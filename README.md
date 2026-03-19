@@ -59,7 +59,7 @@ cross build --release --target aarch64-unknown-linux-gnu
 adb devices
 
 # Install (stops stock firmware, pushes binary, sets up init script)
-./deploy/install.sh
+./waved/deploy/install.sh
 
 # Reboot into waved
 adb reboot
@@ -68,13 +68,13 @@ adb reboot
 ### Revert to Stock
 
 ```bash
-./deploy/revert.sh
+./waved/deploy/revert.sh
 adb reboot
 ```
 
 ### Configure
 
-Edit `/data/waved/config.toml` on device (or `config/default.toml` before deploying):
+Edit `/data/waved/config.toml` on device (or `waved/config/default.toml` before deploying):
 
 ```toml
 [device]
@@ -98,16 +98,20 @@ servers = ["pool.ntp.org", "time.google.com"]
 ## Project Structure
 
 ```
-waved/
-├── crates/           9 Rust crates (workspace)
-├── config/           Default device configuration
-├── deploy/           ADB deployment scripts + init script + firewall
-└── docs/
-    ├── *.md                    Reverse-engineering reports & guides
-    ├── analysis_reports/       Decompiled firmware analysis
-    └── superpowers/
-        ├── specs/              Firmware design specification
-        └── plans/              Implementation plans (all phases)
+├── waved/                    Rust workspace (9 crates)
+│   ├── crates/               All service crates
+│   ├── config/               Default device configuration
+│   └── deploy/               ADB deployment scripts + init script + firewall
+├── decompiled/               Ghidra decompiled C output (stock firmware)
+├── firmware/                 Firmware update manifests (v1.0.13.6, v1.1.6.6)
+├── docs/
+│   ├── *.md                  Reverse-engineering reports & guides
+│   ├── analysis_reports/     Decompiled firmware analysis
+│   └── superpowers/
+│       ├── specs/            Firmware design specification
+│       └── plans/            Implementation plans (all phases)
+├── ghidra_decompile.java     Ghidra headless decompilation script
+└── ghidra_decompile.py       Ghidra Python decompilation script
 ```
 
 ## Documentation
@@ -129,6 +133,17 @@ waved/
 | [GUIDE_DEVICE_ACCESS.md](docs/GUIDE_DEVICE_ACCESS.md) | ADB access, root shell, filesystem layout |
 | [GUIDE_EXTRACT_MODELS.md](docs/GUIDE_EXTRACT_MODELS.md) | Extracting AI models from device |
 | [GUIDE_MODEL_PARTITION_RECOVERY.md](docs/GUIDE_MODEL_PARTITION_RECOVERY.md) | Recovering the 3GB model partition |
+
+### Decompiled Firmware
+
+| File | Description |
+|---|---|
+| [pspapp.c](decompiled/pspapp.c) | Main application binary |
+| [libins_entry.so.c](decompiled/libins_entry.so.c) | Core entry point library |
+| [libInstaAudio.so.c](decompiled/libInstaAudio.so.c) | TEA SDK audio pipeline |
+| [libcloud_proto_https.so.c](decompiled/libcloud_proto_https.so.c) | Cloud/telemetry protocol |
+| [libdatabase.so.c](decompiled/libdatabase.so.c) | SQLite database layer |
+| [libui.so.c](decompiled/libui.so.c) | LVGL touchscreen UI |
 
 ### Analysis
 
