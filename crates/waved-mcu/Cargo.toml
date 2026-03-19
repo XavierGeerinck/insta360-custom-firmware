@@ -1,0 +1,12 @@
+[package]
+name = "waved-mcu"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+waved-state = { path = "../waved-state" }
+waved-uart = { path = "../waved-uart" }
+tokio = { workspace = true, features = ["sync"] }
+crossbeam-channel.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

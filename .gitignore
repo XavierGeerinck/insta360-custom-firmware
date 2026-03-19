@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+# Cargo lock is committed for binaries
+# Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+config/local.toml
+
+# Device data (generated on-device)
+*.db
+*.db-shm
+*.db-wal
+recordings/
+
+# Debug dumps
+*.pcm
+*.raw
+audio_dump/

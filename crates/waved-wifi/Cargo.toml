@@ -1,0 +1,11 @@
+[package]
+name = "waved-wifi"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
+tokio = { workspace = true, features = ["sync", "process", "time"] }
+tracing.workspace = true
+thiserror.workspace = true

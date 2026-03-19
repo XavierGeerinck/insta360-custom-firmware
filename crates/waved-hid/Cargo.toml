@@ -1,0 +1,10 @@
+[package]
+name = "waved-hid"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+waved-state = { path = "../waved-state" }
+tokio = { workspace = true, features = ["sync", "io-util", "fs"] }
+tracing.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "waved-state"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["sync"] }
+uuid.workspace = true
+serde.workspace = true

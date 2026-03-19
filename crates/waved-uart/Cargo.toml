@@ -1,0 +1,10 @@
+[package]
+name = "waved-uart"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serialport = "4"
+crossbeam-channel.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

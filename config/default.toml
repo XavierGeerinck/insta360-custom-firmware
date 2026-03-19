@@ -1,0 +1,22 @@
+[device]
+name = "Wave Open"
+language = "en"
+
+[audio]
+mode = "noise_reduction"
+speaker_volume = 150
+mic_volume = 200
+
+[api]
+endpoint = "https://localhost:8080/meetings/upload"
+auth_token = ""
+auto_upload = true
+retry_max = 5
+retry_backoff_ms = 1000
+
+[security]
+device_password = ""
+ota_server = ""
+
+[ntp]
+servers = ["pool.ntp.org", "time.google.com"]

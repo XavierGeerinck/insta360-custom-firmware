@@ -1,0 +1,23 @@
+[package]
+name = "waved"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "waved"
+path = "src/main.rs"
+
+[dependencies]
+waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
+waved-uart = { path = "../waved-uart" }
+waved-mcu = { path = "../waved-mcu" }
+waved-bt = { path = "../waved-bt" }
+waved-hid = { path = "../waved-hid" }
+waved-audio = { path = "../waved-audio" }
+waved-meeting = { path = "../waved-meeting" }
+waved-wifi = { path = "../waved-wifi" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+nix.workspace = true

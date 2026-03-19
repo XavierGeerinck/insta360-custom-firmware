@@ -1,0 +1,36 @@
+#!/bin/sh
+
+case "$1" in
+    start)
+        echo "Starting waved..."
+
+        # Apply firewall rules
+        if [ -f /data/waved/iptables.rules ]; then
+            iptables-restore < /data/waved/iptables.rules 2>/dev/null || true
+        fi
+
+        # Ensure directories exist
+        mkdir -p /data/waved
+        mkdir -p /mnt/udisk/recordings
+
+        # Set permissions on config
+        chmod 0600 /data/waved/config.toml 2>/dev/null || true
+
+        # Start waved with watchdog respawn
+        (
+            while true; do
+                /data/waved/waved 2>&1 | logger -t waved
+                echo "waved exited ($?), restarting in 3s..." | logger -t waved
+                sleep 3
+            done
+        ) &
+        ;;
+    stop)
+        echo "Stopping waved..."
+        killall waved 2>/dev/null
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
