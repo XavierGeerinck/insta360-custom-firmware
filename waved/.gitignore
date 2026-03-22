@@ -1,0 +1,11 @@
+/target
+
+# Simulation artifacts
+config.toml
+recordings/
+meetings.db
+test_uploads/
+
+# HIL artifacts
+scripts/backup/
+scripts/results/
