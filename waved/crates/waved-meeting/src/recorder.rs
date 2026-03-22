@@ -59,3 +59,52 @@ impl ActiveRecording {
         self.dir.join("audio.opus")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_serialization_roundtrip() {
+        let meta = MeetingMetadata {
+            id: "test-id".to_string(),
+            start_time: "2026-03-21T10:00:00Z".to_string(),
+            duration_secs: 300,
+            audio_mode: "NoiseReduction".to_string(),
+            device_id: "wave-001".to_string(),
+            sample_rate: 48000,
+            channels: 2,
+            codec: "opus".to_string(),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let parsed: MeetingMetadata = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "test-id");
+        assert_eq!(parsed.sample_rate, 48000);
+        assert_eq!(parsed.channels, 2);
+        assert_eq!(parsed.codec, "opus");
+        assert_eq!(parsed.duration_secs, 300);
+    }
+
+    #[tokio::test]
+    async fn active_recording_creates_directory_and_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = ActiveRecording::start(dir.path(), "NoiseReduction").await.unwrap();
+
+        assert!(rec.dir.exists());
+        assert!(rec.dir.join("metadata.json").exists());
+        assert!(rec.dir.join("audio.opus").exists());
+
+        let meta_json = tokio::fs::read_to_string(rec.dir.join("metadata.json")).await.unwrap();
+        let meta: MeetingMetadata = serde_json::from_str(&meta_json).unwrap();
+        assert_eq!(meta.id, rec.id.to_string());
+        assert_eq!(meta.audio_mode, "NoiseReduction");
+        assert_eq!(meta.sample_rate, 48000);
+    }
+
+    #[tokio::test]
+    async fn audio_path_returns_correct_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        assert_eq!(rec.audio_path(), rec.dir.join("audio.opus"));
+    }
+}
