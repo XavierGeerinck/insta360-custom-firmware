@@ -1,0 +1,13 @@
+[package]
+name = "waved-device-test"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "waved-device-test"
+path = "src/main.rs"
+
+[dependencies]
+waved-uart = { path = "../waved-uart" }
+waved-config = { path = "../waved-config" }
+serialport = "4"
