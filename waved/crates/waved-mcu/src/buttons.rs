@@ -12,3 +12,39 @@ pub fn parse_button_frame(data: &[u8]) -> Option<ButtonType> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mute_toggle() {
+        assert_eq!(parse_button_frame(&[0x40]), Some(ButtonType::MuteToggle));
+    }
+
+    #[test]
+    fn parse_volume_up() {
+        assert_eq!(parse_button_frame(&[0x41]), Some(ButtonType::VolumeUp));
+    }
+
+    #[test]
+    fn parse_volume_down() {
+        assert_eq!(parse_button_frame(&[0x42]), Some(ButtonType::VolumeDown));
+    }
+
+    #[test]
+    fn parse_mute_long_press() {
+        assert_eq!(parse_button_frame(&[0x43]), Some(ButtonType::MuteLongPress));
+    }
+
+    #[test]
+    fn parse_unknown_byte_returns_none() {
+        assert_eq!(parse_button_frame(&[0x44]), None);
+        assert_eq!(parse_button_frame(&[0xFF]), None);
+    }
+
+    #[test]
+    fn parse_empty_returns_none() {
+        assert_eq!(parse_button_frame(&[]), None);
+    }
+}
