@@ -114,4 +114,27 @@ mod tests {
         assert_eq!(loaded.device.name, config.device.name);
         assert_eq!(loaded.api.retry_max, config.api.retry_max);
     }
+
+    #[test]
+    fn reject_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is not valid toml {{{{").unwrap();
+        assert!(WavedConfig::load(&path).is_err());
+    }
+
+    #[test]
+    fn reject_missing_required_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.toml");
+        std::fs::write(&path, "[ntp]\nservers = [\"pool.ntp.org\"]\n").unwrap();
+        assert!(WavedConfig::load(&path).is_err());
+    }
+
+    #[test]
+    fn load_or_default_falls_back() {
+        let path = std::path::Path::new("/nonexistent/config.toml");
+        let config = WavedConfig::load_or_default(path);
+        assert_eq!(config.device.name, "Wave Open");
+    }
 }
