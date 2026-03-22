@@ -3,6 +3,9 @@ name = "waved-uart"
 version.workspace = true
 edition.workspace = true
 
+[features]
+simulate = []
+
 [dependencies]
 serialport = "4"
 crossbeam-channel.workspace = true
