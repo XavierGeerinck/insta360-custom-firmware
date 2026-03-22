@@ -1,5 +1,8 @@
 pub mod wpa;
 
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use waved_config::WavedConfig;
