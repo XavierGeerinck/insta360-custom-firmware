@@ -72,6 +72,32 @@ adb reboot
 adb reboot
 ```
 
+### Test
+
+```bash
+cd waved
+
+# Layer 1: Unit tests (runs on your Mac, no device needed)
+cargo test
+
+# Layer 2: Integration tests (simulate feature swaps hardware for in-memory mocks)
+cargo test -p waved --features simulate
+
+# Layer 3: Run simulation binary (full waved on your Mac with fake hardware)
+cargo run -p waved --features simulate
+
+# Layer 4A: ADB smoke test (quick deploy + health check on device)
+./scripts/smoke.sh --deploy
+
+# Layer 4B: On-device hardware tests (runs on the Wave itself)
+cross build --release --target aarch64-unknown-linux-gnu -p waved-device-test
+adb push target/aarch64-unknown-linux-gnu/release/waved-device-test /data/waved/
+adb shell /data/waved/waved-device-test
+
+# Layer 5: Full HIL run (backup → deploy → test → restore, manual trigger only)
+./scripts/hil.sh
+```
+
 ### Configure
 
 Edit `/data/waved/config.toml` on device (or `waved/config/default.toml` before deploying):
@@ -98,10 +124,11 @@ servers = ["pool.ntp.org", "time.google.com"]
 ## Project Structure
 
 ```
-├── waved/                    Rust workspace (9 crates)
-│   ├── crates/               All service crates
+├── waved/                    Rust workspace (10 crates)
+│   ├── crates/               All service crates + waved-device-test
 │   ├── config/               Default device configuration
-│   └── deploy/               ADB deployment scripts + init script + firewall
+│   ├── deploy/               ADB deployment scripts + init script + firewall
+│   └── scripts/              smoke.sh (Layer 4A) + hil.sh (Layer 5)
 ├── decompiled/               Ghidra decompiled C output (stock firmware)
 ├── firmware/                 Firmware update manifests (v1.0.13.6, v1.1.6.6)
 ├── docs/
