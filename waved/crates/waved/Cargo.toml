@@ -7,6 +7,17 @@ edition.workspace = true
 name = "waved"
 path = "src/main.rs"
 
+[features]
+simulate = [
+    "waved-uart/simulate",
+    "waved-bt/simulate",
+    "waved-hid/simulate",
+    "waved-audio/simulate",
+    "waved-mcu/simulate",
+    "waved-wifi/simulate",
+    "waved-meeting/simulate",
+]
+
 [dependencies]
 waved-state = { path = "../waved-state" }
 waved-config = { path = "../waved-config" }
@@ -21,3 +32,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 nix.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+uuid.workspace = true
