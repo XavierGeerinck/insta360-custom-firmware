@@ -1,3 +1,6 @@
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;

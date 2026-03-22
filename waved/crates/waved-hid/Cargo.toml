@@ -3,6 +3,9 @@ name = "waved-hid"
 version.workspace = true
 edition.workspace = true
 
+[features]
+simulate = []
+
 [dependencies]
 waved-state = { path = "../waved-state" }
 tokio = { workspace = true, features = ["sync", "io-util", "fs"] }
