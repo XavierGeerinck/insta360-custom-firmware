@@ -247,4 +247,20 @@ mod tests {
         }
         assert!(result.unwrap().is_err());
     }
+
+    #[test]
+    fn parse_zero_length_frame() {
+        let raw = Frame::build([0xDC, 0xCD], &[]).unwrap();
+        assert_eq!(raw.len(), 4); // 2 header + 1 len(0) + 1 checksum
+        let mut parser = FrameParser::new();
+        let mut result = None;
+        for &byte in &raw {
+            if let Some(r) = parser.feed(byte) {
+                result = Some(r);
+            }
+        }
+        let frame = result.unwrap().unwrap();
+        assert_eq!(frame.target, FrameTarget::Mcu);
+        assert!(frame.data.is_empty());
+    }
 }
