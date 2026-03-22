@@ -1,5 +1,8 @@
 pub mod commands;
 
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use crossbeam_channel::Receiver;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
