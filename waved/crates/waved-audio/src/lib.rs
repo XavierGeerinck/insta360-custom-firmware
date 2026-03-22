@@ -1,6 +1,9 @@
 pub mod callbacks;
 pub mod ffi;
 
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
