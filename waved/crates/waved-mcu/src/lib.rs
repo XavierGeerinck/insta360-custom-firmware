@@ -2,6 +2,9 @@ pub mod battery;
 pub mod buttons;
 pub mod motor;
 
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use crossbeam_channel::Receiver;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
