@@ -167,3 +167,58 @@ impl StateBus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn state_bus_creates_with_defaults() {
+        let bus = StateBus::new();
+        let audio = bus.audio.subscribe();
+        assert!(!audio.borrow().mic_muted);
+        assert_eq!(audio.borrow().mode, AudioMode::NoiseReduction);
+    }
+
+    #[test]
+    fn watch_channel_sees_latest_value() {
+        let bus = StateBus::new();
+        let rx = bus.battery.subscribe();
+
+        bus.battery.send_modify(|s| {
+            s.level = 85;
+            s.is_charging = true;
+        });
+
+        assert_eq!(rx.borrow().level, 85);
+        assert!(rx.borrow().is_charging);
+    }
+
+    #[tokio::test]
+    async fn broadcast_multiple_subscribers() {
+        let bus = StateBus::new();
+        let mut rx1 = bus.events.subscribe();
+        let mut rx2 = bus.events.subscribe();
+
+        let _ = bus.events.send(DeviceEvent::UsbConnected);
+
+        match rx1.recv().await.unwrap() {
+            DeviceEvent::UsbConnected => {}
+            other => panic!("unexpected event: {:?}", other),
+        }
+        match rx2.recv().await.unwrap() {
+            DeviceEvent::UsbConnected => {}
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn motor_position_default_is_low() {
+        assert_eq!(MotorPosition::default(), MotorPosition::Low);
+    }
+
+    #[test]
+    fn audio_mode_default_is_noise_reduction() {
+        assert_eq!(AudioMode::default(), AudioMode::NoiseReduction);
+    }
+}

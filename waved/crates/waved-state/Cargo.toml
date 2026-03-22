@@ -7,3 +7,6 @@ edition.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 uuid.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
