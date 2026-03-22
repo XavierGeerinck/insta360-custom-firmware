@@ -2,6 +2,9 @@ pub mod db;
 pub mod recorder;
 pub mod upload;
 
+#[cfg(feature = "simulate")]
+pub mod simulate;
+
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -150,12 +153,23 @@ impl MeetingService {
         let backoff_ms = self.config.api.retry_backoff_ms;
 
         for attempt in 1..=max_retries {
-            match upload::upload_recording(
+            #[cfg(not(feature = "simulate"))]
+            let upload_result = upload::upload_recording(
                 &self.config.api.endpoint,
                 &self.config.api.auth_token,
                 meeting_id,
                 audio_path,
-            ).await {
+            ).await;
+
+            #[cfg(feature = "simulate")]
+            let upload_result = simulate::upload_recording(
+                &self.config.api.endpoint,
+                &self.config.api.auth_token,
+                meeting_id,
+                audio_path,
+            ).await;
+
+            match upload_result {
                 Ok(()) => {
                     if let Ok(uuid) = meeting_id.parse() {
                         let _ = db::set_upload_status(&self.pool, &uuid, "uploaded").await;
