@@ -19,6 +19,7 @@ use display::FramebufferDisplay;
 use i18n::I18n;
 use input::TouchInput;
 use nav::{ScreenManager, UiScreen};
+use screens::Screen;
 use status_bar::StatusBar;
 use toast::Toast;
 
