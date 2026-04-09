@@ -11,13 +11,13 @@ const FRAME_INTERVAL_MS: u64 = 20;
 
 pub struct SimAudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
-    frame_tx: mpsc::Sender<AudioFrame>,
+    meeting_tx: mpsc::Sender<AudioFrame>,
 }
 
 impl SimAudioService {
-    pub fn new(audio_tx: Arc<watch::Sender<AudioState>>, frame_tx: mpsc::Sender<AudioFrame>) -> Self {
+    pub fn new(audio_tx: Arc<watch::Sender<AudioState>>, meeting_tx: mpsc::Sender<AudioFrame>) -> Self {
         info!("[SIM] audio service created (silence generator)");
-        Self { audio_tx, frame_tx }
+        Self { audio_tx, meeting_tx }
     }
 
     pub async fn run(self, mut cmd_rx: broadcast::Receiver<Command>) {
@@ -34,7 +34,7 @@ impl SimAudioService {
                     };
                     let vu = crate::compute_vu(&frame.data, 8);
                     self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
-                    let _ = self.frame_tx.send(frame).await;
+                    let _ = self.meeting_tx.send(frame).await;
                     frame_count += 1;
                 }
                 cmd_result = cmd_rx.recv() => {

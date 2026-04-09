@@ -33,17 +33,22 @@ pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
 
 pub struct AudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
+    /// Kept alive so the channel stays open for future C SDK callback registration.
     _frame_tx: mpsc::Sender<callbacks::AudioFrame>,
     frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
+    meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
 }
 
 impl AudioService {
+    /// * `frame_tx`/`frame_rx`: channel that C SDK callbacks will write PCM frames to.
+    /// * `meeting_tx`: forwards each frame to MeetingService after VU computation.
     pub fn new(
         audio_tx: Arc<watch::Sender<AudioState>>,
         frame_tx: mpsc::Sender<callbacks::AudioFrame>,
         frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
+        meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
     ) -> Self {
-        Self { audio_tx, _frame_tx: frame_tx, frame_rx }
+        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx }
     }
 
     pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) {
@@ -68,6 +73,7 @@ impl AudioService {
                     if let Some(frame) = frame {
                         let vu = compute_vu(&frame.data, 8);
                         self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
+                        let _ = self.meeting_tx.try_send(frame);
                     }
                 }
                 cmd = cmd_rx.recv() => {

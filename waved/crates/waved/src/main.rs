@@ -123,16 +123,15 @@ fn main() {
 }
 
 async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
-    // Audio service
-    // frame_tx: used by C TEA SDK callbacks (non-simulate) or SimAudioService (simulate)
-    // frame_rx: consumed by MeetingService for recording
-    #[allow(unused_variables)]
-    let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
+    // Meeting frame channel: PCM frames for recording.
+    // Non-simulate: C SDK callbacks → frame channel → AudioService (VU) → meeting channel → MeetingService
+    // Simulate: SimAudioService writes silence frames directly to meeting channel.
+    let (meeting_tx, meeting_rx) = waved_audio::callbacks::create_audio_channel();
 
     #[cfg(not(feature = "simulate"))]
     {
-        let (vu_frame_tx, vu_frame_rx) = waved_audio::callbacks::create_audio_channel();
-        let audio_svc = waved_audio::AudioService::new(Arc::clone(&bus.audio), vu_frame_tx, vu_frame_rx);
+        let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
+        let audio_svc = waved_audio::AudioService::new(Arc::clone(&bus.audio), frame_tx, frame_rx, meeting_tx);
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
     }
@@ -141,7 +140,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     {
         let sim_audio = waved_audio::simulate::SimAudioService::new(
             Arc::clone(&bus.audio),
-            frame_tx,
+            meeting_tx,
         );
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { sim_audio.run(audio_cmd_rx).await });
@@ -180,7 +179,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         PathBuf::from(RECORDINGS_DIR),
         Arc::clone(&bus.meeting),
         bus.events.clone(),
-        frame_rx,
+        meeting_rx,
     ).await {
         Ok(meeting_svc) => {
             let meeting_cmd_rx = bus.commands.subscribe();
