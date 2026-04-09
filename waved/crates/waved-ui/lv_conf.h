@@ -92,7 +92,7 @@
  * OTHERS
  *===================*/
 
-#define LV_USE_PNG 1
+#define LV_USE_LODEPNG 1  /* built-in PNG decoder for beamforming icon assets */
 #define LV_USE_FS_STDIO 0
 
 #endif /* LV_CONF_H */

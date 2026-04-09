@@ -7,9 +7,8 @@ fn main() {
     let lvgl_src = lvgl_root.join("src");
     let conf_dir = manifest.clone();
 
-    // Collect all LVGL .c files recursively
+    // Collect all LVGL .c files recursively and emit rerun-if-changed per file
     let c_files = collect_c_files(&lvgl_src);
-    println!("cargo:warning=Compiling {} LVGL C files", c_files.len());
 
     cc::Build::new()
         .files(&c_files)
@@ -42,7 +41,10 @@ fn main() {
 
     println!("cargo:rerun-if-changed=lv_conf.h");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=lvgl-src/lvgl/src");
+    // Emit per-file rerun directives so nested .c changes trigger incremental rebuilds
+    for f in &c_files {
+        println!("cargo:rerun-if-changed={}", f.display());
+    }
 }
 
 fn collect_c_files(dir: &PathBuf) -> Vec<PathBuf> {
