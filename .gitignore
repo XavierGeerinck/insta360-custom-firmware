@@ -34,3 +34,13 @@ fw_v1.1.6.6/
 ghidra_projects/
 *.swu
 *.pkg
+
+# Brainstorming / visual companion session files
+.superpowers/
+
+# Device backups — contain per-device secrets (unifykey, bindkey, TEA license).
+# Keep the README tracked so the backup layout is documented, but exclude the
+# actual captured bytes (partitions and pulled /etc text files that may
+# include shadow/passwd).
+backups/**
+!backups/README.md
