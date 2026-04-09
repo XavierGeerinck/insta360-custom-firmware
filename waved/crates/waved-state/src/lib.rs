@@ -245,6 +245,6 @@ mod tests {
     #[test]
     fn command_set_nr_level_exists() {
         let cmd = Command::SetNrLevel(NrLevel::High);
-        matches!(cmd, Command::SetNrLevel(NrLevel::High));
+        assert!(matches!(cmd, Command::SetNrLevel(NrLevel::High)));
     }
 }
