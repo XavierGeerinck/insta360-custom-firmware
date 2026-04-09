@@ -124,11 +124,15 @@ fn main() {
 
 async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     // Audio service
+    // frame_tx: used by C TEA SDK callbacks (non-simulate) or SimAudioService (simulate)
+    // frame_rx: consumed by MeetingService for recording
+    #[allow(unused_variables)]
     let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
 
     #[cfg(not(feature = "simulate"))]
     {
-        let audio_svc = waved_audio::AudioService::new(Arc::clone(&bus.audio), frame_tx);
+        let (vu_frame_tx, vu_frame_rx) = waved_audio::callbacks::create_audio_channel();
+        let audio_svc = waved_audio::AudioService::new(Arc::clone(&bus.audio), vu_frame_tx, vu_frame_rx);
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
     }

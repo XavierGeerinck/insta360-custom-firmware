@@ -32,6 +32,8 @@ impl SimAudioService {
                         sample_rate: 48000, channels: CHANNELS,
                         timestamp_ms: frame_count * FRAME_INTERVAL_MS,
                     };
+                    let vu = crate::compute_vu(&frame.data, 8);
+                    self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
                     let _ = self.frame_tx.send(frame).await;
                     frame_count += 1;
                 }
