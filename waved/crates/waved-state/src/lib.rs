@@ -14,6 +14,8 @@ pub struct AudioState {
     pub mic_volume: u16,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
+    pub vu_level: [f32; 8],
+    pub nr_level: NrLevel,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -26,6 +28,16 @@ pub enum AudioMode {
     Supercardioid,
     Figure8,
     Stereo,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NrLevel {
+    #[default]
+    Off,
+    Low,
+    Med,
+    High,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -113,6 +125,7 @@ pub enum ButtonType {
 #[derive(Clone, Debug)]
 pub enum Command {
     SetAudioMode(AudioMode),
+    SetNrLevel(NrLevel),
     ToggleMicMute,
     ToggleSpeakerMute,
     SetSpeakerVolume(u16),
@@ -220,5 +233,18 @@ mod tests {
     #[test]
     fn audio_mode_default_is_noise_reduction() {
         assert_eq!(AudioMode::default(), AudioMode::NoiseReduction);
+    }
+
+    #[test]
+    fn audio_state_has_vu_level() {
+        let state = AudioState::default();
+        assert_eq!(state.vu_level, [0.0f32; 8]);
+        assert_eq!(state.nr_level, NrLevel::Off);
+    }
+
+    #[test]
+    fn command_set_nr_level_exists() {
+        let cmd = Command::SetNrLevel(NrLevel::High);
+        matches!(cmd, Command::SetNrLevel(NrLevel::High));
     }
 }
