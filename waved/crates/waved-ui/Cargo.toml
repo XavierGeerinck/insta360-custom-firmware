@@ -1,0 +1,21 @@
+[package]
+name = "waved-ui"
+version.workspace = true
+edition.workspace = true
+
+[features]
+simulate = []
+
+[dependencies]
+tokio = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+libc = "0.2"
+waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
+
+[build-dependencies]
+cc = "1"
+bindgen = "0.71"
