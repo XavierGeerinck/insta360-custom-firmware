@@ -244,6 +244,15 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         });
     }
 
+    #[cfg(feature = "ui")]
+    {
+        use waved_ui::UiService;
+        info!("Starting UI service");
+        let ui = UiService::new(Arc::clone(&bus), config.clone());
+        // Drop ui without joining — the thread runs until process exit.
+        std::mem::forget(ui);
+    }
+
     // Wait for SIGTERM or SIGINT
     use tokio::signal::unix::{signal, SignalKind};
     let mut sigterm = signal(SignalKind::terminate()).unwrap();

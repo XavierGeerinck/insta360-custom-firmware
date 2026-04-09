@@ -16,7 +16,9 @@ simulate = [
     "waved-mcu/simulate",
     "waved-wifi/simulate",
     "waved-meeting/simulate",
+    "waved-ui?/simulate",
 ]
+ui = ["dep:waved-ui"]
 
 [dependencies]
 waved-state = { path = "../waved-state" }
@@ -28,6 +30,7 @@ waved-hid = { path = "../waved-hid" }
 waved-audio = { path = "../waved-audio" }
 waved-meeting = { path = "../waved-meeting" }
 waved-wifi = { path = "../waved-wifi" }
+waved-ui = { path = "../waved-ui", optional = true }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
