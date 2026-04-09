@@ -68,12 +68,22 @@ fn ui_thread_main(
 
     unsafe {
         let disp = lv_display_create(display::SCREEN_W as i32, display::SCREEN_H as i32);
+        lv_display_set_color_format(disp, lv_color_format_t_LV_COLOR_FORMAT_RGB565);
         lv_display_set_flush_cb(disp, Some(flush_cb));
+
+        // Extract buffer pointers before boxing fb (Box doesn't move heap data).
+        let buf1_ptr = fb.buf1.as_ptr() as *mut _;
+        let buf2_ptr = fb.buf2.as_ptr() as *mut _;
+        let buf_len  = fb.buf1.len() as u32;
+        // Leak fb onto the heap so flush_cb can borrow it via user_data.
+        let fb_raw = Box::into_raw(Box::new(fb));
+        lv_display_set_user_data(disp, fb_raw as *mut _);
+
         lv_display_set_buffers(
             disp,
-            fb.buf1.as_ptr() as *mut _,
-            fb.buf2.as_ptr() as *mut _,
-            fb.buf1.len() as u32,
+            buf1_ptr,
+            buf2_ptr,
+            buf_len,
             lv_display_render_mode_t_LV_DISPLAY_RENDER_MODE_PARTIAL,
         );
 
@@ -89,6 +99,7 @@ fn ui_thread_main(
     let mut home = screens::home::HomeScreen::new(Arc::clone(&bus), i18n.tr("home.connected"));
 
     let root = unsafe { home.create() };
+    unsafe { lv_screen_load(root); }
     nav.set_root(root);
 
     let mut last_tick = Instant::now();
@@ -140,9 +151,13 @@ fn handle_command(cmd: &Command, _nav: &mut ScreenManager, toast: &mut Toast) {
 
 unsafe extern "C" fn flush_cb(
     disp: *mut lv_display_t,
-    _area: *const lv_area_t,
-    _px_map: *mut u8,
+    area: *const lv_area_t,
+    px_map: *mut u8,
 ) {
+    let fb = lv_display_get_user_data(disp) as *mut display::FramebufferDisplay;
+    if !fb.is_null() {
+        (*fb).flush(&*area, px_map as *const u8);
+    }
     lv_display_flush_ready(disp);
 }
 

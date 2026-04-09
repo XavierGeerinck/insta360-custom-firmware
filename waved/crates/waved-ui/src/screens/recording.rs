@@ -94,7 +94,7 @@ impl super::Screen for RecordingScreen {
             self.sphere = sphere;
 
             let lbl_rec = lv_label_create(sphere);
-            lv_label_set_text(lbl_rec, c"● RECORDING".as_ptr());
+            lv_label_set_text(lbl_rec, c"> RECORDING".as_ptr());
             lv_obj_set_style_text_color(lbl_rec, rgb(CLR_RED), 0);
             lv_obj_set_style_text_font(lbl_rec, &lv_font_montserrat_12, 0);
             lv_obj_align(lbl_rec, lv_align_t_LV_ALIGN_TOP_MID, 0, 12);

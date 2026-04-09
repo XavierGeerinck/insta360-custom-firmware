@@ -73,9 +73,9 @@ impl HomeScreen {
 
         // Upload queue count
         let upload_str = if meeting.pending_uploads == 0 {
-            CString::new("☁ 0").unwrap()
+            CString::new("C:0").unwrap()
         } else {
-            CString::new(format!("☁ {}", meeting.pending_uploads)).unwrap()
+            CString::new(format!("C:{}", meeting.pending_uploads)).unwrap()
         };
         lv_label_set_text(self.lbl_upload, upload_str.as_ptr());
     }
@@ -122,7 +122,7 @@ impl super::Screen for HomeScreen {
             let lbl = lv_label_create(sphere);
             lv_obj_set_style_text_color(lbl, rgb(CLR_ACCENT), 0);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
-            lv_label_set_text(lbl, c"● Connected".as_ptr());
+            lv_label_set_text(lbl, c"* Connected".as_ptr());
             lv_obj_align(lbl, lv_align_t_LV_ALIGN_TOP_MID, 0, 20);
             self.lbl_status = lbl;
 
@@ -170,7 +170,7 @@ impl super::Screen for HomeScreen {
             self.btn_rec = btn_rec;
 
             let lbl_rec = lv_label_create(btn_rec);
-            lv_label_set_text(lbl_rec, c"● REC".as_ptr());
+            lv_label_set_text(lbl_rec, c"> REC".as_ptr());
             lv_obj_set_style_text_font(lbl_rec, &lv_font_montserrat_14, 0);
             lv_obj_set_style_text_color(lbl_rec, rgb(CLR_WHITE), 0);
             lv_obj_center(lbl_rec);
@@ -211,7 +211,7 @@ impl super::Screen for HomeScreen {
 
             let lbl_nr       = mk_bbar_lbl(b"NR:Off\0", 8);
             let _files_lbl   = mk_bbar_lbl(b"Files\0", 108);
-            let lbl_upload   = mk_bbar_lbl(b"\xe2\x98\x81 0\0", 208); // ☁ 0 in UTF-8
+            let lbl_upload   = mk_bbar_lbl(b"C:0\0", 208);
             let _settings_lbl = mk_bbar_lbl(b"Settings\0", 300);
 
             self.lbl_nr = lbl_nr;
