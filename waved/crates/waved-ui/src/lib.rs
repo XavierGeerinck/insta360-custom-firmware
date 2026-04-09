@@ -1,6 +1,10 @@
 pub mod bindings;
 pub mod display;
+pub mod i18n;
 pub mod input;
+pub mod nav;
+pub mod screens;
+pub mod theme;
 
 pub struct UiService;
 
@@ -12,7 +16,6 @@ impl UiService {
 mod tests {
     #[test]
     fn display_module_compiles() {
-        // Compile-check: if display.rs compiles, this passes.
         assert!(true);
     }
 }

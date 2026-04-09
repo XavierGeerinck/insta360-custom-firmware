@@ -1,0 +1,19 @@
+pub mod audio_mode;
+pub mod control_center;
+pub mod home;
+pub mod recording;
+pub mod settings;
+
+use crate::bindings::lv_obj_t;
+
+/// Every screen implements this trait.
+/// `create` builds the LVGL widget tree and returns the root object.
+/// `destroy` is called before navigating away — must call `lv_obj_delete(root)`.
+pub trait Screen {
+    fn create(&mut self) -> *mut lv_obj_t;
+    fn destroy(&mut self, root: *mut lv_obj_t) {
+        unsafe { crate::bindings::lv_obj_delete(root); }
+    }
+    /// Called each LVGL tick to refresh state-driven labels/values.
+    fn update(&mut self, _root: *mut lv_obj_t) {}
+}
