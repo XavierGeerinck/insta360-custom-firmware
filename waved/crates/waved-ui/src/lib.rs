@@ -59,9 +59,12 @@ fn ui_thread_main(
 
     let mut cmd_rx = bus.commands.subscribe();
 
-    let i18n = I18n::load(&config.device.language);
+    let _i18n = I18n::load(&config.device.language);
 
-    unsafe { lv_init(); }
+    unsafe {
+        lv_init();
+        lv_fs_posix_init(); // register 'A:' → POSIX FS for PNG asset loading
+    }
 
     let fb    = FramebufferDisplay::init()?;
     let mut touch = TouchInput::init()?;
@@ -69,6 +72,7 @@ fn ui_thread_main(
     unsafe {
         let disp = lv_display_create(display::SCREEN_W as i32, display::SCREEN_H as i32);
         lv_display_set_color_format(disp, lv_color_format_t_LV_COLOR_FORMAT_RGB565);
+        lv_display_set_rotation(disp, lv_display_rotation_t_LV_DISPLAY_ROTATION_180);
         lv_display_set_flush_cb(disp, Some(flush_cb));
 
         // Extract buffer pointers before boxing fb (Box doesn't move heap data).
@@ -96,7 +100,7 @@ fn ui_thread_main(
     let mut toast  = unsafe { Toast::create() };
 
     let mut nav = ScreenManager::new();
-    let mut home = screens::home::HomeScreen::new(Arc::clone(&bus), i18n.tr("home.connected"));
+    let mut home = screens::home::HomeScreen::new(Arc::clone(&bus));
 
     let root = unsafe { home.create() };
     unsafe { lv_screen_load(root); }

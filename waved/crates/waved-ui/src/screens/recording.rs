@@ -4,7 +4,11 @@ use std::ffi::CString;
 use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
-use crate::screens::home::{VU_BAR_W, VU_BAR_GAP, VU_BANDS, vu_bar_height};
+const VU_MAX_H: i32 = 20;
+const VU_BAR_W: i32 = 3;
+const VU_BAR_GAP: i32 = 2;
+const VU_BANDS: usize = 8;
+fn vu_bar_height(level: f32) -> i32 { (level.clamp(0.0, 1.0) * VU_MAX_H as f32) as i32 }
 use waved_state::{AudioState, AudioMode, MeetingState, StateBus};
 
 extern "C" {

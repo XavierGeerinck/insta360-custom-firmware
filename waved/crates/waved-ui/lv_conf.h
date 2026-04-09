@@ -12,14 +12,10 @@
    STDLIB WRAPPER SETTINGS
  *=========================*/
 
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
-#define LV_USE_STDLIB_STRING    LV_STDLIB_BUILTIN
-#define LV_USE_STDLIB_SPRINTF   LV_STDLIB_BUILTIN
-
-/* 128 KiB heap for LVGL */
-#define LV_MEM_SIZE (128 * 1024U)
-#define LV_MEM_POOL_EXPAND_SIZE 0
-#define LV_MEM_ADR 0
+/* Use system malloc/free — no fixed heap cap; PNG images need ~500 KiB */
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+#define LV_USE_STDLIB_STRING    LV_STDLIB_CLIB
+#define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
 
 /*====================
    HAL SETTINGS
@@ -92,7 +88,15 @@
  * OTHERS
  *===================*/
 
-#define LV_USE_LODEPNG 1  /* built-in PNG decoder for beamforming icon assets */
-#define LV_USE_FS_STDIO 0
+#define LV_USE_LODEPNG 1  /* built-in PNG decoder */
+
+/* POSIX file system driver — maps drive letter 'A' to the root filesystem.
+ * Image paths: "A:/etc/pspapp/lvgl/icon/msc/bg_main.png" → /etc/pspapp/... */
+#define LV_USE_FS_POSIX 1
+#if LV_USE_FS_POSIX
+    #define LV_FS_POSIX_LETTER 'A'
+    #define LV_FS_POSIX_PATH   ""
+    #define LV_FS_POSIX_CACHE_SIZE 0
+#endif
 
 #endif /* LV_CONF_H */

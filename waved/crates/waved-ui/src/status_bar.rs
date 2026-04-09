@@ -1,6 +1,6 @@
 //! Persistent status bar on lv_layer_top() — survives screen changes.
 //!
-//! Shows: battery %, WiFi signal, BT connected, mic muted, time.
+//! Uses the original pspapp 20×20 PNG icons for battery, wifi, bluetooth.
 //! Height: 32px. Width: 400px.
 
 use crate::bindings::*;
@@ -10,17 +10,51 @@ extern "C" {
     static lv_font_montserrat_12: lv_font_t;
 }
 
+// ── Icon path helpers ─────────────────────────────────────────────────────────
+
+fn battery_icon(pct: u8) -> &'static [u8] {
+    match pct {
+        0..=5   => b"A:/etc/pspapp/lvgl/icon/status/battery_0_5.png\0",
+        6..=10  => b"A:/etc/pspapp/lvgl/icon/status/battery_6_10.png\0",
+        11..=20 => b"A:/etc/pspapp/lvgl/icon/status/battery_11_20.png\0",
+        21..=30 => b"A:/etc/pspapp/lvgl/icon/status/battery_21_30.png\0",
+        31..=40 => b"A:/etc/pspapp/lvgl/icon/status/battery_31_40.png\0",
+        41..=50 => b"A:/etc/pspapp/lvgl/icon/status/battery_41_50.png\0",
+        51..=60 => b"A:/etc/pspapp/lvgl/icon/status/battery_51_60.png\0",
+        61..=70 => b"A:/etc/pspapp/lvgl/icon/status/battery_61_70.png\0",
+        71..=80 => b"A:/etc/pspapp/lvgl/icon/status/battery_71_80.png\0",
+        81..=90 => b"A:/etc/pspapp/lvgl/icon/status/battery_81_90.png\0",
+        _       => b"A:/etc/pspapp/lvgl/icon/status/battery_91_100.png\0",
+    }
+}
+
+fn wifi_icon(connected: bool) -> &'static [u8] {
+    if connected {
+        b"A:/etc/pspapp/lvgl/icon/status/wifi_signal_50_100.png\0"
+    } else {
+        b"A:/etc/pspapp/lvgl/icon/status/wifi_unconnected.png\0"
+    }
+}
+
+fn bt_icon(connected: bool) -> &'static [u8] {
+    if connected {
+        b"A:/etc/pspapp/lvgl/icon/status/bluetooth_green.png\0"
+    } else {
+        b"A:/etc/pspapp/lvgl/icon/status/bluetooth.png\0"
+    }
+}
+
+// ── Struct ────────────────────────────────────────────────────────────────────
+
 pub struct StatusBar {
-    root: *mut lv_obj_t,
-    lbl_battery: *mut lv_obj_t,
-    lbl_wifi: *mut lv_obj_t,
-    lbl_bt: *mut lv_obj_t,
-    lbl_mic: *mut lv_obj_t,
-    lbl_time: *mut lv_obj_t,
+    img_battery: *mut lv_obj_t,
+    img_wifi:    *mut lv_obj_t,
+    img_bt:      *mut lv_obj_t,
+    lbl_mic:     *mut lv_obj_t,   // small text "M" when muted
+    lbl_time:    *mut lv_obj_t,
 }
 
 impl StatusBar {
-    /// Create the status bar on the top LVGL layer. Call once after lv_init().
     pub unsafe fn create() -> Self {
         let top_layer = lv_layer_top();
 
@@ -28,7 +62,7 @@ impl StatusBar {
         lv_obj_set_size(root, 400, 32);
         lv_obj_set_pos(root, 0, 0);
         lv_obj_set_style_bg_color(root, rgb(CLR_BG), 0);
-        lv_obj_set_style_bg_opa(root, 220, 0);
+        lv_obj_set_style_bg_opa(root, 200, 0);
         lv_obj_set_style_border_width(root, 0, 0);
         lv_obj_set_style_radius(root, 0, 0);
         lv_obj_set_style_pad_top(root, 0, 0);
@@ -36,24 +70,36 @@ impl StatusBar {
         lv_obj_set_style_pad_left(root, 0, 0);
         lv_obj_set_style_pad_right(root, 0, 0);
 
-        let mk_label = |parent: *mut lv_obj_t, x: i32, align: lv_align_t| {
-            let lbl = lv_label_create(parent);
-            lv_obj_set_style_text_color(lbl, rgb(CLR_TEXT), 0);
-            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
-            lv_obj_align(lbl, align, x, 0);
-            lbl
+        // Helper: create a 20×20 image at a given x offset from the left
+        let mk_icon = |x: i32, initial_src: &[u8]| {
+            let img = lv_image_create(root);
+            lv_image_set_src(img, initial_src.as_ptr() as *const _);
+            lv_obj_align(img, lv_align_t_LV_ALIGN_LEFT_MID, x, 0);
+            lv_obj_set_style_border_width(img, 0, 0);
+            img
         };
 
-        let lbl_battery = mk_label(root, 4,   lv_align_t_LV_ALIGN_LEFT_MID);
-        let lbl_wifi    = mk_label(root, 50,  lv_align_t_LV_ALIGN_LEFT_MID);
-        let lbl_bt      = mk_label(root, 80,  lv_align_t_LV_ALIGN_LEFT_MID);
-        let lbl_mic     = mk_label(root, 110, lv_align_t_LV_ALIGN_LEFT_MID);
-        let lbl_time    = mk_label(root, -4,  lv_align_t_LV_ALIGN_RIGHT_MID);
+        let img_battery = mk_icon(4,  battery_icon(80));
+        let img_wifi    = mk_icon(28, wifi_icon(false));
+        let img_bt      = mk_icon(52, bt_icon(false));
 
-        Self { root, lbl_battery, lbl_wifi, lbl_bt, lbl_mic, lbl_time }
+        // Small "M" label when mic is muted (hidden by default)
+        let lbl_mic = lv_label_create(root);
+        lv_label_set_text(lbl_mic, c"".as_ptr());
+        lv_obj_set_style_text_color(lbl_mic, rgb(0xff4444), 0);
+        lv_obj_set_style_text_font(lbl_mic, &lv_font_montserrat_12, 0);
+        lv_obj_align(lbl_mic, lv_align_t_LV_ALIGN_LEFT_MID, 76, 0);
+
+        // Time on the right
+        let lbl_time = lv_label_create(root);
+        lv_label_set_text(lbl_time, c"00:00".as_ptr());
+        lv_obj_set_style_text_color(lbl_time, rgb(CLR_TEXT), 0);
+        lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_12, 0);
+        lv_obj_align(lbl_time, lv_align_t_LV_ALIGN_RIGHT_MID, -4, 0);
+
+        Self { img_battery, img_wifi, img_bt, lbl_mic, lbl_time }
     }
 
-    /// Update labels from current state. Call each LVGL tick.
     pub unsafe fn update(
         &self,
         battery_pct: u8,
@@ -63,26 +109,21 @@ impl StatusBar {
     ) {
         use std::ffi::CString;
 
-        let batt_str = CString::new(format!("{battery_pct}%")).unwrap();
-        lv_label_set_text(self.lbl_battery, batt_str.as_ptr());
+        lv_image_set_src(self.img_battery, battery_icon(battery_pct).as_ptr() as *const _);
+        lv_image_set_src(self.img_wifi,    wifi_icon(wifi_connected).as_ptr() as *const _);
+        lv_image_set_src(self.img_bt,      bt_icon(bt_connected).as_ptr() as *const _);
 
-        let wifi_str = CString::new(if wifi_connected { "W" } else { "--" }).unwrap();
-        lv_label_set_text(self.lbl_wifi, wifi_str.as_ptr());
+        let mic_text = if mic_muted { c"M".as_ptr() } else { c"".as_ptr() };
+        lv_label_set_text(self.lbl_mic, mic_text);
 
-        let bt_str = CString::new(if bt_connected { "BT" } else { "" }).unwrap();
-        lv_label_set_text(self.lbl_bt, bt_str.as_ptr());
-
-        let mic_str = CString::new(if mic_muted { "M" } else { "" }).unwrap();
-        lv_label_set_text(self.lbl_mic, mic_str.as_ptr());
-
-        // Wall clock from system time
+        // Wall clock
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let h = (now / 3600) % 24;
         let m = (now / 60) % 60;
-        let time_str = CString::new(format!("{h:02}:{m:02}")).unwrap();
-        lv_label_set_text(self.lbl_time, time_str.as_ptr());
+        let time_s = CString::new(format!("{h:02}:{m:02}")).unwrap();
+        lv_label_set_text(self.lbl_time, time_s.as_ptr());
     }
 }
