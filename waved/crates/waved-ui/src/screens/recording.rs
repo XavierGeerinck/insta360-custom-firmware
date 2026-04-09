@@ -176,7 +176,7 @@ impl super::Screen for RecordingScreen {
 
             let mk = |text: &[u8], x: i32| {
                 let lbl = lv_label_create(bbar);
-                lv_label_set_text(lbl, text.as_ptr() as *const i8);
+                lv_label_set_text(lbl, text.as_ptr() as *const _);
                 lv_obj_set_style_text_font(lbl, &lv_font_montserrat_12, 0);
                 lv_obj_set_style_text_color(lbl, rgb(CLR_TEXT_DIM), 0);
                 lv_obj_align(lbl, lv_align_t_LV_ALIGN_LEFT_MID, x, 0);
