@@ -3,6 +3,7 @@
 //! In simulate mode this is a no-op — the caller provides its own flush target.
 
 use crate::bindings::*;
+#[cfg(not(feature = "simulate"))]
 use std::os::unix::io::RawFd;
 
 pub const SCREEN_W: u32 = 400;
@@ -73,6 +74,8 @@ impl FramebufferDisplay {
     ) {
         #[cfg(not(feature = "simulate"))]
         {
+            debug_assert!(area.x1 >= 0 && area.y1 >= 0 && area.x2 >= 0 && area.y2 >= 0,
+                "LVGL flush area has negative coordinate: {:?}", (area.x1, area.y1, area.x2, area.y2));
             let x1 = area.x1 as usize;
             let y1 = area.y1 as usize;
             let x2 = area.x2 as usize;
@@ -94,6 +97,7 @@ impl Drop for FramebufferDisplay {
         #[cfg(not(feature = "simulate"))]
         unsafe {
             libc::munmap(self.fb_ptr as *mut _, self.fb_size);
+            libc::close(self._fd);
         }
     }
 }

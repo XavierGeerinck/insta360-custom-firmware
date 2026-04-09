@@ -2,8 +2,6 @@
 //!
 //! Reads ABS_X / ABS_Y + BTN_TOUCH events and converts to LVGL lv_indev_data_t.
 
-use crate::bindings::*;
-
 /// Evdev event structure (matches kernel input_event).
 #[repr(C)]
 struct InputEvent {
