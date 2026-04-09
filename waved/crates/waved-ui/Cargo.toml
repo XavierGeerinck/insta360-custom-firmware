@@ -3,6 +3,9 @@ name = "waved-ui"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+doctest = false  # bindgen-generated bindings contain C doc comments that aren't valid Rust doctests
+
 [features]
 simulate = []
 
