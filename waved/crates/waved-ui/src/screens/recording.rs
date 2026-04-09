@@ -4,7 +4,7 @@ use std::ffi::CString;
 use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
-use crate::screens::home::{VU_MAX_H, VU_BAR_W, VU_BAR_GAP, VU_BANDS, vu_bar_height};
+use crate::screens::home::{VU_BAR_W, VU_BAR_GAP, VU_BANDS, vu_bar_height};
 use waved_state::{AudioState, AudioMode, MeetingState, StateBus};
 
 extern "C" {
@@ -21,7 +21,7 @@ pub fn format_duration(secs: u32) -> String {
 }
 
 pub struct RecordingScreen {
-    bus: Arc<StateBus>,
+    _bus: Arc<StateBus>,
     sphere: *mut lv_obj_t,
     lbl_timer: *mut lv_obj_t,
     vu_bars: [*mut lv_obj_t; VU_BANDS],
@@ -32,7 +32,7 @@ pub struct RecordingScreen {
 impl RecordingScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
-            bus,
+            _bus: bus,
             sphere: std::ptr::null_mut(),
             lbl_timer: std::ptr::null_mut(),
             vu_bars: [std::ptr::null_mut(); VU_BANDS],
