@@ -194,7 +194,6 @@ fn ui_thread_main(
                 let meeting = meeting_rx.borrow().clone();
                 unsafe { recording.update_state(&audio, &meeting); }
             }
-            _ => {}
         }
 
         // Update control center state whenever it is visible

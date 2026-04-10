@@ -4,17 +4,6 @@
 pub enum UiScreen {
     Home,
     Recording,
-    MicMode,
-    Settings,
-    Files,
-    Wifi,
-    WifiInfo,
-    Bluetooth,
-    Volume,
-    Height,
-    About,
-    PowerOff,
-    ControlCenter, // overlay — stacked above current screen
 }
 
 impl Default for UiScreen {
@@ -23,7 +12,6 @@ impl Default for UiScreen {
 
 pub struct ScreenManager {
     pub current: UiScreen,
-    pub control_center_open: bool,
     current_root: *mut crate::bindings::lv_obj_t,
 }
 
@@ -31,7 +19,6 @@ impl ScreenManager {
     pub fn new() -> Self {
         Self {
             current: UiScreen::default(),
-            control_center_open: false,
             current_root: std::ptr::null_mut(),
         }
     }
@@ -62,7 +49,6 @@ mod tests {
     fn default_screen_is_home() {
         let nav = ScreenManager::new();
         assert_eq!(nav.current, UiScreen::Home);
-        assert!(!nav.control_center_open);
     }
 
     #[test]
