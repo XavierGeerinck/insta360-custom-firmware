@@ -11,7 +11,7 @@ if [ ! -f "$BINARY" ]; then
 fi
 
 echo "=== Stopping stock firmware ==="
-adb shell "killall pspapp pspapp_daemon pspapp_watchdog 2>/dev/null || true"
+adb shell "killall pspapp pspapp_daemon 2>/dev/null || true"
 
 echo "=== Pushing waved binary ==="
 adb shell "mkdir -p /data/waved"

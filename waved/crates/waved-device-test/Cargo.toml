@@ -10,4 +10,5 @@ path = "src/main.rs"
 [dependencies]
 waved-uart = { path = "../waved-uart" }
 waved-config = { path = "../waved-config" }
-serialport = "4"
+serialport = { version = "4", default-features = false }
+nix = { workspace = true }

@@ -48,14 +48,24 @@ cd waved
 cargo check
 
 # Cross-compile for device (requires Docker + cross-rs)
-cargo install cross
+# cross 0.2.5 has a known rustup detection bug on macOS/arm64, so install from git
+cargo install cross --git https://github.com/cross-rs/cross
 cross build --release --target aarch64-unknown-linux-gnu
 ```
 
 ### Deploy
 
+ADB access via HID `0xC0` on stock firmware is **temporary** — it resets on reboot and can silently fail on some firmware states. For reliable, persistent ADB, put the device into factory devmode once via the `/data/enter_factory_mode` sentinel file path (**non-destructive**, see docs/GUIDE_DEVICE_ACCESS.md → "Entering Factory Mode Safely"), after which `pspapp` auto-enables ADB at every boot. **Do NOT** enter factory devmode via HID `byte[5]=0xEE` — that path chains into a full factory reset that wipes `/data`, `/mnt/udisk`, cloud binding, and region code.
+
 ```bash
-# Connect device via USB, ensure ADB access
+# Connect device via USB, then enable ADB via the HID packet if needed
+# See: docs/GUIDE_DEVICE_ACCESS.md
+sudo python3 ./waved/scripts/enable_adb.py
+
+# Wait for USB re-enumeration after each enable
+sleep 3
+
+# Verify the device is visible over ADB after the HID mode switch
 adb devices
 
 # Install (stops stock firmware, pushes binary, sets up init script)

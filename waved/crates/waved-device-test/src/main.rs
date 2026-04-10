@@ -8,6 +8,12 @@ struct TestResult {
 }
 
 fn main() {
+    // Touch diagnostic mode: `waved-device-test touch` reads raw events for 10 s.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(|s| s.as_str()) == Some("touch") {
+        return touch_diagnostic();
+    }
+
     println!("=== waved device test runner ===\n");
 
     let results = vec![
@@ -140,6 +146,106 @@ fn test_config_load() -> Result<(), String> {
     if !path.exists() { return Err("config.toml not found".to_string()); }
     let _config = waved_config::WavedConfig::load(path).map_err(|e| format!("config parse error: {e}"))?;
     Ok(())
+}
+
+/// Dump raw evdev events from the ILITEK touch controller for 10 seconds.
+/// Run with waved stopped so nothing else consumes events.
+/// Usage: waved-device-test touch
+fn touch_diagnostic() {
+    #[repr(C)]
+    struct InputEvent {
+        tv_sec:  i64,
+        tv_usec: i64,
+        typ:     u16,
+        code:    u16,
+        value:   i32,
+    }
+
+    const EV_SYN: u16 = 0x00;
+    const EV_KEY: u16 = 0x01;
+    const EV_ABS: u16 = 0x03;
+
+    fn type_name(t: u16) -> &'static str {
+        match t {
+            0x00 => "EV_SYN",
+            0x01 => "EV_KEY",
+            0x03 => "EV_ABS",
+            _ => "EV_???",
+        }
+    }
+    fn code_name(t: u16, c: u16) -> String {
+        if t == EV_KEY {
+            return match c { 0x14a => "BTN_TOUCH".into(), _ => format!("KEY_{c:#06x}") };
+        }
+        if t == EV_ABS {
+            return match c {
+                0x00 => "ABS_X".into(),
+                0x01 => "ABS_Y".into(),
+                0x2f => "ABS_MT_SLOT".into(),
+                0x30 => "ABS_MT_TOUCH_MAJOR".into(),
+                0x32 => "ABS_MT_WIDTH_MAJOR".into(),
+                0x35 => "ABS_MT_POSITION_X".into(),
+                0x36 => "ABS_MT_POSITION_Y".into(),
+                0x37 => "ABS_MT_TOOL_TYPE".into(),
+                0x38 => "ABS_MT_BLOB_ID".into(),
+                0x39 => "ABS_MT_TRACKING_ID".into(),
+                0x3a => "ABS_MT_PRESSURE".into(),
+                0x3d => "ABS_MT_TOOL_Y".into(),
+                _ => format!("ABS_{c:#06x}"),
+            };
+        }
+        if t == EV_SYN {
+            return match c { 0 => "SYN_REPORT".into(), 2 => "SYN_MT_REPORT".into(), _ => format!("SYN_{c:#06x}") };
+        }
+        format!("{c:#06x}")
+    }
+
+    println!("Touch diagnostic: opening /dev/input/event1 (blocking)");
+    println!("Touch the screen — reading for 10 seconds...\n");
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .open("/dev/input/event1");
+    let file = match file {
+        Ok(f) => f,
+        Err(e) => { eprintln!("Failed to open event1: {e}"); return; }
+    };
+
+    use std::io::Read;
+    let mut file = file;
+    let ev_size = std::mem::size_of::<InputEvent>();
+    let mut buf = vec![0u8; ev_size];
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut count = 0usize;
+
+    // Set non-blocking so we can time out
+    {
+        use std::os::unix::io::AsRawFd;
+        use nix::fcntl::{fcntl, FcntlArg, OFlag};
+        let _ = fcntl(file.as_raw_fd(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK));
+    }
+
+    while std::time::Instant::now() < deadline {
+        match file.read_exact(&mut buf) {
+            Ok(()) => {
+                let ev: InputEvent = unsafe { std::ptr::read(buf.as_ptr() as *const _) };
+                count += 1;
+                println!("  {:>4}  type={:<10} code={:<25} value={}",
+                    count,
+                    type_name(ev.typ),
+                    code_name(ev.typ, ev.code),
+                    ev.value,
+                );
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => { eprintln!("Read error: {e}"); break; }
+        }
+    }
+    println!("\n{count} events total.");
+    if count == 0 { println!("WARNING: No events received — is the touch screen working?"); }
 }
 
 fn test_recordings_dir() -> Result<(), String> {

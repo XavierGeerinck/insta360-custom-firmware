@@ -25,7 +25,7 @@ How to back up, wipe, and restore the 3GB `/model` partition (AI/ASR models).
 
 ```bash
 # Enable ADB first (see GUIDE_DEVICE_ACCESS.md)
-python3 enable_adb.py
+python3 ./waved/scripts/enable_adb.py
 sleep 3
 
 # Pull the entire model directory (3GB, takes ~10 min over USB)
@@ -34,6 +34,8 @@ adb pull /model/ ./model_backup/
 # Or make a raw partition image (exact byte-for-byte copy)
 adb shell "dd if=/dev/model bs=1M" | dd of=./model_partition_backup.img bs=1M
 ```
+
+If the device rebooted or switched USB modes, repeat the ADB enable step before retrying the backup.
 
 ### Via ADB Shell + USB Storage
 

@@ -55,7 +55,7 @@ fn ui_thread_main(
     let battery_rx = bus.battery.subscribe();
     let bt_rx      = bus.bt.subscribe();
     let wifi_rx    = bus.wifi.subscribe();
-    let meeting_rx = bus.meeting.subscribe();
+    let _meeting_rx = bus.meeting.subscribe();
 
     let mut cmd_rx = bus.commands.subscribe();
 
@@ -67,12 +67,12 @@ fn ui_thread_main(
     }
 
     let fb    = FramebufferDisplay::init()?;
-    let mut touch = TouchInput::init()?;
+    // Leak TouchInput onto the heap so touch_read_cb can borrow it via indev user_data.
+    let touch_ptr = Box::into_raw(Box::new(TouchInput::init()?));
 
     unsafe {
         let disp = lv_display_create(display::SCREEN_W as i32, display::SCREEN_H as i32);
         lv_display_set_color_format(disp, lv_color_format_t_LV_COLOR_FORMAT_RGB565);
-        lv_display_set_rotation(disp, lv_display_rotation_t_LV_DISPLAY_ROTATION_180);
         lv_display_set_flush_cb(disp, Some(flush_cb));
 
         // Extract buffer pointers before boxing fb (Box doesn't move heap data).
@@ -94,6 +94,8 @@ fn ui_thread_main(
         let indev = lv_indev_create();
         lv_indev_set_type(indev, lv_indev_type_t_LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(indev, Some(touch_read_cb));
+        // Pass TouchInput pointer so touch_read_cb can deliver actual touch state.
+        lv_indev_set_user_data(indev, touch_ptr as *mut _);
     }
 
     let status_bar = unsafe { StatusBar::create() };
@@ -102,11 +104,17 @@ fn ui_thread_main(
     let mut nav = ScreenManager::new();
     let mut home = screens::home::HomeScreen::new(Arc::clone(&bus));
 
-    let root = unsafe { home.create() };
+    let root = home.create();
     unsafe { lv_screen_load(root); }
     nav.set_root(root);
 
     let mut last_tick = Instant::now();
+
+    // Track previous status-bar state to avoid redrawing every frame.
+    let mut prev_batt:  u8   = 255; // impossible sentinel
+    let mut prev_wifi:  bool = false;
+    let mut prev_bt:    bool = false;
+    let mut prev_muted: bool = false;
 
     loop {
         let elapsed_ms = last_tick.elapsed().as_millis() as u32;
@@ -114,14 +122,26 @@ fn ui_thread_main(
 
         unsafe { lv_tick_inc(elapsed_ms); }
 
-        touch.poll();
+        unsafe { (*touch_ptr).poll(); }
 
-        unsafe {
+        {
             let batt  = battery_rx.borrow();
             let audio = audio_rx.borrow();
             let bt    = bt_rx.borrow();
             let wifi  = wifi_rx.borrow();
-            status_bar.update(batt.level, wifi.connected, bt.connected, audio.mic_muted);
+            let new_batt  = batt.level;
+            let new_wifi  = wifi.connected;
+            let new_bt    = bt.connected;
+            let new_muted = audio.mic_muted;
+            if new_batt != prev_batt || new_wifi != prev_wifi
+                || new_bt != prev_bt || new_muted != prev_muted
+            {
+                unsafe { status_bar.update(new_batt, new_wifi, new_bt, new_muted); }
+                prev_batt  = new_batt;
+                prev_wifi  = new_wifi;
+                prev_bt    = new_bt;
+                prev_muted = new_muted;
+            }
         }
 
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -133,9 +153,10 @@ fn ui_thread_main(
 
         match &nav.current {
             UiScreen::Home => {
-                let audio   = audio_rx.borrow().clone();
-                let meeting = meeting_rx.borrow().clone();
-                unsafe { home.update_state(&audio, &meeting); }
+                let audio = audio_rx.borrow().clone();
+                let bt    = bt_rx.borrow().clone();
+                let wifi  = wifi_rx.borrow().clone();
+                unsafe { home.update_state(&audio, &bt, &wifi); }
             }
             _ => {}
         }
@@ -166,10 +187,22 @@ unsafe extern "C" fn flush_cb(
 }
 
 unsafe extern "C" fn touch_read_cb(
-    _indev: *mut lv_indev_t,
+    indev: *mut lv_indev_t,
     data: *mut lv_indev_data_t,
 ) {
-    (*data).state = lv_indev_state_t_LV_INDEV_STATE_RELEASED;
+    let touch = lv_indev_get_user_data(indev) as *const input::TouchInput;
+    if touch.is_null() {
+        (*data).state = lv_indev_state_t_LV_INDEV_STATE_RELEASED;
+        return;
+    }
+    let touch = &*touch;
+    (*data).point.x = touch.x;
+    (*data).point.y = touch.y;
+    (*data).state = if touch.pressed {
+        lv_indev_state_t_LV_INDEV_STATE_PRESSED
+    } else {
+        lv_indev_state_t_LV_INDEV_STATE_RELEASED
+    };
 }
 
 #[cfg(test)]

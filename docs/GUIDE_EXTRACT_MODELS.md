@@ -29,7 +29,17 @@ pip3 install hidapi  # or: pip3 install --break-system-packages hidapi
 
 ### 1. Enable ADB
 
-Save as `enable_adb.py`:
+Use the checked-in helper script from the repository root:
+
+If you are using the standalone copy instead of the checked-in helper:
+
+```bash
+python3 enable_adb.py
+sleep 3
+adb devices  # Should show PSP_<serial>
+```
+
+If you need a standalone copy outside this repo, this is the helper script contents:
 
 ```python
 #!/usr/bin/env python3
@@ -52,10 +62,12 @@ print("ADB enabled. Run: adb devices")
 ```
 
 ```bash
-python3 enable_adb.py
+python3 ./waved/scripts/enable_adb.py
 sleep 3
 adb devices  # Should show PSP_<serial>
 ```
+
+If the device rebooted or switched USB modes, run the helper again before pulling files.
 
 ### 2. Pull All Models
 

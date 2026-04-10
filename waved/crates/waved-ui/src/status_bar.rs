@@ -70,32 +70,39 @@ impl StatusBar {
         lv_obj_set_style_pad_left(root, 0, 0);
         lv_obj_set_style_pad_right(root, 0, 0);
 
-        // Helper: create a 20×20 image at a given x offset from the left
-        let mk_icon = |x: i32, initial_src: &[u8]| {
+        // Icons and labels clustered around the screen centre (x=200).
+        // At the top of the circular display the visible width is ~270 px, so
+        // keeping everything within ±60 px of centre (x=140..260) is safe.
+        //
+        // Layout (left → right, centred at x=200):
+        //   battery  wifi  bt  muted  time
+        //   -46      -22   +2  +26    +52
+        let mk_icon = |x_off: i32, initial_src: &[u8]| {
             let img = lv_image_create(root);
             lv_image_set_src(img, initial_src.as_ptr() as *const _);
-            lv_obj_align(img, lv_align_t_LV_ALIGN_LEFT_MID, x, 0);
+            lv_obj_align(img, lv_align_t_LV_ALIGN_CENTER, x_off, 0);
             lv_obj_set_style_border_width(img, 0, 0);
             img
         };
 
-        let img_battery = mk_icon(4,  battery_icon(80));
-        let img_wifi    = mk_icon(28, wifi_icon(false));
-        let img_bt      = mk_icon(52, bt_icon(false));
+        // Initialize at 0%; will update to real level once MCU sends battery data.
+        let img_battery = mk_icon(-46, battery_icon(0));
+        let img_wifi    = mk_icon(-22, wifi_icon(false));
+        let img_bt      = mk_icon(  2, bt_icon(false));
 
         // Small "M" label when mic is muted (hidden by default)
         let lbl_mic = lv_label_create(root);
         lv_label_set_text(lbl_mic, c"".as_ptr());
         lv_obj_set_style_text_color(lbl_mic, rgb(0xff4444), 0);
         lv_obj_set_style_text_font(lbl_mic, &lv_font_montserrat_12, 0);
-        lv_obj_align(lbl_mic, lv_align_t_LV_ALIGN_LEFT_MID, 76, 0);
+        lv_obj_align(lbl_mic, lv_align_t_LV_ALIGN_CENTER, 26, 0);
 
-        // Time on the right
+        // Time — centred cluster, just right of the muted indicator
         let lbl_time = lv_label_create(root);
         lv_label_set_text(lbl_time, c"00:00".as_ptr());
         lv_obj_set_style_text_color(lbl_time, rgb(CLR_TEXT), 0);
         lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_12, 0);
-        lv_obj_align(lbl_time, lv_align_t_LV_ALIGN_RIGHT_MID, -4, 0);
+        lv_obj_align(lbl_time, lv_align_t_LV_ALIGN_CENTER, 52, 0);
 
         Self { img_battery, img_wifi, img_bt, lbl_mic, lbl_time }
     }

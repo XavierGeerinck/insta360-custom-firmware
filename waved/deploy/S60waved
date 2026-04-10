@@ -19,11 +19,16 @@ case "$1" in
         # Start waved with watchdog respawn
         (
             while true; do
-                /data/waved/waved 2>&1 | logger -t waved
-                echo "waved exited ($?), restarting in 3s..." | logger -t waved
+                /data/waved/waved >>/data/waved/waved.log 2>&1
+                echo "waved exited ($?), restarting in 3s..." >>/data/waved/waved.log
                 sleep 3
             done
         ) &
+
+        # The first waved instance after boot always has a broken display
+        # (fb_ili79400 deferred-I/O not active). Kill it after 5s so the
+        # watchdog restarts it — the second instance works reliably.
+        (sleep 5 && killall -TERM waved) &
         ;;
     stop)
         echo "Stopping waved..."
