@@ -42,6 +42,34 @@ unsafe extern "C" fn rec_btn_cb(e: *mut lv_event_t) {
     }
 }
 
+/// Vol button clicked → toggle control center (sends ToggleSpeakerMute,
+/// which is intercepted by the UI loop in handle_command to show/hide the overlay).
+unsafe extern "C" fn vol_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::ToggleSpeakerMute);
+        }
+    }
+}
+
+/// Swipe down on home screen → toggle control center (same signal as vol_btn_cb).
+unsafe extern "C" fn gesture_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_GESTURE {
+        let dir = lv_indev_get_gesture_dir(lv_indev_active());
+        if dir == lv_dir_t_LV_DIR_BOTTOM {
+            let tx = lv_event_get_user_data(e)
+                as *const tokio::sync::broadcast::Sender<Command>;
+            if !tx.is_null() {
+                // ToggleSpeakerMute is reused as the "toggle control center" UI signal.
+                // Task 4 (handle_command) intercepts this to show/hide the overlay.
+                let _ = (*tx).send(Command::ToggleSpeakerMute);
+            }
+        }
+    }
+}
+
 extern "C" {
     static lv_font_montserrat_12: lv_font_t;
     static lv_font_montserrat_14: lv_font_t;
@@ -178,6 +206,16 @@ impl super::Screen for HomeScreen {
             lv_obj_set_style_text_font(lbl_vol, &lv_font_montserrat_12, 0);
             lv_obj_align(lbl_vol, lv_align_t_LV_ALIGN_BOTTOM_MID, 0, -8);
 
+            // Make vol button clickable — opens Control Center.
+            lv_obj_add_flag(btn_spk, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
+            let vol_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                btn_spk,
+                Some(vol_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                vol_tx as *mut _,
+            );
+
             // ── Record button (180×76) ────────────────────────────────────────
             // Original: TOP_MID x=0, y=160 → centre (200, 198)
             // CENTER offset: (0, 198−152) = (0, +46)
@@ -241,21 +279,14 @@ impl super::Screen for HomeScreen {
                 mic_tx as *mut _,
             );
 
-            // ── "More" slide-up indicator ─────────────────────────────────────
-            // Original: a 120×120 circle at TOP_MID y=264, mostly off-screen,
-            // with an arrow_down.png rotated 180° (= arrow pointing up) centred
-            // inside it. The visible sliver (y 264..304) hints "swipe up for more".
-            // Original decompiled: lv_obj_align(btn, TOP_MID, 0, 0x108=264)
-            //                      lv_img_set_angle(arrow, 0x708=1800)
-            let more_btn = lv_image_create(screen);
-            lv_image_set_src(
-                more_btn,
-                c"A:/etc/pspapp/lvgl/icon/btn/arrow_down.png".as_ptr() as *const _,
+            // Swipe down to open control center
+            let gesture_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                screen,
+                Some(gesture_cb),
+                lv_event_code_t_LV_EVENT_GESTURE,
+                gesture_tx as *mut _,
             );
-            lv_image_set_rotation(more_btn, 1800); // 180° → arrow points up
-            // TOP_MID y=264 → CENTER y_ofs = 264 − 152 = +112; only sliver visible
-            lv_obj_align(more_btn, lv_align_t_LV_ALIGN_TOP_MID, 0, 264);
-            lv_obj_set_style_opa(more_btn, 120, 0); // dim: it's barely visible in the sliver
 
             screen
         }
