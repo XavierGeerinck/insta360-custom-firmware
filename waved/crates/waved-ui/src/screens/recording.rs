@@ -9,7 +9,56 @@ const VU_BAR_W: i32 = 3;
 const VU_BAR_GAP: i32 = 2;
 const VU_BANDS: usize = 8;
 fn vu_bar_height(level: f32) -> i32 { (level.clamp(0.0, 1.0) * VU_MAX_H as f32) as i32 }
-use waved_state::{AudioState, AudioMode, MeetingState, StateBus};
+use waved_state::{AudioState, AudioMode, Command, MeetingState, StateBus};
+
+/// Mark button clicked → add bookmark.
+unsafe extern "C" fn mark_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::AddBookmark);
+        }
+    }
+}
+
+/// Stop button clicked → stop recording.
+unsafe extern "C" fn stop_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::StopRecording);
+        }
+    }
+}
+
+/// Mute button clicked → toggle mic mute.
+unsafe extern "C" fn mute_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::ToggleMicMute);
+        }
+    }
+}
+
+/// Swipe down on recording screen → toggle control center.
+unsafe extern "C" fn gesture_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_GESTURE {
+        let dir = lv_indev_get_gesture_dir(lv_indev_active());
+        if dir == lv_dir_t_LV_DIR_BOTTOM {
+            let tx = lv_event_get_user_data(e)
+                as *const tokio::sync::broadcast::Sender<Command>;
+            if !tx.is_null() {
+                // ToggleSpeakerMute is reused as the "toggle control center" UI signal.
+                // Task 4 (handle_command) intercepts this to show/hide the overlay.
+                let _ = (*tx).send(Command::ToggleSpeakerMute);
+            }
+        }
+    }
+}
 
 extern "C" {
     static lv_font_montserrat_12: lv_font_t;
@@ -25,7 +74,7 @@ pub fn format_duration(secs: u32) -> String {
 }
 
 pub struct RecordingScreen {
-    _bus: Arc<StateBus>,
+    bus: Arc<StateBus>,
     sphere: *mut lv_obj_t,
     lbl_timer: *mut lv_obj_t,
     vu_bars: [*mut lv_obj_t; VU_BANDS],
@@ -36,7 +85,7 @@ pub struct RecordingScreen {
 impl RecordingScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
-            _bus: bus,
+            bus,
             sphere: std::ptr::null_mut(),
             lbl_timer: std::ptr::null_mut(),
             vu_bars: [std::ptr::null_mut(); VU_BANDS],
@@ -144,6 +193,13 @@ impl super::Screen for RecordingScreen {
             lv_obj_set_style_text_color(lbl_mark, rgb(CLR_TEXT_DIM), 0);
             lv_obj_set_style_text_font(lbl_mark, &lv_font_montserrat_12, 0);
             lv_obj_center(lbl_mark);
+            let mark_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                btn_mark,
+                Some(mark_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                mark_tx as *mut _,
+            );
 
             let btn_stop = lv_button_create(screen);
             lv_obj_set_size(btn_stop, 80, 32);
@@ -155,6 +211,13 @@ impl super::Screen for RecordingScreen {
             lv_obj_set_style_text_color(lbl_stop, rgb(CLR_WHITE), 0);
             lv_obj_set_style_text_font(lbl_stop, &lv_font_montserrat_14, 0);
             lv_obj_center(lbl_stop);
+            let stop_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                btn_stop,
+                Some(stop_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                stop_tx as *mut _,
+            );
 
             let btn_mute = lv_button_create(screen);
             lv_obj_set_size(btn_mute, 60, 38);
@@ -166,6 +229,13 @@ impl super::Screen for RecordingScreen {
             lv_obj_set_style_text_color(lbl_mute, rgb(CLR_TEXT_DIM), 0);
             lv_obj_set_style_text_font(lbl_mute, &lv_font_montserrat_12, 0);
             lv_obj_center(lbl_mute);
+            let mute_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                btn_mute,
+                Some(mute_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                mute_tx as *mut _,
+            );
 
             // Bottom bar
             let bbar = lv_obj_create(screen);
@@ -191,6 +261,14 @@ impl super::Screen for RecordingScreen {
             let lbl_storage = mk(b"-- GB\0", 188);
             let _ = mk(b"Settings\0", 300);
             self.lbl_storage = lbl_storage;
+
+            let gesture_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                screen,
+                Some(gesture_cb),
+                lv_event_code_t_LV_EVENT_GESTURE,
+                gesture_tx as *mut _,
+            );
 
             screen
         }
