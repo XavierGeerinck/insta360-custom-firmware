@@ -55,7 +55,7 @@ fn ui_thread_main(
     let battery_rx = bus.battery.subscribe();
     let bt_rx      = bus.bt.subscribe();
     let wifi_rx    = bus.wifi.subscribe();
-    let _meeting_rx = bus.meeting.subscribe();
+    let meeting_rx = bus.meeting.subscribe();
 
     let mut cmd_rx = bus.commands.subscribe();
 
@@ -103,6 +103,11 @@ fn ui_thread_main(
 
     let mut nav = ScreenManager::new();
     let mut home = screens::home::HomeScreen::new(Arc::clone(&bus));
+    let mut recording = screens::recording::RecordingScreen::new(Arc::clone(&bus));
+    let mut cc = screens::control_center::ControlCenter::new(Arc::clone(&bus));
+    unsafe { cc.init(); }
+
+    let mut prev_recording = false;
 
     let root = home.create();
     unsafe { lv_screen_load(root); }
@@ -145,11 +150,37 @@ fn ui_thread_main(
         }
 
         while let Ok(cmd) = cmd_rx.try_recv() {
-            handle_command(&cmd, &mut nav, &mut toast);
+            handle_command(&cmd, &mut toast, &mut cc);
         }
 
         unsafe { lv_timer_handler(); }
         unsafe { toast.tick(); }
+
+        // Navigate Home ↔ Recording based on meeting.recording state
+        {
+            let recording_active = meeting_rx.borrow().recording;
+            if recording_active && !prev_recording {
+                // Started recording → switch to Recording screen.
+                // Hide CC first so it doesn't occlude the recording screen.
+                // SAFETY: lv_screen_load is called before navigate_to deletes the old root.
+                // This is safe without animations because LVGL completes the load synchronously.
+                // If transition animations are ever added, this order must be revisited.
+                if cc.is_visible() { unsafe { cc.hide(); } }
+                let root = recording.create();
+                unsafe { lv_screen_load(root); }
+                nav.navigate_to(UiScreen::Recording);
+                nav.set_root(root);
+                prev_recording = true;
+            } else if !recording_active && prev_recording {
+                // Stopped recording → switch back to Home screen.
+                if cc.is_visible() { unsafe { cc.hide(); } }
+                let root = home.create();
+                unsafe { lv_screen_load(root); }
+                nav.navigate_to(UiScreen::Home);
+                nav.set_root(root);
+                prev_recording = false;
+            }
+        }
 
         match &nav.current {
             UiScreen::Home => {
@@ -158,17 +189,53 @@ fn ui_thread_main(
                 let wifi  = wifi_rx.borrow().clone();
                 unsafe { home.update_state(&audio, &bt, &wifi); }
             }
+            UiScreen::Recording => {
+                let audio   = audio_rx.borrow().clone();
+                let meeting = meeting_rx.borrow().clone();
+                unsafe { recording.update_state(&audio, &meeting); }
+            }
             _ => {}
+        }
+
+        // Update control center state whenever it is visible
+        if cc.is_visible() {
+            let audio = audio_rx.borrow().clone();
+            let wifi  = wifi_rx.borrow().clone();
+            let bt    = bt_rx.borrow().clone();
+            unsafe { cc.update_state(&audio, &wifi, &bt); }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
-fn handle_command(cmd: &Command, _nav: &mut ScreenManager, toast: &mut Toast) {
+fn handle_command(
+    cmd: &Command,
+    toast: &mut Toast,
+    cc: &mut screens::control_center::ControlCenter,
+) {
     match cmd {
         Command::AddBookmark => {
             unsafe { toast.show("Bookmark added", 1500); }
+        }
+        Command::Shutdown => {
+            // The actual shutdown is handled by waved-mcu which also subscribes
+            // to this command. Here we just show feedback.
+            unsafe { toast.show("Shutting down...", 2000); }
+        }
+        Command::ToggleSpeakerMute => {
+            // Reused as "toggle control center" UI signal from gestures/buttons.
+            // handle_command intercepts this before any audio service sees it
+            // (the command channel has multiple subscribers; the audio service
+            // also subscribes, but on the Wave there is currently no speaker
+            // hardware, so toggling speaker mute is a no-op there).
+            unsafe {
+                if cc.is_visible() {
+                    cc.hide();
+                } else {
+                    cc.show();
+                }
+            }
         }
         _ => {}
     }
