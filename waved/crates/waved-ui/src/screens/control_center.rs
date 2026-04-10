@@ -110,6 +110,12 @@ impl ControlCenter {
     /// Create the overlay panel on lv_layer_top(). Starts hidden (y = -272).
     pub unsafe fn init(&mut self) {
         let top = lv_layer_top();
+        // lv_layer_top() is CLICKABLE by default in LVGL 9 (it's a full-screen
+        // 400×304 object). If left clickable it absorbs ALL touch events, making
+        // every button on the active screen unreachable. Strip the flag so the
+        // layer is input-transparent; its children (the panel, its buttons) are
+        // still individually clickable.
+        lv_obj_remove_flag(top, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
         let panel = lv_obj_create(top);
         lv_obj_set_size(panel, 400, 272); // visible area = 304 - 32 (status bar)
         lv_obj_set_pos(panel, 0, -272);
@@ -362,13 +368,12 @@ impl ControlCenter {
         lv_obj_align(hint, lv_align_t_LV_ALIGN_TOP_LEFT, 0, 468);
 
         // ── Swipe up gesture → close ──────────────────────────────────────────────
-        // Register on lv_layer_top() (non-scrollable parent) to avoid conflict with
-        // the panel's scroll behavior. Enable LV_OBJ_FLAG_GESTURE_BUBBLE on panel so
-        // gestures originating on the panel propagate up to layer_top.
-        lv_obj_add_flag(panel, lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE);
+        // Register on the panel itself. Known limitation: when scrolled past the
+        // top, LVGL may interpret upward drags as scroll rather than gesture.
+        // Acceptable trade-off — the panel can always be scrolled back to top first.
         let gesture_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
         lv_obj_add_event_cb(
-            top,
+            panel,
             Some(swipe_up_cb),
             lv_event_code_t_LV_EVENT_GESTURE,
             gesture_tx as *mut _,
