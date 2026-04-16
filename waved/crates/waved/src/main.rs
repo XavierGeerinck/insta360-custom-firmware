@@ -133,6 +133,11 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     // Simulate: SimAudioService writes silence frames directly to meeting channel.
     let (meeting_tx, meeting_rx) = waved_audio::callbacks::create_audio_channel();
 
+    // Storage for the capture stop flag so the shutdown path can signal the ALSA thread.
+    // The same cfg condition ensures this compiles away when capture-alsa is disabled.
+    #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
+    let capture_stop_flag: Arc<std::sync::atomic::AtomicBool>;
+
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     {
         use std::sync::atomic::AtomicBool;
@@ -147,6 +152,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         );
         let capture_stats = CaptureStats::new();
         let capture_stop = Arc::new(AtomicBool::new(false));
+        // Keep a reference outside this block so the shutdown path can set the flag.
+        capture_stop_flag = Arc::clone(&capture_stop);
 
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
         let audio_svc = waved_audio::AudioService::new(
@@ -313,5 +320,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
     info!("shutdown signal received");
     let _ = bus.commands.send(Command::Shutdown);
+    // Signal the ALSA capture thread to stop before waiting for drain.
+    #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
+    capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 }
