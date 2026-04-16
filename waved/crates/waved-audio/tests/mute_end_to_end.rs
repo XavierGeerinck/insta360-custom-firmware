@@ -40,7 +40,7 @@ async fn mute_toggles_zero_meeting_frames() {
 
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
+    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let _join = std::thread::spawn(move || {

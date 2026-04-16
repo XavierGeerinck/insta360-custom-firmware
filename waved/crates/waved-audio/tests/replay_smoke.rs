@@ -35,7 +35,7 @@ async fn replay_silence_produces_zero_vu() {
     // Spawn capture thread manually
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
+    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {
@@ -64,7 +64,7 @@ async fn replay_tone_elevates_vu_on_tone_channel() {
 
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
+    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {

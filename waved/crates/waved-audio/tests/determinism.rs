@@ -26,7 +26,7 @@ fn collect_last_frame(fixture: &[i16]) -> (AudioFrame, Arc<CaptureStats>) {
     let (tx, mut rx) = mpsc::channel::<AudioFrame>(256);
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
+    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
     let stats_c = Arc::clone(&stats);
     let stop_c = Arc::clone(&stop);
     std::thread::spawn(move || {

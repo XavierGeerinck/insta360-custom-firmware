@@ -22,7 +22,7 @@ pub enum ReplayFormat {
 // Backwards-compat alias used in tests and existing callers until they migrate.
 impl ReplayFormat {
     /// 8-channel interleaved i16 (what our downmixed fixtures/recordings use).
-    pub const I16Eight: ReplayFormat = ReplayFormat::I16Interleaved { channels: 8 };
+    pub const I16_EIGHT: ReplayFormat = ReplayFormat::I16Interleaved { channels: 8 };
 
     pub fn channels(&self) -> usize {
         match self {
@@ -85,7 +85,7 @@ mod tests {
     fn reads_i16_file_and_widens_to_i32() {
         let data: Vec<i16> = vec![1, -1, 100, -100, i16::MAX, i16::MIN];
         let f = write_pcm_i16(&data);
-        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16Eight, 48000).unwrap();
+        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
         let mut buf = vec![0i32; 6];
         let n = src.read(&mut buf).unwrap();
         assert_eq!(n, 6);
@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn returns_zero_at_eof() {
         let f = write_pcm_i16(&[1, 2, 3, 4]);
-        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16Eight, 48000).unwrap();
+        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
         let mut buf = vec![0i32; 4];
         assert_eq!(src.read(&mut buf).unwrap(), 4);
         assert_eq!(src.read(&mut buf).unwrap(), 0);
@@ -110,7 +110,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&[0x01, 0x00, 0x02, 0x00, 0xAB]).unwrap();
         f.flush().unwrap();
-        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16Eight, 48000).unwrap();
+        let mut src = ReplayPcmSource::open(f.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
         let mut buf = vec![0i32; 4];
         let n = src.read(&mut buf).unwrap();
         assert_eq!(n, 2);
