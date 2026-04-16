@@ -8,6 +8,9 @@ pub mod mock;
 #[cfg(feature = "capture-replay")]
 pub mod replay;
 
+pub mod thread;
+pub use thread::{CaptureStats, run_capture_loop};
+
 pub use channel_map::{ChannelMap, ChannelMapError, ChannelMapSource};
 
 #[cfg(feature = "capture-replay")]
