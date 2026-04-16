@@ -47,6 +47,7 @@ pub fn run_capture_loop<P: PcmSource>(
     let start = Instant::now();
     let sample_rate = source.sample_rate();
     let mut consecutive_errors = 0u32;
+    let mut consecutive_partial = 0u32;
     info!(
         "capture loop starting: period={period_frames} frames, mics={mic_channels}, sr={sample_rate}"
     );
@@ -59,6 +60,7 @@ pub fn run_capture_loop<P: PcmSource>(
             }
             Ok(n) if n == raw.len() => {
                 consecutive_errors = 0;
+                consecutive_partial = 0;
                 if let Err(e) = downmix_interleaved(&raw, &mut out, &map) {
                     error!("downmix failed: {e}");
                     continue;
@@ -85,8 +87,8 @@ pub fn run_capture_loop<P: PcmSource>(
             }
             Ok(partial) => {
                 warn!("partial capture read: {partial}/{} samples", raw.len());
-                consecutive_errors += 1;
-                if consecutive_errors > 5 {
+                consecutive_partial += 1;
+                if consecutive_partial > 5 {
                     error!("too many partial reads, stopping capture");
                     return;
                 }
