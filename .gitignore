@@ -38,6 +38,13 @@ ghidra_projects/
 # Brainstorming / visual companion session files
 .superpowers/
 
+# Serena MCP tool project config (project-local, not for VCS)
+.serena/
+
+# Compiled binaries that land at repo root via tooling
+rust_out
+waved/rust_out
+
 # Device backups — contain per-device secrets (unifykey, bindkey, TEA license).
 # Keep the README tracked so the backup layout is documented, but exclude the
 # actual captured bytes (partitions and pulled /etc text files that may
