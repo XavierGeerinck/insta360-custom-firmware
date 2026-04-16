@@ -16,12 +16,13 @@ pub fn rms_per_channel(interleaved: &[i16], channels: usize) -> Vec<f32> {
     }
     (0..channels)
         .map(|ch| {
-            let chan: Vec<i16> = interleaved.iter()
+            let sum_sq: f64 = interleaved.iter()
                 .skip(ch)
                 .step_by(channels)
-                .copied()
-                .collect();
-            rms(&chan)
+                .map(|&s| (s as f64) * (s as f64))
+                .sum();
+            let count = (interleaved.len() / channels) as f64;
+            (sum_sq / count).sqrt() as f32
         })
         .collect()
 }
@@ -62,16 +63,28 @@ pub fn correlation(a: &[i16], b: &[i16]) -> f32 {
 }
 
 pub fn correlation_matrix(interleaved: &[i16], channels: usize) -> Vec<Vec<f32>> {
+    // Deinterleave once.
     let chans: Vec<Vec<i16>> = (0..channels)
         .map(|ch| interleaved.iter().skip(ch).step_by(channels).copied().collect())
         .collect();
-    (0..channels)
-        .map(|i| (0..channels).map(|j| correlation(&chans[i], &chans[j])).collect())
-        .collect()
+    let mut m = vec![vec![0.0f32; channels]; channels];
+    for i in 0..channels {
+        m[i][i] = if chans[i].is_empty() { 0.0 } else { 1.0 };
+        for j in (i + 1)..channels {
+            let r = correlation(&chans[i], &chans[j]);
+            m[i][j] = r;
+            m[j][i] = r;
+        }
+    }
+    m
 }
 
 /// Cross-correlation at a given lag. Used by the latency probe to find
 /// where the reference chirp appears in the captured mic signal.
+///
+/// Returns `(best_lag, raw_score)` where `raw_score` is the unnormalized
+/// dot-product sum — meaningful only for comparing lags with the same
+/// reference signal, not across different reference lengths.
 pub fn cross_correlate_peak(signal: &[i16], reference: &[i16]) -> (usize, f32) {
     if reference.is_empty() || signal.len() < reference.len() {
         return (0, 0.0);
