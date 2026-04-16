@@ -1,5 +1,6 @@
 pub mod callbacks;
 pub mod capture;
+pub mod stats_collector;
 pub mod ffi;
 pub mod fixtures;
 pub mod metrics;
