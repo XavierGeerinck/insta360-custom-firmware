@@ -2769,6 +2769,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-latency-probe"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "tracing",
+ "tracing-subscriber",
+ "waved-audio",
+]
+
+[[package]]
 name = "waved-mcu"
 version = "0.1.0"
 dependencies = [
