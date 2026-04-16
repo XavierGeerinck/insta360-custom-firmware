@@ -65,12 +65,12 @@ pub fn run_capture_loop<P: PcmSource>(
                     error!("downmix failed: {e}");
                     continue;
                 }
-                let frame = AudioFrame {
-                    data: out.clone(),
+                let frame = AudioFrame::mic_only(
+                    out.clone(),
+                    mic_channels as u16,
                     sample_rate,
-                    channels: mic_channels as u16,
-                    timestamp_ms: start.elapsed().as_millis() as u64,
-                };
+                    start.elapsed().as_millis() as u64,
+                );
                 match frame_tx.try_send(frame) {
                     Ok(()) => { stats.frames_emitted.fetch_add(1, Ordering::Relaxed); }
                     Err(mpsc::error::TrySendError::Full(_)) => {

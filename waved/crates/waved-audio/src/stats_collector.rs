@@ -122,7 +122,7 @@ mod tests {
     use crate::fixtures::{correlation_pair_8ch, silence_8ch};
 
     fn frame_from(data: Vec<i16>) -> AudioFrame {
-        AudioFrame { data, sample_rate: 48000, channels: 8, timestamp_ms: 42 }
+        AudioFrame::mic_only(data, 8, 48000, 42)
     }
 
     #[test]

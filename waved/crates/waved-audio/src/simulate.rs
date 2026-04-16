@@ -27,11 +27,12 @@ impl SimAudioService {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let frame = AudioFrame {
-                        data: vec![0i16; SAMPLES_PER_FRAME * CHANNELS as usize],
-                        sample_rate: 48000, channels: CHANNELS,
-                        timestamp_ms: frame_count * FRAME_INTERVAL_MS,
-                    };
+                    let frame = AudioFrame::mic_only(
+                        vec![0i16; SAMPLES_PER_FRAME * CHANNELS as usize],
+                        CHANNELS,
+                        48000,
+                        frame_count * FRAME_INTERVAL_MS,
+                    );
                     let vu = crate::compute_vu(&frame.data, 8);
                     self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
                     let _ = self.meeting_tx.send(frame).await;
