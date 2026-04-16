@@ -13,8 +13,8 @@ adb push target/aarch64-unknown-linux-gnu/debug/waved-capture-record /data/waved
 
 echo "==> Restarting waved"
 adb shell "killall waved 2>/dev/null; sleep 2"
-adb shell "nohup /data/waved/waved >/tmp/waved.log 2>&1 &"
-sleep 5
+adb shell "setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &"
+sleep 8
 
 echo "==> Checking /tmp/audio_stats.json exists + valid JSON"
 adb shell 'test -f /tmp/audio_stats.json && cat /tmp/audio_stats.json' | python3 -m json.tool > /dev/null
@@ -72,5 +72,5 @@ print('OK')
 "
 
 echo "==> Restarting waved"
-adb shell "nohup /data/waved/waved >/tmp/waved.log 2>&1 &"
+adb shell "setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &"
 echo "==> Smoke test passed"
