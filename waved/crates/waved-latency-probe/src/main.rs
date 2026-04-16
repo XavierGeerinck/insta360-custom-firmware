@@ -12,7 +12,8 @@ use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::alsa::AlsaPcmSource;
+use waved_audio::audio_config::SampleFormat;
+use waved_audio::capture::alsa::{AlsaPcmSource, AlsaStreamConfig};
 use waved_audio::capture::{run_capture_loop, CaptureStats};
 use waved_audio::fixtures::chirp_5khz_burst;
 use waved_audio::metrics::cross_correlate_peak;
@@ -73,7 +74,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mic_channels = args.mic_channels as usize;
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = AlsaPcmSource::open("hw:0,2", 48000, args.mic_channels, 256, 4)?;
+    let src = AlsaPcmSource::open(&AlsaStreamConfig {
+        device: "hw:0,2",
+        channels: args.mic_channels,
+        sample_rate: 48000,
+        format: SampleFormat::S32_LE,
+        period_frames: 256,
+        buffer_periods: 4,
+    }).map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
     let (tx, mut rx) = mpsc::channel::<AudioFrame>(256);
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);

@@ -141,8 +141,9 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     {
         use std::sync::atomic::AtomicBool;
+        use waved_audio::audio_config::SampleFormat;
         use waved_audio::capture::{
-            alsa::AlsaPcmSource, run_capture_loop, CaptureStats, ChannelMapSource,
+            alsa::{AlsaPcmSource, AlsaStreamConfig}, run_capture_loop, CaptureStats, ChannelMapSource,
         };
         use waved_audio::stats_collector;
 
@@ -167,7 +168,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             std::time::Duration::from_millis(500),
         ));
 
-        let src = match AlsaPcmSource::open("hw:0,2", 48000, MIC_CHANNELS as u32, 256, 4) {
+        let src = match AlsaPcmSource::open(&AlsaStreamConfig {
+            device: "hw:0,2",
+            channels: MIC_CHANNELS as u32,
+            sample_rate: 48000,
+            format: SampleFormat::S32_LE,
+            period_frames: 256,
+            buffer_periods: 4,
+        }) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("ALSA capture open failed: {e}");
