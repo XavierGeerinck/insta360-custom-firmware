@@ -19,6 +19,7 @@ simulate = [
     "waved-ui?/simulate",
 ]
 ui = ["dep:waved-ui"]
+capture-alsa = ["waved-audio/capture-alsa"]
 
 [dependencies]
 waved-state = { path = "../waved-state" }

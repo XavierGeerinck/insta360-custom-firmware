@@ -1,3 +1,6 @@
+#[cfg(all(feature = "simulate", feature = "capture-alsa"))]
+compile_error!("features `simulate` and `capture-alsa` are mutually exclusive");
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -130,10 +133,50 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     // Simulate: SimAudioService writes silence frames directly to meeting channel.
     let (meeting_tx, meeting_rx) = waved_audio::callbacks::create_audio_channel();
 
-    #[cfg(not(feature = "simulate"))]
+    #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     {
+        use std::sync::atomic::AtomicBool;
+        use std::path::Path;
+        use waved_audio::capture::{
+            alsa::AlsaPcmSource, run_capture_loop, CaptureStats, ChannelMap,
+        };
+        use waved_audio::stats_collector;
+
+        let (map, map_src) = ChannelMap::load_or_default(
+            Path::new("/etc/channel_map_config_default.json")
+        );
+        let capture_stats = CaptureStats::new();
+        let capture_stop = Arc::new(AtomicBool::new(false));
+
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
-        let audio_svc = waved_audio::AudioService::new(Arc::clone(&bus.audio), frame_tx, frame_rx, meeting_tx);
+        let audio_svc = waved_audio::AudioService::new(
+            Arc::clone(&bus.audio), frame_tx.clone(), frame_rx, meeting_tx,
+        );
+        let stats_rx = audio_svc.subscribe_frames();
+        tokio::spawn(stats_collector::run(
+            stats_rx,
+            Arc::clone(&capture_stats),
+            map_src,
+            std::path::PathBuf::from("/tmp/audio_stats.json"),
+            std::time::Duration::from_millis(500),
+        ));
+
+        let src = match AlsaPcmSource::open("hw:0,0", 48000, map.total_channels as u32, 256, 4) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("ALSA capture open failed: {e}");
+                std::process::exit(1);
+            }
+        };
+        let stats_c = Arc::clone(&capture_stats);
+        let stop_c = Arc::clone(&capture_stop);
+        let map_c = map.clone();
+        std::thread::Builder::new()
+            .name("audio-capture".into())
+            .spawn(move || {
+                run_capture_loop(src, map_c, 256, frame_tx, stop_c, stats_c);
+            })
+            .expect("spawn capture thread");
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
     }
