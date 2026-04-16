@@ -2737,6 +2737,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-capture-record"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "waved-audio",
+]
+
+[[package]]
 name = "waved-config"
 version = "0.1.0"
 dependencies = [
@@ -2773,6 +2785,7 @@ name = "waved-latency-probe"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "waved-audio",
