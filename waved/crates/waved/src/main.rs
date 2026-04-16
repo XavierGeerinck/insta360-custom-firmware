@@ -140,19 +140,29 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     {
+        use std::path::Path;
         use std::sync::atomic::AtomicBool;
-        use waved_audio::audio_config::SampleFormat;
+        use waved_audio::audio_config::{AudioConfig, ConfigSource};
         use waved_audio::capture::{
-            alsa::{AlsaPcmSource, AlsaStreamConfig}, run_capture_loop, CaptureStats, ChannelMapSource,
+            alsa::{AlsaPcmSource, AlsaStreamConfig},
+            alsa_dual_stream::AlsaDualStreamSource,
+            single_stream::SingleStreamFrameSource,
+            run_capture_loop, CaptureStats, ChannelMapSource,
         };
         use waved_audio::stats_collector;
 
-        // v2: mic device is hw:0,2 (8 channels). References captured separately on hw:0,3.
-        // TODO Task 8/12: replace with AlsaDualStreamSource when implemented.
-        const MIC_CHANNELS: usize = 8;
+        let (cfg, cfg_src) = AudioConfig::load_or_default(Path::new("/etc/waved-audio-config.json"));
+        let map_source = match cfg_src {
+            ConfigSource::File => ChannelMapSource::File,
+            ConfigSource::Fallback => ChannelMapSource::Fallback,
+        };
+        let cfg_src_str = match cfg_src {
+            ConfigSource::File => "file",
+            ConfigSource::Fallback => "fallback",
+        };
+
         let capture_stats = CaptureStats::new();
         let capture_stop = Arc::new(AtomicBool::new(false));
-        // Keep a reference outside this block so the shutdown path can set the flag.
         capture_stop_flag = Arc::clone(&capture_stop);
 
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
@@ -160,39 +170,66 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             Arc::clone(&bus.audio), frame_tx.clone(), frame_rx, meeting_tx,
         );
         let stats_rx = audio_svc.subscribe_frames();
+
+        // Build the capture source: dual-stream if reference configured, else single-stream.
+        enum SourceDyn {
+            Dual(AlsaDualStreamSource),
+            Single(SingleStreamFrameSource<AlsaPcmSource>),
+        }
+        let (source, alignment) = if cfg.reference_enabled() {
+            match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
+                Ok(s) => {
+                    let a = s.alignment();
+                    (SourceDyn::Dual(s), a.as_str().to_string())
+                }
+                Err(e) => {
+                    tracing::error!("ALSA dual-stream open failed:\n{e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            let mic = match AlsaPcmSource::open(&AlsaStreamConfig {
+                device: &cfg.capture.mic_device,
+                channels: cfg.capture.mic_channels,
+                sample_rate: cfg.capture.mic_sample_rate,
+                format: cfg.capture.mic_format,
+                period_frames: cfg.period_frames,
+                buffer_periods: cfg.buffer_periods,
+            }) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("ALSA mic open failed:\n{e}");
+                    std::process::exit(1);
+                }
+            };
+            (SourceDyn::Single(SingleStreamFrameSource::new(
+                mic, cfg.period_frames, cfg.capture.mic_channels as usize,
+            )), "mic-only".to_string())
+        };
+
         tokio::spawn(stats_collector::run(
             stats_rx,
             Arc::clone(&capture_stats),
-            ChannelMapSource::Fallback,
+            map_source,
             std::path::PathBuf::from("/tmp/audio_stats.json"),
             std::time::Duration::from_millis(500),
-            "none".to_string(),
+            alignment.clone(),
         ));
 
-        let src = match AlsaPcmSource::open(&AlsaStreamConfig {
-            device: "hw:0,2",
-            channels: MIC_CHANNELS as u32,
-            sample_rate: 48000,
-            format: SampleFormat::S32_LE,
-            period_frames: 256,
-            buffer_periods: 4,
-        }) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!("ALSA capture open failed: {e}");
-                std::process::exit(1);
-            }
-        };
         let stats_c = Arc::clone(&capture_stats);
         let stop_c = Arc::clone(&capture_stop);
         std::thread::Builder::new()
             .name("audio-capture".into())
-            .spawn(move || {
-                run_capture_loop(src, 256, MIC_CHANNELS, frame_tx, stop_c, stats_c);
+            .spawn(move || match source {
+                SourceDyn::Dual(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
+                SourceDyn::Single(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
             })
             .expect("spawn capture thread");
+
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
+
+        tracing::info!("capture wired: config={cfg_src_str} alignment={alignment}");
     }
 
     #[cfg(feature = "simulate")]

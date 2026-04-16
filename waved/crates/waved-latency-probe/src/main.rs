@@ -11,9 +11,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use waved_audio::audio_config::AudioConfig;
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::audio_config::SampleFormat;
 use waved_audio::capture::alsa::{AlsaPcmSource, AlsaStreamConfig};
+use waved_audio::capture::single_stream::SingleStreamFrameSource;
 use waved_audio::capture::{run_capture_loop, CaptureStats};
 use waved_audio::fixtures::chirp_5khz_burst;
 use waved_audio::metrics::cross_correlate_peak;
@@ -26,9 +27,6 @@ struct Args {
     capture_seconds: f32,
     #[arg(long, default_value_t = 0.5)]
     playback_delay_seconds: f32,
-    /// Number of mic channels on hw:0,2.
-    #[arg(long, default_value_t = 8)]
-    mic_channels: u32,
     /// Minimum cross-correlation score to consider the chirp "heard".
     /// cross_correlate_peak returns an unnormalized dot-product; for a 960-sample
     /// reference at amplitude ~20000, a score of 1e9 requires ~50 RMS of mic signal
@@ -64,29 +62,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let args = Args::parse();
 
+    // Load AudioConfig (falls back to embedded default if file missing).
+    let (cfg, _) = AudioConfig::load_or_default(Path::new("/etc/waved-audio-config.json"));
+    let mic_channels = cfg.capture.mic_channels as usize;
+
     // Extract just channel 0 from the 8-channel fixture as a mono reference.
     let chirp_8ch = chirp_5khz_burst(1);
-    let mono_ref: Vec<i16> = chirp_8ch.iter().step_by(8).copied().collect();
+    let mono_ref: Vec<i16> = chirp_8ch.iter().step_by(mic_channels).copied().collect();
     // Keep only the first 20ms (960 samples @ 48kHz) of the reference — after that it's silence.
     let reference: Vec<i16> = mono_ref.into_iter().take(960).collect();
-    write_wav(Path::new(&args.chirp_path), &reference, 48000)?;
+    write_wav(Path::new(&args.chirp_path), &reference, cfg.capture.mic_sample_rate)?;
 
-    let mic_channels = args.mic_channels as usize;
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = AlsaPcmSource::open(&AlsaStreamConfig {
-        device: "hw:0,2",
-        channels: args.mic_channels,
-        sample_rate: 48000,
-        format: SampleFormat::S32_LE,
-        period_frames: 256,
-        buffer_periods: 4,
+    let mic = AlsaPcmSource::open(&AlsaStreamConfig {
+        device: &cfg.capture.mic_device,
+        channels: cfg.capture.mic_channels,
+        sample_rate: cfg.capture.mic_sample_rate,
+        format: cfg.capture.mic_format,
+        period_frames: cfg.period_frames,
+        buffer_periods: cfg.buffer_periods,
     }).map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+    let source = SingleStreamFrameSource::new(mic, cfg.period_frames, mic_channels);
     let (tx, mut rx) = mpsc::channel::<AudioFrame>(256);
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let capture = std::thread::spawn(move || {
-        run_capture_loop(src, 256, mic_channels, tx, stop_c, stats_c);
+        run_capture_loop(source, tx, stop_c, stats_c);
     });
 
     // Wait, then kick off playback. aplay handle kept to reap the child after capture.
