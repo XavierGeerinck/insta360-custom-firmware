@@ -12,7 +12,6 @@ pub mod replay;
 pub mod thread;
 pub mod single_stream;
 
-#[cfg(feature = "capture-alsa")]
 pub mod alsa_dual_stream;
 
 pub use thread::{CaptureStats, run_capture_loop};
