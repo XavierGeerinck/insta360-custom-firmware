@@ -25,6 +25,12 @@ struct Args {
     capture_seconds: f32,
     #[arg(long, default_value_t = 0.5)]
     playback_delay_seconds: f32,
+    /// Minimum cross-correlation score to consider the chirp "heard".
+    /// cross_correlate_peak returns an unnormalized dot-product; for a 960-sample
+    /// reference at amplitude ~20000, a score of 1e9 requires ~50 RMS of mic signal
+    /// aligned with the chirp — a reasonable floor for "speaker was audible".
+    #[arg(long, default_value_t = 1e9_f32)]
+    min_score: f32,
 }
 
 fn write_wav(path: &Path, samples: &[i16], sample_rate: u32) -> std::io::Result<()> {
@@ -57,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Extract just channel 0 from the 8-channel fixture as a mono reference.
     let chirp_8ch = chirp_5khz_burst(1);
     let mono_ref: Vec<i16> = chirp_8ch.iter().step_by(8).copied().collect();
-    // Keep only the first 20ms (960 samples) of the reference — after that it's silence.
+    // Keep only the first 20ms (960 samples @ 48kHz) of the reference — after that it's silence.
     let reference: Vec<i16> = mono_ref.into_iter().take(960).collect();
     write_wav(Path::new(&args.chirp_path), &reference, 48000)?;
 
@@ -73,22 +79,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_capture_loop(src, map_c, 256, tx, stop_c, stats_c);
     });
 
-    // Wait, then kick off playback.
+    // Wait, then kick off playback. aplay handle kept to reap the child after capture.
     tokio::time::sleep(Duration::from_secs_f32(args.playback_delay_seconds)).await;
-    Command::new("aplay")
+    let mut aplay = Command::new("aplay")
         .arg("-q")
         .arg(&args.chirp_path)
         .spawn()
         .map_err(|e| format!("aplay spawn: {e}"))?;
 
-    // Collect frames for the configured duration.
+    // Collect frames for the configured duration, then stop the capture thread.
     tokio::time::sleep(Duration::from_secs_f32(args.capture_seconds)).await;
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     capture.join().map_err(|_| "capture join")?;
+    let _ = aplay.wait(); // reap child; ignore exit status
 
     let mut mono: Vec<i16> = Vec::new();
     while let Ok(frame) = rx.try_recv() {
-        // Take channel 0 of each 8-ch frame.
+        // Take channel 0 of each 8-ch frame (downmixed from 10-ch raw ALSA).
         for s in frame.data.iter().step_by(8) { mono.push(*s); }
     }
     if mono.len() < reference.len() {
@@ -101,8 +108,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let delay_samples = peak_idx as i64 - lead_samples as i64;
     let delay_ms = delay_samples as f32 / 48.0;
-    if score < 1e9 {
-        return Err(format!("chirp not heard (peak score {score:.2e}) — speaker muted? mic dead?").into());
+    if score < args.min_score {
+        return Err(format!("chirp not heard (peak score {score:.2e} < min {:.2e}) — speaker muted? mic dead?", args.min_score).into());
     }
     println!("{{\"delay_ms\": {:.2}, \"peak_sample\": {}, \"score\": {:.2e}}}", delay_ms, peak_idx, score);
     Ok(())

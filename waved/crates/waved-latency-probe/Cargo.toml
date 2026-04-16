@@ -8,3 +8,4 @@ waved-audio = { path = "../waved-audio", features = ["capture-alsa"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap = { version = "4", features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
