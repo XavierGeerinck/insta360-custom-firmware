@@ -10,7 +10,7 @@ pub mod simulate;
 
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use waved_state::{AudioMode, AudioState, Command};
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
@@ -52,35 +52,27 @@ pub struct AudioService {
     _frame_tx: mpsc::Sender<callbacks::AudioFrame>,
     frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
     meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
+    stats_tee: broadcast::Sender<callbacks::AudioFrame>,
 }
 
 impl AudioService {
-    /// * `frame_tx`/`frame_rx`: channel that C SDK callbacks will write PCM frames to.
-    /// * `meeting_tx`: forwards each frame to MeetingService after VU computation.
     pub fn new(
         audio_tx: Arc<watch::Sender<AudioState>>,
         frame_tx: mpsc::Sender<callbacks::AudioFrame>,
         frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
         meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
     ) -> Self {
-        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx }
+        let (stats_tee, _) = broadcast::channel(16);
+        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx, stats_tee }
+    }
+
+    /// Subscribe to the frame stream for diagnostics (stats collector, debug tools).
+    pub fn subscribe_frames(&self) -> broadcast::Receiver<callbacks::AudioFrame> {
+        self.stats_tee.subscribe()
     }
 
     pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) {
-        info!("audio_srv starting");
-
-        let init_result = tokio::task::spawn_blocking(|| ffi::init_audio()).await;
-        match init_result {
-            Ok(Ok(())) => info!("TEA SDK initialized"),
-            Ok(Err(e)) => {
-                error!("TEA SDK init failed: {e}");
-                return;
-            }
-            Err(e) => {
-                error!("TEA SDK init thread panicked: {e}");
-                return;
-            }
-        }
+        info!("audio_srv starting (consumer-only loop)");
 
         loop {
             tokio::select! {
@@ -90,6 +82,7 @@ impl AudioService {
                         apply_mic_mute(&mut frame.data, muted);
                         let vu = compute_vu(&frame.data, 8);
                         self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
+                        let _ = self.stats_tee.send(frame.clone());
                         let _ = self.meeting_tx.try_send(frame);
                     }
                 }

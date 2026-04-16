@@ -22,18 +22,6 @@ use tracing::{info, warn};
 
 const MASTER_MAX: u16 = 16;
 
-pub fn init_audio() -> Result<(), String> {
-    #[cfg(target_arch = "aarch64")]
-    {
-        info!("audio init: using amixer for Master volume (0–{MASTER_MAX})");
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        info!("audio init: stub (not on device)");
-    }
-    Ok(())
-}
-
 pub fn set_work_mode(mode: u32) -> Result<(), String> {
     // libInstaAudio::Insta360_SetAudioMode requires full audio-server init.
     info!("set_work_mode({mode}): stub (requires libInstaAudio init)");
