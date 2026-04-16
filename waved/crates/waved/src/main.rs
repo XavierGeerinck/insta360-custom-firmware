@@ -141,15 +141,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     {
         use std::sync::atomic::AtomicBool;
-        use std::path::Path;
         use waved_audio::capture::{
-            alsa::AlsaPcmSource, run_capture_loop, CaptureStats, ChannelMap,
+            alsa::AlsaPcmSource, run_capture_loop, CaptureStats, ChannelMapSource,
         };
         use waved_audio::stats_collector;
 
-        let (map, map_src) = ChannelMap::load_or_default(
-            Path::new("/etc/channel_map_config_default.json")
-        );
+        // v2: mic device is hw:0,2 (8 channels). References captured separately on hw:0,3.
+        // TODO Task 8/12: replace with AlsaDualStreamSource when implemented.
+        const MIC_CHANNELS: usize = 8;
         let capture_stats = CaptureStats::new();
         let capture_stop = Arc::new(AtomicBool::new(false));
         // Keep a reference outside this block so the shutdown path can set the flag.
@@ -163,12 +162,12 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         tokio::spawn(stats_collector::run(
             stats_rx,
             Arc::clone(&capture_stats),
-            map_src,
+            ChannelMapSource::Fallback,
             std::path::PathBuf::from("/tmp/audio_stats.json"),
             std::time::Duration::from_millis(500),
         ));
 
-        let src = match AlsaPcmSource::open("hw:0,0", 48000, map.total_channels as u32, 256, 4) {
+        let src = match AlsaPcmSource::open("hw:0,2", 48000, MIC_CHANNELS as u32, 256, 4) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("ALSA capture open failed: {e}");
@@ -177,11 +176,10 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         };
         let stats_c = Arc::clone(&capture_stats);
         let stop_c = Arc::clone(&capture_stop);
-        let map_c = map.clone();
         std::thread::Builder::new()
             .name("audio-capture".into())
             .spawn(move || {
-                run_capture_loop(src, map_c, 256, frame_tx, stop_c, stats_c);
+                run_capture_loop(src, 256, MIC_CHANNELS, frame_tx, stop_c, stats_c);
             })
             .expect("spawn capture thread");
         let audio_cmd_rx = bus.commands.subscribe();

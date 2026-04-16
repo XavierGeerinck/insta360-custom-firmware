@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMap, ChannelMapSource};
+use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMapSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::tone_mono_8ch;
 use waved_audio::stats_collector::compute_stats;
@@ -23,9 +23,6 @@ fn write_pcm(data: &[i16]) -> tempfile::NamedTempFile {
 
 fn collect_last_frame(fixture: &[i16]) -> (AudioFrame, Arc<CaptureStats>) {
     let file = write_pcm(fixture);
-    let map = ChannelMap::from_json(
-        r#"{"version":1,"total_channels":8,"physical_mics":[0,1,2,3,4,5,6,7],"reference_channels":[]}"#
-    ).unwrap();
     let (tx, mut rx) = mpsc::channel::<AudioFrame>(256);
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
@@ -33,7 +30,7 @@ fn collect_last_frame(fixture: &[i16]) -> (AudioFrame, Arc<CaptureStats>) {
     let stats_c = Arc::clone(&stats);
     let stop_c = Arc::clone(&stop);
     std::thread::spawn(move || {
-        run_capture_loop(src, map, 256, tx, stop_c, stats_c);
+        run_capture_loop(src, 256, 8, tx, stop_c, stats_c);
     })
     .join()
     .unwrap();

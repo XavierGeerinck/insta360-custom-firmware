@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMap};
+use waved_audio::capture::{run_capture_loop, CaptureStats};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::tone_mono_8ch;
 use waved_audio::AudioService;
@@ -38,16 +38,13 @@ async fn mute_toggles_zero_meeting_frames() {
     let svc = AudioService::new(Arc::clone(&audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
-    let map = ChannelMap::from_json(
-        r#"{"version":1,"total_channels":8,"physical_mics":[0,1,2,3,4,5,6,7],"reference_channels":[]}"#
-    ).unwrap();
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
     let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let _join = std::thread::spawn(move || {
-        run_capture_loop(src, map, 256, frame_tx, stop_c, stats_c);
+        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
     });
 
     // Collect unmuted frames: wait for at least 10 non-zero frames before muting.

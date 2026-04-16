@@ -8,7 +8,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
-use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMap};
+use waved_audio::capture::{run_capture_loop, CaptureStats};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::{silence_8ch, tone_mono_8ch};
 use waved_audio::AudioService;
@@ -19,12 +19,6 @@ fn write_i16_pcm(data: &[i16]) -> tempfile::NamedTempFile {
     for &s in data { f.write_all(&s.to_le_bytes()).unwrap(); }
     f.flush().unwrap();
     f
-}
-
-fn tiny_map_8() -> ChannelMap {
-    ChannelMap::from_json(
-        r#"{"version":1,"total_channels":8,"physical_mics":[0,1,2,3,4,5,6,7],"reference_channels":[]}"#
-    ).unwrap()
 }
 
 #[tokio::test]
@@ -39,14 +33,13 @@ async fn replay_silence_produces_zero_vu() {
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     // Spawn capture thread manually
-    let map = tiny_map_8();
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
     let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {
-        run_capture_loop(src, map, 256, frame_tx, stop_c, stats_c);
+        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
     });
 
     // Wait for VU updates
@@ -69,14 +62,13 @@ async fn replay_tone_elevates_vu_on_tone_channel() {
     let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
-    let map = tiny_map_8();
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
     let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16Eight, 48000).unwrap();
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {
-        run_capture_loop(src, map, 256, frame_tx, stop_c, stats_c);
+        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

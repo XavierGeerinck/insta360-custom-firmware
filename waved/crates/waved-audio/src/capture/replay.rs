@@ -1,5 +1,5 @@
-//! ReplayPcmSource — reads raw interleaved PCM from a file at a chosen
-//! format. Used by waved-audio-bench and integration tests on the host;
+//! ReplayPcmSource — reads raw interleaved i16 PCM from a file.
+//! Used by waved-audio-bench and integration tests on the host;
 //! completely off-path on-device.
 
 use super::PcmSource;
@@ -11,28 +11,22 @@ pub struct ReplayPcmSource {
     reader: BufReader<File>,
     channels: usize,
     sample_rate: u32,
-    sample_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum ReplayFormat {
-    /// 8-channel interleaved i16 (what our downmixed fixtures/recordings use).
-    I16Eight,
-    /// 10-channel interleaved i32 (what raw ALSA capture yields).
-    I32Ten,
+    /// N-channel interleaved i16 (downmixed/mic-only recordings).
+    I16Interleaved { channels: usize },
 }
 
+// Backwards-compat alias used in tests and existing callers until they migrate.
 impl ReplayFormat {
+    /// 8-channel interleaved i16 (what our downmixed fixtures/recordings use).
+    pub const I16Eight: ReplayFormat = ReplayFormat::I16Interleaved { channels: 8 };
+
     pub fn channels(&self) -> usize {
         match self {
-            ReplayFormat::I16Eight => 8,
-            ReplayFormat::I32Ten => 10,
-        }
-    }
-    pub fn sample_bytes(&self) -> usize {
-        match self {
-            ReplayFormat::I16Eight => 2,
-            ReplayFormat::I32Ten => 4,
+            ReplayFormat::I16Interleaved { channels } => *channels,
         }
     }
 }
@@ -44,18 +38,16 @@ impl ReplayPcmSource {
             reader: BufReader::new(file),
             channels: format.channels(),
             sample_rate,
-            sample_bytes: format.sample_bytes(),
         })
     }
 }
 
 impl PcmSource for ReplayPcmSource {
     fn read(&mut self, buf: &mut [i32]) -> std::io::Result<usize> {
-        // Reader yields raw bytes. For I16Eight, we widen each i16 into i32
-        // (left-shift 16 to match ALSA S32_LE convention) so downstream
-        // downmix can right-shift back without losing precision.
-        // For I32Ten, we read bytes directly into i32.
-        let mut byte_buf = vec![0u8; buf.len() * self.sample_bytes];
+        // Read i16 samples and widen each to i32 (left-shift 16 to match ALSA
+        // S32_LE convention) so downstream S32→S16 conversion recovers the
+        // original value without precision loss.
+        let mut byte_buf = vec![0u8; buf.len() * 2];
         let mut total = 0;
         while total < byte_buf.len() {
             let n = self.reader.read(&mut byte_buf[total..])?;
@@ -63,17 +55,10 @@ impl PcmSource for ReplayPcmSource {
             total += n;
         }
         // Align to whole samples (truncate trailing partial sample).
-        let whole_samples = total / self.sample_bytes;
-        match self.sample_bytes {
-            2 => for i in 0..whole_samples {
-                let s = i16::from_le_bytes([byte_buf[2*i], byte_buf[2*i+1]]);
-                buf[i] = (s as i32) << 16;
-            },
-            4 => for i in 0..whole_samples {
-                let b = [byte_buf[4*i], byte_buf[4*i+1], byte_buf[4*i+2], byte_buf[4*i+3]];
-                buf[i] = i32::from_le_bytes(b);
-            },
-            _ => unreachable!(),
+        let whole_samples = total / 2;
+        for i in 0..whole_samples {
+            let s = i16::from_le_bytes([byte_buf[2*i], byte_buf[2*i+1]]);
+            buf[i] = (s as i32) << 16;
         }
         Ok(whole_samples)
     }
@@ -131,5 +116,11 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(buf[0], 1i32 << 16);
         assert_eq!(buf[1], 2i32 << 16);
+    }
+
+    #[test]
+    fn i16_interleaved_channels_matches() {
+        let fmt = ReplayFormat::I16Interleaved { channels: 4 };
+        assert_eq!(fmt.channels(), 4);
     }
 }

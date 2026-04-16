@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use waved_audio::callbacks::AudioFrame;
 use waved_audio::capture::alsa::AlsaPcmSource;
-use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMap};
+use waved_audio::capture::{run_capture_loop, CaptureStats};
 use waved_audio::fixtures::chirp_5khz_burst;
 use waved_audio::metrics::cross_correlate_peak;
 
@@ -25,6 +25,9 @@ struct Args {
     capture_seconds: f32,
     #[arg(long, default_value_t = 0.5)]
     playback_delay_seconds: f32,
+    /// Number of mic channels on hw:0,2.
+    #[arg(long, default_value_t = 8)]
+    mic_channels: u32,
     /// Minimum cross-correlation score to consider the chirp "heard".
     /// cross_correlate_peak returns an unnormalized dot-product; for a 960-sample
     /// reference at amplitude ~20000, a score of 1e9 requires ~50 RMS of mic signal
@@ -67,16 +70,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reference: Vec<i16> = mono_ref.into_iter().take(960).collect();
     write_wav(Path::new(&args.chirp_path), &reference, 48000)?;
 
-    let map = ChannelMap::default_embedded();
+    let mic_channels = args.mic_channels as usize;
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
-    let src = AlsaPcmSource::open("hw:0,0", 48000, map.total_channels as u32, 256, 4)?;
+    let src = AlsaPcmSource::open("hw:0,2", 48000, args.mic_channels, 256, 4)?;
     let (tx, mut rx) = mpsc::channel::<AudioFrame>(256);
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
-    let map_c = map.clone();
     let capture = std::thread::spawn(move || {
-        run_capture_loop(src, map_c, 256, tx, stop_c, stats_c);
+        run_capture_loop(src, 256, mic_channels, tx, stop_c, stats_c);
     });
 
     // Wait, then kick off playback. aplay handle kept to reap the child after capture.
@@ -95,8 +97,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut mono: Vec<i16> = Vec::new();
     while let Ok(frame) = rx.try_recv() {
-        // Take channel 0 of each 8-ch frame (downmixed from 10-ch raw ALSA).
-        for s in frame.data.iter().step_by(8) { mono.push(*s); }
+        // Take channel 0 of each frame.
+        for s in frame.data.iter().step_by(mic_channels) { mono.push(*s); }
     }
     if mono.len() < reference.len() {
         return Err(format!("not enough samples captured ({})", mono.len()).into());
