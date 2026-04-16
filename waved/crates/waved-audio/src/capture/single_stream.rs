@@ -7,7 +7,6 @@ use std::time::Instant;
 
 pub struct SingleStreamFrameSource<P: PcmSource> {
     source: P,
-    period_frames: usize,
     channels: usize,
     raw: Vec<i32>,
     out: Vec<i16>,
@@ -17,7 +16,6 @@ pub struct SingleStreamFrameSource<P: PcmSource> {
 impl<P: PcmSource> SingleStreamFrameSource<P> {
     pub fn new(source: P, period_frames: usize, channels: usize) -> Self {
         Self {
-            period_frames,
             channels,
             raw: vec![0i32; period_frames * channels],
             out: vec![0i16; period_frames * channels],
