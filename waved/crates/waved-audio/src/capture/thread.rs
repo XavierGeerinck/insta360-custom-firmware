@@ -1,13 +1,12 @@
-//! CaptureThread: generic over PcmSource. Reads raw i32 samples from the
-//! source, converts S32→S16, timestamps, and emits AudioFrames on an mpsc.
-//! Drops the newest frame on backpressure (policy chosen to preserve
-//! contiguous history for future AEC reference alignment).
+//! CaptureThread: generic over AudioFrameSource. Pulls complete AudioFrames
+//! from the source and emits them on an mpsc. Drops the newest frame on
+//! backpressure (policy chosen to preserve contiguous history for future AEC
+//! reference alignment).
 
-use super::PcmSource;
+use super::AudioFrameSource;
 use crate::callbacks::AudioFrame;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{info, warn, error};
 
@@ -29,45 +28,27 @@ impl CaptureStats {
 
 /// Runs the capture loop, consuming the source to EOF or until stop_flag.
 ///
-/// `period_frames` is the number of frames read per iteration (ALSA period
-/// size; ~5.3ms at 48kHz with 256). Output frames on `frame_tx` are one
-/// period each, interleaved mic_channels i16 after S32→S16 conversion.
-pub fn run_capture_loop<P: PcmSource>(
-    mut source: P,
-    period_frames: usize,
-    mic_channels: usize,
+/// Repeatedly calls `source.next_frame()` to pull complete AudioFrames
+/// (which already have timestamps and sample conversion done internally).
+/// Output frames on `frame_tx` as they arrive from the source.
+pub fn run_capture_loop<S: AudioFrameSource>(
+    mut source: S,
     frame_tx: mpsc::Sender<AudioFrame>,
     stop_flag: Arc<AtomicBool>,
     stats: Arc<CaptureStats>,
 ) {
-    let mut raw = vec![0i32; period_frames * mic_channels];
-    let mut out = vec![0i16; period_frames * mic_channels];
-    let start = Instant::now();
     let sample_rate = source.sample_rate();
     let mut consecutive_errors = 0u32;
-    let mut consecutive_partial = 0u32;
-    info!(
-        "capture loop starting: period={period_frames} frames, mics={mic_channels}, sr={sample_rate}"
-    );
+    info!("capture loop starting: sr={sample_rate}");
 
     while !stop_flag.load(Ordering::Relaxed) {
-        match source.read(&mut raw) {
-            Ok(0) => {
+        match source.next_frame() {
+            Ok(None) => {
                 info!("capture source EOF");
                 return;
             }
-            Ok(n) if n == raw.len() => {
+            Ok(Some(frame)) => {
                 consecutive_errors = 0;
-                consecutive_partial = 0;
-                for (i, &s) in raw.iter().enumerate() {
-                    out[i] = (s >> 16) as i16;
-                }
-                let frame = AudioFrame::mic_only(
-                    out.clone(),
-                    mic_channels as u16,
-                    sample_rate,
-                    start.elapsed().as_millis() as u64,
-                );
                 match frame_tx.try_send(frame) {
                     Ok(()) => { stats.frames_emitted.fetch_add(1, Ordering::Relaxed); }
                     Err(mpsc::error::TrySendError::Full(_)) => {
@@ -82,19 +63,10 @@ pub fn run_capture_loop<P: PcmSource>(
                     }
                 }
             }
-            Ok(partial) => {
-                warn!("partial capture read: {partial}/{} samples", raw.len());
-                consecutive_partial += 1;
-                if consecutive_partial > 5 {
-                    error!("too many partial reads, stopping capture");
-                    return;
-                }
-            }
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
                 let n = stats.xrun_count.fetch_add(1, Ordering::Relaxed) + 1;
                 warn!("xrun #{n} ({e})");
-                // AlsaPcmSource is expected to call snd_pcm_prepare internally
-                // and return the next read cleanly. We just continue.
+                // Source is expected to recover internally; we just continue.
             }
             Err(e) => {
                 consecutive_errors += 1;
@@ -113,11 +85,13 @@ pub fn run_capture_loop<P: PcmSource>(
 mod tests {
     use super::*;
     use super::super::mock::MockPcmSource;
+    use super::super::single_stream::SingleStreamFrameSource;
 
     #[tokio::test]
     async fn emits_one_frame_per_batch() {
-        let src = MockPcmSource::new(1, 48000)
-            .with_batch(vec![10 << 16, 20 << 16]); // 2 frames, 1 channel each
+        let mock = MockPcmSource::new(1, 48000)
+            .with_batch(vec![10 << 16, 20 << 16]); // 2 samples, 1 channel = period_frames=2
+        let src = SingleStreamFrameSource::new(mock, 2, 1); // period_frames=2, channels=1
         let (tx, mut rx) = mpsc::channel(8);
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
@@ -125,7 +99,7 @@ mod tests {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, /*period*/ 2, /*mic_channels*/ 1, tx, stop, stats);
+                run_capture_loop(src, tx, stop, stats);
             })
         };
         let frame = rx.recv().await.expect("one frame");
@@ -138,20 +112,21 @@ mod tests {
 
     #[tokio::test]
     async fn drops_frames_on_backpressure() {
-        // Queue 100 small batches of 1 frame each into a cap=2 channel.
-        let mut src = MockPcmSource::new(1, 48000);
+        // Queue 100 single-sample batches
+        let mut mock = MockPcmSource::new(1, 48000);
         for _ in 0..100 {
-            src = src.with_batch(vec![0]);
+            mock = mock.with_batch(vec![0 << 16]);
         }
+        let src = SingleStreamFrameSource::new(mock, 1, 1); // period_frames=1, channels=1
         let (tx, _rx) = mpsc::channel(2);
-        // Don't drain rx — force backpressure.
+        // Don't drain _rx — force backpressure.
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
         {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, 1, 1, tx, stop, stats);
+                run_capture_loop(src, tx, stop, stats);
             }).join().unwrap();
         }
         let emitted = stats.frames_emitted.load(Ordering::Relaxed);
@@ -164,10 +139,11 @@ mod tests {
     #[tokio::test]
     async fn xrun_increments_counter_and_continues() {
         use std::io::ErrorKind;
-        let src = MockPcmSource::new(1, 48000)
+        let mock = MockPcmSource::new(1, 48000)
             .with_batch(vec![1 << 16])
             .with_error(ErrorKind::BrokenPipe, "xrun")
             .with_batch(vec![2 << 16]);
+        let src = SingleStreamFrameSource::new(mock, 1, 1); // period_frames=1, channels=1
         let (tx, mut rx) = mpsc::channel(8);
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
@@ -175,7 +151,7 @@ mod tests {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, 1, 1, tx, stop, stats);
+                run_capture_loop(src, tx, stop, stats);
             }).join().unwrap();
         }
         // Should have emitted 2 frames (before and after the xrun).
