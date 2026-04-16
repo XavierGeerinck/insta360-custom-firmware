@@ -50,7 +50,8 @@ pub fn downmix_interleaved(
     for f in 0..frames {
         for (mi, &src_idx) in map.physical_mics.iter().enumerate() {
             let src = input[f * total + src_idx as usize];
-            // S32 → S16: shift right 16 bits (ALSA stores 32-bit right-justified samples).
+            // S32_LE → S16: ALSA S32_LE is left-justified (sample in the upper 24 bits);
+            // shift right 16 to obtain the top 16 bits.
             out[f * mics + mi] = (src >> 16) as i16;
         }
     }
