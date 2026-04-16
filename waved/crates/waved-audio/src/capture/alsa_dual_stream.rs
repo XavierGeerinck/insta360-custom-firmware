@@ -6,7 +6,6 @@
 use super::{AudioFrameSource, PcmSource};
 use crate::callbacks::AudioFrame;
 use std::time::Instant;
-use tracing::{info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignmentMethod {
@@ -96,6 +95,7 @@ mod alsa_impl {
     use super::*;
     use crate::audio_config::CaptureConfig;
     use crate::capture::alsa::{AlsaOpenError, AlsaPcmSource, AlsaStreamConfig};
+    use tracing::{info, warn};
 
     pub type AlsaDualStreamSource = DualStreamSource<AlsaPcmSource, AlsaPcmSource>;
 
