@@ -191,6 +191,10 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         tokio::spawn(async move { sim_audio.run(audio_cmd_rx).await });
     }
 
+    // Neither capture-alsa nor simulate: suppress unused warning on meeting_tx.
+    #[cfg(not(any(feature = "simulate", feature = "capture-alsa")))]
+    drop(meeting_tx);
+
     // HID service
     let hid_events_rx = bus.events.subscribe();
     #[cfg(not(feature = "simulate"))]
