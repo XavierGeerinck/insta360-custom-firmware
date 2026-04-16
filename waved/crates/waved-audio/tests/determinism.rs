@@ -44,8 +44,8 @@ fn replaying_same_fixture_twice_yields_identical_stats_json() {
     let fixture = tone_mono_8ch(1, 1000.0, 2, 8000);
     let (f1, s1) = collect_last_frame(&fixture);
     let (f2, s2) = collect_last_frame(&fixture);
-    let stats1 = compute_stats(&f1, &s1, ChannelMapSource::File, None);
-    let stats2 = compute_stats(&f2, &s2, ChannelMapSource::File, None);
+    let stats1 = compute_stats(&f1, &s1, ChannelMapSource::File, None, "none");
+    let stats2 = compute_stats(&f2, &s2, ChannelMapSource::File, None, "none");
     let mut stats1 = stats1;
     let mut stats2 = stats2;
     stats1.last_updated_ms = 0;

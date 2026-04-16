@@ -166,6 +166,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             ChannelMapSource::Fallback,
             std::path::PathBuf::from("/tmp/audio_stats.json"),
             std::time::Duration::from_millis(500),
+            "none".to_string(),
         ));
 
         let src = match AlsaPcmSource::open(&AlsaStreamConfig {

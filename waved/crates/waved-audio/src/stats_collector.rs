@@ -26,6 +26,8 @@ pub struct AudioStats {
     pub dc_offset_per_channel: Vec<f32>,
     pub correlation_matrix: Vec<Vec<f32>>,
     pub last_write_error: Option<String>,
+    pub reference_rms: Vec<f32>,
+    pub alignment: String,
 }
 
 pub async fn run(
@@ -34,6 +36,7 @@ pub async fn run(
     map_source: ChannelMapSource,
     out_path: PathBuf,
     period: std::time::Duration,
+    alignment: String,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
@@ -53,7 +56,7 @@ pub async fn run(
             },
             _ = interval.tick() => {
                 if let Some(frame) = latest_frame.as_ref() {
-                    let s = compute_stats(frame, &stats, map_source, last_write_error.clone());
+                    let s = compute_stats(frame, &stats, map_source, last_write_error.clone(), &alignment);
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
                         last_write_error = Some(format!("{e}"));
@@ -71,6 +74,7 @@ pub fn compute_stats(
     cap_stats: &CaptureStats,
     map_source: ChannelMapSource,
     last_write_error: Option<String>,
+    alignment: &str,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -87,6 +91,12 @@ pub fn compute_stats(
         })
         .collect();
     let corr = correlation_matrix(&frame.data, ch);
+    let ref_rms = if let Some(ref_data) = &frame.reference {
+        let ref_ch = frame.reference_channels as usize;
+        if ref_ch > 0 { rms_per_channel(ref_data, ref_ch) } else { vec![] }
+    } else {
+        vec![]
+    };
     AudioStats {
         last_updated_ms: frame.timestamp_ms,
         channel_map_source: match map_source {
@@ -103,6 +113,8 @@ pub fn compute_stats(
         dc_offset_per_channel: per_ch_dc,
         correlation_matrix: corr,
         last_write_error,
+        reference_rms: ref_rms,
+        alignment: alignment.to_string(),
     }
 }
 
@@ -130,7 +142,7 @@ mod tests {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
         cs.frames_emitted.store(7, Ordering::Relaxed);
-        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None);
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
         assert_eq!(s.channels, 8);
         assert_eq!(s.frames_emitted, 7);
         assert!(s.rms_per_channel.iter().all(|&r| r == 0.0));
@@ -142,7 +154,7 @@ mod tests {
     fn stats_flag_fallback_channel_map() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
-        let s = compute_stats(&frame, &cs, ChannelMapSource::Fallback, None);
+        let s = compute_stats(&frame, &cs, ChannelMapSource::Fallback, None, "none");
         assert_eq!(s.channel_map_source, "fallback");
     }
 
@@ -150,7 +162,7 @@ mod tests {
     fn stats_correlation_on_paired_tone() {
         let frame = frame_from(correlation_pair_8ch(1, 1000.0, 10_000)[..8 * 1024].to_vec());
         let cs = CaptureStats::new();
-        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None);
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
         assert!((s.correlation_matrix[0][1] - 1.0).abs() < 1e-3);
     }
 
@@ -158,7 +170,7 @@ mod tests {
     fn write_atomic_creates_json() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
-        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None);
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("stats.json");
         write_atomic(&path, &s).unwrap();
@@ -171,12 +183,33 @@ mod tests {
     fn write_atomic_cleans_up_tmp_on_success() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
-        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None);
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("stats.json");
         write_atomic(&path, &s).unwrap();
         let tmp_path = path.with_extension("json.tmp");
         assert!(!tmp_path.exists(), "tmp should be renamed away");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn reference_rms_populated_when_reference_present() {
+        let mic = vec![0i16; 8 * 256];
+        let ref_data = vec![16384i16; 2 * 256];
+        let frame = AudioFrame::paired(mic, 8, ref_data, 2, 48000, 0);
+        let cs = CaptureStats::new();
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "kernel-linked");
+        assert_eq!(s.reference_rms.len(), 2);
+        assert!((s.reference_rms[0] - 16384.0).abs() < 1.0, "expected ~16384, got {}", s.reference_rms[0]);
+        assert_eq!(s.alignment, "kernel-linked");
+    }
+
+    #[test]
+    fn reference_rms_empty_when_no_reference() {
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48000, 0);
+        let cs = CaptureStats::new();
+        let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
+        assert!(s.reference_rms.is_empty());
+        assert_eq!(s.alignment, "none");
     }
 }
