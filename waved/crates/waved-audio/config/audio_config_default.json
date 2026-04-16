@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "capture": {
+    "mic_device": "hw:0,2",
+    "mic_channels": 8,
+    "mic_sample_rate": 48000,
+    "mic_format": "S32_LE",
+    "reference_device": "hw:0,3",
+    "reference_channels": 2,
+    "reference_sample_rate": 48000,
+    "reference_format": "S32_LE"
+  },
+  "period_frames": 256,
+  "buffer_periods": 4
+}

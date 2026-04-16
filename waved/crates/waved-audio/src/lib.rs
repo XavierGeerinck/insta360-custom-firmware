@@ -1,3 +1,4 @@
+pub mod audio_config;
 pub mod callbacks;
 pub mod capture;
 pub mod stats_collector;
