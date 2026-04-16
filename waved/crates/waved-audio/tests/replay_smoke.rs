@@ -8,7 +8,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
-use waved_audio::capture::{run_capture_loop, CaptureStats};
+use waved_audio::capture::{run_capture_loop, CaptureStats, SingleStreamFrameSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::{silence_8ch, tone_mono_8ch};
 use waved_audio::AudioService;
@@ -39,7 +39,7 @@ async fn replay_silence_produces_zero_vu() {
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {
-        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
+        run_capture_loop(SingleStreamFrameSource::new(src, 256, 8), frame_tx, stop_c, stats_c);
     });
 
     // Wait for VU updates
@@ -68,7 +68,7 @@ async fn replay_tone_elevates_vu_on_tone_channel() {
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let join = std::thread::spawn(move || {
-        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
+        run_capture_loop(SingleStreamFrameSource::new(src, 256, 8), frame_tx, stop_c, stats_c);
     });
 
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;

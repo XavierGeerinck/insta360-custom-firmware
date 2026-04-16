@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::mpsc;
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMapSource};
+use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMapSource, SingleStreamFrameSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::tone_mono_8ch;
 use waved_audio::stats_collector::compute_stats;
@@ -30,7 +30,7 @@ fn collect_last_frame(fixture: &[i16]) -> (AudioFrame, Arc<CaptureStats>) {
     let stats_c = Arc::clone(&stats);
     let stop_c = Arc::clone(&stop);
     std::thread::spawn(move || {
-        run_capture_loop(src, 256, 8, tx, stop_c, stats_c);
+        run_capture_loop(SingleStreamFrameSource::new(src, 256, 8), tx, stop_c, stats_c);
     })
     .join()
     .unwrap();

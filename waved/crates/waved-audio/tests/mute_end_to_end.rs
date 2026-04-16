@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::{run_capture_loop, CaptureStats};
+use waved_audio::capture::{run_capture_loop, CaptureStats, SingleStreamFrameSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::tone_mono_8ch;
 use waved_audio::AudioService;
@@ -44,7 +44,7 @@ async fn mute_toggles_zero_meeting_frames() {
     let stop_c = Arc::clone(&stop);
     let stats_c = Arc::clone(&stats);
     let _join = std::thread::spawn(move || {
-        run_capture_loop(src, 256, 8, frame_tx, stop_c, stats_c);
+        run_capture_loop(SingleStreamFrameSource::new(src, 256, 8), frame_tx, stop_c, stats_c);
     });
 
     // Collect unmuted frames: wait for at least 10 non-zero frames before muting.
