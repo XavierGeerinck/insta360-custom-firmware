@@ -107,6 +107,7 @@ mod tests {
         assert_eq!(buf[0], 1i32 << 16);
         assert_eq!(buf[1], -1i32 << 16);
         assert_eq!(buf[4], (i16::MAX as i32) << 16);
+        assert_eq!(buf[5], (i16::MIN as i32) << 16);
     }
 
     #[test]
