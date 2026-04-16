@@ -5,6 +5,9 @@ pub mod channel_map;
 #[cfg(test)]
 pub mod mock;
 
+#[cfg(feature = "capture-alsa")]
+pub mod alsa;
+
 #[cfg(feature = "capture-replay")]
 pub mod replay;
 
