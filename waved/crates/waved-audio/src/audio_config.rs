@@ -40,6 +40,7 @@ pub struct CaptureConfig {
 fn default_sample_rate() -> u32 { 48000 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[allow(non_camel_case_types)] // intentional: matches ALSA format string names
 pub enum SampleFormat {
     S16_LE,
     S24_LE,
