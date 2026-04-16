@@ -1,4 +1,5 @@
 pub mod callbacks;
+pub mod capture;
 pub mod ffi;
 pub mod metrics;
 
