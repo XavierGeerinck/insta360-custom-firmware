@@ -1,6 +1,7 @@
 pub mod callbacks;
 pub mod capture;
 pub mod ffi;
+pub mod fixtures;
 pub mod metrics;
 
 #[cfg(feature = "simulate")]
