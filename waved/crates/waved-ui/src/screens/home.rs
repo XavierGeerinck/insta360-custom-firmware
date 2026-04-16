@@ -42,30 +42,24 @@ unsafe extern "C" fn rec_btn_cb(e: *mut lv_event_t) {
     }
 }
 
-/// Vol button clicked → toggle control center (sends ToggleSpeakerMute,
-/// which is intercepted by the UI loop in handle_command to show/hide the overlay).
+/// Vol button → open Speaker Volume screen (pspapp page 0xd).
 unsafe extern "C" fn vol_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
         let tx = lv_event_get_user_data(e)
             as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
-            let _ = (*tx).send(Command::ToggleSpeakerMute);
+            let _ = (*tx).send(Command::OpenVolume);
         }
     }
 }
 
-/// Swipe down on home screen → toggle control center (same signal as vol_btn_cb).
-unsafe extern "C" fn gesture_cb(e: *mut lv_event_t) {
-    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_GESTURE {
-        let dir = lv_indev_get_gesture_dir(lv_indev_active());
-        if dir == lv_dir_t_LV_DIR_BOTTOM {
-            let tx = lv_event_get_user_data(e)
-                as *const tokio::sync::broadcast::Sender<Command>;
-            if !tx.is_null() {
-                // ToggleSpeakerMute is reused as the "toggle control center" UI signal.
-                // Task 4 (handle_command) intercepts this to show/hide the overlay.
-                let _ = (*tx).send(Command::ToggleSpeakerMute);
-            }
+/// Bottom "More" button → navigate to Settings screen (page 0xb equivalent).
+unsafe extern "C" fn more_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::OpenSettings);
         }
     }
 }
@@ -170,6 +164,17 @@ impl super::Screen for HomeScreen {
             lv_obj_set_style_pad_left(screen, 0, 0);
             lv_obj_set_style_pad_right(screen, 0, 0);
 
+            // ── Full-screen background (bg_main.png, 400×304) ────────────────
+            // Set as screen bg_image_src (same as pspapp style_manager 0x1b) so
+            // the image fills the screen content area without child-object
+            // alignment timing issues.
+            lv_obj_set_style_bg_image_src(
+                screen,
+                b"A:/etc/pspapp/lvgl/icon/msc/bg_main.png\0".as_ptr() as *const _,
+                0,
+            );
+            lv_obj_set_style_bg_opa(screen, 255, 0);
+
             // ── Connection status label ───────────────────────────────────────
             // Positioned just below the 32 px status bar (y ≈ 40).
             // Shows "Not Connected" / "BT Connected" / "WiFi Connected".
@@ -192,6 +197,8 @@ impl super::Screen for HomeScreen {
             );
             lv_obj_align(btn_spk, lv_align_t_LV_ALIGN_CENTER, -142, 8);
             lv_obj_set_style_border_width(btn_spk, 0, 0);
+            // Remove ADV_HITTEST so the full bounding box is clickable (not just opaque pixels).
+            lv_obj_remove_flag(btn_spk, lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST);
 
             let img_spk = lv_image_create(btn_spk);
             lv_image_set_src(
@@ -226,6 +233,7 @@ impl super::Screen for HomeScreen {
             );
             lv_obj_align(btn_rec, lv_align_t_LV_ALIGN_CENTER, 0, 46);
             lv_obj_set_style_border_width(btn_rec, 0, 0);
+            lv_obj_remove_flag(btn_rec, lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST);
 
             let lbl_rec = lv_label_create(btn_rec);
             lv_label_set_text(lbl_rec, c"> REC".as_ptr());
@@ -253,6 +261,7 @@ impl super::Screen for HomeScreen {
             );
             lv_obj_align(btn_mic, lv_align_t_LV_ALIGN_CENTER, 142, 8);
             lv_obj_set_style_border_width(btn_mic, 0, 0);
+            lv_obj_remove_flag(btn_mic, lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST);
 
             let img_mic = lv_image_create(btn_mic);
             lv_image_set_src(
@@ -279,13 +288,42 @@ impl super::Screen for HomeScreen {
                 mic_tx as *mut _,
             );
 
-            // Swipe down to open control center
-            let gesture_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            // ── Bottom "More" indicator (TOP_MID y≈264) → toggle Control Center ──
+            // Transparent 120×40 hit area with arrow + "More" label.
+            // arrow_down.png is stored upside-down in the asset pack (pspapp convention),
+            // so rotate 180° (1800 tenths-degrees) to render pointing downward on screen.
+            let btn_more = lv_obj_create(screen);
+            lv_obj_set_size(btn_more, 120, 40);
+            // center of screen (200,152) + (0,+110) → center at y=262, top at y=242
+            lv_obj_align(btn_more, lv_align_t_LV_ALIGN_CENTER, 0, 110);
+            lv_obj_set_style_bg_opa(btn_more, 0, 0);
+            lv_obj_set_style_border_width(btn_more, 0, 0);
+            lv_obj_set_style_pad_top(btn_more, 0, 0);
+            lv_obj_set_style_pad_bottom(btn_more, 0, 0);
+            lv_obj_set_style_pad_left(btn_more, 0, 0);
+            lv_obj_set_style_pad_right(btn_more, 0, 0);
+            lv_obj_add_flag(btn_more, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
+
+            let img_arrow = lv_image_create(btn_more);
+            lv_image_set_src(
+                img_arrow,
+                b"A:/etc/pspapp/lvgl/icon/btn/arrow_down.png\0".as_ptr() as *const _,
+            );
+            lv_image_set_rotation(img_arrow, 1800);
+            lv_obj_align(img_arrow, lv_align_t_LV_ALIGN_TOP_MID, 0, 0);
+
+            let lbl_more = lv_label_create(btn_more);
+            lv_label_set_text(lbl_more, c"More".as_ptr());
+            lv_obj_set_style_text_color(lbl_more, rgb(CLR_TEXT_DIM), 0);
+            lv_obj_set_style_text_font(lbl_more, &lv_font_montserrat_12, 0);
+            lv_obj_align(lbl_more, lv_align_t_LV_ALIGN_BOTTOM_MID, 0, 0);
+
+            let more_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
             lv_obj_add_event_cb(
-                screen,
-                Some(gesture_cb),
-                lv_event_code_t_LV_EVENT_GESTURE,
-                gesture_tx as *mut _,
+                btn_more,
+                Some(more_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                more_tx as *mut _,
             );
 
             screen

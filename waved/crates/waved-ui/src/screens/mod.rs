@@ -1,6 +1,9 @@
-pub mod control_center;
+pub mod audio_mode;
 pub mod home;
 pub mod recording;
+pub mod settings;
+pub mod system;
+pub mod volume;
 
 use crate::bindings::lv_obj_t;
 

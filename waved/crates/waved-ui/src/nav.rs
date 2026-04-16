@@ -4,6 +4,14 @@
 pub enum UiScreen {
     Home,
     Recording,
+    /// "More" page — pspapp page 0xb / `ui_setting_screen`.
+    Settings,
+    /// Audio mode carousel — pspapp beamforming page.
+    AudioMode,
+    /// System Settings list — pspapp page 0xe / `ui_setting_system`.
+    System,
+    /// Speaker volume control — pspapp page 0xd / `ui_volume_screen`.
+    Volume,
 }
 
 impl Default for UiScreen {

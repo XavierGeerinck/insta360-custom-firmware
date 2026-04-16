@@ -138,6 +138,17 @@ pub enum Command {
     RetryUpload(Uuid),
     SetMotorPosition(MotorPosition),
     Shutdown,
+    /// UI-only: navigate to the "More" screen (pspapp page 0xb / `ui_setting_screen`).
+    OpenSettings,
+    /// UI-only: navigate back one level (from AudioMode → More, More → Home/Recording,
+    /// System → More).
+    CloseSettings,
+    /// UI-only: show CC overlay on the Audio Mode sub-page.
+    OpenAudioMode,
+    /// UI-only: navigate to the System Settings screen (pspapp page 0xe / `ui_setting_system`).
+    OpenSystemSettings,
+    /// UI-only: navigate to the Speaker Volume screen (pspapp page 0xd / `ui_volume_screen`).
+    OpenVolume,
 }
 
 // --- State Bus ---

@@ -96,11 +96,13 @@ impl TouchInput {
                     }
                     EV_ABS => {
                         if ev.code == ABS_MT_POSITION_X {
-                            // ILITEK reports 0–2047; screen is 400 px wide.
-                            self.x = (ev.value * 399 / 2047).clamp(0, 399);
+                            // ILITEK_TDDI reports native screen pixels (0–399), not 0–2047.
+                            // Apply 180° flip to match the display flush() orientation.
+                            self.x = 399 - ev.value.clamp(0, 399);
                         } else if ev.code == ABS_MT_POSITION_Y {
-                            // ILITEK reports 0–2047; screen is 304 px tall.
-                            self.y = (ev.value * 303 / 2047).clamp(0, 303);
+                            // ILITEK_TDDI reports native screen pixels (0–303), not 0–2047.
+                            // Apply 180° flip to match the display flush() orientation.
+                            self.y = 303 - ev.value.clamp(0, 303);
                         }
                     }
                     _ => {}

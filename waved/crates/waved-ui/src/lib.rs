@@ -1,3 +1,4 @@
+pub mod audio_fx;
 pub mod bindings;
 pub mod display;
 pub mod i18n;
@@ -67,7 +68,6 @@ fn ui_thread_main(
     }
 
     let fb    = FramebufferDisplay::init()?;
-    // Leak TouchInput onto the heap so touch_read_cb can borrow it via indev user_data.
     let touch_ptr = Box::into_raw(Box::new(TouchInput::init()?));
 
     unsafe {
@@ -75,11 +75,9 @@ fn ui_thread_main(
         lv_display_set_color_format(disp, lv_color_format_t_LV_COLOR_FORMAT_RGB565);
         lv_display_set_flush_cb(disp, Some(flush_cb));
 
-        // Extract buffer pointers before boxing fb (Box doesn't move heap data).
         let buf1_ptr = fb.buf1.as_ptr() as *mut _;
         let buf2_ptr = fb.buf2.as_ptr() as *mut _;
         let buf_len  = fb.buf1.len() as u32;
-        // Leak fb onto the heap so flush_cb can borrow it via user_data.
         let fb_raw = Box::into_raw(Box::new(fb));
         lv_display_set_user_data(disp, fb_raw as *mut _);
 
@@ -94,7 +92,6 @@ fn ui_thread_main(
         let indev = lv_indev_create();
         lv_indev_set_type(indev, lv_indev_type_t_LV_INDEV_TYPE_POINTER);
         lv_indev_set_read_cb(indev, Some(touch_read_cb));
-        // Pass TouchInput pointer so touch_read_cb can deliver actual touch state.
         lv_indev_set_user_data(indev, touch_ptr as *mut _);
     }
 
@@ -102,11 +99,15 @@ fn ui_thread_main(
     let mut toast  = unsafe { Toast::create() };
 
     let mut nav = ScreenManager::new();
-    let mut home = screens::home::HomeScreen::new(Arc::clone(&bus));
-    let mut recording = screens::recording::RecordingScreen::new(Arc::clone(&bus));
-    let mut cc = screens::control_center::ControlCenter::new(Arc::clone(&bus));
-    unsafe { cc.init(); }
+    let mut home       = screens::home::HomeScreen::new(Arc::clone(&bus));
+    let mut recording  = screens::recording::RecordingScreen::new(Arc::clone(&bus));
+    let mut settings   = screens::settings::SettingsScreen::new(Arc::clone(&bus));
+    let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
+    let mut system     = screens::system::SystemScreen::new(Arc::clone(&bus));
+    let mut volume     = screens::volume::VolumeScreen::new(Arc::clone(&bus));
 
+    // Track which non-settings screen to return to when settings closes.
+    let mut return_to_recording = false;
     let mut prev_recording = false;
 
     let root = home.create();
@@ -115,8 +116,7 @@ fn ui_thread_main(
 
     let mut last_tick = Instant::now();
 
-    // Track previous status-bar state to avoid redrawing every frame.
-    let mut prev_batt:  u8   = 255; // impossible sentinel
+    let mut prev_batt:  u8   = 255;
     let mut prev_wifi:  bool = false;
     let mut prev_bt:    bool = false;
     let mut prev_muted: bool = false;
@@ -126,7 +126,6 @@ fn ui_thread_main(
         last_tick = Instant::now();
 
         unsafe { lv_tick_inc(elapsed_ms); }
-
         unsafe { (*touch_ptr).poll(); }
 
         {
@@ -150,30 +149,36 @@ fn ui_thread_main(
         }
 
         while let Ok(cmd) = cmd_rx.try_recv() {
-            handle_command(&cmd, &mut toast, &mut cc);
+            handle_command(
+                &cmd,
+                &bus,
+                &mut toast,
+                &mut nav,
+                &mut home,
+                &mut recording,
+                &mut settings,
+                &mut audio_mode,
+                &mut system,
+                &mut volume,
+                &mut return_to_recording,
+                &mut prev_recording,
+            );
         }
 
         unsafe { lv_timer_handler(); }
         unsafe { toast.tick(); }
 
-        // Navigate Home ↔ Recording based on meeting.recording state
-        {
+        // Auto-navigate Home ↔ Recording based on meeting.recording state.
+        // Only when on Home or Recording (not Settings/AudioMode).
+        if nav.current == UiScreen::Home || nav.current == UiScreen::Recording {
             let recording_active = meeting_rx.borrow().recording;
             if recording_active && !prev_recording {
-                // Started recording → switch to Recording screen.
-                // Hide CC first so it doesn't occlude the recording screen.
-                // SAFETY: lv_screen_load is called before navigate_to deletes the old root.
-                // This is safe without animations because LVGL completes the load synchronously.
-                // If transition animations are ever added, this order must be revisited.
-                if cc.is_visible() { unsafe { cc.hide(); } }
                 let root = recording.create();
                 unsafe { lv_screen_load(root); }
                 nav.navigate_to(UiScreen::Recording);
                 nav.set_root(root);
                 prev_recording = true;
             } else if !recording_active && prev_recording {
-                // Stopped recording → switch back to Home screen.
-                if cc.is_visible() { unsafe { cc.hide(); } }
                 let root = home.create();
                 unsafe { lv_screen_load(root); }
                 nav.navigate_to(UiScreen::Home);
@@ -194,47 +199,145 @@ fn ui_thread_main(
                 let meeting = meeting_rx.borrow().clone();
                 unsafe { recording.update_state(&audio, &meeting); }
             }
-        }
-
-        // Update control center state whenever it is visible
-        if cc.is_visible() {
-            let audio = audio_rx.borrow().clone();
-            let wifi  = wifi_rx.borrow().clone();
-            let bt    = bt_rx.borrow().clone();
-            unsafe { cc.update_state(&audio, &wifi, &bt); }
+            UiScreen::Settings => {}
+            UiScreen::System   => {}
+            UiScreen::Volume => {
+                let audio = audio_rx.borrow().clone();
+                unsafe { volume.update_state(&audio); }
+            }
+            UiScreen::AudioMode => {
+                let audio = audio_rx.borrow().clone();
+                unsafe { audio_mode.update_state(&audio); }
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_command(
     cmd: &Command,
+    bus: &Arc<StateBus>,
     toast: &mut Toast,
-    cc: &mut screens::control_center::ControlCenter,
+    nav: &mut ScreenManager,
+    home: &mut screens::home::HomeScreen,
+    recording: &mut screens::recording::RecordingScreen,
+    settings: &mut screens::settings::SettingsScreen,
+    audio_mode: &mut screens::audio_mode::AudioModeScreen,
+    system: &mut screens::system::SystemScreen,
+    volume: &mut screens::volume::VolumeScreen,
+    return_to_recording: &mut bool,
+    prev_recording: &mut bool,
 ) {
+    // UI-thread audio feedback: pspapp's business daemon plays these stock WAVs
+    // on matching IPC commands. waved doesn't run that daemon, so spawn `aplay`
+    // inline for the same effect. Fire-and-forget (see audio_fx::play docs).
+    match cmd {
+        Command::ToggleMicMute => {
+            // State watch reflects pre-toggle value here; audio service updates it
+            // asynchronously after receiving the command.
+            if bus.audio.borrow().mic_muted {
+                audio_fx::play(audio_fx::SFX_MIC_UNMUTE);
+            } else {
+                audio_fx::play(audio_fx::SFX_MIC_MUTE);
+            }
+        }
+        Command::SetSpeakerVolume(_) | Command::ToggleSpeakerMute => {
+            audio_fx::play(audio_fx::SFX_SPK_VOL);
+        }
+        Command::StartRecording => {
+            audio_fx::play(audio_fx::SFX_AIRECORD);
+        }
+        Command::Shutdown => {
+            audio_fx::play(audio_fx::SFX_SHUTDOWN);
+        }
+        _ => {}
+    }
+
     match cmd {
         Command::AddBookmark => {
             unsafe { toast.show("Bookmark added", 1500); }
         }
         Command::Shutdown => {
-            // The actual shutdown is handled by waved-mcu which also subscribes
-            // to this command. Here we just show feedback.
             unsafe { toast.show("Shutting down...", 2000); }
         }
-        Command::ToggleSpeakerMute => {
-            // Reused as "toggle control center" UI signal from gestures/buttons.
-            // handle_command intercepts this before any audio service sees it
-            // (the command channel has multiple subscribers; the audio service
-            // also subscribes, but on the Wave there is currently no speaker
-            // hardware, so toggling speaker mute is a no-op there).
-            unsafe {
-                if cc.is_visible() {
-                    cc.hide();
-                } else {
-                    cc.show();
+        Command::OpenSettings => {
+            *return_to_recording = nav.current == UiScreen::Recording;
+            let root = settings.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::Settings);
+            nav.set_root(root);
+        }
+        Command::OpenSystemSettings => {
+            let root = system.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::System);
+            nav.set_root(root);
+        }
+        Command::OpenVolume => {
+            // Remember return context (Home vs Recording) just like OpenSettings does.
+            *return_to_recording = nav.current == UiScreen::Recording;
+            let root = volume.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::Volume);
+            nav.set_root(root);
+        }
+        Command::CloseSettings => {
+            match nav.current {
+                UiScreen::AudioMode => {
+                    // AudioMode → back to More screen.
+                    let root = settings.create();
+                    unsafe { lv_screen_load(root); }
+                    nav.navigate_to(UiScreen::Settings);
+                    nav.set_root(root);
                 }
+                UiScreen::System => {
+                    // System → back to More screen.
+                    let root = settings.create();
+                    unsafe { lv_screen_load(root); }
+                    nav.navigate_to(UiScreen::Settings);
+                    nav.set_root(root);
+                }
+                UiScreen::Volume => {
+                    // Volume → back to Home or Recording (entered from there, not via More).
+                    let _ = volume;
+                    if *return_to_recording {
+                        let root = recording.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Recording);
+                        nav.set_root(root);
+                        *prev_recording = true;
+                    } else {
+                        let root = home.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Home);
+                        nav.set_root(root);
+                    }
+                }
+                UiScreen::Settings => {
+                    // More → back to Home or Recording.
+                    if *return_to_recording {
+                        let root = recording.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Recording);
+                        nav.set_root(root);
+                        *prev_recording = true;
+                    } else {
+                        let root = home.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Home);
+                        nav.set_root(root);
+                    }
+                }
+                _ => {}
             }
+        }
+        Command::OpenAudioMode => {
+            let root = audio_mode.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::AudioMode);
+            nav.set_root(root);
         }
         _ => {}
     }

@@ -9,6 +9,17 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
 use waved_state::{AudioMode, AudioState, Command};
 
+/// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
+/// implement mic mute in software. libInstaAudio's `setMicMute` does the same
+/// thing (multiplies the gain ratio by 0 in its DSP chain); we short-circuit
+/// at the frame boundary instead, which is equivalent for our use case (VU +
+/// meeting recording) and avoids pulling in the full audio-server singleton.
+pub fn apply_mic_mute(samples: &mut [i16], muted: bool) {
+    if muted {
+        samples.fill(0);
+    }
+}
+
 /// Compute N-band VU levels from i16 PCM samples.
 /// Returns values in [0.0, 1.0] where 1.0 = i16::MAX RMS.
 pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
@@ -70,7 +81,9 @@ impl AudioService {
         loop {
             tokio::select! {
                 frame = self.frame_rx.recv() => {
-                    if let Some(frame) = frame {
+                    if let Some(mut frame) = frame {
+                        let muted = self.audio_tx.borrow().mic_muted;
+                        apply_mic_mute(&mut frame.data, muted);
                         let vu = compute_vu(&frame.data, 8);
                         self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
                         let _ = self.meeting_tx.try_send(frame);
@@ -91,12 +104,29 @@ impl AudioService {
                             self.audio_tx.send_modify(|s| s.mode = mode);
                         }
                         Ok(Command::ToggleMicMute) => {
+                            // Implemented via software PCM zeroing in the frame loop above
+                            // (see `apply_mic_mute`). libInstaAudio's setMicMute does the same
+                            // thing internally (gain ratio → 0); we skip the full audio-server
+                            // init by muting at the frame boundary.
                             self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
                         }
                         Ok(Command::ToggleSpeakerMute) => {
-                            self.audio_tx.send_modify(|s| s.speaker_muted = !s.speaker_muted);
+                            let (new_muted, restore_vol) = {
+                                let s = self.audio_tx.borrow();
+                                (!s.speaker_muted, s.speaker_volume)
+                            };
+                            let _ = tokio::task::spawn_blocking(move || {
+                                ffi::set_speaker_mute(new_muted, restore_vol)
+                            }).await;
+                            self.audio_tx.send_modify(|s| {
+                                s.speaker_muted = new_muted;
+                                if !new_muted && s.speaker_volume < 10 { s.speaker_volume = 10; }
+                            });
                         }
                         Ok(Command::SetSpeakerVolume(v)) => {
+                            let _ = tokio::task::spawn_blocking(move || {
+                                ffi::set_speaker_volume(v)
+                            }).await;
                             self.audio_tx.send_modify(|s| s.speaker_volume = v);
                         }
                         Ok(Command::SetMicVolume(v)) => {
@@ -133,5 +163,19 @@ mod tests {
         for v in &vu {
             assert!(*v > 0.9, "expected ~1.0, got {v}");
         }
+    }
+
+    #[test]
+    fn apply_mic_mute_zeros_when_muted() {
+        let mut samples = vec![1234i16; 16];
+        apply_mic_mute(&mut samples, true);
+        assert!(samples.iter().all(|&s| s == 0));
+    }
+
+    #[test]
+    fn apply_mic_mute_preserves_when_unmuted() {
+        let mut samples = vec![1234i16; 16];
+        apply_mic_mute(&mut samples, false);
+        assert!(samples.iter().all(|&s| s == 1234));
     }
 }
