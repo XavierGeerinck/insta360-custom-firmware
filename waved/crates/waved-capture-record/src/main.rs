@@ -79,11 +79,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     stop.store(true, Ordering::Relaxed);
     capture.join().map_err(|_| "capture join")?;
     file.flush()?;
+    drop(file); // close before writing sidecar — ensures any consumer watching for .meta.json sees complete PCM
     write_meta(&args.out, args.duration, frames, &args.description)?;
-    println!(
-        "{{\"frames\": {frames}, \"path\": \"{}\", \"xruns\": {}}}",
-        args.out.display(),
-        stats.xrun_count.load(Ordering::Relaxed),
-    );
+    let summary = serde_json::json!({
+        "frames": frames,
+        "path": args.out.display().to_string(),
+        "xruns": stats.xrun_count.load(Ordering::Relaxed),
+    });
+    println!("{}", serde_json::to_string(&summary)?);
     Ok(())
 }
