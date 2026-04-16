@@ -2,7 +2,7 @@ pub mod audio_config;
 pub mod callbacks;
 pub mod capture;
 pub mod stats_collector;
-pub mod ffi;
+pub mod speaker_mixer;
 pub mod fixtures;
 pub mod metrics;
 
@@ -12,7 +12,7 @@ pub mod simulate;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
-use waved_state::{AudioMode, AudioState, Command};
+use waved_state::{AudioState, Command};
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
 /// implement mic mute in software. libInstaAudio's `setMicMute` does the same
@@ -54,6 +54,7 @@ pub struct AudioService {
     frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
     meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
     stats_tee: broadcast::Sender<callbacks::AudioFrame>,
+    speaker_control: Option<String>,
 }
 
 impl AudioService {
@@ -64,7 +65,11 @@ impl AudioService {
         meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
     ) -> Self {
         let (stats_tee, _) = broadcast::channel(16);
-        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx, stats_tee }
+        let speaker_control = speaker_mixer::discover_control();
+        if speaker_control.is_none() {
+            warn!("no amixer speaker control found — speaker mute/volume will be state-only");
+        }
+        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx, stats_tee, speaker_control }
     }
 
     /// Subscribe to the frame stream for diagnostics (stats collector, debug tools).
@@ -90,15 +95,7 @@ impl AudioService {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Ok(Command::SetAudioMode(mode)) => {
-                            let mode_num = match mode {
-                                AudioMode::NoiseReduction => 1,
-                                AudioMode::Omni => 2,
-                                AudioMode::Cardioid => 3,
-                                AudioMode::Supercardioid => 4,
-                                AudioMode::Figure8 => 5,
-                                AudioMode::Stereo => 6,
-                            };
-                            let _ = tokio::task::spawn_blocking(move || ffi::set_work_mode(mode_num)).await;
+                            tracing::debug!("SetAudioMode({mode:?}): state-only until SP#3 (beamforming) or SP#4 (NS)");
                             self.audio_tx.send_modify(|s| s.mode = mode);
                         }
                         Ok(Command::ToggleMicMute) => {
@@ -113,18 +110,25 @@ impl AudioService {
                                 let s = self.audio_tx.borrow();
                                 (!s.speaker_muted, s.speaker_volume)
                             };
-                            let _ = tokio::task::spawn_blocking(move || {
-                                ffi::set_speaker_mute(new_muted, restore_vol)
-                            }).await;
+                            if let Some(ctrl) = self.speaker_control.clone() {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    let _ = speaker_mixer::set_mute(&ctrl, new_muted);
+                                    if !new_muted {
+                                        let _ = speaker_mixer::set_volume(&ctrl, restore_vol.max(10) as u32);
+                                    }
+                                }).await;
+                            }
                             self.audio_tx.send_modify(|s| {
                                 s.speaker_muted = new_muted;
                                 if !new_muted && s.speaker_volume < 10 { s.speaker_volume = 10; }
                             });
                         }
                         Ok(Command::SetSpeakerVolume(v)) => {
-                            let _ = tokio::task::spawn_blocking(move || {
-                                ffi::set_speaker_volume(v)
-                            }).await;
+                            if let Some(ctrl) = self.speaker_control.clone() {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    let _ = speaker_mixer::set_volume(&ctrl, v as u32);
+                                }).await;
+                            }
                             self.audio_tx.send_modify(|s| s.speaker_volume = v);
                         }
                         Ok(Command::SetMicVolume(v)) => {
