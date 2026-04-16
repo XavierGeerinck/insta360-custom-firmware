@@ -5,6 +5,8 @@ edition.workspace = true
 
 [features]
 simulate = []
+capture-replay = []
+capture-alsa = ["dep:alsa"]
 
 [dependencies]
 waved-state = { path = "../waved-state" }
@@ -13,3 +15,7 @@ tracing.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+alsa = { version = "0.9", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

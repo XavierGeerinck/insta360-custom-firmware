@@ -5,7 +5,13 @@ pub mod channel_map;
 #[cfg(test)]
 pub mod mock;
 
+#[cfg(feature = "capture-replay")]
+pub mod replay;
+
 pub use channel_map::{ChannelMap, ChannelMapError, ChannelMapSource};
+
+#[cfg(feature = "capture-replay")]
+pub use replay::{ReplayFormat, ReplayPcmSource};
 
 /// Produces raw interleaved 32-bit PCM frames from some source.
 ///
