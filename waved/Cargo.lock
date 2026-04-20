@@ -2697,6 +2697,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-aec-probe"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "tracing",
+ "tracing-subscriber",
+ "waved-audio",
+]
+
+[[package]]
 name = "waved-audio"
 version = "0.1.0"
 dependencies = [
