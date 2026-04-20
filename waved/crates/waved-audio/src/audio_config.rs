@@ -16,6 +16,21 @@ const DEFAULT_JSON: &str = include_str!("../config/audio_config_default.json");
 pub struct AudioConfig {
     pub version: u32,
     pub capture: CaptureConfig,
+    /// Optional playback + software-reference configuration. Present when
+    /// waved owns the playback pipeline (required for AEC on hardware where
+    /// the loopback PCM isn't usable — see playback module docs).
+    #[serde(default)]
+    pub playback: Option<PlaybackSection>,
+    pub period_frames: usize,
+    pub buffer_periods: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PlaybackSection {
+    pub device: String,
+    pub channels: u32,
+    pub sample_rate: u32,
+    pub format: SampleFormat,
     pub period_frames: usize,
     pub buffer_periods: u32,
 }
@@ -117,11 +132,37 @@ impl AudioConfig {
                 "reference_device, reference_channels, reference_format must all be set or all absent".into()
             )),
         }
+        // Playback: validate shape when present.
+        if let Some(p) = &self.playback {
+            if p.channels == 0 {
+                return Err(ConfigError::Invalid("playback.channels must be > 0".into()));
+            }
+            if p.sample_rate == 0 {
+                return Err(ConfigError::Invalid("playback.sample_rate must be > 0".into()));
+            }
+            if p.period_frames == 0 {
+                return Err(ConfigError::Invalid("playback.period_frames must be > 0".into()));
+            }
+            if p.buffer_periods < 2 {
+                return Err(ConfigError::Invalid("playback.buffer_periods must be >= 2".into()));
+            }
+        }
+        // Hardware loopback and software reference are mutually exclusive;
+        // enabling both is ambiguous for stats_collector reporting.
+        if self.capture.reference_device.is_some() && self.playback.is_some() {
+            return Err(ConfigError::Invalid(
+                "reference_device (hardware loopback) and playback (software reference) are mutually exclusive".into()
+            ));
+        }
         Ok(())
     }
 
     pub fn reference_enabled(&self) -> bool {
         self.capture.reference_device.is_some()
+    }
+
+    pub fn software_reference_enabled(&self) -> bool {
+        self.playback.is_some()
     }
 }
 
@@ -135,9 +176,39 @@ mod tests {
         assert_eq!(cfg.version, 2);
         assert_eq!(cfg.capture.mic_device, "hw:0,2");
         assert_eq!(cfg.capture.mic_channels, 8);
-        assert_eq!(cfg.capture.reference_device.as_deref(), Some("hw:0,3"));
-        assert_eq!(cfg.capture.reference_channels, 2);
-        assert!(cfg.reference_enabled());
+        // Embedded default now uses software reference (playback present,
+        // no reference_device) because the hardware loopback isn't usable.
+        assert!(cfg.capture.reference_device.is_none());
+        assert!(!cfg.reference_enabled());
+        assert!(cfg.software_reference_enabled());
+        let p = cfg.playback.expect("playback section");
+        assert_eq!(p.device, "hw:0,1");
+        assert_eq!(p.channels, 2);
+        assert_eq!(p.sample_rate, 48000);
+    }
+
+    #[test]
+    fn rejects_both_hardware_and_software_reference() {
+        let json = r#"{
+            "version":2,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE","reference_device":"hw:0,3","reference_channels":2,"reference_format":"S32_LE"},
+            "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
+            "period_frames":1024,"buffer_periods":8
+        }"#;
+        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn accepts_playback_only() {
+        let json = r#"{
+            "version":2,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
+            "period_frames":1024,"buffer_periods":8
+        }"#;
+        let cfg = AudioConfig::from_json(json).unwrap();
+        assert!(cfg.software_reference_enabled());
+        assert!(!cfg.reference_enabled());
     }
 
     #[test]

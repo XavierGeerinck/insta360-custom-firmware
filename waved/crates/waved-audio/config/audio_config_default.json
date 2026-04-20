@@ -4,11 +4,15 @@
     "mic_device": "hw:0,2",
     "mic_channels": 8,
     "mic_sample_rate": 48000,
-    "mic_format": "S32_LE",
-    "reference_device": "hw:0,3",
-    "reference_channels": 2,
-    "reference_sample_rate": 48000,
-    "reference_format": "S32_LE"
+    "mic_format": "S32_LE"
+  },
+  "playback": {
+    "device": "hw:0,1",
+    "channels": 2,
+    "sample_rate": 48000,
+    "format": "S16_LE",
+    "period_frames": 1024,
+    "buffer_periods": 4
   },
   "period_frames": 1024,
   "buffer_periods": 8

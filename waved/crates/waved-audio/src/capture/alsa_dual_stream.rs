@@ -9,8 +9,10 @@ use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignmentMethod {
-    KernelLinked,       // snd_pcm_link honored
-    TimestampFallback,  // per-thread timestamps
+    KernelLinked,       // snd_pcm_link honored (dual ALSA streams)
+    TimestampFallback,  // per-thread timestamps (dual ALSA streams w/o link)
+    SoftwareReference,  // reference sourced from PlaybackService broadcast
+    MicOnly,            // no reference stream configured
 }
 
 impl AlignmentMethod {
@@ -18,6 +20,8 @@ impl AlignmentMethod {
         match self {
             AlignmentMethod::KernelLinked => "kernel-linked",
             AlignmentMethod::TimestampFallback => "timestamp-fallback",
+            AlignmentMethod::SoftwareReference => "software-reference",
+            AlignmentMethod::MicOnly => "mic-only",
         }
     }
 }

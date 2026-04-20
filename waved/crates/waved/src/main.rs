@@ -146,9 +146,11 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         use waved_audio::capture::{
             alsa::{AlsaPcmSource, AlsaStreamConfig},
             alsa_dual_stream::AlsaDualStreamSource,
+            mic_software_ref::MicWithSoftwareReferenceSource,
             single_stream::SingleStreamFrameSource,
             run_capture_loop, CaptureStats, ChannelMapSource,
         };
+        use waved_audio::playback::{spawn_playback, PlaybackConfig};
         use waved_audio::stats_collector;
 
         let (cfg, cfg_src) = AudioConfig::load_or_default(Path::new("/etc/waved-audio-config.json"));
@@ -171,11 +173,32 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         );
         let stats_rx = audio_svc.subscribe_frames();
 
-        // Build the capture source: dual-stream if reference configured, else single-stream.
+        // Build the capture source. Three modes:
+        //   1. Hardware loopback (cfg.reference_device): AlsaDualStreamSource.
+        //   2. Software reference (cfg.playback):        PlaybackService + MicWithSoftwareReferenceSource.
+        //   3. Mic-only:                                 SingleStreamFrameSource.
         enum SourceDyn {
             Dual(AlsaDualStreamSource),
             Single(SingleStreamFrameSource<AlsaPcmSource>),
+            SoftwareRef(MicWithSoftwareReferenceSource<AlsaPcmSource>),
         }
+
+        let open_mic = |cfg: &AudioConfig| {
+            AlsaPcmSource::open(&AlsaStreamConfig {
+                device: &cfg.capture.mic_device,
+                channels: cfg.capture.mic_channels,
+                sample_rate: cfg.capture.mic_sample_rate,
+                format: cfg.capture.mic_format,
+                period_frames: cfg.period_frames,
+                buffer_periods: cfg.buffer_periods,
+            })
+            .unwrap_or_else(|e| {
+                eprintln!("FATAL: ALSA mic open failed: {e}");
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+                std::process::exit(1);
+            })
+        };
+
         let (source, alignment) = if cfg.reference_enabled() {
             match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
                 Ok(s) => {
@@ -183,32 +206,61 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     (SourceDyn::Dual(s), a.as_str().to_string())
                 }
                 Err(e) => {
-                    // eprintln! bypasses Rust's BufWriter so this reaches the log
-                    // file even when process::exit skips destructors/flush.
                     eprintln!("FATAL: ALSA dual-stream open failed: {e}");
                     let _ = std::io::Write::flush(&mut std::io::stderr());
                     std::process::exit(1);
                 }
             }
-        } else {
-            let mic = match AlsaPcmSource::open(&AlsaStreamConfig {
-                device: &cfg.capture.mic_device,
-                channels: cfg.capture.mic_channels,
-                sample_rate: cfg.capture.mic_sample_rate,
-                format: cfg.capture.mic_format,
-                period_frames: cfg.period_frames,
-                buffer_periods: cfg.buffer_periods,
+        } else if let Some(pb) = cfg.playback.clone() {
+            // Spawn playback first so the broadcast receiver can be subscribed
+            // before capture starts emitting frames.
+            let playback = match spawn_playback(PlaybackConfig {
+                device: pb.device.clone(),
+                channels: pb.channels,
+                sample_rate: pb.sample_rate,
+                format: pb.format,
+                period_frames: pb.period_frames,
+                buffer_periods: pb.buffer_periods,
             }) {
-                Ok(m) => m,
+                Ok(p) => p,
                 Err(e) => {
-                    eprintln!("FATAL: ALSA mic open failed: {e}");
+                    eprintln!("FATAL: ALSA playback open failed: {e}");
                     let _ = std::io::Write::flush(&mut std::io::stderr());
                     std::process::exit(1);
                 }
             };
-            (SourceDyn::Single(SingleStreamFrameSource::new(
-                mic, cfg.period_frames, cfg.capture.mic_channels as usize,
-            )), "mic-only".to_string())
+            let ref_rx = playback.subscribe_reference();
+            let ref_period_samples = playback.period_frames() * playback.channels() as usize;
+            let mic = open_mic(&cfg);
+            let src = MicWithSoftwareReferenceSource::new(
+                mic,
+                cfg.capture.mic_channels as usize,
+                cfg.period_frames,
+                playback.channels() as usize,
+                ref_period_samples,
+                ref_rx,
+            );
+            // Leak the PlaybackService handle so the thread keeps running.
+            // AudioService (future work) will subscribe play_batch to this.
+            Box::leak(Box::new(playback));
+            (
+                SourceDyn::SoftwareRef(src),
+                waved_audio::capture::alsa_dual_stream::AlignmentMethod::SoftwareReference
+                    .as_str()
+                    .to_string(),
+            )
+        } else {
+            let mic = open_mic(&cfg);
+            (
+                SourceDyn::Single(SingleStreamFrameSource::new(
+                    mic,
+                    cfg.period_frames,
+                    cfg.capture.mic_channels as usize,
+                )),
+                waved_audio::capture::alsa_dual_stream::AlignmentMethod::MicOnly
+                    .as_str()
+                    .to_string(),
+            )
         };
 
         tokio::spawn(stats_collector::run(
@@ -227,6 +279,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             .spawn(move || match source {
                 SourceDyn::Dual(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
                 SourceDyn::Single(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
+                SourceDyn::SoftwareRef(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
             })
             .expect("spawn capture thread");
 

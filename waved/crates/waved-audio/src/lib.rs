@@ -1,6 +1,7 @@
 pub mod audio_config;
 pub mod callbacks;
 pub mod capture;
+pub mod playback;
 pub mod stats_collector;
 pub mod speaker_mixer;
 pub mod fixtures;
