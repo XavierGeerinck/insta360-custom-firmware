@@ -178,6 +178,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             cfg.capture.mic_sample_rate,
         );
         let stats_rx = audio_svc.subscribe_frames();
+        let stats_processed_rx = audio_svc.subscribe_processed();
 
         // Build the capture source. Three modes:
         //   1. Hardware loopback (cfg.reference_device): AlsaDualStreamSource.
@@ -271,6 +272,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
         tokio::spawn(stats_collector::run(
             stats_rx,
+            stats_processed_rx,
             Arc::clone(&capture_stats),
             map_source,
             std::path::PathBuf::from("/tmp/audio_stats.json"),

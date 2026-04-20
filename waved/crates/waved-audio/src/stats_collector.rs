@@ -5,6 +5,7 @@
 use crate::callbacks::AudioFrame;
 use crate::capture::{ChannelMapSource, CaptureStats};
 use crate::metrics::{clipping_rate, correlation_matrix, dc_offset, rms_per_channel};
+use crate::processed_frame::ProcessedAudioFrame;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,10 +29,15 @@ pub struct AudioStats {
     pub last_write_error: Option<String>,
     pub reference_rms: Vec<f32>,
     pub alignment: String,
+    /// RMS of the post-AEC mono signal, scaled to i16 units so it's directly
+    /// comparable to `rms_per_channel`. `None` when no processed frame has
+    /// been seen yet (AEC disabled or collector just started).
+    pub mic_post_aec_rms: Option<f32>,
 }
 
 pub async fn run(
     mut rx: broadcast::Receiver<AudioFrame>,
+    mut processed_rx: broadcast::Receiver<ProcessedAudioFrame>,
     stats: Arc<CaptureStats>,
     map_source: ChannelMapSource,
     out_path: PathBuf,
@@ -41,6 +47,7 @@ pub async fn run(
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
     let mut latest_frame: Option<AudioFrame> = None;
+    let mut latest_post_aec_rms: Option<f32> = None;
     let mut last_write_error: Option<String> = None;
     loop {
         tokio::select! {
@@ -54,9 +61,20 @@ pub async fn run(
                     return;
                 }
             },
+            processed = processed_rx.recv() => match processed {
+                Ok(p) => { latest_post_aec_rms = Some(processed_mono_rms(&p)); }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("stats_collector lagged {n} processed frames");
+                }
+                // Closed is not fatal — raw frames can still be collected if
+                // the DSP path tears down first.
+                Err(broadcast::error::RecvError::Closed) => {}
+            },
             _ = interval.tick() => {
                 if let Some(frame) = latest_frame.as_ref() {
-                    let s = compute_stats(frame, &stats, map_source, last_write_error.clone(), &alignment);
+                    let s = compute_stats_with_processed(
+                        frame, &stats, map_source, last_write_error.clone(), &alignment, latest_post_aec_rms,
+                    );
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
                         last_write_error = Some(format!("{e}"));
@@ -69,12 +87,39 @@ pub async fn run(
     }
 }
 
+/// RMS of a ProcessedAudioFrame's mono post-AEC signal, scaled to the same
+/// i16 unit basis as `rms_per_channel` so the ERLE calculation is a single
+/// `20 * log10(raw / post)` with both operands in the same domain.
+pub fn processed_mono_rms(p: &ProcessedAudioFrame) -> f32 {
+    if p.mic_mono_f32.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f64 = p
+        .mic_mono_f32
+        .iter()
+        .map(|&v| (v as f64) * (v as f64))
+        .sum();
+    let rms_f32 = (sum_sq / p.mic_mono_f32.len() as f64).sqrt() as f32;
+    rms_f32 * (i16::MAX as f32)
+}
+
 pub fn compute_stats(
     frame: &AudioFrame,
     cap_stats: &CaptureStats,
     map_source: ChannelMapSource,
     last_write_error: Option<String>,
     alignment: &str,
+) -> AudioStats {
+    compute_stats_with_processed(frame, cap_stats, map_source, last_write_error, alignment, None)
+}
+
+pub fn compute_stats_with_processed(
+    frame: &AudioFrame,
+    cap_stats: &CaptureStats,
+    map_source: ChannelMapSource,
+    last_write_error: Option<String>,
+    alignment: &str,
+    mic_post_aec_rms: Option<f32>,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -115,6 +160,7 @@ pub fn compute_stats(
         last_write_error,
         reference_rms: ref_rms,
         alignment: alignment.to_string(),
+        mic_post_aec_rms,
     }
 }
 
@@ -202,6 +248,36 @@ mod tests {
         assert_eq!(s.reference_rms.len(), 2);
         assert!((s.reference_rms[0] - 16384.0).abs() < 1.0, "expected ~16384, got {}", s.reference_rms[0]);
         assert_eq!(s.alignment, "kernel-linked");
+    }
+
+    #[test]
+    fn processed_mono_rms_matches_expected_i16_scale() {
+        // 0.5 amplitude sine → RMS = 0.5/sqrt(2) * i16::MAX = ~11585.
+        let n = 48000;
+        let step = 2.0 * std::f32::consts::PI * 1000.0 / 48000.0;
+        let mic_mono_f32: Vec<f32> = (0..n).map(|i| (i as f32 * step).sin() * 0.5).collect();
+        let p = ProcessedAudioFrame {
+            mic_mono_f32,
+            reference_f32: vec![],
+            sample_rate: 48000,
+            timestamp_ms: 0,
+            raw_mic_i16: vec![],
+            raw_mic_channels: 0,
+        };
+        let rms = processed_mono_rms(&p);
+        let expected = 0.5 / 2f32.sqrt() * i16::MAX as f32;
+        assert!(
+            (rms - expected).abs() < expected * 0.01,
+            "expected ~{expected:.1}, got {rms:.1}"
+        );
+    }
+
+    #[test]
+    fn mic_post_aec_rms_threads_through_compute_stats_with_processed() {
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let cs = CaptureStats::new();
+        let s = compute_stats_with_processed(&frame, &cs, ChannelMapSource::File, None, "none", Some(123.4));
+        assert_eq!(s.mic_post_aec_rms, Some(123.4));
     }
 
     #[test]
