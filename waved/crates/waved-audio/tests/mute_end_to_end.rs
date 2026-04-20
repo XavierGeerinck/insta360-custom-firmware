@@ -13,6 +13,7 @@ use waved_audio::callbacks::AudioFrame;
 use waved_audio::capture::{run_capture_loop, CaptureStats, SingleStreamFrameSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::tone_mono_8ch;
+use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_audio::AudioService;
 use waved_state::{AudioState, Command};
 
@@ -33,9 +34,16 @@ async fn mute_toggles_zero_meeting_frames() {
     // Small meeting_tx capacity so the capture loop slows down when it fills.
     // try_send drops frames when full, so we drain concurrently below.
     let (frame_tx, frame_rx) = mpsc::channel::<AudioFrame>(32);
-    let (meeting_tx, mut meeting_rx) = mpsc::channel::<AudioFrame>(32);
+    let (meeting_tx, mut meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
     let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
-    let svc = AudioService::new(Arc::clone(&audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
+    let svc = AudioService::new(
+        Arc::clone(&audio_tx),
+        frame_tx.clone(),
+        frame_rx,
+        meeting_tx,
+        256,
+        48_000,
+    );
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     let stats = CaptureStats::new();
@@ -48,6 +56,8 @@ async fn mute_toggles_zero_meeting_frames() {
     });
 
     // Collect unmuted frames: wait for at least 10 non-zero frames before muting.
+    // Check raw_mic_i16 — the test targets `apply_mic_mute`, which zeros the raw
+    // mic data before the DSP stage.
     let mut unmuted_nonzero = 0usize;
     loop {
         match tokio::time::timeout(
@@ -55,7 +65,7 @@ async fn mute_toggles_zero_meeting_frames() {
             meeting_rx.recv(),
         ).await {
             Ok(Some(f)) => {
-                if f.data.iter().any(|&s| s != 0) {
+                if f.raw_mic_i16.iter().any(|&s| s != 0) {
                     unmuted_nonzero += 1;
                 }
                 if unmuted_nonzero >= 10 { break; }
@@ -69,26 +79,22 @@ async fn mute_toggles_zero_meeting_frames() {
     // Toggle mute and collect subsequent frames.
     cmd_tx.send(Command::ToggleMicMute).unwrap();
 
-    // Drain any in-flight unmuted frames (in the channel before mute took effect),
-    // then wait for at least 5 all-zero (muted) frames.
     let mut muted_zero_frames = 0usize;
-    let mut seen_nonzero_after_mute = true; // skip initial in-flight unmuted frames
+    let mut seen_nonzero_after_mute = true;
     loop {
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
             meeting_rx.recv(),
         ).await {
             Ok(Some(f)) => {
-                let all_zero = f.data.iter().all(|&s| s == 0);
+                let all_zero = f.raw_mic_i16.iter().all(|&s| s == 0);
                 if seen_nonzero_after_mute {
-                    // Still draining in-flight unmuted frames
                     if all_zero { seen_nonzero_after_mute = false; muted_zero_frames += 1; }
                 } else {
                     if all_zero {
                         muted_zero_frames += 1;
                     } else {
-                        // A non-zero frame arrived after we started seeing zeros — unexpected
-                        panic!("non-zero frame arrived after mute was applied");
+                        panic!("non-zero raw mic frame arrived after mute was applied");
                     }
                 }
                 if muted_zero_frames >= 5 { break; }

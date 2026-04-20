@@ -3,6 +3,7 @@ pub mod audio_config;
 pub mod callbacks;
 pub mod capture;
 pub mod playback;
+pub mod processed_frame;
 pub mod stats_collector;
 pub mod speaker_mixer;
 pub mod fixtures;
@@ -14,7 +15,11 @@ pub mod simulate;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
-use waved_state::{AudioState, Command};
+use waved_state::{AudioState, Command, NrLevel};
+
+use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
+use crate::callbacks::AudioFrame;
+use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
 /// implement mic mute in software. libInstaAudio's `setMicMute` does the same
@@ -49,38 +54,148 @@ pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Build the DSP chain for a given NR level.
+///
+/// - `NrLevel::Off` → Speex AEC + no NS (echo cancelled, but no spectral
+///   noise reduction). Raw-pass (`PassthroughCanceller`) is not wired to
+///   the UI in SP#2; it stays available for tests via `aec::passthrough`.
+/// - `NrLevel::{Low, Med, High}` → Speex AEC + Speex NS (the NS is tied
+///   to the echo state for residual-echo suppression).
+fn build_dsp_chain(
+    frame_size: usize,
+    sample_rate: u32,
+    nr: NrLevel,
+) -> (Box<dyn EchoCanceller>, Option<Box<dyn NoiseSuppressor>>) {
+    let ec = speex::SpeexEchoCanceller::new(frame_size, sample_rate);
+    let ns: Option<Box<dyn NoiseSuppressor>> = if matches!(nr, NrLevel::Off) {
+        None
+    } else {
+        Some(Box::new(speex::SpeexNoiseSuppressor::new(
+            frame_size,
+            sample_rate,
+            Some(&ec),
+        )))
+    };
+    (Box::new(ec), ns)
+}
+
 pub struct AudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
     /// Kept alive so the channel stays open for future C SDK callback registration.
-    _frame_tx: mpsc::Sender<callbacks::AudioFrame>,
-    frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
-    meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
-    stats_tee: broadcast::Sender<callbacks::AudioFrame>,
+    _frame_tx: mpsc::Sender<AudioFrame>,
+    frame_rx: mpsc::Receiver<AudioFrame>,
+    meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
+    stats_tee: broadcast::Sender<AudioFrame>,
+    processed_tx: broadcast::Sender<ProcessedAudioFrame>,
     speaker_control: Option<String>,
+    frame_size: usize,
+    sample_rate: u32,
+    echo_canceller: Box<dyn EchoCanceller>,
+    noise_suppressor: Option<Box<dyn NoiseSuppressor>>,
+    mic_mono_scratch: Vec<i16>,
+    ref_mono_scratch: Vec<i16>,
 }
 
 impl AudioService {
     pub fn new(
         audio_tx: Arc<watch::Sender<AudioState>>,
-        frame_tx: mpsc::Sender<callbacks::AudioFrame>,
-        frame_rx: mpsc::Receiver<callbacks::AudioFrame>,
-        meeting_tx: mpsc::Sender<callbacks::AudioFrame>,
+        frame_tx: mpsc::Sender<AudioFrame>,
+        frame_rx: mpsc::Receiver<AudioFrame>,
+        meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
+        frame_size: usize,
+        sample_rate: u32,
     ) -> Self {
         let (stats_tee, _) = broadcast::channel(16);
+        let (processed_tx, _) = broadcast::channel(16);
         let speaker_control = speaker_mixer::discover_control();
         if speaker_control.is_none() {
             warn!("no amixer speaker control found — speaker mute/volume will be state-only");
         }
-        Self { audio_tx, _frame_tx: frame_tx, frame_rx, meeting_tx, stats_tee, speaker_control }
+        let initial_nr = audio_tx.borrow().nr_level.clone();
+        let (echo_canceller, noise_suppressor) =
+            build_dsp_chain(frame_size, sample_rate, initial_nr);
+        Self {
+            audio_tx,
+            _frame_tx: frame_tx,
+            frame_rx,
+            meeting_tx,
+            stats_tee,
+            processed_tx,
+            speaker_control,
+            frame_size,
+            sample_rate,
+            echo_canceller,
+            noise_suppressor,
+            mic_mono_scratch: vec![0; frame_size],
+            ref_mono_scratch: vec![0; frame_size],
+        }
     }
 
-    /// Subscribe to the frame stream for diagnostics (stats collector, debug tools).
-    pub fn subscribe_frames(&self) -> broadcast::Receiver<callbacks::AudioFrame> {
+    /// Subscribe to the raw frame stream for diagnostics (stats collector,
+    /// debug tools). Raw 8-ch mic — stats want per-channel RMS, which is
+    /// meaningless on the post-AEC mono signal.
+    pub fn subscribe_frames(&self) -> broadcast::Receiver<AudioFrame> {
         self.stats_tee.subscribe()
     }
 
+    /// Subscribe to the processed frame stream (post-AEC mono + reference +
+    /// raw mic for sidecar). Used by future stats consumers that want ERLE
+    /// and by any downstream uplink path beyond meeting recording.
+    pub fn subscribe_processed(&self) -> broadcast::Receiver<ProcessedAudioFrame> {
+        self.processed_tx.subscribe()
+    }
+
+    /// Run the DSP pipeline on a single `AudioFrame`. Separate method so the
+    /// async `run` loop can invoke it with a bounded borrow of `self` (calling
+    /// a free function with split borrows inside `tokio::select!` triggers a
+    /// `'static` inference issue on the trait-object references). Also used
+    /// directly by unit tests.
+    pub fn process_frame(&mut self, frame: &AudioFrame) -> ProcessedAudioFrame {
+        let frame_size = self.frame_size;
+
+        // Mic: N-ch interleaved → mono mix.
+        let mono_mic = mix_to_mono(&frame.data, frame.channels as usize);
+        if self.mic_mono_scratch.len() != frame_size {
+            self.mic_mono_scratch.resize(frame_size, 0);
+        }
+        let copy_len = mono_mic.len().min(frame_size);
+        self.mic_mono_scratch[..copy_len].copy_from_slice(&mono_mic[..copy_len]);
+        if copy_len < frame_size {
+            self.mic_mono_scratch[copy_len..].fill(0);
+        }
+
+        // Reference: either the paired stream's downmix or silence.
+        if self.ref_mono_scratch.len() != frame_size {
+            self.ref_mono_scratch.resize(frame_size, 0);
+        }
+        match frame.reference.as_ref() {
+            Some(r) if frame.reference_channels > 0 => {
+                let mono_ref = mix_to_mono(r, frame.reference_channels as usize);
+                let copy_len = mono_ref.len().min(frame_size);
+                self.ref_mono_scratch[..copy_len].copy_from_slice(&mono_ref[..copy_len]);
+                if copy_len < frame_size {
+                    self.ref_mono_scratch[copy_len..].fill(0);
+                }
+            }
+            _ => self.ref_mono_scratch.fill(0),
+        }
+
+        let mut aec_out = vec![0i16; frame_size];
+        self.echo_canceller
+            .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
+
+        if let Some(ns) = self.noise_suppressor.as_mut() {
+            ns.process(&mut aec_out);
+        }
+
+        ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch)
+    }
+
     pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) {
-        info!("audio_srv starting (consumer-only loop)");
+        info!(
+            "audio_srv starting (DSP on: frame_size={} sample_rate={})",
+            self.frame_size, self.sample_rate
+        );
 
         loop {
             tokio::select! {
@@ -91,20 +206,25 @@ impl AudioService {
                         let vu = compute_vu(&frame.data, 8);
                         self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
                         let _ = self.stats_tee.send(frame.clone());
-                        let _ = self.meeting_tx.try_send(frame);
+
+                        let processed = self.process_frame(&frame);
+                        let _ = self.processed_tx.send(processed.clone());
+                        let _ = self.meeting_tx.try_send(processed);
                     }
                 }
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Ok(Command::SetAudioMode(mode)) => {
-                            tracing::debug!("SetAudioMode({mode:?}): state-only until SP#3 (beamforming) or SP#4 (NS)");
                             self.audio_tx.send_modify(|s| s.mode = mode);
                         }
+                        Ok(Command::SetNrLevel(level)) => {
+                            info!("NR level -> {level:?}; rebuilding DSP chain");
+                            let (ec, ns) = build_dsp_chain(self.frame_size, self.sample_rate, level.clone());
+                            self.echo_canceller = ec;
+                            self.noise_suppressor = ns;
+                            self.audio_tx.send_modify(|s| s.nr_level = level);
+                        }
                         Ok(Command::ToggleMicMute) => {
-                            // Implemented via software PCM zeroing in the frame loop above
-                            // (see `apply_mic_mute`). libInstaAudio's setMicMute does the same
-                            // thing internally (gain ratio → 0); we skip the full audio-server
-                            // init by muting at the frame boundary.
                             self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
                         }
                         Ok(Command::ToggleSpeakerMute) => {
@@ -163,7 +283,6 @@ mod tests {
     fn compute_vu_level_full_scale_is_one() {
         let samples = vec![i16::MAX; 512];
         let vu = compute_vu(&samples, 8);
-        // Each band should be close to 1.0
         for v in &vu {
             assert!(*v > 0.9, "expected ~1.0, got {v}");
         }
@@ -181,5 +300,87 @@ mod tests {
         let mut samples = vec![1234i16; 16];
         apply_mic_mute(&mut samples, false);
         assert!(samples.iter().all(|&s| s == 1234));
+    }
+
+    /// End-to-end DSP test through `AudioService::process_frame`. Injects a
+    /// synthetic `AudioFrame` whose mic is an echo of its reference; asserts
+    /// the processed mono RMS is at least 10 dB below the raw mic RMS after
+    /// convergence. Uses SpeexEchoCanceller with no NS (NrLevel::Off).
+    #[test]
+    fn audio_service_process_frame_cancels_echo() {
+        let sr: u32 = 48000;
+        let frame_size: usize = 480;
+        let mic_channels: u16 = 8;
+        let ref_channels: u16 = 2;
+        let duration_frames: usize = (sr as usize / frame_size) * 2; // ~2 s
+
+        // Stand up a minimal AudioService with NrLevel::Off so NS doesn't
+        // confound the ERLE measurement.
+        let mut initial_state = AudioState::default();
+        initial_state.nr_level = NrLevel::Off;
+        let (audio_tx, _audio_rx) = tokio::sync::watch::channel(initial_state);
+        let audio_tx = Arc::new(audio_tx);
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<AudioFrame>(4);
+        let (meeting_tx, _meeting_rx) = tokio::sync::mpsc::channel::<ProcessedAudioFrame>(4);
+        let mut svc = AudioService::new(audio_tx, frame_tx, frame_rx, meeting_tx, frame_size, sr);
+
+        let step = 2.0 * std::f32::consts::PI * 1000.0 / sr as f32;
+        let mut raw_rms_sum = 0.0f64;
+        let mut raw_rms_n = 0usize;
+        let mut out_rms_sum = 0.0f64;
+        let mut out_rms_n = 0usize;
+
+        for f in 0..duration_frames {
+            let base = f * frame_size;
+            let ref_mono: Vec<i16> = (0..frame_size)
+                .map(|i| {
+                    let v = ((base + i) as f32 * step).sin() * 0.5 * i16::MAX as f32;
+                    v as i16
+                })
+                .collect();
+            let mut ref_interleaved = vec![0i16; frame_size * ref_channels as usize];
+            for (i, &s) in ref_mono.iter().enumerate() {
+                ref_interleaved[2 * i] = s;
+                ref_interleaved[2 * i + 1] = s;
+            }
+            let mic_mono: Vec<i16> = ref_mono.iter().map(|&s| (s as i32 / 2) as i16).collect();
+            let mut mic_interleaved = vec![0i16; frame_size * mic_channels as usize];
+            for (i, &s) in mic_mono.iter().enumerate() {
+                for ch in 0..mic_channels as usize {
+                    mic_interleaved[i * mic_channels as usize + ch] = s;
+                }
+            }
+
+            let audio_frame = AudioFrame::paired(
+                mic_interleaved,
+                mic_channels,
+                ref_interleaved,
+                ref_channels,
+                sr,
+                (f * frame_size * 1000 / sr as usize) as u64,
+            );
+
+            let processed = svc.process_frame(&audio_frame);
+
+            if f >= duration_frames / 2 {
+                for &s in &mic_mono {
+                    raw_rms_sum += (s as f64).powi(2);
+                    raw_rms_n += 1;
+                }
+                for &v in &processed.mic_mono_f32 {
+                    let s = (v * 32768.0) as f64;
+                    out_rms_sum += s.powi(2);
+                    out_rms_n += 1;
+                }
+            }
+        }
+
+        let raw_rms = (raw_rms_sum / raw_rms_n as f64).sqrt();
+        let out_rms = (out_rms_sum / out_rms_n as f64).sqrt().max(1.0);
+        let attenuation_db = 20.0 * (raw_rms / out_rms).log10();
+        assert!(
+            attenuation_db >= 10.0,
+            "process_frame attenuation {attenuation_db:.1} dB < 10 dB (raw rms {raw_rms:.1}, out rms {out_rms:.1})"
+        );
     }
 }

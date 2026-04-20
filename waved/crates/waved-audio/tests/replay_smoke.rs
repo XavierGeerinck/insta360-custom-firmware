@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::capture::{run_capture_loop, CaptureStats, SingleStreamFrameSource};
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
 use waved_audio::fixtures::{silence_8ch, tone_mono_8ch};
+use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_audio::AudioService;
 use waved_state::{AudioState, Command};
 
@@ -27,9 +28,9 @@ async fn replay_silence_produces_zero_vu() {
     let file = write_i16_pcm(&data);
     let (audio_tx, mut audio_rx) = watch::channel(AudioState::default());
     let (frame_tx, frame_rx) = mpsc::channel(32);
-    let (meeting_tx, _meeting_rx) = mpsc::channel(32);
+    let (meeting_tx, _meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
     let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
-    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
+    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000);
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     // Spawn capture thread manually
@@ -57,9 +58,9 @@ async fn replay_tone_elevates_vu_on_tone_channel() {
     let file = write_i16_pcm(&data);
     let (audio_tx, mut audio_rx) = watch::channel(AudioState::default());
     let (frame_tx, frame_rx) = mpsc::channel(32);
-    let (meeting_tx, _meeting_rx) = mpsc::channel(32);
+    let (meeting_tx, _meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
     let (_cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
-    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
+    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000);
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     let stats = CaptureStats::new();

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
-use waved_audio::callbacks::AudioFrame;
+use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::WavedConfig;
 use waved_state::{Command, DeviceEvent, MeetingState, WifiState};
 
@@ -21,8 +21,9 @@ pub struct MeetingService {
     recordings_dir: PathBuf,
     meeting_tx: Arc<watch::Sender<MeetingState>>,
     events_tx: broadcast::Sender<DeviceEvent>,
-    // Errata #4: audio frame receiver for recording
-    audio_rx: mpsc::Receiver<AudioFrame>,
+    /// Post-AEC, post-NS mono frames for recording. Raw 8-ch mic is carried
+    /// as a sidecar on each `ProcessedAudioFrame` for diagnostic replay.
+    audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
 }
 
 impl MeetingService {
@@ -32,7 +33,7 @@ impl MeetingService {
         recordings_dir: PathBuf,
         meeting_tx: Arc<watch::Sender<MeetingState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
-        audio_rx: mpsc::Receiver<AudioFrame>,
+        audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
     ) -> Result<Self, sqlx::Error> {
         let pool = db::init_pool(db_path).await?;
         Ok(Self {
@@ -55,11 +56,13 @@ impl MeetingService {
 
         loop {
             tokio::select! {
-                // Errata #4: drain audio frames into active recording
+                // Drain post-AEC frames into the active recording. The full
+                // encode pipeline isn't wired yet; when it lands, it will feed
+                // `frame.mic_mono_f32` (already cleaned of echo + noise) via
+                // `waved_audio::processed_frame::f32_to_i16_saturating` to the
+                // encoder's i16 input buffer, then append to audio.opus.
                 Some(_frame) = self.audio_rx.recv(), if active.is_some() => {
-                    // TODO: encode frame to Opus and append to audio.opus
-                    // For now, frames are consumed but not written (TEA SDK stubs
-                    // don't produce real frames yet)
+                    // no-op: consume to keep the channel draining
                 }
                 cmd_result = cmd_rx.recv() => {
                     match cmd_result {

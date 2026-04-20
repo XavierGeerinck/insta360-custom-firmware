@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::callbacks::AudioFrame;
 use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
+use waved_audio::capture::single_stream::SingleStreamFrameSource;
 use waved_audio::capture::{run_capture_loop, CaptureStats, ChannelMapSource};
+use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_audio::stats_collector::compute_stats;
 use waved_audio::AudioService;
 use waved_state::{AudioState, Command};
@@ -38,50 +40,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
     let args = Args::parse();
 
+    const PERIOD_FRAMES: usize = 256;
+
     let (audio_tx, _audio_rx) = watch::channel(AudioState::default());
     let audio_tx = Arc::new(audio_tx);
     let (frame_tx, frame_rx) = mpsc::channel::<AudioFrame>(64);
-    let (meeting_tx, mut meeting_rx) = mpsc::channel::<AudioFrame>(256);
+    let (meeting_tx, mut meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(256);
     let (_cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
 
-    let svc = AudioService::new(Arc::clone(&audio_tx), frame_tx.clone(), frame_rx, meeting_tx);
+    let svc = AudioService::new(
+        Arc::clone(&audio_tx),
+        frame_tx.clone(),
+        frame_rx,
+        meeting_tx,
+        PERIOD_FRAMES,
+        args.sample_rate,
+    );
+    let stats_tee = svc.subscribe_frames();
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     let stats = CaptureStats::new();
     let stop = Arc::new(AtomicBool::new(false));
     let format = ReplayFormat::I16Interleaved { channels: args.channels };
     let src = ReplayPcmSource::open(&args.input, format, args.sample_rate)?;
+    let src = SingleStreamFrameSource::new(src, PERIOD_FRAMES, args.channels);
     let stats_c = Arc::clone(&stats);
     let stop_c = Arc::clone(&stop);
-    let channels = args.channels;
     let capture = std::thread::spawn(move || {
-        run_capture_loop(src, 256, channels, frame_tx, stop_c, stats_c);
+        run_capture_loop(src, frame_tx, stop_c, stats_c);
     });
 
-    // Drain meeting_rx to EOF.
-    let mut last_frame: Option<AudioFrame> = None;
+    // Drain meeting_rx to EOF — also keep the latest raw frame for stats.
+    let mut last_processed: Option<ProcessedAudioFrame> = None;
     loop {
-        // capture finishes at EOF and drops frame_tx, which closes meeting_rx
         if capture.is_finished() {
-            // drain remaining
             while let Ok(frame) = meeting_rx.try_recv() {
-                last_frame = Some(frame);
+                last_processed = Some(frame);
             }
             break;
         }
         match tokio::time::timeout(std::time::Duration::from_millis(50), meeting_rx.recv()).await {
             Ok(Some(frame)) => {
-                last_frame = Some(frame);
+                last_processed = Some(frame);
             }
             Ok(None) => break,
-            Err(_) => {} // timeout, loop again
+            Err(_) => {}
         }
     }
     stop.store(true, Ordering::Relaxed);
     let _ = capture.join();
 
-    let last = last_frame.ok_or("no frames produced — empty input?")?;
-    let stats_json = compute_stats(&last, &stats, ChannelMapSource::Fallback, None);
+    let last = last_processed.ok_or("no frames produced — empty input?")?;
+    // Reconstruct an AudioFrame-shaped view for the stats helper from the
+    // raw mic that ProcessedAudioFrame carries.
+    let raw_view = AudioFrame::mic_only(
+        last.raw_mic_i16.clone(),
+        last.raw_mic_channels,
+        last.sample_rate,
+        last.timestamp_ms,
+    );
+    drop(stats_tee);
+    let stats_json = compute_stats(&raw_view, &stats, ChannelMapSource::Fallback, None, "replay");
     println!("{}", serde_json::to_string_pretty(&stats_json)?);
     Ok(())
 }

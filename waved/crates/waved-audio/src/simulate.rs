@@ -1,21 +1,23 @@
 //! Simulated audio service — generates silence frames at real-time rate.
 use crate::callbacks::AudioFrame;
+use crate::processed_frame::ProcessedAudioFrame;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
-use waved_state::{AudioMode, AudioState, Command};
+use waved_state::{AudioState, Command};
 
 const SAMPLES_PER_FRAME: usize = 960;
 const CHANNELS: u16 = 2;
 const FRAME_INTERVAL_MS: u64 = 20;
+const SIM_SAMPLE_RATE: u32 = 48000;
 
 pub struct SimAudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
-    meeting_tx: mpsc::Sender<AudioFrame>,
+    meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
 }
 
 impl SimAudioService {
-    pub fn new(audio_tx: Arc<watch::Sender<AudioState>>, meeting_tx: mpsc::Sender<AudioFrame>) -> Self {
+    pub fn new(audio_tx: Arc<watch::Sender<AudioState>>, meeting_tx: mpsc::Sender<ProcessedAudioFrame>) -> Self {
         info!("[SIM] audio service created (silence generator)");
         Self { audio_tx, meeting_tx }
     }
@@ -30,12 +32,16 @@ impl SimAudioService {
                     let frame = AudioFrame::mic_only(
                         vec![0i16; SAMPLES_PER_FRAME * CHANNELS as usize],
                         CHANNELS,
-                        48000,
+                        SIM_SAMPLE_RATE,
                         frame_count * FRAME_INTERVAL_MS,
                     );
                     let vu = crate::compute_vu(&frame.data, 8);
                     self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
-                    let _ = self.meeting_tx.send(frame).await;
+                    // Simulated frames are already silence — skip the DSP
+                    // pipeline and emit a silent ProcessedAudioFrame directly.
+                    let silent_mono = vec![0i16; SAMPLES_PER_FRAME];
+                    let processed = ProcessedAudioFrame::from_raw(&frame, &silent_mono, &silent_mono);
+                    let _ = self.meeting_tx.send(processed).await;
                     frame_count += 1;
                 }
                 cmd_result = cmd_rx.recv() => {

@@ -128,10 +128,11 @@ fn main() {
 }
 
 async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
-    // Meeting frame channel: PCM frames for recording.
-    // Non-simulate: C SDK callbacks → frame channel → AudioService (VU) → meeting channel → MeetingService
-    // Simulate: SimAudioService writes silence frames directly to meeting channel.
-    let (meeting_tx, meeting_rx) = waved_audio::callbacks::create_audio_channel();
+    // Meeting frame channel: DSP-processed frames for recording.
+    // Non-simulate: ALSA capture → AudioFrame → AudioService (VU + AEC + NS) →
+    //               ProcessedAudioFrame → meeting channel → MeetingService.
+    // Simulate: SimAudioService writes silence ProcessedAudioFrames directly.
+    let (meeting_tx, meeting_rx) = tokio::sync::mpsc::channel::<waved_audio::processed_frame::ProcessedAudioFrame>(32);
 
     // Storage for the capture stop flag so the shutdown path can signal the ALSA thread.
     // The same cfg condition ensures this compiles away when capture-alsa is disabled.
@@ -169,7 +170,12 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
         let audio_svc = waved_audio::AudioService::new(
-            Arc::clone(&bus.audio), frame_tx.clone(), frame_rx, meeting_tx,
+            Arc::clone(&bus.audio),
+            frame_tx.clone(),
+            frame_rx,
+            meeting_tx,
+            cfg.period_frames,
+            cfg.capture.mic_sample_rate,
         );
         let stats_rx = audio_svc.subscribe_frames();
 
