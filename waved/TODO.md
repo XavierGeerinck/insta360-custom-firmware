@@ -7,7 +7,7 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 ## Sub-projects
 
 - [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
-- [ ] SP#2 — AEC + playback path
+- [~] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; awaiting on-device ERLE measurement via `scripts/test-aec-on-device.sh`)
 - [ ] SP#3 — Beamforming (MVDR/DAS, 6 modes + DOA)
 - [ ] SP#4 — Neural NS + dereverb (DeepFilterNet 3)
 - [ ] SP#5 — Playback EQ + gain staging
