@@ -1,0 +1,15 @@
+# Vendored speexdsp
+
+Source: https://github.com/xiph/speexdsp
+
+Pinned to tag **SpeexDSP-1.2.1** (commit hash matches upstream 1.2.1 release).
+
+License: BSD 3-Clause (see `COPYING`).
+
+Only the files needed by SP#2 AEC (`mdf.c` echo canceller + `preprocess.c` noise
+suppressor + kiss-fft backend + filterbank) are vendored. Resampler, jitter
+buffer, SBR, and the smallft FFT path are omitted.
+
+`speexdsp_config_types.h` is synthesized in this tree to replace the
+autotools-generated file — our targets ship `<stdint.h>`, so the typedefs
+resolve to the exact-width types. See the file for details.
