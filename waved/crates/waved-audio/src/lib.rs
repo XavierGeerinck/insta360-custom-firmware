@@ -1,3 +1,4 @@
+pub mod aec;
 pub mod audio_config;
 pub mod callbacks;
 pub mod capture;
