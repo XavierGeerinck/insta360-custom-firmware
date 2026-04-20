@@ -5,6 +5,7 @@
 //! is missing or malformed. Version-bumped when future sub-projects add
 //! fields (mic_geometry, playback, etc.).
 
+use crate::beam::MicGeometry;
 use serde::Deserialize;
 use std::path::Path;
 use thiserror::Error;
@@ -23,6 +24,14 @@ pub struct AudioConfig {
     pub playback: Option<PlaybackSection>,
     pub period_frames: usize,
     pub buffer_periods: u32,
+    /// Teardown-measured 8-mic geometry; absent in older JSONs, synthesized
+    /// from `MicGeometry::default()` via serde.
+    #[serde(default = "default_mic_geometry")]
+    pub mic_geometry: Option<MicGeometry>,
+}
+
+fn default_mic_geometry() -> Option<MicGeometry> {
+    Some(MicGeometry::default())
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -104,9 +113,9 @@ impl AudioConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.version != 2 {
+        if self.version != 3 {
             return Err(ConfigError::Invalid(format!(
-                "unsupported config version {}, expected 2", self.version
+                "unsupported config version {}, expected 3", self.version
             )));
         }
         if self.capture.mic_channels == 0 {
@@ -171,26 +180,53 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_default_parses_and_is_version_2() {
+    fn embedded_default_parses_and_is_version_3() {
         let cfg = AudioConfig::default_embedded();
-        assert_eq!(cfg.version, 2);
+        assert_eq!(cfg.version, 3);
         assert_eq!(cfg.capture.mic_device, "hw:0,2");
         assert_eq!(cfg.capture.mic_channels, 8);
-        // Embedded default now uses software reference (playback present,
-        // no reference_device) because the hardware loopback isn't usable.
         assert!(cfg.capture.reference_device.is_none());
         assert!(!cfg.reference_enabled());
         assert!(cfg.software_reference_enabled());
-        let p = cfg.playback.expect("playback section");
+        let p = cfg.playback.as_ref().expect("playback section");
         assert_eq!(p.device, "hw:0,1");
         assert_eq!(p.channels, 2);
         assert_eq!(p.sample_rate, 48000);
     }
 
     #[test]
+    fn embedded_default_is_v3_with_wave_geometry() {
+        let cfg = AudioConfig::default_embedded();
+        assert_eq!(cfg.version, 3);
+        let geom = cfg.mic_geometry.as_ref().expect("default includes geometry");
+        assert_eq!(geom.positions_mm.len(), 8);
+        assert_eq!(geom.positions_mm[0].z, 0.0);
+        assert_eq!(geom.positions_mm[4].z, -78.2);
+    }
+
+    #[test]
+    fn v3_json_without_geometry_synthesizes_default() {
+        let json = r#"{
+            "version":3,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
+            "period_frames":1024,"buffer_periods":8
+        }"#;
+        let cfg = AudioConfig::from_json(json).unwrap();
+        assert!(cfg.mic_geometry.is_some(), "missing geometry should default");
+        assert_eq!(cfg.mic_geometry.unwrap().positions_mm[0].z, 0.0);
+    }
+
+    #[test]
+    fn rejects_v2_version_now() {
+        let json = r#"{"version":2,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
+        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
     fn rejects_both_hardware_and_software_reference() {
         let json = r#"{
-            "version":2,
+            "version":3,
             "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE","reference_device":"hw:0,3","reference_channels":2,"reference_format":"S32_LE"},
             "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
             "period_frames":1024,"buffer_periods":8
@@ -201,7 +237,7 @@ mod tests {
     #[test]
     fn accepts_playback_only() {
         let json = r#"{
-            "version":2,
+            "version":3,
             "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
             "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
             "period_frames":1024,"buffer_periods":8
@@ -213,25 +249,25 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version() {
-        let json = r#"{"version":1,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
+        let json = r#"{"version":5,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
         assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
     fn rejects_zero_mic_channels() {
-        let json = r#"{"version":2,"capture":{"mic_device":"hw:0,2","mic_channels":0,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
+        let json = r#"{"version":3,"capture":{"mic_device":"hw:0,2","mic_channels":0,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
         assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
     fn rejects_partial_reference_config() {
-        let json = r#"{"version":2,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE","reference_device":"hw:0,3"},"period_frames":256,"buffer_periods":4}"#;
+        let json = r#"{"version":3,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE","reference_device":"hw:0,3"},"period_frames":256,"buffer_periods":4}"#;
         assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
     }
 
     #[test]
     fn mic_only_config_is_valid() {
-        let json = r#"{"version":2,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
+        let json = r#"{"version":3,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
         let cfg = AudioConfig::from_json(json).unwrap();
         assert!(!cfg.reference_enabled());
     }
@@ -245,13 +281,13 @@ mod tests {
     fn load_or_default_missing_file_uses_fallback() {
         let (cfg, src) = AudioConfig::load_or_default(Path::new("/definitely/not/here.json"));
         assert_eq!(src, ConfigSource::Fallback);
-        assert_eq!(cfg.version, 2);
+        assert_eq!(cfg.version, 3);
     }
 
     #[test]
     fn load_or_default_valid_file_uses_file() {
         let tmp = std::env::temp_dir().join(format!("audiocfg-test-{}.json", std::process::id()));
-        std::fs::write(&tmp, r#"{"version":2,"capture":{"mic_device":"hw:5,5","mic_channels":4,"mic_sample_rate":16000,"mic_format":"S16_LE"},"period_frames":128,"buffer_periods":2}"#).unwrap();
+        std::fs::write(&tmp, r#"{"version":3,"capture":{"mic_device":"hw:5,5","mic_channels":4,"mic_sample_rate":16000,"mic_format":"S16_LE"},"period_frames":128,"buffer_periods":2}"#).unwrap();
         let (cfg, src) = AudioConfig::load_or_default(&tmp);
         assert_eq!(src, ConfigSource::File);
         assert_eq!(cfg.capture.mic_device, "hw:5,5");
