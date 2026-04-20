@@ -1,20 +1,33 @@
-//! Per-preset beamformer weight vectors.
+//! Hemispheric front/back weights for differential beamforming.
 //!
-//! Inputs: target direction (azimuth φ, elevation θ) and MicGeometry.
-//! Output: `[f32; 8]` weights applied AFTER delay alignment. Weights sum
-//! is 1 for unity unit-gain on-axis for Omni/Cardioid/Supercardioid; for
-//! Figure-8 the sum is 0 (pressure-gradient pattern).
+//! For a steering direction d̂, each mic is split into the "front" hemisphere
+//! (p̂·d̂ > 0) or the "back" hemisphere (p̂·d̂ < 0) and given a weight
+//! proportional to |p̂·d̂|. The two weighted sums are then subtracted with a
+//! back delay of Δ = (c_f − c_b)·d̂/c (centroid-to-centroid time-of-flight)
+//! to form a first-order differential cardioid with a null at −d̂.
+//!
+//! Pattern is selected by scaling that back delay:
+//!   * Cardioid        scale = 1.0      (null at 180°)
+//!   * Supercardioid   scale = 0.577    (null at 125°)
+//!   * Hypercardioid   scale = 0.333    (null at 109°)
+//!   * Figure-8        scale = 0.0      (nulls at ±90°)
+//!
+//! Why this instead of DAS + cardioid weights: at 1 kHz the array is ~0.15 λ
+//! across, so DAS alignment alone buys only ~3 dB of directivity. Non-negative
+//! cardioid weights can't null an in-phase rear source either. Differential
+//! beamforming exploits the natural inter-sensor TOA difference and gets a
+//! real null at the cost of a first-order high-pass roll-off.
 //!
 //! Conventions:
 //! - Azimuth φ: 0° = +X (front), 90° = +Y (left), CCW looking down.
-//! - Elevation θ: measured from +Z (zenith). θ=90° is horizon. Our "pitch"
-//!   in AudioState is `90 - θ` (0 = horizon).
+//! - Elevation: 0° = horizon, +90° = zenith.
 
 use super::geometry::{MicGeometry, Position3D};
-use waved_state::AudioMode;
 
-/// Unit vector in Cartesian for (azimuth φ, elevation θ) where θ is
-/// measured from +Z. Inputs in degrees (elevation: 0 = horizon).
+const SPEED_OF_SOUND_M_S: f32 = 343.0;
+
+/// Unit vector in Cartesian for (azimuth, elevation) in degrees with
+/// elevation measured from the horizon.
 pub fn direction_vector(azimuth_deg: f32, elevation_deg: f32) -> Position3D {
     let theta = (90.0 - elevation_deg).to_radians();
     let phi = azimuth_deg.to_radians();
@@ -25,60 +38,71 @@ pub fn direction_vector(azimuth_deg: f32, elevation_deg: f32) -> Position3D {
     )
 }
 
-/// Compute weights for a given preset, DOA, and geometry.
+/// Per-channel weights and the front→back centroid delay for a given DOA.
 ///
-/// Returns a [f32; 8] indexed by *physical* mic index (not ALSA channel);
-/// the beamformer maps ALSA → physical before applying.
-pub fn weights_for(mode: AudioMode, doa_az_deg: f32, doa_el_deg: f32, geom: &MicGeometry) -> [f32; 8] {
-    match mode {
-        AudioMode::Omni => [1.0 / 8.0; 8],
-        AudioMode::NoiseReduction => [1.0 / 8.0; 8],
-        AudioMode::Cardioid => cardioid_weights(doa_az_deg, doa_el_deg, geom, 0.5),
-        AudioMode::Supercardioid => cardioid_weights(doa_az_deg, doa_el_deg, geom, 0.37),
-        AudioMode::Figure8 => figure8_weights(doa_az_deg, doa_el_deg, geom),
-        AudioMode::Stereo => cardioid_weights(doa_az_deg - 45.0, doa_el_deg, geom, 0.5),
-    }
+/// `w_front` / `w_back` are indexed by ALSA channel (already through
+/// `alsa_to_physical`) and each sums to 1.0 if at least one mic lies in that
+/// hemisphere. `delta_samples` is the one-way time-of-flight between the
+/// front and back weighted centroids projected onto d̂, expressed in
+/// fractional samples at `sample_rate`. It is ≥ 0.
+pub struct HemisphericWeights {
+    pub w_front: [f32; 8],
+    pub w_back: [f32; 8],
+    pub delta_samples: f32,
 }
 
-/// First-order cardioid: w_i = alpha + (1-alpha) * (p_i_hat · d_hat)
-/// where p_i_hat is the unit vector to mic i and d_hat is DOA unit vector.
-/// alpha controls pattern tightness: 0.5 = cardioid, 0.37 = supercardioid,
-/// 0.0 = figure-8 (handled separately).
-fn cardioid_weights(az_deg: f32, el_deg: f32, geom: &MicGeometry, alpha: f32) -> [f32; 8] {
-    let d = direction_vector(az_deg, el_deg);
-    let mut w = [0.0f32; 8];
-    let mut sum = 0.0f32;
-    for (i, p) in geom.positions_mm.iter().enumerate() {
-        let r = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt().max(1e-6);
-        let p_hat = Position3D::new(p.x / r, p.y / r, p.z / r);
-        let cos_theta = p_hat.dot(&d);
-        w[i] = alpha + (1.0 - alpha) * cos_theta;
-        sum += w[i];
-    }
-    let norm = 1.0 / sum.max(1e-6);
-    for v in w.iter_mut() {
-        *v *= norm;
-    }
-    w
-}
+pub fn hemispheric_weights(
+    geom: &MicGeometry,
+    doa_az_deg: f32,
+    doa_el_deg: f32,
+    sample_rate: u32,
+) -> HemisphericWeights {
+    let d = direction_vector(doa_az_deg, doa_el_deg);
+    let mut w_front = [0.0f32; 8];
+    let mut w_back = [0.0f32; 8];
+    let mut sum_f = 0.0f32;
+    let mut sum_b = 0.0f32;
 
-/// Figure-8: front vs back differential. Pressure-gradient pattern has
-/// zero sum; we don't normalize.
-fn figure8_weights(az_deg: f32, el_deg: f32, geom: &MicGeometry) -> [f32; 8] {
-    let d = direction_vector(az_deg, el_deg);
-    let mut w = [0.0f32; 8];
-    for (i, p) in geom.positions_mm.iter().enumerate() {
+    for alsa_ch in 0..8 {
+        let p = geom.position_for_alsa(alsa_ch);
         let r = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt().max(1e-6);
-        let p_hat = Position3D::new(p.x / r, p.y / r, p.z / r);
-        w[i] = p_hat.dot(&d);
-    }
-    let max = w.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
-    if max > 1e-6 {
-        for v in w.iter_mut() {
-            *v /= max * 2.0;
+        let p_hat_dot_d = (p.x * d.x + p.y * d.y + p.z * d.z) / r;
+        if p_hat_dot_d > 0.0 {
+            w_front[alsa_ch] = p_hat_dot_d;
+            sum_f += p_hat_dot_d;
+        } else if p_hat_dot_d < 0.0 {
+            w_back[alsa_ch] = -p_hat_dot_d;
+            sum_b += -p_hat_dot_d;
         }
     }
-    w
+
+    if sum_f > 1e-6 {
+        for w in w_front.iter_mut() {
+            *w /= sum_f;
+        }
+    }
+    if sum_b > 1e-6 {
+        for w in w_back.iter_mut() {
+            *w /= sum_b;
+        }
+    }
+
+    let mut c_f_proj = 0.0f32;
+    let mut c_b_proj = 0.0f32;
+    for alsa_ch in 0..8 {
+        let p = geom.position_for_alsa(alsa_ch);
+        let proj_mm = p.x * d.x + p.y * d.y + p.z * d.z;
+        c_f_proj += w_front[alsa_ch] * proj_mm;
+        c_b_proj += w_back[alsa_ch] * proj_mm;
+    }
+    let delta_sec = (c_f_proj - c_b_proj) * 1e-3 / SPEED_OF_SOUND_M_S;
+    let delta_samples = (delta_sec * sample_rate as f32).max(0.0);
+
+    HemisphericWeights {
+        w_front,
+        w_back,
+        delta_samples,
+    }
 }
 
 #[cfg(test)]
@@ -101,42 +125,57 @@ mod tests {
     }
 
     #[test]
-    fn omni_weights_sum_to_one() {
-        let geom = MicGeometry::default();
-        let w = weights_for(AudioMode::Omni, 0.0, 0.0, &geom);
-        let sum: f32 = w.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5);
+    fn direction_vector_zenith_is_plus_z() {
+        let d = direction_vector(0.0, 90.0);
+        assert!(d.z > 0.999);
     }
 
     #[test]
-    fn cardioid_peak_weight_at_front_mic_for_doa_zero() {
+    fn hemispheric_weights_sum_to_one_each_side() {
         let geom = MicGeometry::default();
-        let w = weights_for(AudioMode::Cardioid, 0.0, 0.0, &geom);
-        let max_idx = w.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
-        assert_eq!(max_idx, 0, "expected front mic (0) to peak, got {max_idx}");
+        let hw = hemispheric_weights(&geom, 0.0, 0.0, 48000);
+        let sf: f32 = hw.w_front.iter().sum();
+        let sb: f32 = hw.w_back.iter().sum();
+        assert!((sf - 1.0).abs() < 1e-4, "front sum {sf} != 1");
+        assert!((sb - 1.0).abs() < 1e-4, "back sum {sb} != 1");
     }
 
     #[test]
-    fn cardioid_rear_mic_has_near_zero_weight_for_doa_zero() {
+    fn hemispheric_partition_respects_projection_sign() {
         let geom = MicGeometry::default();
-        let w = weights_for(AudioMode::Cardioid, 0.0, 0.0, &geom);
-        assert!(w[2].abs() < 0.01, "back mic weight {} should be near 0", w[2]);
+        let hw = hemispheric_weights(&geom, 0.0, 0.0, 48000);
+        // Front mic (physical 0, +X) is front-only.
+        assert!(hw.w_front[0] > 0.0 && hw.w_back[0] == 0.0);
+        // Rear mic (physical 2, -X) is back-only.
+        assert!(hw.w_back[2] > 0.0 && hw.w_front[2] == 0.0);
+        // Side mic (physical 1, +Y) is on the boundary (zero).
+        assert_eq!(hw.w_front[1], 0.0);
+        assert_eq!(hw.w_back[1], 0.0);
     }
 
     #[test]
-    fn cardioid_sums_to_one_after_normalize() {
+    fn hemispheric_delta_positive_on_axis() {
         let geom = MicGeometry::default();
-        let w = weights_for(AudioMode::Cardioid, 45.0, 0.0, &geom);
-        let sum: f32 = w.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-4, "sum {sum} != 1");
+        let hw = hemispheric_weights(&geom, 0.0, 0.0, 48000);
+        // Expect roughly 2R/c at 48 kHz ≈ 7.14 samples, but pulled down
+        // by the side-ring mics off-axis contribution.
+        assert!(
+            hw.delta_samples > 3.0 && hw.delta_samples < 10.0,
+            "delta_samples {} out of expected range",
+            hw.delta_samples
+        );
     }
 
     #[test]
-    fn figure8_front_and_back_opposite_sign() {
+    fn hemispheric_weights_symmetric_under_doa_flip() {
         let geom = MicGeometry::default();
-        let w = weights_for(AudioMode::Figure8, 0.0, 0.0, &geom);
-        assert!(w[0] > 0.0, "front weight should be positive");
-        assert!(w[2] < 0.0, "back weight should be negative");
-        assert!((w[0] + w[2]).abs() < 1e-4, "front+back should cancel");
+        let fwd = hemispheric_weights(&geom, 0.0, 0.0, 48000);
+        let rev = hemispheric_weights(&geom, 180.0, 0.0, 48000);
+        for ch in 0..8 {
+            assert!(
+                (fwd.w_front[ch] - rev.w_back[ch]).abs() < 1e-4,
+                "front/back flip mismatch ch {ch}"
+            );
+        }
     }
 }
