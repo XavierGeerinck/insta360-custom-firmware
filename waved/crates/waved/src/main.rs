@@ -247,9 +247,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                 ref_period_samples,
                 ref_rx,
             );
-            // Leak the PlaybackService handle so the thread keeps running.
-            // AudioService (future work) will subscribe play_batch to this.
-            Box::leak(Box::new(playback));
+            // Wrap in Arc so the SIGUSR1 test-tone task can submit playback
+            // batches while keeping the service alive for the rest of the
+            // process lifetime.
+            let playback = Arc::new(playback);
+            tokio::spawn(test_tone_handler(Arc::clone(&playback)));
+            // Keep one Arc alive for process lifetime — the playback thread
+            // stops when the last reference drops.
+            std::mem::forget(Arc::clone(&playback));
             (
                 SourceDyn::SoftwareRef(src),
                 waved_audio::capture::alsa_dual_stream::AlignmentMethod::SoftwareReference
@@ -429,8 +434,80 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
     info!("shutdown signal received");
     let _ = bus.commands.send(Command::Shutdown);
-    // Signal the ALSA capture thread to stop before waiting for drain.
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+}
+
+/// SIGUSR1 test-tone handler for SP#2 AEC smoke tests. Plays a 1 kHz sine
+/// through waved's own PlaybackService so the broadcast reference tap picks
+/// it up and AEC has something to cancel. Defaults match what the smoke-test
+/// script expects; env vars override: `WAVED_TONE_FREQ_HZ`,
+/// `WAVED_TONE_DURATION_MS`, `WAVED_TONE_AMPLITUDE`.
+#[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
+async fn test_tone_handler(playback: Arc<waved_audio::playback::PlaybackService>) {
+    use std::time::Duration;
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigusr1 = match signal(SignalKind::user_defined1()) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("SIGUSR1 test-tone handler unavailable: {e}");
+            return;
+        }
+    };
+
+    let channels = playback.channels() as usize;
+    let period_frames = playback.period_frames();
+    let period_samples = period_frames * channels;
+    let sample_rate = playback.sample_rate();
+    let batch_period = Duration::from_micros(
+        (period_frames as u64 * 1_000_000) / sample_rate as u64,
+    );
+
+    info!("SIGUSR1 test-tone handler ready");
+
+    while sigusr1.recv().await.is_some() {
+        let freq_hz: f32 = std::env::var("WAVED_TONE_FREQ_HZ")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1000.0);
+        let duration_ms: u32 = std::env::var("WAVED_TONE_DURATION_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(3000);
+        let amplitude: f32 = std::env::var("WAVED_TONE_AMPLITUDE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.3f32)
+            .clamp(0.0, 1.0);
+
+        info!(
+            "SIGUSR1: playing {:.0} Hz for {} ms (amplitude {:.2})",
+            freq_hz, duration_ms, amplitude
+        );
+
+        let peak = (amplitude * i16::MAX as f32) as i32;
+        let step = 2.0 * std::f32::consts::PI * freq_hz / sample_rate as f32;
+        let n_periods = ((duration_ms as u64 * sample_rate as u64) / 1000 / period_frames as u64) as usize;
+        let mut frame_idx: usize = 0;
+
+        for _ in 0..n_periods {
+            let mut batch = vec![0i16; period_samples];
+            for i in 0..period_frames {
+                let s = (((frame_idx + i) as f32 * step).sin() * peak as f32) as i16;
+                for ch in 0..channels {
+                    batch[i * channels + ch] = s;
+                }
+            }
+            frame_idx += period_frames;
+            if let Err(e) = playback.play_batch(batch) {
+                warn!("test-tone play_batch failed: {e}; aborting");
+                break;
+            }
+            tokio::time::sleep(batch_period).await;
+        }
+
+        info!("SIGUSR1: test tone complete");
+    }
 }
