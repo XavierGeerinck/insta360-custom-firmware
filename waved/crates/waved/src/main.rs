@@ -179,6 +179,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         );
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();
+        let mic_record_rx = audio_svc.subscribe_processed();
 
         // Build the capture source. Three modes:
         //   1. Hardware loopback (cfg.reference_device): AlsaDualStreamSource.
@@ -252,6 +253,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // process lifetime.
             let playback = Arc::new(playback);
             tokio::spawn(test_tone_handler(Arc::clone(&playback)));
+            tokio::spawn(file_play_handler(Arc::clone(&playback)));
             // Keep one Arc alive for process lifetime — the playback thread
             // stops when the last reference drops.
             std::mem::forget(Arc::clone(&playback));
@@ -298,6 +300,40 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
+
+        // Always-on mic recorder: writes post-AEC mono to /tmp/mic_capture.pcm
+        // as raw S16LE 48 kHz mono for post-test analysis and subjective
+        // listening. File is truncated on each process start.
+        tokio::spawn(async move {
+            use std::io::Write;
+            let mut rx = mic_record_rx;
+            let path = "/tmp/mic_capture.pcm";
+            let file = std::fs::OpenOptions::new()
+                .create(true).write(true).truncate(true).open(path);
+            let mut file = match file {
+                Ok(f) => std::io::BufWriter::new(f),
+                Err(e) => { warn!("mic_capture.pcm create failed: {e}"); return; }
+            };
+            loop {
+                match rx.recv().await {
+                    Ok(frame) => {
+                        let mut buf = Vec::with_capacity(frame.mic_mono_f32.len() * 2);
+                        for &s in &frame.mic_mono_f32 {
+                            let i = (s * i16::MAX as f32)
+                                .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                            buf.extend_from_slice(&i.to_le_bytes());
+                        }
+                        if let Err(e) = file.write_all(&buf) {
+                            warn!("mic_capture.pcm write error: {e}");
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("mic recorder lagged {n} frames");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        });
 
         tracing::info!("capture wired: config={cfg_src_str} alignment={alignment}");
     }
@@ -437,6 +473,74 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+}
+
+/// SIGUSR2 handler: plays `/data/waved/playback.s16le` (raw S16LE stereo
+/// 48 kHz) through waved's own PlaybackService so the reference broadcast
+/// tap captures every frame.  Pairs with `scripts/test-aec-conferencing.sh`
+/// which generates a speech-band multi-tone signal as the "far-end" stream.
+///
+/// Because every played sample flows through the reference broadcast, AEC
+/// sees the same signal the speaker emits and can cancel its echo from the
+/// mic capture — exactly the path a real conferencing call takes.
+#[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
+async fn file_play_handler(playback: Arc<waved_audio::playback::PlaybackService>) {
+    use std::time::Duration;
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigusr2 = match signal(SignalKind::user_defined2()) {
+        Ok(s) => s,
+        Err(e) => { warn!("SIGUSR2 file-play handler unavailable: {e}"); return; }
+    };
+
+    let out_ch = playback.channels() as usize;
+    let period_frames = playback.period_frames();
+    let period_samples = period_frames * out_ch;
+    let sample_rate = playback.sample_rate();
+    let batch_period = Duration::from_micros(
+        (period_frames as u64 * 1_000_000) / sample_rate as u64,
+    );
+
+    info!("SIGUSR2 file-play handler ready (source: /data/waved/playback.s16le)");
+
+    const PLAY_FILE: &str = "/data/waved/playback.s16le";
+    const FILE_CH: usize = 2; // test-signal generator always produces stereo
+
+    while sigusr2.recv().await.is_some() {
+        let raw = match std::fs::read(PLAY_FILE) {
+            Ok(b) => b,
+            Err(e) => { warn!("SIGUSR2: {PLAY_FILE}: {e}"); continue; }
+        };
+        let file_samples: Vec<i16> = raw
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let total_frames = file_samples.len() / FILE_CH;
+        info!("SIGUSR2: playing {total_frames} frames from {PLAY_FILE}");
+
+        for p in 0.. {
+            let frame_start = p * period_frames;
+            if frame_start >= total_frames { break; }
+            let mut batch = vec![0i16; period_samples];
+            for i in 0..period_frames {
+                let ff = frame_start + i;
+                if ff >= total_frames { break; }
+                // Mix stereo → mono, then replicate to all output channels.
+                let l = file_samples[ff * FILE_CH] as i32;
+                let r = file_samples[ff * FILE_CH + 1] as i32;
+                let mono = ((l + r) / 2) as i16;
+                for ch in 0..out_ch {
+                    batch[i * out_ch + ch] = mono;
+                }
+            }
+            if let Err(e) = playback.play_batch(batch) {
+                warn!("SIGUSR2: play_batch: {e}; aborting");
+                break;
+            }
+            tokio::time::sleep(batch_period).await;
+        }
+        info!("SIGUSR2: file playback complete");
+    }
 }
 
 /// SIGUSR1 test-tone handler for SP#2 AEC smoke tests. Plays a 1 kHz sine
