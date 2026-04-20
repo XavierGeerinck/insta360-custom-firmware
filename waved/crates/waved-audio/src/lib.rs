@@ -2,6 +2,7 @@ pub mod aec;
 pub mod audio_config;
 pub mod beam;
 pub mod callbacks;
+pub mod doa;
 pub mod capture;
 pub mod playback;
 pub mod processed_frame;

@@ -17,6 +17,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 alsa = { version = "0.9", optional = true }
 libc = "0.2"
+rustfft = "6.2"
 
 [build-dependencies]
 cc = "1.0"
