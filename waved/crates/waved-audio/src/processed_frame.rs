@@ -11,6 +11,9 @@ use crate::callbacks::AudioFrame;
 pub struct ProcessedAudioFrame {
     /// Post-AEC, post-NS mono signal in [-1.0, 1.0].
     pub mic_mono_f32: Vec<f32>,
+    /// Optional stereo pair produced by Stereo beam mode (L, R).
+    /// Same length as `mic_mono_f32` when present.
+    pub mic_stereo_f32: Option<(Vec<f32>, Vec<f32>)>,
     /// Reference signal fed into AEC (mono downmix, float). Kept for
     /// diagnostic replay and in-process ERLE measurement.
     pub reference_f32: Vec<f32>,
@@ -35,12 +38,33 @@ impl ProcessedAudioFrame {
 
         Self {
             mic_mono_f32,
+            mic_stereo_f32: None,
             reference_f32,
             sample_rate: frame.sample_rate,
             timestamp_ms: frame.timestamp_ms,
             raw_mic_i16: frame.data.clone(),
             raw_mic_channels: frame.channels,
         }
+    }
+
+    /// Attach a stereo pair. L and R must match `mic_mono_f32.len()`.
+    pub fn with_stereo(mut self, l: Vec<f32>, r: Vec<f32>) -> Self {
+        assert_eq!(
+            l.len(),
+            r.len(),
+            "stereo length mismatch: L={} R={}",
+            l.len(),
+            r.len()
+        );
+        assert_eq!(
+            l.len(),
+            self.mic_mono_f32.len(),
+            "stereo length mismatch vs mono: stereo={} mono={}",
+            l.len(),
+            self.mic_mono_f32.len()
+        );
+        self.mic_stereo_f32 = Some((l, r));
+        self
     }
 }
 
@@ -148,6 +172,40 @@ mod tests {
         }
         let mixed = mix_to_mono(&interleaved, 8);
         assert_eq!(mixed, vec![300, 600, 900, 1200]);
+    }
+
+    #[test]
+    fn default_has_none_for_stereo() {
+        let frame = AudioFrame::mic_only(vec![1, 2, 3, 4], 1, 48000, 17);
+        let mic_mono = [1000i16, 2000, -3000, 4000];
+        let ref_mono = [0i16; 4];
+        let p = ProcessedAudioFrame::from_raw(&frame, &mic_mono, &ref_mono);
+        assert!(p.mic_stereo_f32.is_none());
+    }
+
+    #[test]
+    fn with_stereo_accepts_and_preserves_lengths() {
+        let frame = AudioFrame::mic_only(vec![1, 2, 3, 4], 1, 48000, 17);
+        let mic_mono = [1000i16; 4];
+        let ref_mono = [0i16; 4];
+        let p = ProcessedAudioFrame::from_raw(&frame, &mic_mono, &ref_mono)
+            .with_stereo(vec![0.1, 0.2, 0.3, 0.4], vec![-0.1, -0.2, -0.3, -0.4]);
+        let (l, r) = p.mic_stereo_f32.expect("stereo set");
+        assert_eq!(l.len(), 4);
+        assert_eq!(r.len(), 4);
+        assert!((l[2] - 0.3).abs() < 1e-6);
+        assert!((r[2] + 0.3).abs() < 1e-6);
+        assert_eq!(p.mic_mono_f32.len(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "stereo length mismatch")]
+    fn with_stereo_rejects_mismatched_lengths() {
+        let frame = AudioFrame::mic_only(vec![1, 2], 1, 48000, 0);
+        let mic_mono = [100i16; 2];
+        let ref_mono = [0i16; 2];
+        let _ = ProcessedAudioFrame::from_raw(&frame, &mic_mono, &ref_mono)
+            .with_stereo(vec![0.1, 0.2, 0.3], vec![-0.1, -0.2]);
     }
 
     #[test]

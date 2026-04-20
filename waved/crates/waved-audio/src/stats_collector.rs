@@ -258,6 +258,7 @@ mod tests {
         let mic_mono_f32: Vec<f32> = (0..n).map(|i| (i as f32 * step).sin() * 0.5).collect();
         let p = ProcessedAudioFrame {
             mic_mono_f32,
+            mic_stereo_f32: None,
             reference_f32: vec![],
             sample_rate: 48000,
             timestamp_ms: 0,
