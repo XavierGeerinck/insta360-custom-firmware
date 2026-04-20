@@ -95,19 +95,29 @@ fn probe_and_set(pcm: &PCM, cfg: &AlsaStreamConfig<'_>) -> Result<(), AlsaOpenEr
 }
 
 impl PcmSource for AlsaPcmSource {
+    // snd_pcm_readi may satisfy fewer frames than requested (signals, short
+    // transfers when a linked stream paces differently). Loop until the caller's
+    // buffer is full so upstream sees whole periods; propagate EPIPE so xrun
+    // accounting stays in the capture thread.
     fn read(&mut self, buf: &mut [i32]) -> std::io::Result<usize> {
-        let io = self.pcm.io_i32().map_err(std::io::Error::other)?;
-        match io.readi(buf) {
-            Ok(frames) => Ok(frames * self.channels),
-            Err(e) => {
-                if e.errno() == libc::EPIPE {
-                    drop(io);
-                    let _ = self.pcm.prepare();
-                    return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e));
+        let total_samples = buf.len();
+        let mut filled_samples = 0;
+        while filled_samples < total_samples {
+            let io = self.pcm.io_i32().map_err(std::io::Error::other)?;
+            match io.readi(&mut buf[filled_samples..]) {
+                Ok(0) => break,
+                Ok(frames) => filled_samples += frames * self.channels,
+                Err(e) => {
+                    if e.errno() == libc::EPIPE {
+                        drop(io);
+                        let _ = self.pcm.prepare();
+                        return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, e));
+                    }
+                    return Err(std::io::Error::other(e));
                 }
-                Err(std::io::Error::other(e))
             }
         }
+        Ok(filled_samples)
     }
 
     fn channels(&self) -> usize { self.channels }
