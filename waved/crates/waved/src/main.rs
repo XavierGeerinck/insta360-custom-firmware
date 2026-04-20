@@ -183,7 +183,10 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     (SourceDyn::Dual(s), a.as_str().to_string())
                 }
                 Err(e) => {
-                    tracing::error!("ALSA dual-stream open failed:\n{e}");
+                    // eprintln! bypasses Rust's BufWriter so this reaches the log
+                    // file even when process::exit skips destructors/flush.
+                    eprintln!("FATAL: ALSA dual-stream open failed: {e}");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
                     std::process::exit(1);
                 }
             }
@@ -198,7 +201,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             }) {
                 Ok(m) => m,
                 Err(e) => {
-                    tracing::error!("ALSA mic open failed:\n{e}");
+                    eprintln!("FATAL: ALSA mic open failed: {e}");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
                     std::process::exit(1);
                 }
             };
