@@ -26,6 +26,24 @@ impl CaptureStats {
     }
 }
 
+/// Best-effort SCHED_FIFO bump for the current thread. Requires CAP_SYS_NICE
+/// (or root). Silent on platforms where libc isn't POSIX realtime.
+#[cfg(target_os = "linux")]
+fn set_realtime_priority() {
+    let param = libc::sched_param { sched_priority: 20 };
+    // SAFETY: sched_setscheduler reads `param` by pointer; scope is this call.
+    let rc = unsafe { libc::sched_setscheduler(0, libc::SCHED_FIFO, &param) };
+    if rc != 0 {
+        let errno = std::io::Error::last_os_error();
+        warn!("capture thread SCHED_FIFO failed: {errno}; falling back to SCHED_OTHER");
+    } else {
+        info!("capture thread scheduler: SCHED_FIFO priority 20");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_realtime_priority() {}
+
 /// Runs the capture loop, consuming the source to EOF or until stop_flag.
 ///
 /// Repeatedly calls `source.next_frame()` to pull complete AudioFrames
@@ -39,6 +57,7 @@ pub fn run_capture_loop<S: AudioFrameSource>(
 ) {
     let sample_rate = source.sample_rate();
     let mut consecutive_errors = 0u32;
+    set_realtime_priority();
     info!("capture loop starting: sr={sample_rate}");
 
     while !stop_flag.load(Ordering::Relaxed) {
@@ -65,7 +84,11 @@ pub fn run_capture_loop<S: AudioFrameSource>(
             }
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
                 let n = stats.xrun_count.fetch_add(1, Ordering::Relaxed) + 1;
-                warn!("xrun #{n} ({e})");
+                // Logging is on the capture thread: rate-limit so the stderr
+                // lock doesn't starve us into more xruns.
+                if n <= 5 || n.is_power_of_two() || n % 500 == 0 {
+                    warn!("xrun #{n} ({e})");
+                }
                 // Source is expected to recover internally; we just continue.
             }
             Err(e) => {
