@@ -176,6 +176,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             meeting_tx,
             cfg.period_frames,
             cfg.capture.mic_sample_rate,
+            cfg.mic_geometry.clone().unwrap_or_default(),
         );
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();

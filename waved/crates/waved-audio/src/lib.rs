@@ -20,7 +20,9 @@ use tracing::{info, warn};
 use waved_state::{AudioState, Command, NrLevel};
 
 use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
+use crate::beam::{Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
+use crate::doa::DoaEstimator;
 use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
@@ -96,6 +98,9 @@ pub struct AudioService {
     noise_suppressor: Option<Box<dyn NoiseSuppressor>>,
     mic_mono_scratch: Vec<i16>,
     ref_mono_scratch: Vec<i16>,
+    beamformer: Beamformer,
+    doa: DoaEstimator,
+    mic_8ch_f32_scratch: Vec<f32>,
 }
 
 impl AudioService {
@@ -106,6 +111,7 @@ impl AudioService {
         meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
         frame_size: usize,
         sample_rate: u32,
+        geometry: MicGeometry,
     ) -> Self {
         let (stats_tee, _) = broadcast::channel(16);
         let (processed_tx, _) = broadcast::channel(16);
@@ -113,9 +119,15 @@ impl AudioService {
         if speaker_control.is_none() {
             warn!("no amixer speaker control found — speaker mute/volume will be state-only");
         }
-        let initial_nr = audio_tx.borrow().nr_level.clone();
+        let (initial_nr, initial_mode) = {
+            let s = audio_tx.borrow();
+            (s.nr_level.clone(), s.mode.clone())
+        };
         let (echo_canceller, noise_suppressor) =
             build_dsp_chain(frame_size, sample_rate, initial_nr);
+        let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
+        beamformer.set_mode(initial_mode);
+        let doa = DoaEstimator::new(geometry, sample_rate, frame_size);
         Self {
             audio_tx,
             _frame_tx: frame_tx,
@@ -130,7 +142,16 @@ impl AudioService {
             noise_suppressor,
             mic_mono_scratch: vec![0; frame_size],
             ref_mono_scratch: vec![0; frame_size],
+            beamformer,
+            doa,
+            mic_8ch_f32_scratch: vec![0.0; frame_size * 8],
         }
+    }
+
+    /// Test hook: set DOA directly, bypassing DoaEstimator.
+    #[cfg(test)]
+    pub fn set_doa(&mut self, az_deg: f32, el_deg: f32) {
+        self.beamformer.set_doa(az_deg, el_deg);
     }
 
     /// Subscribe to the raw frame stream for diagnostics (stats collector,
@@ -155,18 +176,7 @@ impl AudioService {
     pub fn process_frame(&mut self, frame: &AudioFrame) -> ProcessedAudioFrame {
         let frame_size = self.frame_size;
 
-        // Mic: N-ch interleaved → mono mix.
-        let mono_mic = mix_to_mono(&frame.data, frame.channels as usize);
-        if self.mic_mono_scratch.len() != frame_size {
-            self.mic_mono_scratch.resize(frame_size, 0);
-        }
-        let copy_len = mono_mic.len().min(frame_size);
-        self.mic_mono_scratch[..copy_len].copy_from_slice(&mono_mic[..copy_len]);
-        if copy_len < frame_size {
-            self.mic_mono_scratch[copy_len..].fill(0);
-        }
-
-        // Reference: either the paired stream's downmix or silence.
+        // Reference is the same shape in either branch — prepare it once.
         if self.ref_mono_scratch.len() != frame_size {
             self.ref_mono_scratch.resize(frame_size, 0);
         }
@@ -182,15 +192,64 @@ impl AudioService {
             _ => self.ref_mono_scratch.fill(0),
         }
 
-        let mut aec_out = vec![0i16; frame_size];
-        self.echo_canceller
-            .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
+        if frame.channels as usize == 8 && frame.data.len() == frame_size * 8 {
+            // 8-ch beamforming path.
+            if self.mic_8ch_f32_scratch.len() != frame_size * 8 {
+                self.mic_8ch_f32_scratch.resize(frame_size * 8, 0.0);
+            }
+            for (i, &s) in frame.data.iter().enumerate() {
+                self.mic_8ch_f32_scratch[i] = (s as f32) / 32768.0;
+            }
 
-        if let Some(ns) = self.noise_suppressor.as_mut() {
-            ns.process(&mut aec_out);
+            let doa = self.doa.update(&self.mic_8ch_f32_scratch);
+            self.audio_tx.send_modify(|s| {
+                s.doa_horizontal = doa.azimuth_deg;
+                s.doa_pitch = doa.elevation_deg;
+            });
+            self.beamformer.set_doa(doa.azimuth_deg, doa.elevation_deg);
+
+            let beam_out = self.beamformer.process(&self.mic_8ch_f32_scratch);
+
+            if self.mic_mono_scratch.len() != frame_size {
+                self.mic_mono_scratch.resize(frame_size, 0);
+            }
+            for (dst, &src) in self.mic_mono_scratch.iter_mut().zip(beam_out.mono.iter()) {
+                *dst = (src.clamp(-1.0, 1.0) * 32768.0) as i16;
+            }
+
+            let mut aec_out = vec![0i16; frame_size];
+            self.echo_canceller
+                .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
+            if let Some(ns) = self.noise_suppressor.as_mut() {
+                ns.process(&mut aec_out);
+            }
+
+            let mut p = ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch);
+            if let Some((l, r)) = beam_out.stereo {
+                p = p.with_stereo(l, r);
+            }
+            p
+        } else {
+            // Legacy path: used by host tests that inject <8ch mic data.
+            let mono_mic = mix_to_mono(&frame.data, frame.channels as usize);
+            if self.mic_mono_scratch.len() != frame_size {
+                self.mic_mono_scratch.resize(frame_size, 0);
+            }
+            let copy_len = mono_mic.len().min(frame_size);
+            self.mic_mono_scratch[..copy_len].copy_from_slice(&mono_mic[..copy_len]);
+            if copy_len < frame_size {
+                self.mic_mono_scratch[copy_len..].fill(0);
+            }
+
+            let mut aec_out = vec![0i16; frame_size];
+            self.echo_canceller
+                .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
+            if let Some(ns) = self.noise_suppressor.as_mut() {
+                ns.process(&mut aec_out);
+            }
+
+            ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch)
         }
-
-        ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch)
     }
 
     pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) {
@@ -217,6 +276,8 @@ impl AudioService {
                 cmd = cmd_rx.recv() => {
                     match cmd {
                         Ok(Command::SetAudioMode(mode)) => {
+                            info!("audio mode → {mode:?}");
+                            self.beamformer.set_mode(mode.clone());
                             self.audio_tx.send_modify(|s| s.mode = mode);
                         }
                         Ok(Command::SetNrLevel(level)) => {
@@ -324,7 +385,15 @@ mod tests {
         let audio_tx = Arc::new(audio_tx);
         let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<AudioFrame>(4);
         let (meeting_tx, _meeting_rx) = tokio::sync::mpsc::channel::<ProcessedAudioFrame>(4);
-        let mut svc = AudioService::new(audio_tx, frame_tx, frame_rx, meeting_tx, frame_size, sr);
+        let mut svc = AudioService::new(
+            audio_tx,
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            frame_size,
+            sr,
+            MicGeometry::default(),
+        );
 
         let step = 2.0 * std::f32::consts::PI * 1000.0 / sr as f32;
         let mut raw_rms_sum = 0.0f64;
@@ -384,5 +453,54 @@ mod tests {
             attenuation_db >= 10.0,
             "process_frame attenuation {attenuation_db:.1} dB < 10 dB (raw rms {raw_rms:.1}, out rms {out_rms:.1})"
         );
+    }
+
+    #[test]
+    fn audio_service_applies_beamformer_before_aec() {
+        use crate::beam::MicGeometry;
+        use waved_state::AudioMode;
+
+        let sr: u32 = 48000;
+        let frame_size: usize = 480;
+        let mic_channels: u16 = 8;
+
+        let mut initial_state = AudioState::default();
+        initial_state.nr_level = NrLevel::Off;
+        initial_state.mode = AudioMode::Cardioid;
+        let (audio_tx, _audio_rx) = tokio::sync::watch::channel(initial_state);
+        let audio_tx = Arc::new(audio_tx);
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<AudioFrame>(4);
+        let (meeting_tx, _meeting_rx) = tokio::sync::mpsc::channel::<ProcessedAudioFrame>(4);
+        let mut svc = AudioService::new(
+            audio_tx.clone(),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            frame_size,
+            sr,
+            MicGeometry::default(),
+        );
+
+        let geom = MicGeometry::default();
+        let omega = 2.0 * std::f32::consts::PI * 1000.0 / sr as f32;
+        const C: f32 = 343.0;
+        let mut samples = vec![0i16; frame_size * mic_channels as usize];
+        for alsa_ch in 0..mic_channels as usize {
+            let p = geom.position_for_alsa(alsa_ch);
+            let tau_samples = -(p.x * 1e-3) / C * sr as f32;
+            for i in 0..frame_size {
+                let v = ((i as f32 - tau_samples) * omega).sin() * 0.3 * i16::MAX as f32;
+                samples[i * mic_channels as usize + alsa_ch] = v as i16;
+            }
+        }
+        let frame = AudioFrame::mic_only(samples, mic_channels, sr, 0);
+
+        svc.set_doa(0.0, 0.0);
+        let processed = svc.process_frame(&frame);
+        let rms_front: f32 = {
+            let sq: f32 = processed.mic_mono_f32.iter().map(|x| x * x).sum();
+            (sq / processed.mic_mono_f32.len() as f32).sqrt()
+        };
+        assert!(rms_front > 0.05, "beamformer produced silence: rms={rms_front}");
     }
 }

@@ -30,7 +30,7 @@ async fn replay_silence_produces_zero_vu() {
     let (frame_tx, frame_rx) = mpsc::channel(32);
     let (meeting_tx, _meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
     let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
-    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000);
+    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000, waved_audio::beam::MicGeometry::default());
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     // Spawn capture thread manually
@@ -60,7 +60,7 @@ async fn replay_tone_elevates_vu_on_tone_channel() {
     let (frame_tx, frame_rx) = mpsc::channel(32);
     let (meeting_tx, _meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
     let (_cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
-    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000);
+    let svc = AudioService::new(Arc::new(audio_tx), frame_tx.clone(), frame_rx, meeting_tx, 256, 48_000, waved_audio::beam::MicGeometry::default());
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
     let stats = CaptureStats::new();

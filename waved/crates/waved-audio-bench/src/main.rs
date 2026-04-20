@@ -55,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         meeting_tx,
         PERIOD_FRAMES,
         args.sample_rate,
+        waved_audio::beam::MicGeometry::default(),
     );
     let stats_tee = svc.subscribe_frames();
     tokio::spawn(async move { svc.run(cmd_rx).await });

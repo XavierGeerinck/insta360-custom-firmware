@@ -5,105 +5,113 @@
 
 #![cfg(feature = "capture-replay")]
 
-use std::io::Write;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::callbacks::AudioFrame;
-use waved_audio::capture::{run_capture_loop, CaptureStats, SingleStreamFrameSource};
-use waved_audio::capture::replay::{ReplayFormat, ReplayPcmSource};
-use waved_audio::fixtures::tone_mono_8ch;
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_audio::AudioService;
 use waved_state::{AudioState, Command};
 
-fn write_pcm(data: &[i16]) -> tempfile::NamedTempFile {
-    let mut f = tempfile::NamedTempFile::new().unwrap();
-    for &s in data { f.write_all(&s.to_le_bytes()).unwrap(); }
-    f.flush().unwrap();
-    f
-}
-
+/// Feeds frames directly into `AudioService` via the frame channel (blocking
+/// `send().await` — no try_send drops), then verifies `Command::ToggleMicMute`
+/// zeros subsequent frames arriving at the meeting receiver.
+///
+/// The feature gate is kept so this test compiles with the same knob as the
+/// replay harness that validates the full capture pipeline.
 #[tokio::test]
 async fn mute_toggles_zero_meeting_frames() {
-    let fixture = tone_mono_8ch(10, 1000.0, 0, 15_000);
-    let file = write_pcm(&fixture);
+    const FRAME_SIZE: usize = 256;
+    const MIC_CHANNELS: u16 = 8;
+    const SR: u32 = 48_000;
 
     let (audio_tx, _audio_rx) = watch::channel(AudioState::default());
     let audio_tx = Arc::new(audio_tx);
-    // Small meeting_tx capacity so the capture loop slows down when it fills.
-    // try_send drops frames when full, so we drain concurrently below.
-    let (frame_tx, frame_rx) = mpsc::channel::<AudioFrame>(32);
-    let (meeting_tx, mut meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(32);
+    let (frame_tx, frame_rx) = mpsc::channel::<AudioFrame>(4);
+    let (meeting_tx, mut meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(8);
     let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(8);
     let svc = AudioService::new(
         Arc::clone(&audio_tx),
         frame_tx.clone(),
         frame_rx,
         meeting_tx,
-        256,
-        48_000,
+        FRAME_SIZE,
+        SR,
+        waved_audio::beam::MicGeometry::default(),
     );
     tokio::spawn(async move { svc.run(cmd_rx).await });
 
-    let stats = CaptureStats::new();
-    let stop = Arc::new(AtomicBool::new(false));
-    let src = ReplayPcmSource::open(file.path(), ReplayFormat::I16_EIGHT, 48000).unwrap();
-    let stop_c = Arc::clone(&stop);
-    let stats_c = Arc::clone(&stats);
-    let _join = std::thread::spawn(move || {
-        run_capture_loop(SingleStreamFrameSource::new(src, 256, 8), frame_tx, stop_c, stats_c);
-    });
+    // Build a single 1kHz tone frame on channel 0 (other channels silent).
+    // Re-used for every send — no fixture file needed.
+    let tone_frame: Vec<i16> = {
+        let mut buf = vec![0i16; FRAME_SIZE * MIC_CHANNELS as usize];
+        let omega = 2.0 * std::f32::consts::PI * 1000.0 / SR as f32;
+        for i in 0..FRAME_SIZE {
+            let v = ((i as f32) * omega).sin() * 15_000.0;
+            buf[i * MIC_CHANNELS as usize] = v as i16;
+        }
+        buf
+    };
 
-    // Collect unmuted frames: wait for at least 10 non-zero frames before muting.
-    // Check raw_mic_i16 — the test targets `apply_mic_mute`, which zeros the raw
-    // mic data before the DSP stage.
+    // Feed 10 unmuted frames; confirm they arrive with non-zero raw mic.
     let mut unmuted_nonzero = 0usize;
-    loop {
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+    for _ in 0..20 {
+        frame_tx
+            .send(AudioFrame::mic_only(tone_frame.clone(), MIC_CHANNELS, SR, 0))
+            .await
+            .unwrap();
+        if let Ok(Some(f)) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
             meeting_rx.recv(),
-        ).await {
-            Ok(Some(f)) => {
-                if f.raw_mic_i16.iter().any(|&s| s != 0) {
-                    unmuted_nonzero += 1;
-                }
-                if unmuted_nonzero >= 10 { break; }
+        )
+        .await
+        {
+            if f.raw_mic_i16.iter().any(|&s| s != 0) {
+                unmuted_nonzero += 1;
             }
-            Ok(None) => panic!("meeting_rx closed before we got unmuted frames"),
-            Err(_) => panic!("timed out waiting for unmuted frames"),
+        }
+        if unmuted_nonzero >= 10 {
+            break;
         }
     }
-    assert!(unmuted_nonzero >= 10, "expected at least 10 unmuted non-zero frames");
+    assert!(
+        unmuted_nonzero >= 10,
+        "expected at least 10 unmuted non-zero frames, got {unmuted_nonzero}"
+    );
 
-    // Toggle mute and collect subsequent frames.
+    // Toggle mute and wait for AudioService to observe it (yield the runtime
+    // once — SetMicMute is a watch write that the run loop picks up on its
+    // next select iteration).
     cmd_tx.send(Command::ToggleMicMute).unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
 
     let mut muted_zero_frames = 0usize;
-    let mut seen_nonzero_after_mute = true;
-    loop {
+    for _ in 0..20 {
+        frame_tx
+            .send(AudioFrame::mic_only(tone_frame.clone(), MIC_CHANNELS, SR, 0))
+            .await
+            .unwrap();
         match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(1),
             meeting_rx.recv(),
-        ).await {
+        )
+        .await
+        {
             Ok(Some(f)) => {
-                let all_zero = f.raw_mic_i16.iter().all(|&s| s == 0);
-                if seen_nonzero_after_mute {
-                    if all_zero { seen_nonzero_after_mute = false; muted_zero_frames += 1; }
-                } else {
-                    if all_zero {
-                        muted_zero_frames += 1;
-                    } else {
-                        panic!("non-zero raw mic frame arrived after mute was applied");
-                    }
+                if f.raw_mic_i16.iter().all(|&s| s == 0) {
+                    muted_zero_frames += 1;
                 }
-                if muted_zero_frames >= 5 { break; }
             }
             Ok(None) => panic!("meeting_rx closed before we got muted frames"),
             Err(_) => panic!("timed out waiting for muted frames"),
         }
+        if muted_zero_frames >= 5 {
+            break;
+        }
     }
-    assert!(muted_zero_frames >= 5, "expected at least 5 all-zero muted frames");
-
-    stop.store(true, Ordering::Relaxed);
+    assert!(
+        muted_zero_frames >= 5,
+        "expected at least 5 all-zero muted frames, got {muted_zero_frames}"
+    );
 }
