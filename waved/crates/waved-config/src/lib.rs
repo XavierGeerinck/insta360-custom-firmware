@@ -99,7 +99,7 @@ mod tests {
     fn default_config_parses() {
         let config = WavedConfig::default();
         assert_eq!(config.device.name, "Wave Open");
-        assert_eq!(config.audio.mode, AudioMode::NoiseReduction);
+        assert_eq!(config.audio.mode, AudioMode::Omni);
         assert_eq!(config.audio.speaker_volume, 150);
         assert_eq!(config.ntp.servers.len(), 2);
     }

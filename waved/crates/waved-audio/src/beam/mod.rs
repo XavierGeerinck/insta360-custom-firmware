@@ -84,7 +84,7 @@ impl Beamformer {
     }
 
     fn recompute(&mut self) {
-        self.is_omni = matches!(self.mode, AudioMode::Omni | AudioMode::NoiseReduction);
+        self.is_omni = matches!(self.mode, AudioMode::Omni);
         self.is_stereo = matches!(self.mode, AudioMode::Stereo);
         if self.is_omni {
             return;
@@ -177,7 +177,7 @@ fn back_delay_scale(mode: AudioMode) -> f32 {
         AudioMode::Cardioid | AudioMode::Stereo => 1.0,
         AudioMode::Supercardioid => 0.577,
         AudioMode::Figure8 => 0.0,
-        AudioMode::Omni | AudioMode::NoiseReduction => 0.0,
+        AudioMode::Omni => 0.0,
     }
 }
 

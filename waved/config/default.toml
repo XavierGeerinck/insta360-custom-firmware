@@ -3,7 +3,7 @@ name = "Wave Open"
 language = "en"
 
 [audio]
-mode = "noise_reduction"
+mode = "omni"
 speaker_volume = 150
 mic_volume = 200
 

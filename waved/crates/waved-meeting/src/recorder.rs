@@ -70,7 +70,7 @@ mod tests {
             id: "test-id".to_string(),
             start_time: "2026-03-21T10:00:00Z".to_string(),
             duration_secs: 300,
-            audio_mode: "NoiseReduction".to_string(),
+            audio_mode: "Omni".to_string(),
             device_id: "wave-001".to_string(),
             sample_rate: 48000,
             channels: 2,
@@ -88,7 +88,7 @@ mod tests {
     #[tokio::test]
     async fn active_recording_creates_directory_and_files() {
         let dir = tempfile::tempdir().unwrap();
-        let rec = ActiveRecording::start(dir.path(), "NoiseReduction").await.unwrap();
+        let rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
 
         assert!(rec.dir.exists());
         assert!(rec.dir.join("metadata.json").exists());
@@ -97,7 +97,7 @@ mod tests {
         let meta_json = tokio::fs::read_to_string(rec.dir.join("metadata.json")).await.unwrap();
         let meta: MeetingMetadata = serde_json::from_str(&meta_json).unwrap();
         assert_eq!(meta.id, rec.id.to_string());
-        assert_eq!(meta.audio_mode, "NoiseReduction");
+        assert_eq!(meta.audio_mode, "Omni");
         assert_eq!(meta.sample_rate, 48000);
     }
 

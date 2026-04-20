@@ -55,7 +55,6 @@ fn mode_to_idx(mode: &AudioMode) -> usize {
         AudioMode::Supercardioid => 2,
         AudioMode::Figure8       => 3,
         AudioMode::Stereo        => 4,
-        _                        => 0,
     }
 }
 

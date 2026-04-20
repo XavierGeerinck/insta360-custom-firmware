@@ -22,7 +22,6 @@ pub struct AudioState {
 #[serde(rename_all = "snake_case")]
 pub enum AudioMode {
     #[default]
-    NoiseReduction,
     Omni,
     Cardioid,
     Supercardioid,
@@ -201,7 +200,7 @@ mod tests {
         let bus = StateBus::new();
         let audio = bus.audio.subscribe();
         assert!(!audio.borrow().mic_muted);
-        assert_eq!(audio.borrow().mode, AudioMode::NoiseReduction);
+        assert_eq!(audio.borrow().mode, AudioMode::Omni);
     }
 
     #[test]
@@ -242,8 +241,8 @@ mod tests {
     }
 
     #[test]
-    fn audio_mode_default_is_noise_reduction() {
-        assert_eq!(AudioMode::default(), AudioMode::NoiseReduction);
+    fn audio_mode_default_is_omni() {
+        assert_eq!(AudioMode::default(), AudioMode::Omni);
     }
 
     #[test]
