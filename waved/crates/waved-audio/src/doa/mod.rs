@@ -9,6 +9,10 @@ use crate::beam::MicGeometry;
 use gcc_phat::GccPhat;
 use vad::{EnergyVad, Vad};
 
+/// Speed of sound in air (m/s). Used to compute expected per-pair τ for
+/// the diagnostic dump.
+const SPEED_OF_SOUND_M_S: f32 = 343.0;
+
 /// Fixed set of pairs for the 8-mic array. With the physical Wave layout
 /// (two rings at the same 4 diagonal azimuths, stacked vertically), the
 /// two top-ring diagonals span the XY plane; the two cross-ring diagonals
@@ -46,6 +50,11 @@ pub struct DoaEstimator {
     max_lag_samples: usize,
     /// Precomputed pair position deltas (meters) keyed by pair index.
     pair_deltas_m: [(f32, f32, f32); 4],
+    /// When Some, emit one `debug_dump` log line every N frames with the raw
+    /// per-pair τ and the τ expected given the solved direction. Set via
+    /// `WAVED_DOA_DEBUG=<N>` at startup (0/unset = off). See lib.rs wiring.
+    debug_every_n: Option<u32>,
+    debug_frame_counter: u32,
 }
 
 impl DoaEstimator {
@@ -66,6 +75,11 @@ impl DoaEstimator {
             );
         }
 
+        let debug_every_n = std::env::var("WAVED_DOA_DEBUG")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&n| n > 0);
+
         Self {
             geom,
             sample_rate,
@@ -78,6 +92,8 @@ impl DoaEstimator {
             primed: false,
             max_lag_samples,
             pair_deltas_m,
+            debug_every_n,
+            debug_frame_counter: 0,
         }
     }
 
@@ -110,15 +126,51 @@ impl DoaEstimator {
 
         // Compute TDOAs for each pair; build PairObservations.
         let mut obs = Vec::with_capacity(4);
+        let mut raw_tau_samples = [0.0f32; 4];
         for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
             let tau_samples = self
                 .gcc
                 .estimate_tdoa(&per_ch[i], &per_ch[j], self.max_lag_samples);
+            raw_tau_samples[k] = tau_samples;
             let (dx, dy, dz) = self.pair_deltas_m[k];
             obs.push(PairObservation {
                 delta_m: crate::beam::Position3D::new(dx, dy, dz),
                 tdoa_sec: tau_samples / self.sample_rate as f32,
             });
+        }
+
+        // Optional diagnostic: one line every N frames with raw τ per pair,
+        // expected τ for the current smoothed DOA, and RMS of channel 0.
+        // Enables offline cross-check of hardware TDoAs against geometry.
+        if let Some(n) = self.debug_every_n {
+            self.debug_frame_counter = self.debug_frame_counter.wrapping_add(1);
+            if self.debug_frame_counter % n == 0 {
+                let az = self.smoothed_az.to_radians();
+                let el = self.smoothed_el.to_radians();
+                let dhat = [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()];
+                let sr = self.sample_rate as f32;
+                let rms0 = {
+                    let sq: f32 = per_ch[0].iter().map(|x| x * x).sum();
+                    (sq / per_ch[0].len() as f32).sqrt()
+                };
+                let mut line = String::new();
+                for k in 0..4 {
+                    let (i, j) = PAIR_INDICES[k];
+                    let (dx, dy, dz) = self.pair_deltas_m[k];
+                    let expected_tau_sec =
+                        (dx * dhat[0] + dy * dhat[1] + dz * dhat[2]) / SPEED_OF_SOUND_M_S;
+                    let expected_tau_samples = expected_tau_sec * sr;
+                    line.push_str(&format!(
+                        "({},{})raw={:+.2} exp={:+.2}  ",
+                        i, j, raw_tau_samples[k], expected_tau_samples,
+                    ));
+                }
+                tracing::info!(
+                    target: "waved_audio::doa::debug",
+                    "doa_debug az={:.1} el={:.1} rms0={:.5} | {}",
+                    self.smoothed_az, self.smoothed_el, rms0, line,
+                );
+            }
         }
 
         match solve::solve_direction(&obs) {
