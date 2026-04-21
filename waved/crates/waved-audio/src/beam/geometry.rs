@@ -45,25 +45,39 @@ impl Default for MicGeometry {
 }
 
 impl MicGeometry {
-    /// Physical Insta360 Wave layout: r=25.5 mm, top ring z=0 and bottom
-    /// ring z=-78.2 mm, both rings sharing the same 4 diagonal azimuths
-    /// (45°, 135°, 225°, 315°). Physical indices 0..=3 are top, 4..=7 are
-    /// bottom, both in the same azimuth order.
+    /// Physical Insta360 Wave layout: r=25.5 mm, two rings stacked with
+    /// bottom at z=-78.2 mm. Each ring has 4 mics.
+    ///
+    /// Spec-frame convention: +X = operator's front. Each ring's mics are at
+    /// azimuths 0°, 90°, 180°, 270° from operator-front (front / left /
+    /// back / right). Physical indices 0..=3 are top, 4..=7 are bottom, both
+    /// in the same front→left→back→right azimuth order.
+    ///
+    /// Note on labels vs. coordinates: the tap harness prompts the operator
+    /// to tap holes labelled "45°/135°/225°/315°" (diagonals) in a fixed
+    /// order. On-device sweep showed the beam peak occurs at spec az=45°
+    /// (not 0°) when the speaker is at operator-front — meaning the label
+    /// conventions above disagree with the physical orientation the
+    /// operator picks. We resolve by placing physical mic 0 at spec +X
+    /// directly (operator-front). What the harness records as "TOP 45°"
+    /// maps to physical index 0 = operator-front, and subsequent slots are
+    /// 90° CCW around the device. This keeps spec az=0° aligned with the
+    /// operator's front axis so the default cardioid (`DoaEstimator`
+    /// primed at 0°) faces the talker.
     pub fn insta360_wave() -> Self {
         const R: f32 = 25.5;
         const Z_BOT: f32 = -78.2;
-        let xy = R * std::f32::consts::FRAC_1_SQRT_2;
 
         Self {
             positions_mm: [
-                Position3D::new(xy, xy, 0.0),           // 0: TOP 45°  (front-left)
-                Position3D::new(-xy, xy, 0.0),          // 1: TOP 135° (back-left)
-                Position3D::new(-xy, -xy, 0.0),         // 2: TOP 225° (back-right)
-                Position3D::new(xy, -xy, 0.0),          // 3: TOP 315° (front-right)
-                Position3D::new(xy, xy, Z_BOT),         // 4: BOT 45°  (front-left)
-                Position3D::new(-xy, xy, Z_BOT),        // 5: BOT 135° (back-left)
-                Position3D::new(-xy, -xy, Z_BOT),       // 6: BOT 225° (back-right)
-                Position3D::new(xy, -xy, Z_BOT),        // 7: BOT 315° (front-right)
+                Position3D::new(R, 0.0, 0.0),      // 0: TOP operator-front
+                Position3D::new(0.0, R, 0.0),      // 1: TOP operator-left
+                Position3D::new(-R, 0.0, 0.0),     // 2: TOP operator-back
+                Position3D::new(0.0, -R, 0.0),     // 3: TOP operator-right
+                Position3D::new(R, 0.0, Z_BOT),    // 4: BOT operator-front
+                Position3D::new(0.0, R, Z_BOT),    // 5: BOT operator-left
+                Position3D::new(-R, 0.0, Z_BOT),   // 6: BOT operator-back
+                Position3D::new(0.0, -R, Z_BOT),   // 7: BOT operator-right
             ],
             // Measured on device PSP_0000000000000000 with waved-mic-map
             // tap harness (2026-04-21). Each ALSA channel maps to the
@@ -109,18 +123,23 @@ mod tests {
     }
 
     #[test]
-    fn default_wave_geometry_top_and_bottom_share_diagonal_azimuths() {
+    fn default_wave_geometry_top_and_bottom_share_cardinal_azimuths() {
         let g = MicGeometry::default();
-        let xy = 25.5 * std::f32::consts::FRAC_1_SQRT_2;
         // Index i in top ring (0..4) has same (x,y) as index i+4 in bottom ring.
         for i in 0..4 {
             assert!((g.positions_mm[i].x - g.positions_mm[i + 4].x).abs() < 1e-3);
             assert!((g.positions_mm[i].y - g.positions_mm[i + 4].y).abs() < 1e-3);
         }
-        // And each (x,y) is at +/- xy on each axis (diagonal).
+        // And each mic lies on a cardinal axis: exactly one of |x| or |y| is R,
+        // the other is 0.
         for p in g.positions_mm.iter() {
-            assert!((p.x.abs() - xy).abs() < 1e-3, "|x|={} != xy={xy}", p.x.abs());
-            assert!((p.y.abs() - xy).abs() < 1e-3, "|y|={} != xy={xy}", p.y.abs());
+            let on_x_axis = p.y.abs() < 1e-3 && (p.x.abs() - 25.5).abs() < 1e-3;
+            let on_y_axis = p.x.abs() < 1e-3 && (p.y.abs() - 25.5).abs() < 1e-3;
+            assert!(
+                on_x_axis || on_y_axis,
+                "mic at ({}, {}) not on a cardinal axis",
+                p.x, p.y
+            );
         }
     }
 
@@ -142,11 +161,9 @@ mod tests {
     #[test]
     fn position_for_alsa_applies_permutation() {
         let mut g = MicGeometry::default();
-        // Send ALSA ch 0 → physical 3 (TOP 315°, which is at +xy,-xy,0).
+        // Send ALSA ch 0 → physical 3 and read that position back.
         g.alsa_to_physical = [3, 2, 1, 0, 7, 6, 5, 4];
-        let xy = 25.5 * std::f32::consts::FRAC_1_SQRT_2;
-        let p = g.position_for_alsa(0);
-        assert!((p.x - xy).abs() < 0.01);
-        assert!((p.y + xy).abs() < 0.01);
+        let p = *g.position_for_alsa(0);
+        assert_eq!(p, g.positions_mm[3]);
     }
 }
