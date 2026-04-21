@@ -20,7 +20,7 @@ impl EnergyVad {
 
 impl Default for EnergyVad {
     fn default() -> Self {
-        Self::new(0.003)
+        Self::new(0.0003)
     }
 }
 
