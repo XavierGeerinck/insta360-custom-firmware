@@ -80,6 +80,14 @@ impl GccPhat {
         }
 
         // Parabolic interpolation for sub-sample precision.
+        //
+        // A genuine peak has y_c > y_l and y_c > y_r, which forces
+        //   denom = y_l - 2y_c + y_r  <  0 (concave).
+        // In that case |frac| ≤ 0.5 and the interpolated peak is between the
+        // two neighbours. Rejecting non-concave denom cuts a class of hardware
+        // outliers observed on-device (noisy cross-ring pairs producing
+        // parabolic-fit values of ±hundreds of samples); clamping to ±0.5
+        // bounds the remaining numerical noise near zero-crossings.
         let center = best_lag;
         let idx_c = if center >= 0 { center as usize } else { (n as i32 + center) as usize };
         let idx_l = if idx_c == 0 { n - 1 } else { idx_c - 1 };
@@ -88,7 +96,11 @@ impl GccPhat {
         let y_c = cross[idx_c].re;
         let y_r = cross[idx_r].re;
         let denom = y_l - 2.0 * y_c + y_r;
-        let frac = if denom.abs() > 1e-9 { 0.5 * (y_l - y_r) / denom } else { 0.0 };
+        let frac = if denom < -1e-9 {
+            (0.5 * (y_l - y_r) / denom).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
 
         center as f32 + frac
     }
@@ -138,5 +150,29 @@ mod tests {
         let x2 = tone(2000.0, 48000, 480, 2.5);
         let tau = gcc.estimate_tdoa(&x1, &x2, 16);
         assert!((tau - 2.5).abs() < 0.3, "expected τ≈2.5, got {tau}");
+    }
+
+    #[test]
+    fn noise_pair_is_bounded_not_hundreds_of_samples() {
+        // Uncorrelated noise sources produce a flat/lumpy correlation surface
+        // where parabolic interpolation can blow up. The estimator must stay
+        // within ±(max_lag + 0.5) even in the worst case. Regression test for
+        // on-device outliers like τ=+1836 observed on pair (1,7).
+        let gcc = GccPhat::new(480);
+        let mut state = 0x9E3779B1u32;
+        let mut rnd = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as f32 / u32::MAX as f32) - 0.5
+        };
+        let x1: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let x2: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let max_lag = 20usize;
+        let tau = gcc.estimate_tdoa(&x1, &x2, max_lag);
+        assert!(
+            tau.abs() <= max_lag as f32 + 0.5,
+            "noise pair must stay bounded, got τ={tau}"
+        );
     }
 }
