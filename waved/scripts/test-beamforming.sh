@@ -24,7 +24,9 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
 fi
 
 echo "==> restarting waved..."
-adb shell "killall waved 2>/dev/null; sleep 2; (setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &); sleep 5"
+# ALSA capture device (snd_pcm_open) takes ~6-8 s to release after SIGTERM,
+# so the kill→start gap must be ≥ that or the new instance fails with EBUSY.
+adb shell "killall -9 waved 2>/dev/null; sleep 8; (setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &); sleep 5"
 
 WAVED_PID=$(adb shell "for p in /proc/[0-9]*; do if [ -f \$p/comm ]; then n=\$(cat \$p/comm 2>/dev/null); if [ \"\$n\" = \"waved\" ]; then echo \${p#/proc/}; break; fi; fi; done" | tr -d '\r\n')
 if [[ -z "$WAVED_PID" ]]; then
@@ -131,7 +133,10 @@ echo "  sampling /proc/${WAVED_PID}/stat for 30 s (keep room quiet)..."
 T0=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
 sleep 30
 T1=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
-CLK=$(adb shell 'getconf CLK_TCK' | tr -d '\r')
+# getconf is absent on the PSP firmware; read CONFIG_HZ from the kernel
+# config and fall back to 100 (the Linux default) if that isn't available.
+CLK=$(adb shell "gunzip -c /proc/config.gz 2>/dev/null | awk -F= '/^CONFIG_HZ=/{print \$2}'" | tr -d '\r')
+CLK=${CLK:-100}
 CPU_SEC=$(python3 -c "print((${T1} - ${T0}) / ${CLK})")
 CPU_PCT=$(python3 -c "print(${CPU_SEC} / 30.0 * 100)")
 echo "  CPU: ${CPU_PCT}% over 30 s (pass < 5%)"
