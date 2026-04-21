@@ -144,13 +144,26 @@ mod tests {
     fn hemispheric_partition_respects_projection_sign() {
         let geom = MicGeometry::default();
         let hw = hemispheric_weights(&geom, 0.0, 0.0, 48000);
-        // Front mic (physical 0, +X) is front-only.
-        assert!(hw.w_front[0] > 0.0 && hw.w_back[0] == 0.0);
-        // Rear mic (physical 2, -X) is back-only.
-        assert!(hw.w_back[2] > 0.0 && hw.w_front[2] == 0.0);
-        // Side mic (physical 1, +Y) is on the boundary (zero).
-        assert_eq!(hw.w_front[1], 0.0);
-        assert_eq!(hw.w_back[1], 0.0);
+        // Steering az=0° (+X forward). Any mic with +x goes to the front
+        // hemisphere and w_back must be zero; any mic with -x goes to the
+        // back hemisphere and w_front must be zero. Holds regardless of the
+        // alsa_to_physical permutation.
+        for alsa_ch in 0..8 {
+            let p = geom.position_for_alsa(alsa_ch);
+            if p.x > 0.0 {
+                assert!(
+                    hw.w_front[alsa_ch] > 0.0 && hw.w_back[alsa_ch] == 0.0,
+                    "alsa ch {alsa_ch} (x={}) should be front-only",
+                    p.x
+                );
+            } else if p.x < 0.0 {
+                assert!(
+                    hw.w_back[alsa_ch] > 0.0 && hw.w_front[alsa_ch] == 0.0,
+                    "alsa ch {alsa_ch} (x={}) should be back-only",
+                    p.x
+                );
+            }
+        }
     }
 
     #[test]

@@ -9,13 +9,16 @@ use crate::beam::MicGeometry;
 use gcc_phat::GccPhat;
 use vad::{EnergyVad, Vad};
 
-/// Fixed set of pairs for the 8-mic array: 2 top-ring opposing + 2 top-to-side diagonals.
-/// Indexed by PHYSICAL index (not ALSA); the estimator permutes internally.
+/// Fixed set of pairs for the 8-mic array. With the physical Wave layout
+/// (two rings at the same 4 diagonal azimuths, stacked vertically), the
+/// two top-ring diagonals span the XY plane; the two cross-ring diagonals
+/// add vertical baselines so elevation is observable. Indexed by PHYSICAL
+/// index (not ALSA); the estimator permutes internally.
 const PAIR_INDICES: [(usize, usize); 4] = [
-    (0, 2), // top: front ↔ back (+X axis)
-    (1, 3), // top: left ↔ right (+Y axis)
-    (0, 4), // top front ↔ side front-left (introduces Z)
-    (2, 6), // top back ↔ side back-right (introduces Z, other sign)
+    (0, 2), // top 45°  ↔ top 225° (+X+Y diagonal)
+    (1, 3), // top 135° ↔ top 315° (-X+Y diagonal)
+    (0, 6), // top 45°  ↔ bot 225° (full 3D diagonal, +X+Y axis + Z)
+    (1, 7), // top 135° ↔ bot 315° (full 3D diagonal, -X+Y axis + Z)
 ];
 
 /// Result of a single estimator update.

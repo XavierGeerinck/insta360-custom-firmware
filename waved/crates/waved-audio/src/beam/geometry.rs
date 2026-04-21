@@ -3,9 +3,9 @@
 //! Coordinate system: +X forward, +Y left, +Z up. Origin at center of
 //! top-ring plane. Units: millimeters.
 //!
-//! Default matches the teardown-measured Insta360 Wave geometry: top ring
-//! of 4 mics at z=0 (azimuths 0/90/180/270°), side ring of 4 mics at
-//! z=-78.2 mm (azimuths 45/135/225/315°), all at r=25.5 mm.
+//! Default matches the physical Insta360 Wave layout: two stacked rings of
+//! 4 mics each, all at the same 4 diagonal azimuths (45/135/225/315°),
+//! at r=25.5 mm. Top ring at z=0, bottom ring at z=-78.2 mm.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,25 +45,30 @@ impl Default for MicGeometry {
 }
 
 impl MicGeometry {
-    /// Teardown-measured geometry: r=25.5 mm, top ring z=0 at 0/90/180/270°,
-    /// side ring z=-78.2 mm at 45/135/225/315°.
+    /// Physical Insta360 Wave layout: r=25.5 mm, top ring z=0 and bottom
+    /// ring z=-78.2 mm, both rings sharing the same 4 diagonal azimuths
+    /// (45°, 135°, 225°, 315°). Physical indices 0..=3 are top, 4..=7 are
+    /// bottom, both in the same azimuth order.
     pub fn insta360_wave() -> Self {
         const R: f32 = 25.5;
-        const Z_SIDE: f32 = -78.2;
-        let side_xy = R * std::f32::consts::FRAC_1_SQRT_2;
+        const Z_BOT: f32 = -78.2;
+        let xy = R * std::f32::consts::FRAC_1_SQRT_2;
 
         Self {
             positions_mm: [
-                Position3D::new(R, 0.0, 0.0),
-                Position3D::new(0.0, R, 0.0),
-                Position3D::new(-R, 0.0, 0.0),
-                Position3D::new(0.0, -R, 0.0),
-                Position3D::new(side_xy, side_xy, Z_SIDE),
-                Position3D::new(-side_xy, side_xy, Z_SIDE),
-                Position3D::new(-side_xy, -side_xy, Z_SIDE),
-                Position3D::new(side_xy, -side_xy, Z_SIDE),
+                Position3D::new(xy, xy, 0.0),           // 0: TOP 45°  (front-left)
+                Position3D::new(-xy, xy, 0.0),          // 1: TOP 135° (back-left)
+                Position3D::new(-xy, -xy, 0.0),         // 2: TOP 225° (back-right)
+                Position3D::new(xy, -xy, 0.0),          // 3: TOP 315° (front-right)
+                Position3D::new(xy, xy, Z_BOT),         // 4: BOT 45°  (front-left)
+                Position3D::new(-xy, xy, Z_BOT),        // 5: BOT 135° (back-left)
+                Position3D::new(-xy, -xy, Z_BOT),       // 6: BOT 225° (back-right)
+                Position3D::new(xy, -xy, Z_BOT),        // 7: BOT 315° (front-right)
             ],
-            alsa_to_physical: [0, 1, 2, 3, 4, 5, 6, 7],
+            // Measured on device PSP_0000000000000000 with waved-mic-map
+            // tap harness (2026-04-21). Each ALSA channel maps to the
+            // physical mic position at index `alsa_to_physical[alsa_ch]`.
+            alsa_to_physical: [5, 4, 7, 6, 1, 0, 3, 2],
         }
     }
 
@@ -87,10 +92,10 @@ mod tests {
     }
 
     #[test]
-    fn default_wave_geometry_side_ring_below_top() {
+    fn default_wave_geometry_bottom_ring_below_top() {
         let g = MicGeometry::default();
         for i in 4..8 {
-            assert_eq!(g.positions_mm[i].z, -78.2, "side mic {i} should be at z=-78.2");
+            assert_eq!(g.positions_mm[i].z, -78.2, "bottom mic {i} should be at z=-78.2");
         }
     }
 
@@ -104,27 +109,44 @@ mod tests {
     }
 
     #[test]
-    fn default_wave_geometry_top_azimuths_cardinal() {
+    fn default_wave_geometry_top_and_bottom_share_diagonal_azimuths() {
         let g = MicGeometry::default();
-        assert!((g.positions_mm[0].x - 25.5).abs() < 0.01);
-        assert!(g.positions_mm[0].y.abs() < 0.01);
-        assert!(g.positions_mm[1].x.abs() < 0.01);
-        assert!((g.positions_mm[1].y - 25.5).abs() < 0.01);
+        let xy = 25.5 * std::f32::consts::FRAC_1_SQRT_2;
+        // Index i in top ring (0..4) has same (x,y) as index i+4 in bottom ring.
+        for i in 0..4 {
+            assert!((g.positions_mm[i].x - g.positions_mm[i + 4].x).abs() < 1e-3);
+            assert!((g.positions_mm[i].y - g.positions_mm[i + 4].y).abs() < 1e-3);
+        }
+        // And each (x,y) is at +/- xy on each axis (diagonal).
+        for p in g.positions_mm.iter() {
+            assert!((p.x.abs() - xy).abs() < 1e-3, "|x|={} != xy={xy}", p.x.abs());
+            assert!((p.y.abs() - xy).abs() < 1e-3, "|y|={} != xy={xy}", p.y.abs());
+        }
     }
 
     #[test]
-    fn default_alsa_to_physical_is_identity() {
+    fn default_alsa_to_physical_is_permutation() {
+        // The default mapping comes from the tap-harness measurement; it is
+        // a permutation (every physical index 0..8 referenced exactly once),
+        // not identity.
         let g = MicGeometry::default();
-        for i in 0..8 {
-            assert_eq!(g.alsa_to_physical[i], i as u8);
+        let mut seen = [false; 8];
+        for &p in g.alsa_to_physical.iter() {
+            let p = p as usize;
+            assert!(p < 8, "physical index {p} out of range");
+            assert!(!seen[p], "physical index {p} assigned twice");
+            seen[p] = true;
         }
     }
 
     #[test]
     fn position_for_alsa_applies_permutation() {
         let mut g = MicGeometry::default();
+        // Send ALSA ch 0 → physical 3 (TOP 315°, which is at +xy,-xy,0).
         g.alsa_to_physical = [3, 2, 1, 0, 7, 6, 5, 4];
+        let xy = 25.5 * std::f32::consts::FRAC_1_SQRT_2;
         let p = g.position_for_alsa(0);
-        assert!((p.y + 25.5).abs() < 0.01);
+        assert!((p.x - xy).abs() < 0.01);
+        assert!((p.y + xy).abs() < 0.01);
     }
 }
