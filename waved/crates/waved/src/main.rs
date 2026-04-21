@@ -281,6 +281,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         tokio::spawn(stats_collector::run(
             stats_rx,
             stats_processed_rx,
+            bus.audio.subscribe(),
             Arc::clone(&capture_stats),
             map_source,
             std::path::PathBuf::from("/tmp/audio_stats.json"),
@@ -460,6 +461,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         std::mem::forget(ui);
     }
 
+    tokio::spawn(mode_switch_handler(bus.commands.clone()));
+
     // Wait for SIGTERM or SIGINT
     use tokio::signal::unix::{signal, SignalKind};
     let mut sigterm = signal(SignalKind::terminate()).unwrap();
@@ -474,6 +477,40 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+}
+
+/// SIGHUP handler: reads `/tmp/waved-mode` (a plain-text file containing one
+/// of `omni`, `cardioid`, `supercardioid`, `figure8`, `stereo`) and dispatches
+/// `Command::SetAudioMode`. Used by `scripts/test-beamforming.sh` to switch
+/// beamforming presets without restarting waved.
+async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    use waved_state::AudioMode;
+
+    let mut sighup = match signal(SignalKind::hangup()) {
+        Ok(s) => s,
+        Err(e) => { warn!("SIGHUP mode-switch handler unavailable: {e}"); return; }
+    };
+
+    info!("SIGHUP mode-switch handler ready (source: /tmp/waved-mode)");
+
+    while sighup.recv().await.is_some() {
+        const PATH: &str = "/tmp/waved-mode";
+        let raw = match std::fs::read_to_string(PATH) {
+            Ok(s) => s,
+            Err(e) => { warn!("SIGHUP: {PATH}: {e}"); continue; }
+        };
+        let mode = match raw.trim() {
+            "omni" => AudioMode::Omni,
+            "cardioid" => AudioMode::Cardioid,
+            "supercardioid" => AudioMode::Supercardioid,
+            "figure8" => AudioMode::Figure8,
+            "stereo" => AudioMode::Stereo,
+            other => { warn!("SIGHUP: unknown mode {other:?}"); continue; }
+        };
+        info!("SIGHUP: setting audio mode → {mode:?}");
+        let _ = commands.send(Command::SetAudioMode(mode));
+    }
 }
 
 /// SIGUSR2 handler: plays `/data/waved/playback.s16le` (raw S16LE stereo

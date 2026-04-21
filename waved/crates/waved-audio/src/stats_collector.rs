@@ -10,8 +10,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
+use waved_state::{AudioMode, AudioState};
 
 #[derive(Serialize, Debug, Clone)]
 pub struct AudioStats {
@@ -33,11 +34,15 @@ pub struct AudioStats {
     /// comparable to `rms_per_channel`. `None` when no processed frame has
     /// been seen yet (AEC disabled or collector just started).
     pub mic_post_aec_rms: Option<f32>,
+    pub doa_horizontal: f32,
+    pub doa_pitch: f32,
+    pub mode: AudioMode,
 }
 
 pub async fn run(
     mut rx: broadcast::Receiver<AudioFrame>,
     mut processed_rx: broadcast::Receiver<ProcessedAudioFrame>,
+    audio_state_rx: watch::Receiver<AudioState>,
     stats: Arc<CaptureStats>,
     map_source: ChannelMapSource,
     out_path: PathBuf,
@@ -72,8 +77,10 @@ pub async fn run(
             },
             _ = interval.tick() => {
                 if let Some(frame) = latest_frame.as_ref() {
+                    let state = audio_state_rx.borrow().clone();
                     let s = compute_stats_with_processed(
-                        frame, &stats, map_source, last_write_error.clone(), &alignment, latest_post_aec_rms,
+                        frame, &stats, map_source, last_write_error.clone(), &alignment,
+                        latest_post_aec_rms, &state,
                     );
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
@@ -110,7 +117,9 @@ pub fn compute_stats(
     last_write_error: Option<String>,
     alignment: &str,
 ) -> AudioStats {
-    compute_stats_with_processed(frame, cap_stats, map_source, last_write_error, alignment, None)
+    compute_stats_with_processed(
+        frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(),
+    )
 }
 
 pub fn compute_stats_with_processed(
@@ -120,6 +129,7 @@ pub fn compute_stats_with_processed(
     last_write_error: Option<String>,
     alignment: &str,
     mic_post_aec_rms: Option<f32>,
+    audio_state: &AudioState,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -161,6 +171,9 @@ pub fn compute_stats_with_processed(
         reference_rms: ref_rms,
         alignment: alignment.to_string(),
         mic_post_aec_rms,
+        doa_horizontal: audio_state.doa_horizontal,
+        doa_pitch: audio_state.doa_pitch,
+        mode: audio_state.mode.clone(),
     }
 }
 
@@ -277,8 +290,29 @@ mod tests {
     fn mic_post_aec_rms_threads_through_compute_stats_with_processed() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
-        let s = compute_stats_with_processed(&frame, &cs, ChannelMapSource::File, None, "none", Some(123.4));
+        let s = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(),
+        );
         assert_eq!(s.mic_post_aec_rms, Some(123.4));
+    }
+
+    #[test]
+    fn audio_state_doa_and_mode_appear_in_stats() {
+        use waved_state::AudioMode;
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let cs = CaptureStats::new();
+        let state = AudioState {
+            mode: AudioMode::Cardioid,
+            doa_horizontal: 47.5,
+            doa_pitch: -12.0,
+            ..Default::default()
+        };
+        let s = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none", None, &state,
+        );
+        assert_eq!(s.mode, AudioMode::Cardioid);
+        assert!((s.doa_horizontal - 47.5).abs() < 1e-6);
+        assert!((s.doa_pitch + 12.0).abs() < 1e-6);
     }
 
     #[test]
