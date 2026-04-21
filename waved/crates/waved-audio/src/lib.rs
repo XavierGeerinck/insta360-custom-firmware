@@ -100,6 +100,10 @@ pub struct AudioService {
     ref_mono_scratch: Vec<i16>,
     beamformer: Beamformer,
     doa: DoaEstimator,
+    /// When `Some((az, el))`, the beamformer steers to this fixed direction
+    /// instead of tracking the live DOA. Settable via `Command::SetDoaOverride`.
+    /// Used by the on-device FBR acceptance test.
+    doa_override: Option<(f32, f32)>,
     mic_8ch_f32_scratch: Vec<f32>,
 }
 
@@ -144,6 +148,7 @@ impl AudioService {
             ref_mono_scratch: vec![0; frame_size],
             beamformer,
             doa,
+            doa_override: None,
             mic_8ch_f32_scratch: vec![0.0; frame_size * 8],
         }
     }
@@ -206,7 +211,10 @@ impl AudioService {
                 s.doa_horizontal = doa.azimuth_deg;
                 s.doa_pitch = doa.elevation_deg;
             });
-            self.beamformer.set_doa(doa.azimuth_deg, doa.elevation_deg);
+            let (steer_az, steer_el) = self
+                .doa_override
+                .unwrap_or((doa.azimuth_deg, doa.elevation_deg));
+            self.beamformer.set_doa(steer_az, steer_el);
 
             let beam_out = self.beamformer.process(&self.mic_8ch_f32_scratch);
 
@@ -279,6 +287,13 @@ impl AudioService {
                             info!("audio mode → {mode:?}");
                             self.beamformer.set_mode(mode.clone());
                             self.audio_tx.send_modify(|s| s.mode = mode);
+                        }
+                        Ok(Command::SetDoaOverride(ov)) => {
+                            match ov {
+                                Some((az, el)) => info!("DOA override → ({az:.1}°, {el:.1}°)"),
+                                None => info!("DOA override cleared — resuming DOA tracking"),
+                            }
+                            self.doa_override = ov;
                         }
                         Ok(Command::SetNrLevel(level)) => {
                             info!("NR level -> {level:?}; rebuilding DSP chain");

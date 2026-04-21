@@ -479,10 +479,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 }
 
-/// SIGHUP handler: reads `/tmp/waved-mode` (a plain-text file containing one
-/// of `omni`, `cardioid`, `supercardioid`, `figure8`, `stereo`) and dispatches
-/// `Command::SetAudioMode`. Used by `scripts/test-beamforming.sh` to switch
-/// beamforming presets without restarting waved.
+/// SIGHUP handler: reloads beamforming test hooks from `/tmp`.
+/// - `/tmp/waved-mode` (one of `omni`, `cardioid`, `supercardioid`, `figure8`,
+///   `stereo`) → `Command::SetAudioMode`
+/// - `/tmp/waved-doa-override` (`az_deg,el_deg` or `none` or missing) →
+///   `Command::SetDoaOverride`
+///
+/// Used by `scripts/test-beamforming.sh` to drive mode + fixed-beam steering
+/// without restarting waved.
 async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) {
     use tokio::signal::unix::{signal, SignalKind};
     use waved_state::AudioMode;
@@ -492,25 +496,59 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
         Err(e) => { warn!("SIGHUP mode-switch handler unavailable: {e}"); return; }
     };
 
-    info!("SIGHUP mode-switch handler ready (source: /tmp/waved-mode)");
+    info!(
+        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override)"
+    );
 
     while sighup.recv().await.is_some() {
-        const PATH: &str = "/tmp/waved-mode";
-        let raw = match std::fs::read_to_string(PATH) {
-            Ok(s) => s,
-            Err(e) => { warn!("SIGHUP: {PATH}: {e}"); continue; }
-        };
-        let mode = match raw.trim() {
-            "omni" => AudioMode::Omni,
-            "cardioid" => AudioMode::Cardioid,
-            "supercardioid" => AudioMode::Supercardioid,
-            "figure8" => AudioMode::Figure8,
-            "stereo" => AudioMode::Stereo,
-            other => { warn!("SIGHUP: unknown mode {other:?}"); continue; }
-        };
-        info!("SIGHUP: setting audio mode → {mode:?}");
-        let _ = commands.send(Command::SetAudioMode(mode));
+        const MODE_PATH: &str = "/tmp/waved-mode";
+        match std::fs::read_to_string(MODE_PATH) {
+            Ok(raw) => {
+                let mode = match raw.trim() {
+                    "omni" => Some(AudioMode::Omni),
+                    "cardioid" => Some(AudioMode::Cardioid),
+                    "supercardioid" => Some(AudioMode::Supercardioid),
+                    "figure8" => Some(AudioMode::Figure8),
+                    "stereo" => Some(AudioMode::Stereo),
+                    "" => None,
+                    other => { warn!("SIGHUP: unknown mode {other:?}"); None }
+                };
+                if let Some(m) = mode {
+                    info!("SIGHUP: setting audio mode → {m:?}");
+                    let _ = commands.send(Command::SetAudioMode(m));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {MODE_PATH}: {e}"),
+        }
+
+        const DOA_PATH: &str = "/tmp/waved-doa-override";
+        match std::fs::read_to_string(DOA_PATH) {
+            Ok(raw) => {
+                let trimmed = raw.trim();
+                if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+                    info!("SIGHUP: clearing DOA override");
+                    let _ = commands.send(Command::SetDoaOverride(None));
+                } else {
+                    match parse_doa_override(trimmed) {
+                        Some((az, el)) => {
+                            info!("SIGHUP: DOA override → ({az:.1}°, {el:.1}°)");
+                            let _ = commands.send(Command::SetDoaOverride(Some((az, el))));
+                        }
+                        None => warn!("SIGHUP: malformed {DOA_PATH}: {trimmed:?} (expected `az,el` or `none`)"),
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {DOA_PATH}: {e}"),
+        }
     }
+}
+
+/// Parse `"az_deg,el_deg"` into a pair of floats. Returns `None` on malformed input.
+fn parse_doa_override(s: &str) -> Option<(f32, f32)> {
+    let (a, b) = s.split_once(',')?;
+    Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
 }
 
 /// SIGUSR2 handler: plays `/data/waved/playback.s16le` (raw S16LE stereo

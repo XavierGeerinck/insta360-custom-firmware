@@ -148,6 +148,11 @@ pub enum Command {
     OpenSystemSettings,
     /// UI-only: navigate to the Speaker Volume screen (pspapp page 0xd / `ui_volume_screen`).
     OpenVolume,
+    /// Test hook: force the beamformer to steer at a fixed (azimuth_deg, elevation_deg)
+    /// instead of tracking the live DOA estimate. `None` clears the override.
+    /// Used by `scripts/test-beamforming.sh` Test 1 to measure front-to-back ratio
+    /// against a known fixed axis.
+    SetDoaOverride(Option<(f32, f32)>),
 }
 
 // --- State Bus ---
