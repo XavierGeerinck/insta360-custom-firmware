@@ -127,20 +127,38 @@ print(min(d, 360 - d))
 done
 
 echo
-echo "=== Test 3: CPU budget (Supercardioid, 30 s silence) ==="
-set_mode "supercardioid"
-echo "  sampling /proc/${WAVED_PID}/stat for 30 s (keep room quiet)..."
-T0=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
-sleep 30
-T1=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
-# getconf is absent on the PSP firmware; read CONFIG_HZ from the kernel
-# config and fall back to 100 (the Linux default) if that isn't available.
+echo "=== Test 3: CPU budget (beam-incremental cost) ==="
+# Spec §9.2.3: "Beam CPU budget: < 5% of one A53 core. Leaves headroom for
+# AEC (~2%) + SP#4 DeepFilterNet (~20% budgeted)." The 5% is the *delta*
+# introduced by the beamformer, not the whole waved process (which also
+# runs capture threads, AEC, stats I/O, tokio overhead, etc.). We measure
+# Omni as the baseline (trivial 8-sample average, no hemispheric weights)
+# and Supercardioid as the heaviest preset, then report the difference.
 CLK=$(adb shell "gunzip -c /proc/config.gz 2>/dev/null | awk -F= '/^CONFIG_HZ=/{print \$2}'" | tr -d '\r')
 CLK=${CLK:-100}
-CPU_SEC=$(python3 -c "print((${T1} - ${T0}) / ${CLK})")
-CPU_PCT=$(python3 -c "print(${CPU_SEC} / 30.0 * 100)")
-echo "  CPU: ${CPU_PCT}% over 30 s (pass < 5%)"
-PASS=$(python3 -c "print(1 if float('${CPU_PCT}') < 5.0 else 0)")
+
+sample_cpu_pct() {
+    local mode="$1" secs="$2"
+    set_mode "$mode"
+    sleep 1
+    local t0 t1
+    t0=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
+    sleep "$secs"
+    t1=$(adb shell "awk '{print \$14 + \$15}' /proc/${WAVED_PID}/stat" | tr -d '\r')
+    python3 -c "print(f'{($t1 - $t0)/${CLK}/${secs}*100:.2f}')"
+}
+
+echo "  sampling Omni baseline (30 s, keep room quiet)..."
+BASELINE_PCT=$(sample_cpu_pct "omni" 30)
+echo "  baseline (Omni):        ${BASELINE_PCT}%"
+
+echo "  sampling Supercardioid (30 s)..."
+BEAM_PCT=$(sample_cpu_pct "supercardioid" 30)
+echo "  under load (Super):     ${BEAM_PCT}%"
+
+DELTA_PCT=$(python3 -c "print(f'{float(\"${BEAM_PCT}\") - float(\"${BASELINE_PCT}\"):+.2f}')")
+echo "  beam-incremental:       ${DELTA_PCT}%  (pass < 5%)"
+PASS=$(python3 -c "print(1 if float('${DELTA_PCT}') < 5.0 else 0)")
 [[ "$PASS" == "1" ]] || { echo "  FAIL"; exit 1; }
 echo "  PASS"
 

@@ -136,6 +136,33 @@ is **broad** — only ~1.4 dB attenuation at 45° off-axis. Consequences:
 
 Acceptance test harness: `scripts/test-beamforming.sh`.
 
+### CPU baseline (Cortex-A55 @ ~1.2 GHz, 4 cores)
+
+Measured per-thread on silence, `/proc/<pid>/stat` sampled over 15 s. Whole
+waved process — not per core.
+
+| Mode          | Total CPU | Δ vs Omni |
+|---------------|-----------|-----------|
+| Omni          | ~8.99%    | 0 (baseline) |
+| Cardioid      | ~9.36%    | +0.37% |
+| Supercardioid | ~9.28%    | +0.29% |
+| Figure-8      | ~9.23%    | +0.24% |
+
+The beamformer itself is essentially free (<0.5% delta). The ~9% floor
+is tokio runtime overhead + ALSA capture + AEC + per-frame channel
+fanout — **none of which is beam-related**. The spec's "Beam CPU < 5%"
+applies to the *delta*, not the absolute waved figure. `test-beamforming.sh`
+Test 3 now reports the delta explicitly.
+
+Per-thread breakdown at Omni (15 s, silence):
+
+| Thread            | Share |
+|-------------------|-------|
+| tokio-rt-worker × 4 | ~7.8% |
+| audio-capture     | ~1.3% |
+| audio-playback    | ~0.3% |
+| ui-lvgl           | ~0.2% |
+
 ## 4-Point DOA Validation Protocol
 
 With speaker at top-ring level, 1 m out:
