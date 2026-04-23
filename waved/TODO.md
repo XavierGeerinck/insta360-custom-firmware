@@ -9,7 +9,14 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 - [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
 - [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
 - [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
-- [ ] SP#4 — Neural NS + dereverb (DeepFilterNet 3)
+- [~] **SP#4 — Neural NS + dereverb (DeepFilterNet 3)** — partial. Probing complete, blocked on NPU toolchain:
+  - ✅ NPU reachable from our process (`vxCreateContext`, `vsi_nn_CreateContext` — see `crates/waved-npu-probe/`)
+  - ✅ TIM-VX cross-compiles + loads on device with `USE_EXTERNAL_OVXLIB=ON` delegating to device's libovxlib
+  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG
+  - ❌ Host prebuilt SDK's archmodel is GC7000-class + CPU simulator; device NPU is VIP9000Nano-S — compiled NBG targets wrong silicon, device-side `ops::NBG` fails at instantiation
+  - ❌ ORT 1.22 + VSI-NPU EP cross-compile — three upstream bugs; same archmodel issue underneath
+  - 🔍 Unprobed: device-side JIT compile (device has libVSC/libOpenVX that know this chip — could JIT simple ops in-process without host SDK)
+  - See `docs/COMPUTE_HARDWARE.md` for the full path-status matrix.
 - [ ] SP#5 — Playback EQ + gain staging
 - [ ] SP#6 — UAC2 routing for Wave Controller
 
@@ -30,7 +37,7 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003). Preamp / gain staging belongs in SP#5.
 
 ### SP#4 (Neural NS + dereverb)
-- DeepFilterNet 3 integration (post-beamforming single-channel f32).
+- DeepFilterNet 3 integration (post-beamforming single-channel f32) — blocked on NPU toolchain access (VIP9000 archmodel not in any open SDK). Device-side JIT still an open probe.
 
 ### SP#5 (Playback EQ + gain staging)
 - Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.

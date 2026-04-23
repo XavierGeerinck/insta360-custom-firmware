@@ -253,6 +253,22 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
 ## Task 3: Cross-compile `onnxruntime` with VSI-NPU EP — BLOCKED (2026-04-23)
 
+> **Update 2026-04-23 (same day)**: Task 3 original blockers were three ORT
+> bugs. Pivoted to Task 3' (TIM-VX direct) and proved TIM-VX
+> graph-construction works on device (with `USE_EXTERNAL_OVXLIB=ON`
+> delegating to device's libovxlib). Added host-side `CompileToBinary`
+> which produces valid VPMN NBG format. **BUT** — device-side `ops::NBG`
+> load/compile of that NBG fails at node-instantiation because the host
+> prebuilt SDK's archmodel library only knows GC7000-class NPUs + CPU
+> simulator, not our VIP9000Nano-S. So the host toolchain produces NBGs
+> targeting the wrong silicon. Full picture + path-status matrix in
+> `docs/COMPUTE_HARDWARE.md`.
+>
+> **Remaining open probe**: device has `libVSC.so` / `libOpenVX.so` that
+> *know* VIP9000Nano-S. In-process JIT compile on-device might work
+> without any host SDK, sidestepping the archmodel problem entirely.
+> Untested at plan-status time.
+
 > **Status: blocked, deferred.** After eight iterations on toolchain and
 > upstream-patch issues, three genuine ORT 1.22.0 bugs in the VSI-NPU EP
 > cross-compile path remain:
