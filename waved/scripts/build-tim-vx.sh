@@ -61,6 +61,9 @@ docker run --rm \
             -DTIM_VX_ENABLE_TEST=OFF \
             -DTIM_VX_BUILD_EXAMPLES=ON \
             -DTIM_VX_ENABLE_NBG_PARSER=ON \
+            -DTIM_VX_USE_EXTERNAL_OVXLIB=ON \
+            -DOVXLIB_LIB=/work/third_party/device-sdk/lib/libovxlib.so \
+            -DOVXLIB_INC=/work/third_party/TIM-VX/src/tim/vx/internal/include \
             -DEXTERNAL_VIV_SDK=/work/third_party/device-sdk \
             -DCMAKE_BUILD_TYPE=Release
         ninja -v 2>&1 | tail -30

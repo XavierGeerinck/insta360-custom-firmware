@@ -215,11 +215,45 @@ Expected output (on this unit, firmware build Nov 28 2025):
 RESULT: OK — NPU reachable from waved's process.
 ```
 
-### TIM-VX runtime ABI mismatch (SP#4 Task 3/4, 2026-04-23)
+### TIM-VX ahead-of-time compile path (resolved 2026-04-23)
 
-TIM-VX v1.2.22 cross-builds and loads (see Task 2), but attempting to
-**use** its runtime — create a context, then a tensor — fails on this
-chip:
+Probing during SP#4 established the working path:
+
+```
+HOST x86_64                         DEVICE aarch64
+─────────────────                   ──────────────────────
+TIM-VX (prebuilt SDK, simulator)    TIM-VX (USE_EXTERNAL_OVXLIB=ON)
+  |                                   |
+  Construct graph in code             Load .nb via ops::NBG
+  graph->CompileToBinary(.nb) ─────► graph->Run()  (device libovxlib)
+```
+
+**Key moves:**
+- Build TIM-VX on host with its x86_64 prebuilt SDK — shaders + OpenCL
+  compile machinery are present → `CompileToBinary()` produces a `.nb`
+  that bakes in the NPU instructions for the target chip.
+- Build TIM-VX for device with `-DTIM_VX_USE_EXTERNAL_OVXLIB=ON` and
+  `-DOVXLIB_LIB=/path/to/device/libovxlib.so` — libtim-vx.so (2.2 MB, was
+  8.6 MB bundled) delegates all `vsi_nn_*` calls to the **device's own**
+  libovxlib, which has the correct kernel-contract ioctl for chip rev
+  0x9002 (see next section for the earlier mismatch).
+- Load the .nb at device runtime via `tim::vx::ops::NBG` + `ops::NBG` —
+  no shader compilation required on-device.
+
+**NPU identification** (from `VSI_NN_LOG_LEVEL=5`):
+- product: **VIP9000Nano-S**, pid `0x1000000e`
+- stock OVXLIB on device: **1.2.15** (our TIM-VX headers are 1.2.22 —
+  close enough for the stable C++ surface we use).
+
+**Runtime env requirement**: every process that loads libovxlib must set
+`VIVANTE_SDK_DIR` (any non-empty path works — the var is checked for
+presence, not content, when only running pre-compiled .nb).
+
+### TIM-VX runtime ABI mismatch (for reference; fixed by USE_EXTERNAL_OVXLIB)
+
+Before `TIM_VX_USE_EXTERNAL_OVXLIB=ON`, TIM-VX v1.2.22's bundled ovxlib
+copy issued a `query_hardware_caps` ioctl that galcore 6.4.19 on chip rev
+0x9002 rejected:
 
 ```
 tim_vx_smoke: create context... E [vsi_nn_context.c:query_hardware_caps:55]
@@ -238,12 +272,15 @@ TIM-VX v1.2.22 parses (`NBG parser is forward compatible with NBG
 format, please update NBG parser in time`), so `tim::vx::ops::NBG`
 can't load them either.
 
-This is a **chip/driver/TIM-VX triple mismatch** not patchable from
-our userspace. Consequences:
-- TIM-VX `Context::Create()` unusable on this Wave unit.
-- `tim::vx::ops::NBG` can't load stock `.nb` (format too new).
-- ORT 1.22's VSI-NPU EP (even if its cross-compile bugs were fixed)
-  would hit this same query at runtime.
+This was a **chip/driver/TIM-VX triple mismatch** not patchable from
+userspace. Fixed by delegating to the device's own libovxlib (see above).
+Symptoms when misconfigured:
+- TIM-VX `Context::Create()` returns a poisoned handle.
+- `ops::NBG` can't load stock `.nb` (unrelated: stock `.nb` format is
+  too new for TIM-VX v1.2.22's NBG parser, but we never need to load
+  stock `.nb` — we ship our own compiled via CompileToBinary).
+- ORT 1.22's VSI-NPU EP would hit the same query at runtime (on top of
+  its own separate cross-compile bugs).
 
 Stock firmware avoids all of this because `libnnsdk.so` was compiled
 against the exact chip/driver combo it ships with. The `vsi_nn_*` API
