@@ -245,16 +245,31 @@ above is.
 
 **What this means for "own the models"**:
 
-| Path | Unblocked? | Notes |
-|------|-----------|-------|
-| Host AoT compile, device run (OSS stack) | ✗ | Host SDK lacks VIP9000 archmodel |
-| Device-side compile + cache .nb | open | Requires device's libOpenVX to have the compiler + kernel cache; untested |
-| `libnnsdk.so` with chip-native SDK | ✗ NDA | Needs VeriSilicon Acuity Toolkit for this chip |
-| A311D prebuilt SDK from TIM-VX | untested | VIP9000 is different IP family from A311D's GCNANOULTRA31 — unlikely to help but cheap to try |
+| Path | State | Notes |
+|------|-------|-------|
+| Host AoT compile, device run (OSS stack) | ❌ blocked | Host SDK's archmodel is GC7000-class + CPU simulator, no VIP9000 |
+| Device-side JIT compile via libOpenVX / libVSC | ❌ blocked | Device ships the compiler (`libVSC.so`) but **zero shader sources** (`.vx`, `.cl`, `cl_viv_vx_ext.h`) — stripped from image because stock only loads pre-compiled NBGs |
+| `libnnsdk.so` with chip-native SDK | ❌ NDA | Needs VeriSilicon Acuity Toolkit for VIP9000 — proprietary |
+| TIM-VX evk-board SDKs (A311D, S905D3) | — (untested) | Different NPU IP family from VIP9000 — very unlikely to produce compatible NBGs |
 
-Short of getting a VIP9000-native SDK (VeriSilicon/Amlogic/Insta360
-relationship), fully open-source host-side NPU compilation is not
-viable on this silicon.
+**Root cause** across all three blocked OSS paths: the VIP9000-specific
+bits (archmodel data + shader sources + chip-native kernel compilers) only
+ship inside proprietary BSP drops from VeriSilicon / Amlogic / Insta360.
+The device's runtime libraries (`libOpenVX.so`, `libVSC.so`,
+`libovxlib.so`) know the chip, but the *data files* they need to compile
+new graphs for it aren't on the device.
+
+**Unblocking action is business/external, not technical:**
+- Acuity Toolkit license from VeriSilicon (covers archmodel + compiler)
+- Amlogic A113X2 BSP drop (probably includes archmodel + shader source
+  tree under Amlogic NDA)
+- Insta360 engineering handoff — they built the stock firmware and have
+  both.
+
+Until one of those lands, NPU-targeted models require pre-compiled NBGs
+produced externally. Implementation-side SP#4 work (Rust wrapper, NS
+integration, acceptance tests) can still proceed against a CPU backend
+— see `TODO.md` for the status matrix.
 
 ### TIM-VX ahead-of-time compile path (mapped 2026-04-23)
 

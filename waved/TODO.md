@@ -15,7 +15,8 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
   - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG
   - ❌ Host prebuilt SDK's archmodel is GC7000-class + CPU simulator; device NPU is VIP9000Nano-S — compiled NBG targets wrong silicon, device-side `ops::NBG` fails at instantiation
   - ❌ ORT 1.22 + VSI-NPU EP cross-compile — three upstream bugs; same archmodel issue underneath
-  - 🔍 Unprobed: device-side JIT compile (device has libVSC/libOpenVX that know this chip — could JIT simple ops in-process without host SDK)
+  - ❌ Device-side JIT compile: blocked. Device has libVSC/libOpenVX but zero shader source files (`.vx`, `.cl`) — stripped from image since stock only runs pre-compiled NBGs.
+  - Unblocking is external (Acuity Toolkit / Amlogic BSP / Insta360 handoff).
   - See `docs/COMPUTE_HARDWARE.md` for the full path-status matrix.
 - [ ] SP#5 — Playback EQ + gain staging
 - [ ] SP#6 — UAC2 routing for Wave Controller
