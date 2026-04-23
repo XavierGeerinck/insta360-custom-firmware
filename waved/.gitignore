@@ -10,3 +10,7 @@ test_uploads/
 scripts/backup/
 scripts/results/
 .superpowers/
+
+# Vendored third-party sources (reproducible via scripts/build-*.sh)
+/third_party/
+/models/*.onnx

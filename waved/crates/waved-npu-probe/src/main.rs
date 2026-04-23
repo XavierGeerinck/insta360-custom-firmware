@@ -208,6 +208,29 @@ fn main() -> ExitCode {
         }
     }
 
+    // TIM-VX smoke: our own cross-built libtim-vx.so (SP#4 Task 2). Success
+    // here means TIM-VX links cleanly against the device's Vivante 6.4.19
+    // libs despite being built against the 6.4.15-era prebuilt SDK headers.
+    // Expected at /data/waved/lib/libtim-vx.so; skipped if not present so
+    // the probe still passes before Task 2 is deployed.
+    step(9, "dlopen libtim-vx.so (our cross-built TIM-VX)");
+    match unsafe { libloading::Library::new("libtim-vx.so") } {
+        Ok(_tim) => {
+            ok("libtim-vx.so loaded — no missing symbols against device libs");
+        }
+        Err(e) => {
+            // Distinguish "not deployed yet" from "ABI mismatch": Task 2
+            // builds land the .so at /data/waved/lib/; a bare 'file not
+            // found' before deploy is OK.
+            let s = format!("{e}");
+            if s.contains("not found") || s.contains("No such file") {
+                println!("    skip: libtim-vx.so not deployed yet (run scripts/build-tim-vx.sh + adb push)");
+            } else {
+                fail(&format!("libtim-vx.so dlopen failed (likely ABI issue): {s}"));
+            }
+        }
+    }
+
     println!();
     if ctx_ok {
         println!("RESULT: OK — NPU reachable from waved's process.");

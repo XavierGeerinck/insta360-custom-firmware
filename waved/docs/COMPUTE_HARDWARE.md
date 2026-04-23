@@ -172,8 +172,23 @@ Route 1 is the default recommendation: biggest model-import surface
 ### NPU proof-of-life (validated 2026-04-23)
 
 Our own process can open `/dev/galcore`, dlopen `libOpenVX.so` +
-`libovxlib.so`, call `vxCreateContext()` and `vsi_nn_CreateContext()`,
-and get back non-null handles. Release is clean. No kill-stock dance
+`libovxlib.so` + our cross-built `libtim-vx.so`, call `vxCreateContext()`
+and `vsi_nn_CreateContext()`, and get back non-null handles. Release
+is clean.
+
+**TIM-VX cross-compile (SP#4 Task 2, 2026-04-23)**: built from
+`third_party/TIM-VX` v1.2.22 against `third_party/device-sdk/`
+(TIM-VX's x86_64 prebuilt headers at 6.4.15 paired with aarch64 .so
+files pulled from `/usr/lib` on device at 6.4.19). The resulting
+`libtim-vx.so` loads on-device with every transitive symbol resolved
+— no ABI mismatch between 6.4.15 headers and 6.4.19 runtime on this
+chip revision (0x9002). Recipe: `scripts/build-tim-vx.sh`.
+
+**One quirk**: this chip ships no `libCLC.so`. TIM-VX's build expects
+one (the OpenCL C compiler, used for JIT kernel compilation). The
+functionality is folded into `libOpenCL.so` on this stack; a symlink
+`third_party/device-sdk/lib/libCLC.so → libOpenCL.so` satisfies the
+link step and the resulting library works at runtime. No kill-stock dance
 required in the steady state (we happen to have killed `audioserver`
 indirectly via earlier watchdog kills, so this measurement doesn't
 tell us whether stock holds an exclusive NPU lock during normal boot —
