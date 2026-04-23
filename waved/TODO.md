@@ -8,7 +8,7 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 
 - [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
 - [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
-- [ ] SP#3 — Beamforming (MVDR/DAS, 6 modes + DOA)
+- [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
 - [ ] SP#4 — Neural NS + dereverb (DeepFilterNet 3)
 - [ ] SP#5 — Playback EQ + gain staging
 - [ ] SP#6 — UAC2 routing for Wave Controller
@@ -19,10 +19,15 @@ ASR (Silero VAD, WeNet, SenseVoice) is already open-source and out of scope.
 
 Items intentionally deferred during SP#1 v2 because they belong to their owning sub-project:
 
-### SP#3 (Beamforming)
-- Add `mic_geometry` field to `AudioConfig` under a version bump.
-- Wire `Command::SetAudioMode` (Omni / Cardioid / Supercardioid / Figure8 / Stereo) to MVDR/DAS beamforming presets.
-- DOA estimation consumer for on-UI directionality indicator.
+### SP#3 (Beamforming) — all done
+- [x] `mic_geometry` in `AudioConfig` v3 (Task 8).
+- [x] `Command::SetAudioMode` wired to beamforming presets (Task 11).
+- [x] DOA consumer exposed via `doa_horizontal` in `/tmp/audio_stats.json` (Task 11 / stats_collector).
+
+### SP#3 known residuals (not blockers, not scheduled)
+- Elevation bias +3° to +18° after pure-Z pair swap — may be partly real speaker-above-ring. Investigate only if a downstream feature needs elevation (current consumer is 2D arrow).
+- Azimuth error at 270° is ~19° post-pair-swap (vs ~7° before). Candidate fix: per-pair GCC-PHAT peak-sharpness confidence weighting in the LS solve.
+- Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003). Preamp / gain staging belongs in SP#5.
 
 ### SP#4 (Neural NS + dereverb)
 - DeepFilterNet 3 integration (post-beamforming single-channel f32).

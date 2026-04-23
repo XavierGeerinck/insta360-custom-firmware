@@ -1,5 +1,7 @@
 # Waved Audio — SP#3 Beamforming Implementation Plan
 
+> **Status: COMPLETE (2026-04-23).** All 13 tasks landed and on-device acceptance passes (FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%). Device-specific findings — body acoustic shadow, pure-Z pair choice, GCC-PHAT concavity guard, VAD floor, CPU-delta methodology — live in `docs/AUDIO_HARDWARE.md`, which is the authoritative doc going forward.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the 8-mic array from "channel 0, ignore the rest" into a direction-steered Delay-and-Sum beamformer with 5 audio-mode presets (Omni, Cardioid, Supercardioid, Figure-8, Stereo) and a live DOA estimator that drives both the UI pointer and the beam's steering direction.
@@ -72,7 +74,7 @@ scripts/
 
 **Rationale:** beamforming math needs concrete 3D positions per mic. We encode the teardown-measured geometry as a compile-time default and expose it via `AudioConfig.mic_geometry`. The `Position3D` + `MicGeometry` types are the substrate for all later tasks.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Create `crates/waved-audio/src/beam/geometry.rs`:
 
@@ -226,13 +228,13 @@ scripts/
   pub mod beam;
   ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
   Run: `cargo test -p waved-audio geometry`
 
   Expected: compilation succeeds, tests pass on first run (this task is mostly type + data declaration — the tests exist to pin the geometry constants, so they pass immediately after creating the module).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add crates/waved-audio/src/beam/
@@ -250,7 +252,7 @@ scripts/
 
 **Rationale:** a plane wave reaches each mic at different times. DAS aligns by delaying each channel by a computed amount. Max delay across our geometry is ~150 μs (≈7.2 samples at 48 kHz); we need fractional-sample precision, which means linear interpolation over a per-channel ring buffer.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Create `crates/waved-audio/src/beam/delays.rs`:
 
@@ -368,13 +370,13 @@ scripts/
   pub use geometry::{MicGeometry, Position3D};
   ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
   Run: `cargo test -p waved-audio beam::delays`
 
   Expected: 5/5 pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add crates/waved-audio/src/beam/
@@ -391,7 +393,7 @@ scripts/
 
 **Rationale:** each audio-mode preset becomes a fixed weight vector `[f32; 8]` applied after delay alignment. Weights are computed from the target direction and the mic geometry. We precompute analytically (closed form for Omni / Figure-8 / Cardioid) and fall back to a numerical constrained solve only if needed (§11 of the spec, out of scope for this task).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Create `crates/waved-audio/src/beam/weights.rs`:
 
@@ -555,13 +557,13 @@ scripts/
   pub use geometry::{MicGeometry, Position3D};
   ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
   Run: `cargo test -p waved-audio beam::weights`
 
   Expected: 7/7 pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add crates/waved-audio/src/beam/
@@ -577,7 +579,7 @@ scripts/
 
 **Rationale:** combine delays + weights into a single consumable. Takes an 8-ch interleaved frame in, produces mono (or stereo for Stereo mode) out. Weight matrix is precomputed when DOA or mode changes; per-sample hot path is 8 delay reads + 8 muladds. The acceptance test here is the end-to-end front/back ratio on a synthetic plane wave — the number the on-device test later mirrors.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Replace `crates/waved-audio/src/beam/mod.rs` with:
 
@@ -828,13 +830,13 @@ scripts/
   }
   ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
   Run: `cargo test -p waved-audio beam::tests`
 
   Expected: 4/4 pass. If Cardioid FBR test fails, check weight normalization in Task 3.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add crates/waved-audio/src/beam/mod.rs
@@ -853,7 +855,7 @@ scripts/
 
 **Rationale:** DOA needs time-delay estimates between mic pairs. GCC-PHAT (Generalized Cross-Correlation with Phase Transform) is the standard approach: FFT both signals, compute `X1 * conj(X2) / |X1 * conj(X2)|`, IFFT, find peak.
 
-- [ ] **Step 1: Add rustfft dependency**
+- [x] **Step 1: Add rustfft dependency**
 
   Modify `crates/waved-audio/Cargo.toml` `[dependencies]` section — add:
 
@@ -861,7 +863,7 @@ scripts/
   rustfft = "6.2"
   ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
   Create `crates/waved-audio/src/doa/gcc_phat.rs`:
 
@@ -1004,13 +1006,13 @@ scripts/
   pub mod doa;
   ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
   Run: `cargo test -p waved-audio doa::gcc_phat`
 
   Expected: 4/4 pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add crates/waved-audio/Cargo.toml
@@ -1029,7 +1031,7 @@ scripts/
 
 **Rationale:** given TDOAs from ≥3 pairs, solve for the source's unit direction vector in Cartesian. Uses the linear relation `τ_ij · c = (p_i - p_j) · d_hat` → overdetermined system, solve via normal equations.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Create `crates/waved-audio/src/doa/solve.rs`:
 
@@ -1206,13 +1208,13 @@ scripts/
   pub use solve::{DoaAngles, PairObservation};
   ```
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
   Run: `cargo test -p waved-audio doa::solve`
 
   Expected: 5/5 pass.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```bash
   git add crates/waved-audio/src/doa/
@@ -1229,7 +1231,7 @@ scripts/
 
 **Rationale:** tie GCC-PHAT + solver + VAD + EWMA smoothing into a single per-frame `update(frame)` call. The estimator owns state (previous smoothed angles, VAD history) and selects which 4 mic pairs to use from geometry.
 
-- [ ] **Step 1: Write VAD helper**
+- [x] **Step 1: Write VAD helper**
 
   Create `crates/waved-audio/src/doa/vad.rs`:
 
@@ -1284,7 +1286,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 2: Write DoaEstimator tests**
+- [x] **Step 2: Write DoaEstimator tests**
 
   Replace `crates/waved-audio/src/doa/mod.rs` with:
 
@@ -1508,13 +1510,13 @@ scripts/
   }
   ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
   Run: `cargo test -p waved-audio doa`
 
   Expected: VAD 2/2 + gcc_phat 4/4 + solve 5/5 + doa 4/4 = 15/15 pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add crates/waved-audio/src/doa/
@@ -1531,7 +1533,7 @@ scripts/
 
 **Rationale:** bump config to version 3, attach the tear-down geometry as a serializable field (defaulting to the embedded Wave geometry when absent). Keeps v2 JSONs working via `serde(default)` on the new field and simultaneous tolerance of `version: 2` during migration — see test.
 
-- [ ] **Step 1: Extend the tests**
+- [x] **Step 1: Extend the tests**
 
   Modify `crates/waved-audio/src/audio_config.rs` — in the test module, add:
 
@@ -1571,7 +1573,7 @@ scripts/
 
   Note: replace the existing `rejects_wrong_version` test (which expected v1 rejected) — change its `"version":1` to `"version":5` to keep it meaningful and not overlap with the new test.
 
-- [ ] **Step 2: Implement v3 schema**
+- [x] **Step 2: Implement v3 schema**
 
   Modify `crates/waved-audio/src/audio_config.rs`:
 
@@ -1608,7 +1610,7 @@ scripts/
 
   - Remove or adjust the `embedded_default_parses_and_is_version_2` test (rename to `..._v3`) — the existing test's version assertion will fail once we change the JSON.
 
-- [ ] **Step 3: Update default JSON**
+- [x] **Step 3: Update default JSON**
 
   Modify `crates/waved-audio/config/audio_config_default.json`:
 
@@ -1636,13 +1638,13 @@ scripts/
 
   The geometry is omitted from JSON — `serde(default = "default_mic_geometry")` synthesizes it via `MicGeometry::default()`. This keeps the JSON file human-editable without embedding the long mic-position table.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
   Run: `cargo test -p waved-audio audio_config`
 
   Expected: all tests pass (existing `embedded_default_*`, `accepts_playback_only`, `load_or_default_valid_file_uses_file` need their JSONs updated to `"version": 3` — fix any failures by updating test JSONs to v3 inline).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add crates/waved-audio/src/audio_config.rs
@@ -1660,7 +1662,7 @@ scripts/
 
 **Rationale:** `NoiseReduction` overlaps conceptually with `NrLevel`. Removing it collapses the UI to "Omni + NrLevel knob" which is the clean model. One-time migration handles persisted state files.
 
-- [ ] **Step 1: Write the failing test in waved-state**
+- [x] **Step 1: Write the failing test in waved-state**
 
   Modify `crates/waved-state/src/lib.rs` — in the test module, replace the existing `assert_eq!(AudioMode::default(), AudioMode::NoiseReduction)` line and the `state_bus_creates_with_defaults` mode assertion:
 
@@ -1683,7 +1685,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 2: Implement the enum change**
+- [x] **Step 2: Implement the enum change**
 
   Modify `crates/waved-state/src/lib.rs`:
 
@@ -1700,7 +1702,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 3: Scan dependents and update**
+- [x] **Step 3: Scan dependents and update**
 
   Run: `cargo build --workspace 2>&1 | grep -E "NoiseReduction|error\[" | head -20`
 
@@ -1709,7 +1711,7 @@ scripts/
   - If it's default-value construction: remove; `AudioMode::default()` now yields Omni.
   - If it's a persisted-state deserialize path in `waved/src/main.rs`: see Step 4 below.
 
-- [ ] **Step 4: One-shot state migration at waved boot**
+- [x] **Step 4: One-shot state migration at waved boot**
 
   Modify `crates/waved/src/main.rs` — in the code path that loads persisted `AudioState` (or whatever the current load point is; if no persistence yet exists, this step becomes a no-op and can be skipped):
 
@@ -1727,13 +1729,13 @@ scripts/
 
   If no such load path exists yet (state isn't persisted), this step is a no-op; the only concern is runtime defaults, already covered.
 
-- [ ] **Step 5: Run all tests**
+- [x] **Step 5: Run all tests**
 
   Run: `cargo test --workspace`
 
   Expected: entire workspace passes. Fix any stragglers referencing `NoiseReduction`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
   ```bash
   git add crates/waved-state/src/lib.rs
@@ -1751,7 +1753,7 @@ scripts/
 
 **Rationale:** Stereo mode produces two mic channels; the existing mono-only field doesn't carry them. Add `mic_stereo_f32: Option<(Vec<f32>, Vec<f32>)>` so downstream consumers that want stereo (future meeting recorder) can get it, while the mono consumers (stats, uplink) keep reading `mic_mono_f32` unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Modify `crates/waved-audio/src/processed_frame.rs` — extend `#[cfg(test)] mod tests` with:
 
@@ -1792,7 +1794,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 2: Implement the extension**
+- [x] **Step 2: Implement the extension**
 
   Modify `crates/waved-audio/src/processed_frame.rs`:
 
@@ -1832,13 +1834,13 @@ scripts/
     }
     ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
   Run: `cargo test -p waved-audio processed_frame`
 
   Expected: 3 new tests pass, existing tests still pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
   ```bash
   git add crates/waved-audio/src/processed_frame.rs
@@ -1854,7 +1856,7 @@ scripts/
 
 **Rationale:** insert the beamformer before AEC in `process_frame`, drive it with the current DOA, write DOA back to `AudioState`. `Command::SetAudioMode` now affects `bf.set_mode(...)` instead of being state-only.
 
-- [ ] **Step 1: Write integration test**
+- [x] **Step 1: Write integration test**
 
   Modify `crates/waved-audio/src/lib.rs` — in the existing test module, add:
 
@@ -1903,7 +1905,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 2: Wire beamformer + DOA into AudioService**
+- [x] **Step 2: Wire beamformer + DOA into AudioService**
 
   Modify `crates/waved-audio/src/lib.rs`:
 
@@ -2078,19 +2080,19 @@ scripts/
     }
     ```
 
-- [ ] **Step 3: Run workspace tests**
+- [x] **Step 3: Run workspace tests**
 
   Run: `cargo test --workspace`
 
   Expected: all tests including the new `audio_service_applies_beamformer_before_aec` pass. The existing echo-cancellation test `audio_service_process_frame_cancels_echo` should also still pass (it sends 8-ch data so the new 8-ch path runs, then AEC).
 
-- [ ] **Step 4: Cross-compile check**
+- [x] **Step 4: Cross-compile check**
 
   Run: `cross build --target aarch64-unknown-linux-gnu -p waved --release`
 
   Expected: clean build. If rustfft pulls in anything that breaks cross, pin its feature flags in `Cargo.toml` (`rustfft = { version = "6.2", default-features = false }`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add crates/waved-audio/src/lib.rs
@@ -2110,7 +2112,7 @@ scripts/
 
 **Rationale:** produce the ALSA channel → physical-mic permutation table by recording 12 s while the operator taps each mic hole in order. Emits `/tmp/mic_map.json`, which the operator copies into `mic_geometry.alsa_to_physical` and commits.
 
-- [ ] **Step 1: Create the crate**
+- [x] **Step 1: Create the crate**
 
   Create `crates/waved-mic-map/Cargo.toml`:
 
@@ -2129,7 +2131,7 @@ scripts/
 
   Modify workspace root `Cargo.toml` to add `crates/waved-mic-map` to `members`.
 
-- [ ] **Step 2: Write the harness**
+- [x] **Step 2: Write the harness**
 
   Create `crates/waved-mic-map/src/main.rs`:
 
@@ -2278,7 +2280,7 @@ scripts/
   }
   ```
 
-- [ ] **Step 3: Add host-side wrapper script**
+- [x] **Step 3: Add host-side wrapper script**
 
   Create `scripts/tap-mic-map.sh`:
 
@@ -2325,13 +2327,13 @@ scripts/
   chmod +x scripts/tap-mic-map.sh
   ```
 
-- [ ] **Step 4: Cross-compile check**
+- [x] **Step 4: Cross-compile check**
 
   Run: `cross build -p waved-mic-map --release --target aarch64-unknown-linux-gnu`
 
   Expected: clean build.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add crates/waved-mic-map/
@@ -2340,7 +2342,7 @@ scripts/
   git commit -m "feat(audio): SP#3 — waved-mic-map tap harness for ALSA→physical mapping"
   ```
 
-- [ ] **Step 6: Run the harness against hardware (device-touching, one-shot)**
+- [x] **Step 6: Run the harness against hardware (device-touching, one-shot)**
 
   ```bash
   scripts/tap-mic-map.sh
@@ -2370,7 +2372,7 @@ scripts/
 
 **Rationale:** spec §9.2 defines three acceptance tests: front-to-back ratio ≥ 10 dB, DOA accuracy ≤ 10°, beam CPU < 5%. This script produces pass/fail on device.
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
   Create `scripts/test-beamforming.sh`:
 
@@ -2477,14 +2479,14 @@ scripts/
 
   **Note on `set_mode`:** the stub above writes to `/tmp/waved-command.json`; if waved has no such RPC injection path, adjust the script to modify persisted state + restart waved (SP#2's test-aec-on-device.sh does similar — follow that pattern). The mode-switching mechanic is not SP#3's deliverable; use whatever is available.
 
-- [ ] **Step 2: Commit the script**
+- [x] **Step 2: Commit the script**
 
   ```bash
   git add scripts/test-beamforming.sh
   git commit -m "test(audio): SP#3 — on-device beamforming acceptance tests"
   ```
 
-- [ ] **Step 3: Run the acceptance tests on hardware**
+- [x] **Step 3: Run the acceptance tests on hardware**
 
   Prep: Bluetooth speaker, tape marks at 0°/90°/180°/270° and 1 m from device, 1 kHz tone + speech-band audio ready to play.
 
