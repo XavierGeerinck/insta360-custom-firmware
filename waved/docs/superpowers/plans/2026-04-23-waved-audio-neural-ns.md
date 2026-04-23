@@ -251,11 +251,49 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
 ---
 
-## Task 3: Cross-compile `onnxruntime` with VSI-NPU EP
+## Task 3: Cross-compile `onnxruntime` with VSI-NPU EP — BLOCKED (2026-04-23)
+
+> **Status: blocked, deferred.** After eight iterations on toolchain and
+> upstream-patch issues, three genuine ORT 1.22.0 bugs in the VSI-NPU EP
+> cross-compile path remain:
+>
+> 1. `cmake/deps.txt` pins a stale SHA1 for gitlab's eigen archive — gitlab
+>    regenerates tarballs non-deterministically. Patched in the build script
+>    to the currently-served hash.
+> 2. `vsinpu_execution_provider.cc:87` references `logger` where the in-scope
+>    name is `logger_` — compile error. Patched in the build script to use
+>    `*GetLogger()`.
+> 3. `cmake/onnxruntime_providers_vsinpu.cmake` only calls
+>    `target_link_libraries(... ${TIMVX_LIBRARY})` in the non-cross-compile
+>    branch; the cross-compile branch stashes the library in `CMAKE_CXX_FLAGS`
+>    but ninja doesn't propagate that to the final shared-library link step.
+>    libonnxruntime.so fails to link with undefined `tim::vx::*` symbols.
+>
+> The pattern (every fix exposes the next bug, consistently in the VSI-NPU
+> EP specifically) says the upstream VSI-NPU EP is currently only tested on
+> host x86_64 with TIM-VX simulator. Fixing issue #3 would require patching
+> ORT's cmake, and the probability of hitting further cross-compile bugs
+> downstream (there were ~667 more files to compile past the source bug)
+> is high.
+>
+> **Pivot**: Task 3' — TIM-VX-direct from Rust. We already have working
+> `libtim-vx.so` on device (Task 2). Writing a small C++ FFI bridge that
+> loads a pre-compiled `.nb` model and runs one inference per frame is a
+> **bounded** amount of work; the ORT+VSI-EP path is not. Trade-off: we
+> lose the ability to load arbitrary ONNX files automatically, and need
+> a host-side Acuity (or TIM-VX API) to produce the `.nb`. For a single
+> model (DFN3), that's acceptable.
+>
+> The original Task 3 remains documented below for future reference /
+> re-attempt once VSI-NPU EP matures upstream.
+>
+> ---
+
+## Task 3 (original, blocked): Cross-compile `onnxruntime` with VSI-NPU EP
 
 **Files:**
 - Create: `scripts/build-onnxruntime-vsinpu.sh`
-- Create: `third_party/onnxruntime/` (git submodule or vendored, pinned to `v1.18.0`)
+- Create: `third_party/onnxruntime/` (shallow clone, pinned to `v1.22.0` — v1.22.0 in the original draft predated the VSI-NPU EP, which landed in v1.19.0)
 - Modify: `Cross.toml` — add a second target image entry `[target.aarch64-unknown-linux-gnu.env.volumes]` to share `target/ort/` with the cross container
 
 **Rationale:** We need a `libonnxruntime.so` that contains the VSI-NPU provider. Upstream `ort` crate 2.x links dynamically against the system `libonnxruntime.so`, so we only need to ship the .so. Our own ORT build must link against the TIM-VX .so from Task 2 at runtime (or statically, to avoid dual-.so drift).
@@ -263,7 +301,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 - [ ] **Step 1: Pin ORT source + build script**
 
   ```bash
-  git submodule add -b v1.18.0 https://github.com/microsoft/onnxruntime.git third_party/onnxruntime
+  git submodule add -b v1.22.0 https://github.com/microsoft/onnxruntime.git third_party/onnxruntime
   ```
 
   `scripts/build-onnxruntime-vsinpu.sh`:
@@ -306,7 +344,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
   On host (fastest):
 
   ```bash
-  strings target/ort/libonnxruntime.so.1.18.0 | grep -E 'VsiNpuExecutionProvider|VSI_NPU'
+  strings target/ort/libonnxruntime.so.1.22.0 | grep -E 'VsiNpuExecutionProvider|VSI_NPU'
   ```
 
   Expected: at least one match.
@@ -315,8 +353,8 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
   ```bash
   adb shell "mkdir -p /data/waved/lib"
-  adb push target/ort/libonnxruntime.so.1.18.0 /data/waved/lib/
-  adb shell "cd /data/waved/lib && ln -sf libonnxruntime.so.1.18.0 libonnxruntime.so"
+  adb push target/ort/libonnxruntime.so.1.22.0 /data/waved/lib/
+  adb shell "cd /data/waved/lib && ln -sf libonnxruntime.so.1.22.0 libonnxruntime.so"
   ```
 
   Quick smoke (from Python or a tiny C++ client) to confirm the .so loads and `ort_api->GetProvider()` includes `VsiNpuExecutionProvider`. A minimal Rust check using `ort` crate is also fine — this is plumbing, not a formal test.
@@ -351,7 +389,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
 - [ ] **Step 2: Extend `waved-npu-probe` with `--load <model>`**
 
-  Uses the `ort` crate against the OUR `/data/waved/lib/libonnxruntime.so.1.18.0` (set via `LD_LIBRARY_PATH` or by passing `--path` at session-create time). Registers VSI-NPU EP first, CPU second. Feeds the same known input as step 1. Compares output against the golden reference within 1e-3 absolute (int8 quantisation will introduce some delta; 1e-3 is forgiving enough to not flake).
+  Uses the `ort` crate against the OUR `/data/waved/lib/libonnxruntime.so.1.22.0` (set via `LD_LIBRARY_PATH` or by passing `--path` at session-create time). Registers VSI-NPU EP first, CPU second. Feeds the same known input as step 1. Compares output against the golden reference within 1e-3 absolute (int8 quantisation will introduce some delta; 1e-3 is forgiving enough to not flake).
 
 - [ ] **Step 3: Run on device**
 
@@ -433,7 +471,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 ## Task 6: `OrtInfer` implementation in `waved-npu`
 
 **Files:**
-- Modify: `crates/waved-npu/Cargo.toml` — add `ort = "2"` dependency with `load-dynamic` feature so it uses our `/data/waved/lib/libonnxruntime.so.1.18.0` at runtime, not linked statically
+- Modify: `crates/waved-npu/Cargo.toml` — add `ort = "2"` dependency with `load-dynamic` feature so it uses our `/data/waved/lib/libonnxruntime.so.1.22.0` at runtime, not linked statically
 - Modify: `crates/waved-npu/src/lib.rs`
 - Modify: `crates/waved-npu/src/providers.rs`
 
@@ -814,7 +852,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
   Outline:
 
-  1. Build + push `waved`, `libonnxruntime.so.1.18.0`, `deepfilternet3.onnx` to device.
+  1. Build + push `waved`, `libonnxruntime.so.1.22.0`, `deepfilternet3.onnx` to device.
   2. Restart waved (kill watchdog + ALSA-release 8 s from SP#3 experience, same pattern).
   3. Assert `ns_backend == "deep_filter"` in stats. If not, print /tmp/waved.log and FAIL.
   4. **Test 1 — inference latency**: sample `ns_frame_ms` 20× over 10 s; compute 95th percentile; pass if ≤ 5 ms.
