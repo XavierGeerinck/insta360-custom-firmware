@@ -215,7 +215,48 @@ Expected output (on this unit, firmware build Nov 28 2025):
 RESULT: OK — NPU reachable from waved's process.
 ```
 
-### TIM-VX ahead-of-time compile path (resolved 2026-04-23)
+### Host prebuilt SDK is simulator-only (2026-04-23)
+
+Pursuing the AoT path (compile on host, load on device via `ops::NBG`)
+ran into one more wall: **TIM-VX's `prebuilt-sdk/x86_64_linux/` is a CPU
+simulator, not a chip-native compiler.** Evidence:
+
+- `strings libOpenVX.so.1` shows `vSimCustomizedFeature`,
+  `vivSetVSimulatorTarget`, `gVsimulatorTargetID`,
+  `AddCallBackForSimulator`, `isVSimulatorInRunMode` — all simulator
+  machinery.
+- `strings libArchModelSw.so` enumerates only `GC8000NANOULTRA31_vip1`,
+  `GCNANOULTRA31`, `GCNANOULTRA31_VIP2`, `vip7Version: 7` — NPU
+  archmodels for older GC7000-class chips, **no VIP9000**.
+
+On-device NPU is VIP9000Nano-S (pid `0x1000000e`), which this archmodel
+library doesn't know about. The host `CompileToBinary` still produces a
+syntactically valid NBG (magic `VPMN`, 2944 bytes) but the compiled
+kernels inside target simulator semantics. On-device
+`tim::vx::ops::NBG::Compile()` fails at `compute_node:447 Create node[0]
+NBG fail` when trying to instantiate the underlying vx op against real
+silicon.
+
+Also: TIM-VX v1.2.22's bundled NBG format version is `0x0001001e`, but
+its own standalone `nbg_parser.c` only accepts up to `0x00010014` —
+internal inconsistency. For our own loader path (`ops::NBG` directly, no
+standalone parser) this isn't the blocker; the chip-archmodel mismatch
+above is.
+
+**What this means for "own the models"**:
+
+| Path | Unblocked? | Notes |
+|------|-----------|-------|
+| Host AoT compile, device run (OSS stack) | ✗ | Host SDK lacks VIP9000 archmodel |
+| Device-side compile + cache .nb | open | Requires device's libOpenVX to have the compiler + kernel cache; untested |
+| `libnnsdk.so` with chip-native SDK | ✗ NDA | Needs VeriSilicon Acuity Toolkit for this chip |
+| A311D prebuilt SDK from TIM-VX | untested | VIP9000 is different IP family from A311D's GCNANOULTRA31 — unlikely to help but cheap to try |
+
+Short of getting a VIP9000-native SDK (VeriSilicon/Amlogic/Insta360
+relationship), fully open-source host-side NPU compilation is not
+viable on this silicon.
+
+### TIM-VX ahead-of-time compile path (mapped 2026-04-23)
 
 Probing during SP#4 established the working path:
 
