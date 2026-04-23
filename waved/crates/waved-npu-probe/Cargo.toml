@@ -1,0 +1,11 @@
+[package]
+name = "waved-npu-probe"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "waved-npu-probe"
+path = "src/main.rs"
+
+[dependencies]
+libloading = "0.8"

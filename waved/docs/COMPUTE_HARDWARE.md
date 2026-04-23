@@ -169,10 +169,41 @@ vanilla CPU build. Our choices for NPU inference:
 Route 1 is the default recommendation: biggest model-import surface
 (any ONNX), open source, fits existing ML-ops tooling.
 
+### NPU proof-of-life (validated 2026-04-23)
+
+Our own process can open `/dev/galcore`, dlopen `libOpenVX.so` +
+`libovxlib.so`, call `vxCreateContext()` and `vsi_nn_CreateContext()`,
+and get back non-null handles. Release is clean. No kill-stock dance
+required in the steady state (we happen to have killed `audioserver`
+indirectly via earlier watchdog kills, so this measurement doesn't
+tell us whether stock holds an exclusive NPU lock during normal boot —
+worth a re-check once we start SP#4 with everything running).
+
+Reproduce:
+
+```bash
+cross build -p waved-npu-probe --release --target aarch64-unknown-linux-gnu
+adb push target/aarch64-unknown-linux-gnu/release/waved-npu-probe /data/waved/
+adb shell /data/waved/waved-npu-probe
+```
+
+Expected output (on this unit, firmware build Nov 28 2025):
+
+```text
+[1] /dev/galcore                        OK
+[2] dlopen libOpenVX.so                  OK
+[3] vxCreateContext / vxReleaseContext   OK
+[4] vxCreateContext()                    OK — handle ~0x7f8...
+[5] vxReleaseContext()                   OK — status 0
+[7] dlopen libovxlib.so                  OK
+[8] vsi_nn_CreateContext()               OK — handle ~0x559...
+RESULT: OK — NPU reachable from waved's process.
+```
+
 ### Finding which stock process holds the NPU
 
-If waved tries to open `/dev/galcore` but is blocked, audit which stock
-process has it:
+If a future probe run fails at step 1 or 4, audit which stock process
+has `/dev/galcore` open:
 
 ```bash
 adb shell "for p in /proc/[0-9]*/fd; do
@@ -184,7 +215,8 @@ done"
 ```
 
 Same pattern as the ALSA / S60waved watchdog dance — kill the
-conflicting stock service before launching waved's NPU path.
+conflicting stock service (likely `audioserver`) before launching
+waved's NPU path.
 
 ## Related docs
 
