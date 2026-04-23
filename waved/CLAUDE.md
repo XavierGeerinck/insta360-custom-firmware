@@ -9,13 +9,14 @@ array, touch input, Bluetooth and Wi-Fi.
 Keep these docs authoritative for anything device-specific — values here come
 from on-device measurement and are hard to rederive.
 
-| Area             | Doc                                   |
-|------------------|---------------------------------------|
-| Circular OLED    | [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md) |
-| 8-mic array, DOA | [`docs/AUDIO_HARDWARE.md`](docs/AUDIO_HARDWARE.md)     |
-| UI assets        | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md)               |
-| UI coordinates   | [`docs/ui/COORDINATE_SYSTEM.md`](docs/ui/COORDINATE_SYSTEM.md) |
-| Home screen      | [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md)     |
+| Area              | Doc                                   |
+|-------------------|---------------------------------------|
+| Circular OLED     | [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md) |
+| 8-mic array, DOA  | [`docs/AUDIO_HARDWARE.md`](docs/AUDIO_HARDWARE.md)     |
+| Compute (NPU/DSP) | [`docs/COMPUTE_HARDWARE.md`](docs/COMPUTE_HARDWARE.md) |
+| UI assets         | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md)               |
+| UI coordinates    | [`docs/ui/COORDINATE_SYSTEM.md`](docs/ui/COORDINATE_SYSTEM.md) |
+| Home screen       | [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md)     |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
