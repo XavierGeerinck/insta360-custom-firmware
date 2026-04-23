@@ -14,3 +14,4 @@ scripts/results/
 # Vendored third-party sources (reproducible via scripts/build-*.sh)
 /third_party/
 /models/*.onnx
+/third_party/vip9000-sdk/

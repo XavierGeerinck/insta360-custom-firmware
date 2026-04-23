@@ -243,6 +243,68 @@ internal inconsistency. For our own loader path (`ops::NBG` directly, no
 standalone parser) this isn't the blocker; the chip-archmodel mismatch
 above is.
 
+### eYs3D eCV5546 VIP9000 SDK — massive de-risking (2026-04-23)
+
+The `eYs3D/eCV5546_rootfs` repo on GitHub ships the complete aarch64
+VeriSilicon VIP9000 userspace SDK at versions **6.4.15.9** and
+**6.4.18.5** under
+`initramfs/prebuilt/vip9000sdk/<ver>/`. This includes everything we
+concluded was missing above:
+
+- `libNNVXCBinary.so` (87 MB) and `libNNGPUBinary.so` (33 MB) —
+  pre-compiled kernel binaries for every NN op
+- `libOvx12VXCBinary.so`, `libOvxGPUVXCBinary.so` — OpenVX 1.2 kernels
+- `libArchModelSw.so` with **actual VIP9000 archmodel** (vs TIM-VX's
+  GC7000-only prebuilt)
+- `libOpenVX.so.1.3.0` (6.8 MB) — OpenVX runtime *built with the NN
+  binary subsystem enabled*
+- `libovxlib.so`, `libGAL.so`, `libVSC.so`, `libCLC.so`, `libSPIRV_viv.so`,
+  `libGLSLC.so`, `libtim-vx.so` — full aarch64 Vivante stack
+- `include/CL/cl_viv_vx_ext.h` — the OpenCL Vivante extension header
+- Full `include/ovxlib/` tree — complete userspace API
+
+Plus the companion `eYs3D/eCV5546_linux` kernel tree ships the galcore
+**driver source** at 6.4.18.5 and 6.4.15.9 under
+`drivers/media/platform/eys3d/vip9000/v<ver>/`. Its
+`gc_feature_database.h` identifies our exact chip: **`vip9000nano-di+`**
+(ChipID `0x9000`, Rev `0x9002`, ProductID `0x5090009`).
+
+**Our chip matches.** License-wise, these are proprietary VeriSilicon
+binaries that eYs3D publishes with their product's redistribution
+permission — same binaries Insta360 ships on every Wave (just from a
+different redistributor, complete rather than stripped).
+
+### Why the SDK alone doesn't unblock us: user/kernel version skew
+
+Attempting to use the 6.4.18.5 userspace against our device's 6.4.19
+galcore kernel driver (tested 2026-04-23) produces consistent failures:
+
+- Full 6.4.18.5 stack → `HAL user 6.4.18.886827 / HAL kernel
+  6.4.19.946407` warning, then `vsi_nn_AddTensor` returns
+  `VSI_NN_TENSOR_ID_NA` at every tensor create. Tensor-allocation ioctl
+  between 6.4.18 libovxlib and 6.4.19 galcore is incompatible.
+- Pure 6.4.18.5 libOpenVX with device libGAL/libVSC → hangs at context
+  create.
+- Device userspace with only 6.4.18.5 `libNN*Binary.so` blobs added →
+  silent Compile fail. Reason via `LD_DEBUG=libs`: Insta360's libOpenVX
+  **never dlopens** `libNNVXCBinary.so` — it was built without the NN
+  binary subsystem. Dead code in their binary.
+
+**Net**: the 6.4.18.5 SDK is complete and right for this chip family,
+but *not* ABI-compatible with 6.4.19 galcore. We either:
+
+1. **Replace galcore with 6.4.18.5 kernel driver.** Source is public in
+   `eYs3D/eCV5546_linux`. Build as module, `rmmod galcore && insmod
+   galcore.ko`. Then full 6.4.18.5 stack works end-to-end. Risk: NPU
+   driver replacement on a running device; if it misbehaves, might
+   require reboot. Mitigation: galcore is a loadable module, not
+   statically compiled.
+2. **Obtain matching 6.4.19 userspace from Insta360/Amlogic.** Business
+   ask — they clearly have it since stock ASR works with full NN binary
+   loading.
+3. **Find another public 6.4.19 BSP.** Not yet surveyed; Amlogic's own
+   GitHub / linux-meson trees are candidates.
+
 **What this means for "own the models"**:
 
 | Path | State | Notes |
