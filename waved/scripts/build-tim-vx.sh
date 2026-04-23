@@ -59,11 +59,15 @@ docker run --rm \
             -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
             -DBUILD_SHARED_LIBS=ON \
             -DTIM_VX_ENABLE_TEST=OFF \
-            -DTIM_VX_BUILD_EXAMPLES=OFF \
+            -DTIM_VX_BUILD_EXAMPLES=ON \
+            -DTIM_VX_ENABLE_NBG_PARSER=ON \
             -DEXTERNAL_VIV_SDK=/work/third_party/device-sdk \
             -DCMAKE_BUILD_TYPE=Release
-        ninja -v 2>&1 | tail -80
+        ninja -v 2>&1 | tail -30
         cp -v /work/target/tim-vx-build/src/tim/libtim-vx.so /work/target/tim-vx/
+        # Samples produce side-binaries we can push to device for smoke tests.
+        cp -v /work/target/tim-vx-build/samples/nbg_runner/nbg_runner /work/target/tim-vx/ || true
+        cp -v /work/target/tim-vx-build/src/tim/utils/nbg_parser/libnbg_parser.so /work/target/tim-vx/ 2>/dev/null || true
     '
 
 echo ""

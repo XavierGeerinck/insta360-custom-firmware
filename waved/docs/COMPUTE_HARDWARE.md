@@ -215,6 +215,54 @@ Expected output (on this unit, firmware build Nov 28 2025):
 RESULT: OK — NPU reachable from waved's process.
 ```
 
+### TIM-VX runtime ABI mismatch (SP#4 Task 3/4, 2026-04-23)
+
+TIM-VX v1.2.22 cross-builds and loads (see Task 2), but attempting to
+**use** its runtime — create a context, then a tensor — fails on this
+chip:
+
+```
+tim_vx_smoke: create context... E [vsi_nn_context.c:query_hardware_caps:55]
+  CHECK STATUS(-10:The supplied parameter information does not match the
+  kernel contract.)
+OK (context object returned but poisoned)
+tim_vx_smoke: create graph... OK
+E [tensor.cc:Init:447]Create tensor fail!
+```
+
+TIM-VX's hardware-capability query emits an ioctl that galcore 6.4.19
+on chip rev 0x9002 rejects as a contract mismatch. The context is
+returned non-null (no fail-fast in TIM-VX) but tensor creation fails
+downstream. Also: stock `.nb` files use a newer NBG format than
+TIM-VX v1.2.22 parses (`NBG parser is forward compatible with NBG
+format, please update NBG parser in time`), so `tim::vx::ops::NBG`
+can't load them either.
+
+This is a **chip/driver/TIM-VX triple mismatch** not patchable from
+our userspace. Consequences:
+- TIM-VX `Context::Create()` unusable on this Wave unit.
+- `tim::vx::ops::NBG` can't load stock `.nb` (format too new).
+- ORT 1.22's VSI-NPU EP (even if its cross-compile bugs were fixed)
+  would hit this same query at runtime.
+
+Stock firmware avoids all of this because `libnnsdk.so` was compiled
+against the exact chip/driver combo it ships with. The `vsi_nn_*` API
+surface (which our NPU probe shows works) is the one that initializes
+cleanly.
+
+**Viable NPU paths remain:**
+1. Call `libnnsdk.so` directly from Rust FFI (same as stock). Proved
+   reachable in `waved-npu-probe`. Requires `.nb` files, which require
+   VeriSilicon Acuity Toolkit (NDA) to produce from ONNX.
+2. Call `libovxlib.so` directly via `vsi_nn_*` API. Same `.nb` /
+   Acuity requirement.
+3. Newer TIM-VX from upstream main (post-v1.2.22) — may have updated
+   the kernel-contract query. Untested.
+
+**Dead paths:**
+- TIM-VX v1.2.22 runtime — kernel contract mismatch.
+- ORT 1.22.0 + VSI-NPU EP — cross-compile bugs + same runtime issue.
+
 ### Finding which stock process holds the NPU
 
 If a future probe run fails at step 1 or 4, audit which stock process
