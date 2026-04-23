@@ -1,0 +1,7 @@
+[package]
+name = "waved-npu"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1"

@@ -73,7 +73,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
 **Rationale:** Land the public API surface before we sink time into the ORT build. Tasks 2/3 can fail and we still keep a type-checked trait that `DeepFilterNs` (Task 7) can compile against, using only the CPU EP from the `ort` crate's default build.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
   Create `crates/waved-npu/src/lib.rs`:
 
@@ -155,7 +155,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
   No `ort` dependency yet — added in Task 6 once the real ORT build exists.
 
-- [ ] **Step 2: Run tests**
+- [x] **Step 2: Run tests**
 
   ```bash
   cargo test -p waved-npu
@@ -163,7 +163,7 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
   Expected: 2 passing.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
   ```
   feat(npu): SP#4 — waved-npu crate scaffold + NpuInfer trait
