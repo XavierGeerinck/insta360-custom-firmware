@@ -117,23 +117,74 @@ If the VSI-NPU EP lacks an op DFN3 needs, fall back to the Acuity path
   A55 can deliver. NPU should cover NS + dereverb with plenty of
   headroom.
 
-## Seeing what stock uses the NPU for
+## Stock audio stack (what uses the NPU today)
 
-Stock firmware (`/data/main_processor` or whichever binary) links
-`libovxlib.so` / `libGAL.so`. Quick audit:
+The stock NPU consumer is `/usr/bin/audioserver` (~398 KB ELF). Its
+library graph:
+
+```
+/usr/bin/audioserver
+├─ libInstaAudio.so           — Insta360 audio pipeline glue
+├─ libTEAProcessSdk.so (8.1M) — Tencent Enhanced Audio SDK
+│                               (NS / enhancement / AEC, proprietary)
+├─ libbva_audio.so     (1.9M) — secondary audio component
+├─ liblibspai_mic_sigp.so     — SPAI mic-signal processing
+├─ libonnxruntime.so.1.15.1   — CPU-only ORT build, no VSI-NPU EP
+└─ libnnsdk.so ──► libovxlib.so ──► /dev/galcore ──► NPU
+```
+
+Model-to-backend mapping:
+
+| Model path | Format | Backend |
+|------------|--------|---------|
+| `/model/vad/silero_vad_v5.onnx` | ONNX | `libonnxruntime` (CPU) |
+| `/model/asr_*/*.nb` | Vivante `.nb` | `libnnsdk` → NPU |
+| `/model/diarization/campp_118_cn_en_fp16.nb` | fp16 `.nb` | `libnnsdk` → NPU |
+| `/model/punc_model/*.nb`, `/model/punc_mino/*.nb` | `.nb` | `libnnsdk` → NPU |
+
+**There is no dedicated NS/dereverb model in `/model/`.** Stock noise
+suppression almost certainly lives inside `libTEAProcessSdk.so` (Tencent
+TEA), running on the A55 cores. The NPU is reserved for ASR, punctuation,
+and diarization.
+
+### What this means for waved SP#4
+
+The on-device `libonnxruntime.so.1.15.1` cannot reach the NPU — it's a
+vanilla CPU build. Our choices for NPU inference:
+
+1. **Build our own ORT with the VSI-NPU EP.** VeriSilicon maintains the
+   provider at github.com/microsoft/onnxruntime under
+   `onnxruntime/core/providers/vsinpu`. It depends on TIM-VX, which
+   depends on `libovxlib.so` + `/dev/galcore` (both on-device). Output:
+   a drop-in `libonnxruntime.so.1.16+` or our own crate-level wrapper.
+2. **Call `libovxlib.so` via TIM-VX directly from Rust.** TIM-VX
+   (github.com/VeriSilicon/TIM-VX) is VeriSilicon's open-source C++ API.
+   Smaller footprint than ORT, but we'd have to construct the DFN3
+   graph layer-by-layer instead of loading an ONNX.
+3. **Reuse stock `libnnsdk.so` directly.** It exports the standard
+   VeriSilicon `vsi_nn_*` symbols. Simplest at runtime, but we still
+   need `.nb` files to feed it — which brings back the Acuity toolkit
+   dependency.
+
+Route 1 is the default recommendation: biggest model-import surface
+(any ONNX), open source, fits existing ML-ops tooling.
+
+### Finding which stock process holds the NPU
+
+If waved tries to open `/dev/galcore` but is blocked, audit which stock
+process has it:
 
 ```bash
-adb shell "for p in /proc/[0-9]*; do
-  if grep -q libovxlib /proc/\${p##*/}/maps 2>/dev/null; then
-    echo \"\${p##*/}: \$(cat \$p/comm)\"
+adb shell "for p in /proc/[0-9]*/fd; do
+  pid=\${p%/fd}; pid=\${pid##*/}
+  if ls -la \$p 2>/dev/null | grep -q galcore; then
+    echo \"pid=\$pid comm=\$(cat /proc/\$pid/comm 2>/dev/null)\"
   fi
 done"
 ```
 
-This is how to find which stock process is holding the NPU context — an
-`/dev/galcore` open can serialise access, so we may need to kill stock
-ASR before waved can claim the NPU (same pattern as the S60waved
-watchdog interaction for ALSA).
+Same pattern as the ALSA / S60waved watchdog dance — kill the
+conflicting stock service before launching waved's NPU path.
 
 ## Related docs
 
