@@ -57,13 +57,50 @@ ALSA 8ch interleaved f32
 
 | Pair  | Baseline                    | Observes          |
 |-------|-----------------------------|-------------------|
-| (0,2) | top 45° ↔ top 225°          | +X+Y diagonal, horizontal |
-| (1,3) | top 135° ↔ top 315°         | −X+Y diagonal, horizontal |
-| (0,6) | top 45° ↔ bot 225°          | full 3D diagonal  |
-| (1,7) | top 135° ↔ bot 315°         | full 3D diagonal  |
+| (0,2) | top 45°  ↔ top 225°         | +X+Y horizontal diagonal |
+| (1,3) | top 135° ↔ top 315°         | −X+Y horizontal diagonal |
+| (0,4) | top 45°  ↔ bot 45°          | pure-Z column, +X+Y side |
+| (2,6) | top 225° ↔ bot 225°         | pure-Z column, −X−Y side |
 
-The two top-ring pairs span the XY plane; the cross-ring pairs add a vertical
-baseline so elevation is observable.
+Two top-ring pairs span the XY plane; two pure-Z (same-XY, different-Z)
+pairs give elevation. We deliberately do **not** use the longer 3D
+diagonals like (0,6) or (1,7) — see next section.
+
+### Cross-ring pair acoustic shadow (why not (0,6)/(1,7))
+
+Earlier iterations used the 3D diagonals `(0,6) = top 45°↔bot 225°` and
+`(1,7) = top 135°↔bot 315°` for elevation because their 90 mm baselines
+are the longest available and looked best on paper. On-device 4-compass
+validation with `WAVED_DOA_DEBUG=100` showed the two diagonals are
+*mutually inconsistent* — they disagree on elevation by 15–25° at every
+azimuth, sometimes with opposite sign:
+
+| Source az | (0,6) implies el | (1,7) implies el | Truth |
+|-----------|------------------|------------------|-------|
+| 0° (front)  | +17°           | −8°              | 0°    |
+| 90° (left)  | +50°           | +35°             | 0°    |
+| 180° (back) | 0°             | +45°             | 0°    |
+| 270° (right)| 0°             | −38°             | 0°    |
+
+Root cause is body diffraction. The Wave is a ~40 × 40 × 80 mm block of
+electronics/plastic between the top and bottom rings. At audio
+wavelengths (340 mm @ 1 kHz, 85 mm @ 4 kHz) that block is a non-trivial
+acoustic obstruction. Whenever the source is on one hemisphere, the
+bottom mic on the opposite-hemisphere side of a 3D-diagonal pair is in
+the body's shadow — it receives diffracted signal with smeared phase,
+and GCC-PHAT lands on the wrong lag. Because the two diagonals are
+rotated 90° from each other, they experience opposite shadow patterns
+and give contradictory readings.
+
+Pure-Z pairs (0,4), (2,6) sidestep this: both mics in each pair share
+XY, so they see the same acoustic side of the device. Any body-shadow
+effect applies to both equally and cancels out of the time-difference
+estimate. The trade-off is a shorter 78 mm baseline (vs 93 mm for the
+diagonals) — acceptable because τ_max at the edge of elevation is still
+~11 samples at 48 kHz, well within `max_lag_samples = 20`.
+
+This is a device-intrinsic property, not a per-unit manufacturing
+issue. Every Wave has the same body geometry.
 
 ### Sign Conventions (read carefully)
 

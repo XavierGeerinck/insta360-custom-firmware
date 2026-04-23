@@ -13,16 +13,29 @@ use vad::{EnergyVad, Vad};
 /// the diagnostic dump.
 const SPEED_OF_SOUND_M_S: f32 = 343.0;
 
-/// Fixed set of pairs for the 8-mic array. With the physical Wave layout
-/// (two rings at the same 4 diagonal azimuths, stacked vertically), the
-/// two top-ring diagonals span the XY plane; the two cross-ring diagonals
-/// add vertical baselines so elevation is observable. Indexed by PHYSICAL
-/// index (not ALSA); the estimator permutes internally.
+/// Fixed set of pairs for the 8-mic array. Two top-ring horizontal
+/// diagonals give azimuth; two *pure-Z* vertical pairs (same-XY top/bot
+/// mics) give elevation.
+///
+/// We originally used the full 3D diagonals (0,6) and (1,7) for elevation
+/// because they have the longest baseline. On-device 4-compass validation
+/// (see docs/AUDIO_HARDWARE.md § "Cross-ring pair acoustic shadow") showed
+/// those two pairs give mutually inconsistent τ — they disagree on
+/// elevation by 15-25° at every azimuth. Root cause is body-diffraction:
+/// when the source is in one hemisphere, one of the two bottom mics in
+/// each diagonal pair is in the Wave body's acoustic shadow, so its
+/// signal is smeared and GCC-PHAT lands on the wrong lag.
+///
+/// Pure-Z pairs sidestep the issue: both mics in a pair share XY, so they
+/// see the same acoustic side of the device — any shadow applies to both
+/// equally and cancels out of the time-difference estimate.
+///
+/// Indexed by PHYSICAL index (not ALSA); the estimator permutes internally.
 const PAIR_INDICES: [(usize, usize); 4] = [
-    (0, 2), // top 45°  ↔ top 225° (+X+Y diagonal)
-    (1, 3), // top 135° ↔ top 315° (-X+Y diagonal)
-    (0, 6), // top 45°  ↔ bot 225° (full 3D diagonal, +X+Y axis + Z)
-    (1, 7), // top 135° ↔ bot 315° (full 3D diagonal, -X+Y axis + Z)
+    (0, 2), // top 45°  ↔ top 225° (+X+Y horizontal diagonal)
+    (1, 3), // top 135° ↔ top 315° (-X+Y horizontal diagonal)
+    (0, 4), // top 45°  ↔ bot 45°  (pure-Z, +X+Y column)
+    (2, 6), // top 225° ↔ bot 225° (pure-Z, -X-Y column)
 ];
 
 /// Result of a single estimator update.
