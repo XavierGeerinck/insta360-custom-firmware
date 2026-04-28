@@ -9,15 +9,16 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 - [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
 - [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
 - [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
-- [~] **SP#4 — Neural NS + dereverb (DeepFilterNet 3)** — partial. Probing complete, blocked on NPU toolchain:
+- [~] **SP#4 — Neural NS + dereverb (DeepFilterNet 3)** — partial. Probing complete, one version-skew blocker remains:
   - ✅ NPU reachable from our process (`vxCreateContext`, `vsi_nn_CreateContext` — see `crates/waved-npu-probe/`)
   - ✅ TIM-VX cross-compiles + loads on device with `USE_EXTERNAL_OVXLIB=ON` delegating to device's libovxlib
-  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG
-  - ❌ Host prebuilt SDK's archmodel is GC7000-class + CPU simulator; device NPU is VIP9000Nano-S — compiled NBG targets wrong silicon, device-side `ops::NBG` fails at instantiation
-  - ❌ ORT 1.22 + VSI-NPU EP cross-compile — three upstream bugs; same archmodel issue underneath
-  - ❌ Device-side JIT compile: blocked. Device has libVSC/libOpenVX but zero shader source files (`.vx`, `.cl`) — stripped from image since stock only runs pre-compiled NBGs.
-  - Unblocking is external (Acuity Toolkit / Amlogic BSP / Insta360 handoff).
-  - See `docs/COMPUTE_HARDWARE.md` for the full path-status matrix.
+  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG (but TIM-VX prebuilt host SDK targets simulator/GC7000, not our chip)
+  - ✅ **Found public VIP9000-aware userspace SDK** at `github.com/eYs3D/eCV5546_rootfs` (versions 6.4.15.9 + 6.4.18.5; full archmodel + NN binary blobs + headers; aarch64). Companion `eYs3D/eCV5546_linux` has the matching galcore kernel driver source.
+  - ✅ Confirmed our chip is `vip9000nano-di+` (ChipID 0x9000 / Rev 0x9002 / ProductID 0x5090009) from eYs3D's `gc_feature_database.h`.
+  - ❌ Insta360's libOpenVX was built without the NN binary subsystem — adding `libNN*Binary.so` to device doesn't help (never dlopened).
+  - ❌ Mixing 6.4.18.5 userspace with our device's 6.4.19 galcore kernel driver: `vsi_nn_AddTensor` fails (ioctl protocol mismatch); pure-userspace mix hangs at context init.
+  - ❌ ORT 1.22 + VSI-NPU EP cross-compile — three upstream bugs; same archmodel issue underneath.
+  - **Remaining blocker is version skew between Insta360's 6.4.19 galcore kernel driver and the public 6.4.18.5 userspace.** Three paths to unblock (see `docs/COMPUTE_HARDWARE.md`): replace galcore with 6.4.18.5 (source available), find a 6.4.19 userspace from another public BSP, or business ask to Insta360/Amlogic.
 - [ ] SP#5 — Playback EQ + gain staging
 - [ ] SP#6 — UAC2 routing for Wave Controller
 
@@ -38,7 +39,7 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003). Preamp / gain staging belongs in SP#5.
 
 ### SP#4 (Neural NS + dereverb)
-- DeepFilterNet 3 integration (post-beamforming single-channel f32) — blocked on NPU toolchain access (VIP9000 archmodel not in any open SDK). Device-side JIT still an open probe.
+- DeepFilterNet 3 integration (post-beamforming single-channel f32) — blocked on a single version-skew issue (6.4.18.5 public userspace vs our device's 6.4.19 galcore). Both galcore source and userspace binaries are public on `github.com/eYs3D/eCV5546_*` repos.
 
 ### SP#5 (Playback EQ + gain staging)
 - Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.

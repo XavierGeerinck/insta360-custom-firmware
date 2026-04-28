@@ -253,10 +253,18 @@ Risk is concentrated in Tasks 2 + 3 (the cross-compile of ORT against on-device 
 
 ## Task 3: Cross-compile `onnxruntime` with VSI-NPU EP — BLOCKED (2026-04-23)
 
-> **Update 2026-04-23 (same day)**: Task 3 original blockers were three ORT
-> bugs. Pivoted to Task 3' (TIM-VX direct) and proved TIM-VX
+> **Update 2026-04-23 → narrowed blocker**: Task 3 original blockers were
+> three ORT bugs. Pivoted to Task 3' (TIM-VX direct) and proved TIM-VX
 > graph-construction works on device (with `USE_EXTERNAL_OVXLIB=ON`
-> delegating to device's libovxlib). Added host-side `CompileToBinary`
+> delegating to device's libovxlib). Then discovered
+> `github.com/eYs3D/eCV5546_rootfs` ships the complete aarch64 VIP9000
+> userspace SDK at 6.4.18.5 and `eCV5546_linux` ships matching galcore
+> source. Tested on 2026-04-23: 6.4.18.5 userspace ↔ our device's 6.4.19
+> galcore mismatches at the tensor-allocation ioctl. Blocker reduced from
+> "no public toolchain exists" to "single version-skew issue" — see
+> `docs/COMPUTE_HARDWARE.md` for the three-path unblock matrix.
+>
+> Added host-side `CompileToBinary`
 > which produces valid VPMN NBG format. **BUT** — device-side `ops::NBG`
 > load/compile of that NBG fails at node-instantiation because the host
 > prebuilt SDK's archmodel library only knows GC7000-class NPUs + CPU
