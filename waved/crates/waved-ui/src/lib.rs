@@ -103,6 +103,7 @@ fn ui_thread_main(
     let mut recording  = screens::recording::RecordingScreen::new(Arc::clone(&bus));
     let mut settings   = screens::settings::SettingsScreen::new(Arc::clone(&bus));
     let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
+    let mut noise_red  = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
     let mut system     = screens::system::SystemScreen::new(Arc::clone(&bus));
     let mut volume     = screens::volume::VolumeScreen::new(Arc::clone(&bus));
 
@@ -158,6 +159,7 @@ fn ui_thread_main(
                 &mut recording,
                 &mut settings,
                 &mut audio_mode,
+                &mut noise_red,
                 &mut system,
                 &mut volume,
                 &mut return_to_recording,
@@ -209,6 +211,10 @@ fn ui_thread_main(
                 let audio = audio_rx.borrow().clone();
                 unsafe { audio_mode.update_state(&audio); }
             }
+            UiScreen::NoiseReduction => {
+                let audio = audio_rx.borrow().clone();
+                unsafe { noise_red.update_state(&audio); }
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -225,6 +231,7 @@ fn handle_command(
     recording: &mut screens::recording::RecordingScreen,
     settings: &mut screens::settings::SettingsScreen,
     audio_mode: &mut screens::audio_mode::AudioModeScreen,
+    noise_red: &mut screens::noise_reduction::NoiseReductionScreen,
     system: &mut screens::system::SystemScreen,
     volume: &mut screens::volume::VolumeScreen,
     return_to_recording: &mut bool,
@@ -299,6 +306,22 @@ fn handle_command(
                     nav.navigate_to(UiScreen::Settings);
                     nav.set_root(root);
                 }
+                UiScreen::NoiseReduction => {
+                    // NR → back to Home or Recording (entered from Home shortcut).
+                    let _ = noise_red;
+                    if *return_to_recording {
+                        let root = recording.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Recording);
+                        nav.set_root(root);
+                        *prev_recording = true;
+                    } else {
+                        let root = home.create();
+                        unsafe { lv_screen_load(root); }
+                        nav.navigate_to(UiScreen::Home);
+                        nav.set_root(root);
+                    }
+                }
                 UiScreen::Volume => {
                     // Volume → back to Home or Recording (entered from there, not via More).
                     let _ = volume;
@@ -337,6 +360,15 @@ fn handle_command(
             let root = audio_mode.create();
             unsafe { lv_screen_load(root); }
             nav.navigate_to(UiScreen::AudioMode);
+            nav.set_root(root);
+        }
+        Command::OpenNoiseReduction => {
+            // Remember return context (Home vs Recording) so CloseSettings
+            // takes us back to the right place — entered from Home shortcut.
+            *return_to_recording = nav.current == UiScreen::Recording;
+            let root = noise_red.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::NoiseReduction);
             nav.set_root(root);
         }
         _ => {}

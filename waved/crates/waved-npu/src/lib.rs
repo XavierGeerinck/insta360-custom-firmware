@@ -32,6 +32,10 @@ pub trait NpuInfer: Send {
 
 /// DeepFilterNet 3 inference on CPU. Uses the bundled low-latency model
 /// shipped via `default-model-ll`. Single channel, 48 kHz, 10 ms hop.
+///
+/// `atten_lim_db` caps how much attenuation DFN3 applies — 100 dB ≈ no cap
+/// (full enhancement), 12 dB is a gentle floor that keeps a touch of room
+/// tone, 0 dB disables the model entirely (caller should bypass instead).
 pub struct Dfn3CpuInfer {
     model: df::tract::DfTract,
     sr: usize,
@@ -48,8 +52,16 @@ pub struct Dfn3CpuInfer {
 unsafe impl Send for Dfn3CpuInfer {}
 
 impl Dfn3CpuInfer {
+    /// Default — 100 dB attenuation cap (full DFN3 enhancement).
     pub fn new() -> Result<Self> {
-        let r_params = df::tract::RuntimeParams::default();
+        Self::with_atten_lim_db(100.0)
+    }
+
+    /// Construct with a specific attenuation cap (in dB). Maps to DFN3's
+    /// `RuntimeParams::with_atten_lim` — the model mixes back some of the
+    /// noisy signal so output is at most this many dB quieter than input.
+    pub fn with_atten_lim_db(atten_lim_db: f32) -> Result<Self> {
+        let r_params = df::tract::RuntimeParams::default().with_atten_lim(atten_lim_db);
         let df_params = df::tract::DfParams::default();
         let model = df::tract::DfTract::new(df_params, &r_params)
             .context("DfTract::new (bundled default-model-ll)")?;
@@ -57,8 +69,15 @@ impl Dfn3CpuInfer {
         let hop_size = model.hop_size;
         let noisy_buf = Array2::<f32>::zeros((1, hop_size));
         let enh_buf = Array2::<f32>::zeros((1, hop_size));
-        tracing::info!(sr, hop_size, "Dfn3CpuInfer initialized");
+        tracing::info!(sr, hop_size, atten_lim_db, "Dfn3CpuInfer initialized");
         Ok(Self { model, sr, hop_size, noisy_buf, enh_buf })
+    }
+
+    /// Hot-swap the attenuation cap without rebuilding the session — much
+    /// cheaper than `new()` (~1.5 s) so this is the right hook for a live
+    /// NR-strength UI change.
+    pub fn set_atten_lim_db(&mut self, atten_lim_db: f32) {
+        self.model.set_atten_lim(atten_lim_db);
     }
 }
 

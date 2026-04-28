@@ -1,5 +1,6 @@
 pub mod audio_mode;
 pub mod home;
+pub mod noise_reduction;
 pub mod recording;
 pub mod settings;
 pub mod system;

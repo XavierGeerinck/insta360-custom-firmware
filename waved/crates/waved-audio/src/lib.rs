@@ -61,11 +61,13 @@ pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
 /// Build the DSP chain for a given NR level.
 ///
 /// - `NrLevel::Off` → Speex AEC + no NS.
-/// - `NrLevel::{Low, Med, High}` → Speex AEC + neural NS. We try
-///   DeepFilterNet 3 (CPU, tract-NEON) first; on init failure (e.g. tract
-///   couldn't load the bundled model on this target) we fall back to
-///   `SpeexNoiseSuppressor`. SP#4 keeps the speex path compiled in as a
-///   safety net — DFN3 init failure must not crash the audio service.
+/// - `NrLevel::{Low, Med, High}` → Speex AEC + DeepFilterNet 3 (CPU). The
+///   level maps to a DFN3 attenuation-limit cap: gentler levels mix more
+///   of the original noisy signal back in, so the dereverb/NS becomes a
+///   subtle tone-shaping rather than a hard mask.
+///   On DFN3 init failure (e.g. tract couldn't load the bundled model on
+///   this target) we fall back to `SpeexNoiseSuppressor`. SP#4 keeps the
+///   speex path compiled in as a safety net.
 fn build_dsp_chain(
     frame_size: usize,
     sample_rate: u32,
@@ -75,9 +77,25 @@ fn build_dsp_chain(
     let ns: Option<Box<dyn NoiseSuppressor>> = if matches!(nr, NrLevel::Off) {
         None
     } else {
-        Some(build_noise_suppressor(frame_size, sample_rate, &ec))
+        Some(build_noise_suppressor(frame_size, sample_rate, &nr, &ec))
     };
     (Box::new(ec), ns)
+}
+
+/// DFN3 attenuation cap per NR level (in dB).
+///
+/// 100 dB ≈ "no cap" — DFN3 is free to attenuate as much as it wants.
+/// 24 dB ≈ moderate — caps the most aggressive masking; output sits ~−24 dB
+/// below the noisy input at most, leaves a touch of room tone audible.
+/// 12 dB ≈ light — barely-there NS, useful when you want naturalness >
+/// noise-floor.
+fn nr_to_atten_lim_db(nr: &NrLevel) -> f32 {
+    match nr {
+        NrLevel::Off  => 0.0,   // bypass anyway, but a sane number for logging
+        NrLevel::Low  => 12.0,
+        NrLevel::Med  => 24.0,
+        NrLevel::High => 100.0,
+    }
 }
 
 /// DFN3 (CPU) → speex fallback. DFN3 only supports 48 kHz; any other rate
@@ -88,14 +106,18 @@ fn build_dsp_chain(
 fn build_noise_suppressor(
     frame_size: usize,
     sample_rate: u32,
+    nr: &NrLevel,
     ec: &speex::SpeexEchoCanceller,
 ) -> Box<dyn NoiseSuppressor> {
     if sample_rate == 48_000 {
-        match aec::deep_filter::DeepFilterNs::new() {
+        let atten_lim_db = nr_to_atten_lim_db(nr);
+        match aec::deep_filter::DeepFilterNs::with_atten_lim_db(atten_lim_db) {
             Ok(ns) => {
                 tracing::info!(
                     backend = "deep_filter_cpu",
                     frame_size,
+                    nr = ?nr,
+                    atten_lim_db,
                     "neural NS active"
                 );
                 return Box::new(ns);

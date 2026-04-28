@@ -8,6 +8,8 @@ pub enum UiScreen {
     Settings,
     /// Audio mode carousel — pspapp beamforming page.
     AudioMode,
+    /// Noise Reduction strength selector (SP#4 — DFN3 Off/Low/Med/High).
+    NoiseReduction,
     /// System Settings list — pspapp page 0xe / `ui_setting_system`.
     System,
     /// Speaker volume control — pspapp page 0xd / `ui_volume_screen`.

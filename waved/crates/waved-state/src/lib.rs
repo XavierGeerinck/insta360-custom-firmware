@@ -144,6 +144,8 @@ pub enum Command {
     CloseSettings,
     /// UI-only: show CC overlay on the Audio Mode sub-page.
     OpenAudioMode,
+    /// UI-only: navigate to the Noise Reduction screen (SP#4 — DFN3 strength selector).
+    OpenNoiseReduction,
     /// UI-only: navigate to the System Settings screen (pspapp page 0xe / `ui_setting_system`).
     OpenSystemSettings,
     /// UI-only: navigate to the Speaker Volume screen (pspapp page 0xd / `ui_volume_screen`).

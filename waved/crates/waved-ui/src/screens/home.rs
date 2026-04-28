@@ -64,6 +64,17 @@ unsafe extern "C" fn more_btn_cb(e: *mut lv_event_t) {
     }
 }
 
+/// Noise Reduction shortcut → navigate to NR screen (SP#4).
+unsafe extern "C" fn nr_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
+        let tx = lv_event_get_user_data(e)
+            as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::OpenNoiseReduction);
+        }
+    }
+}
+
 extern "C" {
     static lv_font_montserrat_12: lv_font_t;
     static lv_font_montserrat_14: lv_font_t;
@@ -186,6 +197,30 @@ impl super::Screen for HomeScreen {
             // CENTER y_ofs = 40 − 152 = −112
             lv_obj_align(lbl_status, lv_align_t_LV_ALIGN_CENTER, 0, -112);
             self.lbl_status = lbl_status;
+
+            // ── Noise Reduction shortcut pill (100×32 at center offset 0,-65) ─
+            // Sits between the connection label (y=40) and the vol/mic row (y=160).
+            // Tap → Command::OpenNoiseReduction → NoiseReductionScreen.
+            let btn_nr = lv_button_create(screen);
+            lv_obj_set_size(btn_nr, 120, 32);
+            lv_obj_align(btn_nr, lv_align_t_LV_ALIGN_CENTER, 0, -65);
+            lv_obj_set_style_radius(btn_nr, 16, 0);
+            lv_obj_set_style_bg_color(btn_nr, rgb(CLR_SURFACE), 0);
+            lv_obj_set_style_bg_opa(btn_nr, 200, 0);
+            lv_obj_set_style_border_width(btn_nr, 1, 0);
+            lv_obj_set_style_border_color(btn_nr, rgb(CLR_ACCENT), 0);
+            let lbl_nr = lv_label_create(btn_nr);
+            lv_label_set_text(lbl_nr, c"Noise Reduction".as_ptr());
+            lv_obj_set_style_text_color(lbl_nr, rgb(CLR_ACCENT), 0);
+            lv_obj_set_style_text_font(lbl_nr, &lv_font_montserrat_12, 0);
+            lv_obj_center(lbl_nr);
+            let nr_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+            lv_obj_add_event_cb(
+                btn_nr,
+                Some(nr_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                nr_tx as *mut _,
+            );
 
             // ── Vol / Speaker button (76×76) ──────────────────────────────────
             // Original: TOP_LEFT x=20, y=122 → centre (58, 160)

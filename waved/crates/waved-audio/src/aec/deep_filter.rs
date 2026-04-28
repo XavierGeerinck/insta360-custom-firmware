@@ -36,9 +36,16 @@ pub struct DeepFilterNs {
 }
 
 impl DeepFilterNs {
-    /// Construct with the bundled DFN3 low-latency model. 48 kHz only.
+    /// Construct with the bundled DFN3 low-latency model and a 100 dB
+    /// attenuation cap (full enhancement). 48 kHz only.
     pub fn new() -> anyhow::Result<Self> {
-        let infer = Dfn3CpuInfer::new()?;
+        Self::with_atten_lim_db(100.0)
+    }
+
+    /// Construct with a specific attenuation cap. NrLevel maps to one of
+    /// these via `build_noise_suppressor` in `crates/waved-audio/src/lib.rs`.
+    pub fn with_atten_lim_db(atten_lim_db: f32) -> anyhow::Result<Self> {
+        let infer = Dfn3CpuInfer::with_atten_lim_db(atten_lim_db)?;
         let hop_size = infer.hop_size();
         Ok(Self {
             infer,
