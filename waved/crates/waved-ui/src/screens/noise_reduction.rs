@@ -8,9 +8,12 @@
 //!
 //! Audio-service rebuild of the DSP chain takes ~1.5 s (tract session
 //! creation), so we don't wait for the AudioState round-trip to update the
-//! visual. The click callback paints the new selection immediately, then
-//! sends `Command::SetNrLevel`. When the audio thread eventually confirms,
-//! `update_state` sees the same level we already painted and short-circuits.
+//! visual. The click callback paints the new selection immediately and
+//! marks the level as `pending`. While `pending` is `Some`, `update_state`
+//! ignores `audio.nr_level` (still showing the pre-tap value) and keeps
+//! the optimistic paint. Once the audio thread catches up
+//! (`audio.nr_level == pending`), `pending` clears and normal sync
+//! resumes.
 //!
 //! Layout (400×304):
 //!   y=44   Title  "NOISE REDUCTION"  (clears 32 px status bar + 12 px gap)
@@ -79,7 +82,7 @@ unsafe extern "C" fn level_click_cb(e: *mut lv_event_t) {
 
     // Optimistic UI — paint before round-tripping through the audio service.
     if !d.screen.is_null() {
-        (*d.screen).paint_for_idx(d.idx);
+        (*d.screen).paint_optimistic(d.idx);
     }
 
     let _ = d.tx.send(Command::SetNrLevel(idx_to_level(d.idx)));
@@ -102,7 +105,14 @@ pub struct NoiseReductionScreen {
     circles:    [*mut lv_obj_t; 4],
     inner_lbls: [*mut lv_obj_t; 4],
     detail_lbl: *mut lv_obj_t,
+    /// Last level we painted. Tracks `audio.nr_level` once `pending` is
+    /// `None`; while `pending` is `Some`, this mirrors `pending`.
     prev_level: Option<NrLevel>,
+    /// Set when the user taps a button — survives across UI ticks until
+    /// the audio service confirms (`audio.nr_level == pending`). Prevents
+    /// the optimistic paint from being overwritten during the ~1.5 s
+    /// tract-rebuild window.
+    pending: Option<NrLevel>,
 }
 
 impl NoiseReductionScreen {
@@ -113,6 +123,7 @@ impl NoiseReductionScreen {
             inner_lbls: [std::ptr::null_mut(); 4],
             detail_lbl: std::ptr::null_mut(),
             prev_level: None,
+            pending:    None,
         }
     }
 
@@ -139,10 +150,9 @@ impl NoiseReductionScreen {
         }
     }
 
-    /// Re-paint all circles + the detail label for a given selected idx.
-    /// Updates `prev_level` so the next state-sync tick sees us as
-    /// already-in-sync and short-circuits.
-    unsafe fn paint_for_idx(&mut self, idx: usize) {
+    /// Repaint all circles + the detail label for a given selected idx.
+    /// Caller is responsible for setting `prev_level` / `pending`.
+    unsafe fn paint(&self, idx: usize) {
         for i in 0..4usize {
             if self.circles[i].is_null() { continue; }
             Self::paint_circle(self.circles[i], self.inner_lbls[i], i == idx);
@@ -151,15 +161,36 @@ impl NoiseReductionScreen {
             let s = CString::new(DETAIL[idx]).unwrap();
             lv_label_set_text(self.detail_lbl, s.as_ptr());
         }
-        self.prev_level = Some(idx_to_level(idx));
     }
 
-    /// Called every UI tick. No-op when nothing changed.
+    /// Optimistic-paint hook called from the click callback. Marks the
+    /// level as pending; subsequent `update_state` ticks will hold this
+    /// paint until the audio thread confirms.
+    unsafe fn paint_optimistic(&mut self, idx: usize) {
+        self.paint(idx);
+        let level = idx_to_level(idx);
+        self.prev_level = Some(level.clone());
+        self.pending    = Some(level);
+    }
+
+    /// Called every UI tick. While `pending` is `Some`, ignores
+    /// `audio.nr_level` and keeps the optimistic paint until the audio
+    /// state catches up.
     pub unsafe fn update_state(&mut self, audio: &AudioState) {
+        if let Some(p) = self.pending.clone() {
+            if audio.nr_level == p {
+                // Audio caught up — clear pending and resume normal sync.
+                self.pending    = None;
+                self.prev_level = Some(audio.nr_level.clone());
+            }
+            // Either way: don't repaint. Visual already shows `pending`.
+            return;
+        }
         if self.prev_level.as_ref() == Some(&audio.nr_level) {
             return;
         }
-        self.paint_for_idx(level_to_idx(&audio.nr_level));
+        self.paint(level_to_idx(&audio.nr_level));
+        self.prev_level = Some(audio.nr_level.clone());
     }
 }
 
@@ -167,6 +198,7 @@ impl super::Screen for NoiseReductionScreen {
     fn create(&mut self) -> *mut lv_obj_t {
         unsafe {
             self.prev_level = None;
+            self.pending    = None;
             self.circles    = [std::ptr::null_mut(); 4];
             self.inner_lbls = [std::ptr::null_mut(); 4];
             let screen_ptr: *mut Self = self as *mut Self;
