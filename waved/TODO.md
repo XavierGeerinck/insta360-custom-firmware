@@ -9,16 +9,29 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 - [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
 - [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
 - [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
-- [~] **SP#4 — Neural NS + dereverb (DeepFilterNet 3)** — partial. Probing complete, one version-skew blocker remains:
-  - ✅ NPU reachable from our process (`vxCreateContext`, `vsi_nn_CreateContext` — see `crates/waved-npu-probe/`)
-  - ✅ TIM-VX cross-compiles + loads on device with `USE_EXTERNAL_OVXLIB=ON` delegating to device's libovxlib
-  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG (but TIM-VX prebuilt host SDK targets simulator/GC7000, not our chip)
-  - ✅ **Found public VIP9000-aware userspace SDK** at `github.com/eYs3D/eCV5546_rootfs` (versions 6.4.15.9 + 6.4.18.5; full archmodel + NN binary blobs + headers; aarch64). Companion `eYs3D/eCV5546_linux` has the matching galcore kernel driver source.
-  - ✅ Confirmed our chip is `vip9000nano-di+` (ChipID 0x9000 / Rev 0x9002 / ProductID 0x5090009) from eYs3D's `gc_feature_database.h`.
-  - ❌ Insta360's libOpenVX was built without the NN binary subsystem — adding `libNN*Binary.so` to device doesn't help (never dlopened).
-  - ❌ Mixing 6.4.18.5 userspace with our device's 6.4.19 galcore kernel driver: `vsi_nn_AddTensor` fails (ioctl protocol mismatch); pure-userspace mix hangs at context init.
-  - ❌ ORT 1.22 + VSI-NPU EP cross-compile — three upstream bugs; same archmodel issue underneath.
-  - **Remaining blocker is version skew between Insta360's 6.4.19 galcore kernel driver and the public 6.4.18.5 userspace.** Three paths to unblock (see `docs/COMPUTE_HARDWARE.md`): replace galcore with 6.4.18.5 (source available), find a 6.4.19 userspace from another public BSP, or business ask to Insta360/Amlogic.
+- [x] **SP#4 — Neural NS + dereverb (DeepFilterNet 3, CPU)** — DFN3 running on Cortex-A55 via `tract-NEON`. Acceptance: init clean, process alive ≥ 8 s under load, CPU delta well under the 5 % budget (sampled noise; DFN3 cost ~0–2 %). NPU path was deliberately abandoned after a full toolchain survey — see "SP#4 NPU history" below for what we learned.
+  - Crate: `crates/waved-npu/` exposes `NpuInfer` trait + `Dfn3CpuInfer` (bundled DFN3 low-latency model via `default-model-ll` feature).
+  - Pipeline: `crates/waved-audio/src/aec/deep_filter.rs` implements `NoiseSuppressor` over `Dfn3CpuInfer`. Internally hop-buffers 1024-sample ALSA periods into 480-sample DFN3 hops. Init failure falls back to `SpeexNoiseSuppressor`.
+  - Driving: SIGHUP + `/tmp/waved-nr` (off | low | med | high) — see `crates/waved/src/main.rs::mode_switch_handler`.
+  - Acceptance: `scripts/test-neural-ns.sh` (init engages, process alive, CPU delta ≤ 5 %).
+  - Future-NPU: the `NpuInfer` trait stays — when/if a usable VIP9000 toolchain lands (see `docs/COMPUTE_HARDWARE.md`), drop in a `Dfn3NpuInfer` impl, no caller changes.
+
+### SP#4 NPU history (closed; preserved for context)
+
+The NPU path was probed exhaustively before pivoting:
+
+  - ✅ NPU reachable from our process (`vxCreateContext`, `vsi_nn_CreateContext` — `crates/waved-npu-probe/`).
+  - ✅ TIM-VX cross-compiles + loads on device with `USE_EXTERNAL_OVXLIB=ON`.
+  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG (but prebuilt host SDK archmodel targets GC7000, not our chip).
+  - ✅ Public 6.4.18.5 SDK located at `github.com/eYs3D/eCV5546_*`; chip identified as `vip9000nano-di+` (ChipID 0x9000 / Rev 0x9002 / ProductID 0x5090009).
+  - ✅ `libnnsdk.so` reverse complete: ~30-symbol clean C API (`NNsdk_module_create/run_graph/...`), `dlopen`s the stack at runtime — would be trivial to FFI-bind from Rust if we had a DFN3 `.nb`.
+  - ✅ Khadas redistributable Acuity Toolkit found (GPL); ships VIPNANOQI target descriptors but not VIPNANODI+ (our variant).
+  - ❌ Insta360's `libOpenVX` was built without the NN binary subsystem — `libNN*Binary.so` is never `dlopen`ed.
+  - ❌ 6.4.18.5 userspace × 6.4.19 galcore: `vsi_nn_AddTensor` ioctl mismatch; pure-userspace mix hangs at context init.
+  - ❌ ORT 1.22 + VSI-NPU EP cross-compile: three upstream bugs.
+  - ❌ Replacing galcore with 6.4.18.5: feasible but requires sourcing Insta360's GPL kernel + porting an Amlogic platform file into eYs3D's source — weeks of work, not days.
+
+  **Net**: producing a `.nb` that runs on this exact chip without a VeriSilicon Acuity license costs weeks; running DFN3 ONNX on CPU costs days and the CPU has the headroom. The NPU stack stays a future optimization. Full path-status matrix in `docs/COMPUTE_HARDWARE.md`.
 - [ ] SP#5 — Playback EQ + gain staging
 - [ ] SP#6 — UAC2 routing for Wave Controller
 
@@ -38,8 +51,14 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - Azimuth error at 270° is ~19° post-pair-swap (vs ~7° before). Candidate fix: per-pair GCC-PHAT peak-sharpness confidence weighting in the LS solve.
 - Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003). Preamp / gain staging belongs in SP#5.
 
-### SP#4 (Neural NS + dereverb)
-- DeepFilterNet 3 integration (post-beamforming single-channel f32) — blocked on a single version-skew issue (6.4.18.5 public userspace vs our device's 6.4.19 galcore). Both galcore source and userspace binaries are public on `github.com/eYs3D/eCV5546_*` repos.
+### SP#4 (Neural NS + dereverb) — done
+- DeepFilterNet 3 v0.5.6 integrated on CPU via `tract`; bundled low-latency model. See `crates/waved-npu/`, `crates/waved-audio/src/aec/deep_filter.rs`, `scripts/test-neural-ns.sh`.
+
+### SP#4 follow-ups (not blockers)
+- Tract session creation takes ~1.5 s; engaging NR live drops ~50 frames during the rebuild. Pre-build DFN3 at startup (regardless of initial NR level) and only flip the active backend on `SetNrLevel` to eliminate the warm-up gap.
+- Speech-loaded CPU profile: current measurement was a quiet room (DFN3's lsnr gating skipped decoder layers most of the time). Re-measure with the AEC-conferencing playback running to see actual sustained cost.
+- `ns_backend` + `ns_frame_ms` stats fields (per spec §5.2) — useful for ongoing observability; deferred until we have a stats consumer that needs them.
+- NR strength wiring: NrLevel::Low/Med/High currently all engage the same DFN3 atten settings. Map to `RuntimeParams::with_atten_lim` per the SP#4 spec §2.5 wet/dry idea.
 
 ### SP#5 (Playback EQ + gain staging)
 - Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.

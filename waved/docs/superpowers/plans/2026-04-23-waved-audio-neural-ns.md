@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the speex NS stage with DeepFilterNet 3 running on the Vivante VIP NPU. Ship a working NS backend that beats speex on stationary + non-stationary noise, stays under a 2% CPU delta, and falls back cleanly to speex when the NPU is unavailable.
+**Goal:** Replace the speex NS stage with DeepFilterNet 3. Ship a working NS backend that beats speex on stationary + non-stationary noise, stays under a 5% CPU delta, and falls back cleanly to speex on init failure.
 
-**Architecture:** New `waved-npu` crate wraps our own `onnxruntime` build (with the VSI-NPU execution provider) behind a small `NpuInfer` trait. New `waved-audio::ns::deep_filter::DeepFilterNs` implements the existing `NoiseSuppressor` trait on top of `waved-npu`. `AudioConfig` bumps to v4 with a `neural_ns` section. `AudioService::init_processing()` tries DFN3 first, falls back to `SpeexNs` on any init failure. Deploy ships `libonnxruntime.so` and `deepfilternet3.onnx` to `/data/waved/{lib,models}/` alongside the binary.
+> **STATUS 2026-04-28 — CPU pivot.** Tasks 2–6 originally targeted the on-board Vivante NPU via a cross-built ORT + VSI-NPU EP. After surveying the toolchain landscape (see `docs/COMPUTE_HARDWARE.md` "Path 1 feasibility" + the libnnsdk reverse), every NPU path requires either a VeriSilicon Acuity license (NDA) or weeks of reverse-engineering work (Mesa etnaviv-ml, missing recurrent ops). The model itself, DFN3, is small enough (~2 M params, INT8-quantizable) to run real-time on Cortex-A55 + NEON. We pivot SP#4 to CPU inference using DeepFilterNet's own Rust crate (`deep_filter`, which uses `tract` internally with NEON kernels). The `NpuInfer` trait we landed in Task 1 stays — future NPU work plugs into it. Tasks 2–4 are abandoned. Tasks 5–6 are reshaped around `deep_filter` instead of ORT/ONNX. CPU budget gate raised from 2% → 5%.
 
-**Tech Stack:** Rust 2021, `ort` crate (ONNX Runtime bindings), our own cross-built `libonnxruntime.so ≥ 1.17` with `--use_vsinpu`, TIM-VX (VeriSilicon), on-device `libovxlib.so` 6.4.19 and `/dev/galcore`. DeepFilterNet 3 exported to ONNX via upstream's `export.py`.
+**Architecture:** New `waved-npu` crate wraps `deep_filter` (DFN3's official Rust port) behind the `NpuInfer` trait. New `waved-audio::ns::deep_filter::DeepFilterNs` implements `NoiseSuppressor` on top of `waved-npu`. `AudioConfig` bumps to v4 with a `neural_ns` section. `AudioService::init_processing()` tries DFN3 first, falls back to `SpeexNs` on any init failure. Deploy ships the DFN3 model archive to `/data/waved/models/` alongside the binary.
+
+**Tech Stack:** Rust 2021, `deep_filter` crate (which depends on `tract-onnx` + `tract-core` for NEON-optimized inference). DFN3 model shipped as `.tar.gz` (DFN's own packaging — config + weights). No C++ deps, no ORT, no NPU runtime. Cross-compiles cleanly via `cross`.
 
 **Reference spec:** `docs/superpowers/specs/2026-04-23-waved-audio-neural-ns-design.md`
 **Reference hardware docs:** `docs/COMPUTE_HARDWARE.md`, `docs/AUDIO_HARDWARE.md`

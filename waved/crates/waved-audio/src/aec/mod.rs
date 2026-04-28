@@ -11,6 +11,7 @@
 //! `speex::SpeexNoiseSuppressor`) plus a no-op `passthrough::PassthroughCanceller`
 //! for the DSP-disabled code path and tests.
 
+pub mod deep_filter;
 pub mod passthrough;
 pub mod speex;
 

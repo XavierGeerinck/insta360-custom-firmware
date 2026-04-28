@@ -10,6 +10,7 @@ capture-alsa = ["dep:alsa"]
 
 [dependencies]
 waved-state = { path = "../waved-state" }
+waved-npu = { path = "../waved-npu" }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
 thiserror.workspace = true
@@ -18,6 +19,7 @@ serde_json.workspace = true
 alsa = { version = "0.9", optional = true }
 libc = "0.2"
 rustfft = "6.2"
+anyhow = "1"
 
 [build-dependencies]
 cc = "1.0"

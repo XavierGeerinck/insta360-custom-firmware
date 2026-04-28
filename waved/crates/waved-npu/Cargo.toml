@@ -5,3 +5,9 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1"
+ndarray = "^0.15"
+tracing = { workspace = true }
+
+# DFN3 inference (tract under the hood; bundles low-latency model via default-model-ll).
+# Pinned to v0.5.6 — crates.io only has 0.2.5 which lacks the `tract` feature.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = ["tract", "default-model-ll"] }

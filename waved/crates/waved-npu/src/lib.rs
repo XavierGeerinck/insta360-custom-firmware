@@ -1,70 +1,158 @@
-//! ONNX Runtime wrapper with VSI-NPU execution provider preference.
+//! Neural inference backends for waved-audio's NS pipeline.
 //!
-//! `OrtInfer` is constructed from a model path; it tries providers in
-//! [`providers::preferred_providers()`] order and falls through to CPU.
-//! Exposes a single per-frame entry point `run(&[f32]) -> Vec<f32>` sized
-//! to match the model's declared output shape.
+//! `NpuInfer` is the abstract surface; `Dfn3CpuInfer` is the only impl today,
+//! wrapping DeepFilterNet 3 via the upstream `deep_filter` crate (which uses
+//! `tract` under the hood with NEON kernels on aarch64). The NPU backends we
+//! probed earlier (Vivante VIP9000) are blocked on toolchain access — see
+//! `docs/COMPUTE_HARDWARE.md`. Future NPU impls plug into the same trait.
 //!
-//! This crate's public surface is stable from Task 1. The real ORT session
-//! lands in Task 6 — `OrtInfer::new` currently errors so that downstream
-//! callers (`DeepFilterNs` in Task 7) can compile against the final trait
-//! shape without waiting for the toolchain work.
+//! The bundled DFN3 low-latency model ships inside the binary via the
+//! `default-model-ll` cargo feature on `deep_filter`. No separate model file
+//! to deploy.
 
-use anyhow::Result;
-use std::path::Path;
+use anyhow::{Context, Result};
+use ndarray::Array2;
 
-pub mod providers;
-
+/// Per-frame neural inference. Implementations expose a fixed sample rate
+/// and hop size; callers must match those before invoking `run`.
 pub trait NpuInfer: Send {
-    /// Run one forward pass. `input.len()` must match the declared input
-    /// size; returned vector length equals the declared output size.
+    /// Run one forward pass on a single mono frame of `hop_size()` samples.
+    /// Returns the enhanced frame as a fresh `Vec<f32>` of the same length.
     fn run(&mut self, input: &[f32]) -> Result<Vec<f32>>;
 
-    /// Name of the execution provider actually used at construction —
-    /// "vsi_npu", "cpu", etc. Used by stats_collector for `ns_backend`.
+    /// Backend name — surfaced to `/tmp/audio_stats.json` as `ns_backend`.
     fn provider(&self) -> &'static str;
+
+    /// Sample rate the backend's model expects (e.g. 48_000 for DFN3).
+    fn sr(&self) -> usize;
+
+    /// Frame size (samples per channel) per call to `run`.
+    fn hop_size(&self) -> usize;
 }
 
-pub struct OrtInfer {
-    _stub: (),
+/// DeepFilterNet 3 inference on CPU. Uses the bundled low-latency model
+/// shipped via `default-model-ll`. Single channel, 48 kHz, 10 ms hop.
+pub struct Dfn3CpuInfer {
+    model: df::tract::DfTract,
+    sr: usize,
+    hop_size: usize,
+    noisy_buf: Array2<f32>,
+    enh_buf: Array2<f32>,
 }
 
-impl OrtInfer {
-    /// Placeholder constructor; real body in Task 6.
-    pub fn new(_model_path: &Path) -> Result<Self> {
-        anyhow::bail!("OrtInfer not yet implemented — see Task 6")
+// `DfTract` holds `Rc<Tensor>` internally (tract's single-threaded runtime
+// model), making it !Send by default. We never share `Dfn3CpuInfer` across
+// threads — `AudioService` constructs it once and moves it into the
+// processing thread. tract spawns no internal threads, so the Rcs never
+// escape; moving the whole struct between threads is sound.
+unsafe impl Send for Dfn3CpuInfer {}
+
+impl Dfn3CpuInfer {
+    pub fn new() -> Result<Self> {
+        let r_params = df::tract::RuntimeParams::default();
+        let df_params = df::tract::DfParams::default();
+        let model = df::tract::DfTract::new(df_params, &r_params)
+            .context("DfTract::new (bundled default-model-ll)")?;
+        let sr = model.sr;
+        let hop_size = model.hop_size;
+        let noisy_buf = Array2::<f32>::zeros((1, hop_size));
+        let enh_buf = Array2::<f32>::zeros((1, hop_size));
+        tracing::info!(sr, hop_size, "Dfn3CpuInfer initialized");
+        Ok(Self { model, sr, hop_size, noisy_buf, enh_buf })
     }
 }
 
-impl NpuInfer for OrtInfer {
-    fn run(&mut self, _input: &[f32]) -> Result<Vec<f32>> {
-        anyhow::bail!("OrtInfer not yet implemented — see Task 6")
+impl NpuInfer for Dfn3CpuInfer {
+    fn run(&mut self, input: &[f32]) -> Result<Vec<f32>> {
+        if input.len() != self.hop_size {
+            anyhow::bail!(
+                "input len {} != hop_size {}",
+                input.len(),
+                self.hop_size
+            );
+        }
+        self.noisy_buf
+            .row_mut(0)
+            .as_slice_mut()
+            .expect("contiguous row")
+            .copy_from_slice(input);
+        let _lsnr = self
+            .model
+            .process(self.noisy_buf.view(), self.enh_buf.view_mut())
+            .context("DfTract::process")?;
+        Ok(self
+            .enh_buf
+            .row(0)
+            .as_slice()
+            .expect("contiguous row")
+            .to_vec())
     }
 
     fn provider(&self) -> &'static str {
-        "stub"
+        "deep_filter_cpu"
+    }
+
+    fn sr(&self) -> usize {
+        self.sr
+    }
+
+    fn hop_size(&self) -> usize {
+        self.hop_size
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
-    fn stub_constructor_errors_cleanly() {
-        let r = OrtInfer::new(&PathBuf::from("/nonexistent"));
-        assert!(r.is_err(), "stub should error, not panic");
+    fn dfn3_constructs_with_bundled_model() {
+        let m = Dfn3CpuInfer::new().expect("bundled model should load");
+        assert_eq!(m.sr(), 48_000);
+        assert_eq!(m.hop_size(), 480);
+        assert_eq!(m.provider(), "deep_filter_cpu");
     }
 
     #[test]
-    fn provider_name_is_static_str() {
-        // Compile-time assertion that the trait signature is what we expect.
-        // If a future edit changes `provider` to return `String` or take
-        // `&mut self`, this won't compile.
-        fn _check<T: NpuInfer>() {
-            let _: fn(&T) -> &'static str = T::provider;
+    fn dfn3_passes_silence_through_clean() {
+        let mut m = Dfn3CpuInfer::new().expect("bundled model should load");
+        let silence = vec![0.0f32; m.hop_size()];
+        let out = m.run(&silence).expect("inference on silence should not error");
+        assert_eq!(out.len(), m.hop_size());
+        let max = out.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(max < 1e-3, "silence in -> ~silence out, got peak {}", max);
+    }
+
+    #[test]
+    fn dfn3_rejects_wrong_frame_size() {
+        let mut m = Dfn3CpuInfer::new().expect("bundled model should load");
+        assert!(m.run(&[0.0f32; 100]).is_err());
+        assert!(m.run(&[0.0f32; 1024]).is_err());
+    }
+
+    #[test]
+    fn dfn3_attenuates_white_noise() {
+        let mut m = Dfn3CpuInfer::new().expect("bundled model should load");
+        // White-noise burst at moderate level; DFN3 should reduce energy.
+        let mut x = 0u32;
+        let noisy: Vec<f32> = (0..m.hop_size())
+            .map(|_| {
+                x = x.wrapping_mul(1103515245).wrapping_add(12345);
+                ((x >> 16) as i32 as f32) / 32768.0 * 0.3
+            })
+            .collect();
+        let in_rms = (noisy.iter().map(|s| s * s).sum::<f32>() / noisy.len() as f32).sqrt();
+        // Need a few frames of warm-up since DFN3 has lookahead and internal state.
+        let mut last = vec![0.0f32; m.hop_size()];
+        for _ in 0..16 {
+            last = m.run(&noisy).unwrap();
         }
-        _check::<OrtInfer>();
+        let out_rms = (last.iter().map(|s| s * s).sum::<f32>() / last.len() as f32).sqrt();
+        assert!(
+            out_rms < in_rms * 0.7,
+            "expected ≥ 3 dB attenuation, got in={} out={}",
+            in_rms,
+            out_rms
+        );
     }
 }

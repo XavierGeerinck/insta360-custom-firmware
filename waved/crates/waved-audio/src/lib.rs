@@ -60,11 +60,12 @@ pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
 
 /// Build the DSP chain for a given NR level.
 ///
-/// - `NrLevel::Off` → Speex AEC + no NS (echo cancelled, but no spectral
-///   noise reduction). Raw-pass (`PassthroughCanceller`) is not wired to
-///   the UI in SP#2; it stays available for tests via `aec::passthrough`.
-/// - `NrLevel::{Low, Med, High}` → Speex AEC + Speex NS (the NS is tied
-///   to the echo state for residual-echo suppression).
+/// - `NrLevel::Off` → Speex AEC + no NS.
+/// - `NrLevel::{Low, Med, High}` → Speex AEC + neural NS. We try
+///   DeepFilterNet 3 (CPU, tract-NEON) first; on init failure (e.g. tract
+///   couldn't load the bundled model on this target) we fall back to
+///   `SpeexNoiseSuppressor`. SP#4 keeps the speex path compiled in as a
+///   safety net — DFN3 init failure must not crash the audio service.
 fn build_dsp_chain(
     frame_size: usize,
     sample_rate: u32,
@@ -74,13 +75,43 @@ fn build_dsp_chain(
     let ns: Option<Box<dyn NoiseSuppressor>> = if matches!(nr, NrLevel::Off) {
         None
     } else {
-        Some(Box::new(speex::SpeexNoiseSuppressor::new(
-            frame_size,
-            sample_rate,
-            Some(&ec),
-        )))
+        Some(build_noise_suppressor(frame_size, sample_rate, &ec))
     };
     (Box::new(ec), ns)
+}
+
+/// DFN3 (CPU) → speex fallback. DFN3 only supports 48 kHz; any other rate
+/// short-circuits to speex. Frame size is decoupled — `DeepFilterNs`
+/// internally buffers to bridge ALSA's period (1024) and DFN3's 10 ms hop
+/// (480). Init failure (e.g. tract couldn't load the bundled model on this
+/// target) falls back cleanly.
+fn build_noise_suppressor(
+    frame_size: usize,
+    sample_rate: u32,
+    ec: &speex::SpeexEchoCanceller,
+) -> Box<dyn NoiseSuppressor> {
+    if sample_rate == 48_000 {
+        match aec::deep_filter::DeepFilterNs::new() {
+            Ok(ns) => {
+                tracing::info!(
+                    backend = "deep_filter_cpu",
+                    frame_size,
+                    "neural NS active"
+                );
+                return Box::new(ns);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "DFN3 init failed; falling back to speex NS");
+            }
+        }
+    } else {
+        tracing::info!(sample_rate, "DFN3 needs 48 kHz; using speex NS");
+    }
+    Box::new(speex::SpeexNoiseSuppressor::new(
+        frame_size,
+        sample_rate,
+        Some(ec),
+    ))
 }
 
 pub struct AudioService {

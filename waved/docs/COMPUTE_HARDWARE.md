@@ -333,6 +333,109 @@ produced externally. Implementation-side SP#4 work (Rust wrapper, NS
 integration, acceptance tests) can still proceed against a CPU backend
 — see `TODO.md` for the status matrix.
 
+### Path 1 (replace galcore) — feasibility survey (2026-04-28)
+
+After deciding on Path 1 (rebuild galcore at 6.4.18.5 to match the
+public userspace), surveyed what's actually needed.
+
+**Device state captured:**
+
+- Kernel: `Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64`
+  built with `aarch64-none-linux-gnu-gcc 10.2.1` (Arm Toolchain 10.2-2020.11).
+- `/proc/config.gz`: pulled to `/tmp/waved-galcore-survey/config`. Key flags:
+  `CONFIG_MODULES=y`, `CONFIG_MODULE_UNLOAD=y`, `CONFIG_MODVERSIONS=y`,
+  no `CONFIG_MODULE_SIG*` (modules are not signed). `CONFIG_LOCALVERSION=""`,
+  `CONFIG_LOCALVERSION_AUTO=y` — the `-ab575` suffix is git-derived from the
+  Amlogic build tree (likely the build number, given the path below).
+- `/lib/modules/5.4.242/build` and `Module.symvers` are **not** on the device.
+  `/usr/src` and `/usr/include/linux` absent.
+- Stock galcore.ko pulled. `vermagic=5.4.242-ab575 SMP preempt mod_unload modversions aarch64`.
+  Banner string: `$VERSION$6.4.19:946407$` → exact version is **6.4.19.5.946407**
+  (5-component, not 4). Module is loadable+unloadable (refcount 0, taint G/O).
+- `dmesg` shows `chipRevision mismatch, database chipRevision=0x9001 register
+  read chipRevision=0x9002` — stock galcore's chip database is slightly stale
+  for our die rev, but it works anyway.
+
+**Stock galcore originates from an Amlogic Yocto-style PSP build:**
+
+`strings galcore-stock.ko` reveals source paths under
+`/home/jenkins/workspace/PSP_Releasebuild/575/projectCode/SOC/output/a5_av400_psp_a64_release/build/npu-1.0/`
+— the `575` matches the `-ab575` LOCALVERSION suffix, and `a5_av400` is the
+Amlogic A5 reference platform. The platform file used was
+`hal/os/linux/kernel/platform/amlogic/gc_hal_kernel_platform_amlogic.c`.
+DT compatible string: `amlogic, galcore`. Imported clocks: `npu_axi_clk`,
+`npu_core_clk`. IRQ 19.
+
+**eYs3D source only ships an `eys3d` platform file**, not Amlogic's. So
+"build galcore 6.4.18.5" splits into two sub-paths:
+
+- **Path 1A**: take eYs3D's 6.4.18.5 source, swap `platform/eys3d/*` for an
+  Amlogic platform file ported from a public Amlogic galcore source. Two
+  candidate sources for the Amlogic platform file:
+  - `aml-streambox/nanoq` (Yocto migration of `aml-comp/hardware/aml-5.4/amlogic/npu/nanoq`),
+    galcore version 6.4.11.2, full Amlogic platform file (22 KB).
+  - `khadas/android_vendor_amlogic_npu` (Goldfinger branch), 6.3.2.5 — older.
+  - `khadas/android_common_driver_modules_npu_driver` (VIM4), 6.4.8.7.7.1.1 — closest.
+  Risk: platform-file API may have shifted between 6.4.11 → 6.4.18 (struct
+  layouts in `gckPLATFORM_OPERATIONS`); needs source diff.
+
+- **Path 1B**: forget version-matching userspace. Use `aml-streambox/nanoq`
+  galcore 6.4.11.2 directly (it has Amlogic platform built in), then find a
+  matching 6.4.11.2 userspace. Most likely source: `aml-streambox/aml_npu_common`
+  (sibling repo, same Yocto migration). Risk: 6.4.11.2 userspace doesn't
+  ship the same VIP9000Nano-DI+ archmodel as our chip needs.
+
+**Same chip family is supported by these public galcore sources** (found
+via `vip9000nano-di+` / VIP9000NANODI_PLUS_PID0X1000000B grep across GitHub):
+`STMicroelectronics/gcnano-binaries`, `eYs3D/eCV5546_linux`,
+`radxa/allwinner-bsp`, `D-Robotics/x5-kernel`, `eswincomputing/linux-stable`,
+`YuzukiHD/TinyVision`. None Amlogic-specific, so platform code would still
+need adaptation, but the **chip-feature database** (archmodel data) for our
+exact die rev is broadly available.
+
+**The CONFIG_MODVERSIONS=y constraint is the harder of the two issues.**
+Every kernel symbol galcore imports needs a CRC matching the device's
+`Module.symvers`. Without that file or the device kernel's full build tree,
+options are:
+
+1. Source Insta360's GPL kernel release (mandatory under GPL-2.0 — they
+   distribute galcore as a module, so `-ab575` kernel source must be
+   obtainable). Ask Insta360 / look for a published GPL drop.
+2. Reconstruct: build kernel 5.4.242 from Amlogic upstream + apply
+   `CONFIG_LOCALVERSION="-ab575"` + use device's `/proc/config.gz`. If the
+   config matches, symbol CRCs match (CRCs are deterministic from preprocessed
+   source + config). Risk: any out-of-tree patches Amlogic/Insta360 applied
+   that touched exported symbols would shift CRCs.
+3. `insmod --force` — the kernel rejects cross-vermagic by default, but
+   `modprobe --force-modversions --force-vermagic` exists. Will likely
+   panic at first symbol the kernel can't reconcile.
+
+**Net assessment of Path 1:**
+
+- The galcore source side is workable but not trivial: need to merge the
+  eYs3D 6.4.18.5 codebase with an Amlogic-style platform file.
+- The kernel build side is the bigger blocker: `CONFIG_MODVERSIONS=y`
+  without device kernel source effectively forces us into option 1 (Insta360
+  GPL drop) or option 2 (rebuild upstream + pray on CRCs). Option 2 has
+  decent odds — kernel 5.4.242 is the LTS upstream version and Amlogic
+  upstreams most of their meson tree.
+
+**Two adjacent paths worth considering before committing further to Path 1:**
+
+- **Path 4 (userspace ABI shim).** The mismatch is "user 6.4.18.886827 vs
+  kernel 6.4.19.946407 → `vsi_nn_AddTensor` ioctl mismatch". Inspect
+  `gc_hal_driver.h` ioctl numbers/structs in eYs3D 6.4.18.5 vs whatever
+  6.4.19 source we can find. If the delta is small (one struct field added),
+  patching the userspace `libGAL.so` is far cheaper than rebuilding the
+  kernel module.
+- **Path 5 (Insta360 GPL request).** Insta360 distributes `galcore.ko` as
+  a binary under GPL-2.0 (eYs3D Makefile carries SPDX `GPL-2.0-only`).
+  Under GPL we can request the kernel source corresponding to
+  `5.4.242-ab575`. This is the cleanest unblock — it gives us the build
+  tree (Module.symvers), a canonical Amlogic platform file matching our
+  device, and a galcore source at exactly 6.4.19.5.946407 which removes
+  all skew.
+
 ### TIM-VX ahead-of-time compile path (mapped 2026-04-23)
 
 Probing during SP#4 established the working path:

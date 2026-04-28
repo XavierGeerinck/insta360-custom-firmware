@@ -489,7 +489,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 /// without restarting waved.
 async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) {
     use tokio::signal::unix::{signal, SignalKind};
-    use waved_state::AudioMode;
+    use waved_state::{AudioMode, NrLevel};
 
     let mut sighup = match signal(SignalKind::hangup()) {
         Ok(s) => s,
@@ -497,7 +497,7 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
     };
 
     info!(
-        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override)"
+        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override, /tmp/waved-nr)"
     );
 
     while sighup.recv().await.is_some() {
@@ -520,6 +520,29 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => warn!("SIGHUP: {MODE_PATH}: {e}"),
+        }
+
+        const NR_PATH: &str = "/tmp/waved-nr";
+        match std::fs::read_to_string(NR_PATH) {
+            Ok(raw) => {
+                let level = match raw.trim().to_ascii_lowercase().as_str() {
+                    "off" => Some(NrLevel::Off),
+                    "low" => Some(NrLevel::Low),
+                    "med" | "medium" => Some(NrLevel::Med),
+                    "high" => Some(NrLevel::High),
+                    "" => None,
+                    other => {
+                        warn!("SIGHUP: unknown NR level {other:?}");
+                        None
+                    }
+                };
+                if let Some(l) = level {
+                    info!("SIGHUP: setting NR level → {l:?}");
+                    let _ = commands.send(Command::SetNrLevel(l));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {NR_PATH}: {e}"),
         }
 
         const DOA_PATH: &str = "/tmp/waved-doa-override";
