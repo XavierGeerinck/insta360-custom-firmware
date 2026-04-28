@@ -1,15 +1,22 @@
 //! Noise Reduction strength selector — SP#4.
 //!
 //! 4 circular buttons in a row (Off / Low / Med / High). Tap the one you
-//! want — selected circle fills with accent colour, others stay dim. Tap
-//! Done to dismiss. The dB-cap sublabel under the row tells you what
-//! "Low / Med / High" mean (12 / 24 / 100 dB DFN3 attenuation cap).
+//! want — selected circle fills with accent colour, others stay dim.
+//! The dB-cap sublabel under the row tells you what each level does.
+//!
+//! ## Optimistic UI
+//!
+//! Audio-service rebuild of the DSP chain takes ~1.5 s (tract session
+//! creation), so we don't wait for the AudioState round-trip to update the
+//! visual. The click callback paints the new selection immediately, then
+//! sends `Command::SetNrLevel`. When the audio thread eventually confirms,
+//! `update_state` sees the same level we already painted and short-circuits.
 //!
 //! Layout (400×304):
-//!   y=24   Title  "NOISE REDUCTION"
-//!   y=ctr  Row of 4 circles (76×76, 16 px gap), horizontally centered
-//!   y+96   Sublabel — "Low — light, room tone preserved"
-//!   y=-8   Done button (BOTTOM_MID), shared factory with audio_mode.rs
+//!   y=44   Title  "NOISE REDUCTION"  (clears 32 px status bar + 12 px gap)
+//!   y=88   Row of 4 circles (76 px Ø, 16 px gap, 24 px side margin)
+//!   y=178  Sublabel for the active level
+//!   y=-20  Done button (BOTTOM_MID), check_circle.png
 
 use std::ffi::CString;
 use std::sync::Arc;
@@ -24,14 +31,21 @@ extern "C" {
 
 const LABELS: [&str; 4] = ["Off", "Low", "Med", "High"];
 
-/// What we say below the row when a level is selected. Maps NrLevel to
-/// the same atten_lim_db cap used by `waved_audio::nr_to_atten_lim_db`.
 const DETAIL: [&str; 4] = [
-    "Off — speex AEC only, no neural NS",
-    "Low — -12 dB cap, room tone preserved",
-    "Med — -24 dB cap, moderate suppression",
-    "High — full DFN3 attenuation",
+    "Off - speex AEC only, no neural NS",
+    "Low - -12 dB cap, room tone preserved",
+    "Med - -24 dB cap, moderate suppression",
+    "High - full DFN3 attenuation",
 ];
+
+fn idx_to_level(idx: usize) -> NrLevel {
+    match idx {
+        0 => NrLevel::Off,
+        1 => NrLevel::Low,
+        2 => NrLevel::Med,
+        _ => NrLevel::High,
+    }
+}
 
 fn level_to_idx(level: &NrLevel) -> usize {
     match level {
@@ -42,30 +56,34 @@ fn level_to_idx(level: &NrLevel) -> usize {
     }
 }
 
-// ── Per-circle click callbacks ────────────────────────────────────────────────
+// ── Click-callback user_data ──────────────────────────────────────────────────
+//
+// Carries the broadcast Sender, the back-pointer to the screen for optimistic
+// repaint, and the level index. The screen lives on the UI-thread stack for
+// the process lifetime and never moves, so the raw pointer is always valid
+// inside the callback.
 
-macro_rules! level_cb {
-    ($name:ident, $level:expr) => {
-        unsafe extern "C" fn $name(e: *mut lv_event_t) {
-            if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-                let tx = lv_event_get_user_data(e)
-                    as *const tokio::sync::broadcast::Sender<Command>;
-                if !tx.is_null() {
-                    let _ = (*tx).send(Command::SetNrLevel($level));
-                }
-            }
-        }
-    };
+struct ClickData {
+    tx:     tokio::sync::broadcast::Sender<Command>,
+    screen: *mut NoiseReductionScreen,
+    idx:    usize,
 }
 
-level_cb!(level0_cb, NrLevel::Off);
-level_cb!(level1_cb, NrLevel::Low);
-level_cb!(level2_cb, NrLevel::Med);
-level_cb!(level3_cb, NrLevel::High);
+unsafe extern "C" fn level_click_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
+    let data = lv_event_get_user_data(e) as *const ClickData;
+    if data.is_null() { return; }
+    let d = &*data;
 
-const CARD_CBS: &[unsafe extern "C" fn(*mut lv_event_t)] = &[
-    level0_cb, level1_cb, level2_cb, level3_cb,
-];
+    // Optimistic UI — paint before round-tripping through the audio service.
+    if !d.screen.is_null() {
+        (*d.screen).paint_for_idx(d.idx);
+    }
+
+    let _ = d.tx.send(Command::SetNrLevel(idx_to_level(d.idx)));
+}
 
 unsafe extern "C" fn done_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
@@ -108,7 +126,6 @@ impl NoiseReductionScreen {
             lv_obj_set_style_border_color(circle, rgb(CLR_ACCENT), 0);
             lv_obj_set_style_border_width(circle, 3, 0);
             if !label.is_null() {
-                // Dark text on accent fill stays readable.
                 lv_obj_set_style_text_color(label, rgb(CLR_BG), 0);
             }
         } else {
@@ -122,23 +139,27 @@ impl NoiseReductionScreen {
         }
     }
 
-    pub unsafe fn update_state(&mut self, audio: &AudioState) {
-        if self.prev_level.as_ref() == Some(&audio.nr_level) {
-            return;
-        }
-        let idx = level_to_idx(&audio.nr_level);
-
+    /// Re-paint all circles + the detail label for a given selected idx.
+    /// Updates `prev_level` so the next state-sync tick sees us as
+    /// already-in-sync and short-circuits.
+    unsafe fn paint_for_idx(&mut self, idx: usize) {
         for i in 0..4usize {
             if self.circles[i].is_null() { continue; }
             Self::paint_circle(self.circles[i], self.inner_lbls[i], i == idx);
         }
-
         if !self.detail_lbl.is_null() {
             let s = CString::new(DETAIL[idx]).unwrap();
             lv_label_set_text(self.detail_lbl, s.as_ptr());
         }
+        self.prev_level = Some(idx_to_level(idx));
+    }
 
-        self.prev_level = Some(audio.nr_level.clone());
+    /// Called every UI tick. No-op when nothing changed.
+    pub unsafe fn update_state(&mut self, audio: &AudioState) {
+        if self.prev_level.as_ref() == Some(&audio.nr_level) {
+            return;
+        }
+        self.paint_for_idx(level_to_idx(&audio.nr_level));
     }
 }
 
@@ -148,6 +169,7 @@ impl super::Screen for NoiseReductionScreen {
             self.prev_level = None;
             self.circles    = [std::ptr::null_mut(); 4];
             self.inner_lbls = [std::ptr::null_mut(); 4];
+            let screen_ptr: *mut Self = self as *mut Self;
 
             let screen = lv_obj_create(std::ptr::null_mut());
             lv_obj_set_size(screen, 400, 304);
@@ -158,21 +180,19 @@ impl super::Screen for NoiseReductionScreen {
             lv_obj_set_style_pad_left(screen, 0, 0);
             lv_obj_set_style_pad_right(screen, 0, 0);
 
-            // ── Title ────────────────────────────────────────────────────────
+            // ── Title ─ y=44 clears the 32 px status bar + 12 px gap ────────
             let title = lv_label_create(screen);
             lv_label_set_text(title, c"NOISE REDUCTION".as_ptr());
             lv_obj_set_style_text_color(title, rgb(CLR_ACCENT), 0);
             lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-            lv_obj_align(title, lv_align_t_LV_ALIGN_TOP_MID, 0, 24);
+            lv_obj_align(title, lv_align_t_LV_ALIGN_TOP_MID, 0, 44);
 
             // ── Row of 4 circles ─────────────────────────────────────────────
-            // 4 × 76 + 3 × 16 = 352 → 24 px margin each side, fits 400.
             const SIZE: i32 = 76;
             const GAP:  i32 = 16;
             const STEP: i32 = SIZE + GAP;
-            // Row width 352, centred: first circle x = (400 - 352) / 2 = 24.
             let x0: i32 = (400 - (4 * SIZE + 3 * GAP)) / 2;
-            let y0: i32 = 88; // below title, leaves room for sublabel + Done.
+            let y0: i32 = 88;
 
             for i in 0..4usize {
                 let circle = lv_button_create(screen);
@@ -194,12 +214,16 @@ impl super::Screen for NoiseReductionScreen {
 
                 Self::paint_circle(circle, lbl, false);
 
-                let tx = Box::into_raw(Box::new(self.bus.commands.clone()));
+                let click_data = Box::into_raw(Box::new(ClickData {
+                    tx:     self.bus.commands.clone(),
+                    screen: screen_ptr,
+                    idx:    i,
+                }));
                 lv_obj_add_event_cb(
                     circle,
-                    Some(CARD_CBS[i]),
+                    Some(level_click_cb),
                     lv_event_code_t_LV_EVENT_CLICKED,
-                    tx as *mut _,
+                    click_data as *mut _,
                 );
 
                 self.circles[i]    = circle;
@@ -216,13 +240,16 @@ impl super::Screen for NoiseReductionScreen {
             lv_obj_align(detail, lv_align_t_LV_ALIGN_TOP_MID, 0, y0 + SIZE + 14);
             self.detail_lbl = detail;
 
-            // ── Done button (64×64 BOTTOM_MID y=-8 — same factory as audio_mode) ─
+            // ── Done button ─────────────────────────────────────────────────
+            // `check_circle.png` has a visible green-on-white check; the
+            // earlier `btn_done_white.png` rendered as a white blob on the
+            // dark screen background. y=-20 lifts it off the bottom edge.
             let btn_done = lv_obj_create(screen);
             lv_obj_set_size(btn_done, 64, 64);
-            lv_obj_align(btn_done, lv_align_t_LV_ALIGN_BOTTOM_MID, 0, -8);
+            lv_obj_align(btn_done, lv_align_t_LV_ALIGN_BOTTOM_MID, 0, -20);
             lv_obj_set_style_bg_image_src(
                 btn_done,
-                b"A:/etc/pspapp/lvgl/icon/btn/btn_done_white.png\0".as_ptr() as *const _,
+                b"A:/etc/pspapp/lvgl/icon/btn/check_circle.png\0".as_ptr() as *const _,
                 0,
             );
             lv_obj_set_style_bg_opa(btn_done, 255, 0);
