@@ -37,6 +37,7 @@ impl HighPassFilter {
     pub fn process_interleaved(&mut self, buf: &mut [f32]) {
         let ch = self.biquads.len();
         if ch == 0 { return; }
+        debug_assert_eq!(buf.len() % ch, 0, "buf length must be a multiple of channels");
         for frame in buf.chunks_exact_mut(ch) {
             for (c, sample) in frame.iter_mut().enumerate() {
                 *sample = self.biquads[c].process_sample(*sample);
