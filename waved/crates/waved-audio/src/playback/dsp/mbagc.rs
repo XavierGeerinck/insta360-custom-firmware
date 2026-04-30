@@ -46,14 +46,14 @@ pub struct MultibandAgc {
 /// Per-band per-channel filter cascade and envelope state.
 struct BandState {
     /// Per-channel filter cascade producing this band.
-    /// For each channel: (low-pass-1, low-pass-2, high-pass-1, high-pass-2).
-    /// Band 0 (lowest): passes content below crossover[0] — uses LP cascade only.
-    /// Band 1..N-1: pass content between crossover[band-1] and crossover[band] —
-    ///   apply HP at lower edge, LP at upper edge.
-    /// Band N-1 (highest): passes above crossover[N-2] — HP cascade only.
+    /// (low-pass-1, low-pass-2, high-pass-1, high-pass-2) per channel.
     filters: [(Biquad, Biquad, Biquad, Biquad); N_CHANNELS],
-    /// Envelope state per channel (peak with IIR release).
-    envelope: [f32; N_CHANNELS],
+    /// Combined peak envelope (driven by max(|L|, |R|) per band).
+    /// Single value because the gain is shared across L and R to preserve stereo image.
+    envelope: f32,
+    /// `exp(-1 / (release_ms × 1e-3 × sample_rate_hz))` — cached at preset switch
+    /// instead of recomputed per sample.
+    release_alpha: f32,
 }
 
 impl MultibandAgc {
@@ -90,9 +90,12 @@ impl MultibandAgc {
                 Biquad::new(lp_coeffs), Biquad::new(lp_coeffs),
                 Biquad::new(hp_coeffs), Biquad::new(hp_coeffs),
             );
+            let release_alpha = (-1.0_f32
+                / (self.params.release_ms[band] * 1e-3 * self.sample_rate_hz)).exp();
             self.bands.push(BandState {
                 filters: [make_filters(), make_filters()],
-                envelope: [0.0; N_CHANNELS],
+                envelope: 0.0,
+                release_alpha,
             });
         }
     }
@@ -114,8 +117,8 @@ impl MultibandAgc {
                 band.filters[ch].1.reset();
                 band.filters[ch].2.reset();
                 band.filters[ch].3.reset();
-                band.envelope[ch] = 0.0;
             }
+            band.envelope = 0.0;
         }
         self.last_gain_db = [0.0; N_BANDS];
     }
@@ -147,25 +150,19 @@ impl MultibandAgc {
     /// Update per-band envelope state and compute the linear gain for this
     /// sample. Envelope is peak-with-exponential-release; gain is floored at 0
     /// (lift-only, no cut) and ceiled at `max_gain_db`.
-    fn band_gain_linear(&mut self, band_idx: usize, peak: f32, sample_rate_hz: f32) -> f32 {
-        let release_ms = self.params.release_ms[band_idx];
-        let alpha = (-1.0_f32 / (release_ms * 1e-3 * sample_rate_hz)).exp();
-        let env_l = self.bands[band_idx].envelope[0];
-        let env_r = self.bands[band_idx].envelope[1];
-        let new_env_l = if peak > env_l { peak } else { env_l * alpha };
-        let new_env_r = if peak > env_r { peak } else { env_r * alpha };
-        self.bands[band_idx].envelope[0] = new_env_l;
-        self.bands[band_idx].envelope[1] = new_env_r;
-        let env = new_env_l.max(new_env_r).max(1e-12);
+    fn band_gain_linear(&mut self, band_idx: usize, peak: f32) -> f32 {
+        let alpha = self.bands[band_idx].release_alpha;
+        let env = self.bands[band_idx].envelope;
+        let new_env = if peak > env { peak } else { env * alpha };
+        self.bands[band_idx].envelope = new_env;
+        let env = new_env.max(1e-12);
 
         let env_dbfs = 20.0 * env.log10();
         let target = self.params.target_dbfs[band_idx];
         let max_gain = self.params.max_gain_db[band_idx];
-        let knee = self.params.knee_db[band_idx];
 
         let raw = target - env_dbfs;
-        // Bound by [-knee, max_gain] then floor at 0 (lift-only).
-        let gain_db = raw.clamp(-knee, max_gain).max(0.0);
+        let gain_db = raw.min(max_gain).max(0.0);  // lift-only
         self.last_gain_db[band_idx] = gain_db;
         10.0_f32.powf(gain_db / 20.0)
     }
@@ -173,7 +170,6 @@ impl MultibandAgc {
     pub fn process_interleaved(&mut self, buf: &mut [f32]) {
         if !self.enabled { return; }
         debug_assert_eq!(buf.len() % N_CHANNELS, 0, "buf length must be a multiple of N_CHANNELS");
-        let sr = self.sample_rate_hz;
         for frame in buf.chunks_exact_mut(N_CHANNELS) {
             let l_in = frame[0];
             let r_in = frame[1];
@@ -182,7 +178,7 @@ impl MultibandAgc {
             for band in 0..N_BANDS {
                 let (lb, rb) = self.band_sample(band, l_in, r_in);
                 let peak = lb.abs().max(rb.abs());
-                let g = self.band_gain_linear(band, peak, sr);
+                let g = self.band_gain_linear(band, peak);
                 l_out += lb * g;
                 r_out += rb * g;
             }
