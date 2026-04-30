@@ -213,7 +213,10 @@ mod tests {
             (s / n as f32).sqrt()
         };
         let attn_db = 20.0 * rms.log10();
+        // Upper bound: cuts ≥ 12 dB at 40 Hz (well below 80 Hz cutoff).
         assert!(attn_db <= -12.0, "expected ≤ -12 dB at 40 Hz, got {attn_db:.2} dB");
+        // Lower bound: doesn't zero the signal (catches a designer that emits silence).
+        assert!(attn_db >= -40.0, "expected ≥ -40 dB at 40 Hz, got {attn_db:.2} dB");
     }
 
     #[test]
@@ -247,6 +250,20 @@ mod tests {
         };
         let gain_db = 20.0 * rms.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
         assert!(gain_db > 4.0, "expected ≥ 4 dB lift at 60 Hz, got {gain_db:.2} dB");
+
+        // Non-boosted side: 4 kHz should pass within ±1 dB.
+        let coeffs2 = design_low_shelf(200.0, 6.0, 1.0, 48_000.0);
+        let mut b2 = Biquad::new(coeffs2);
+        let mut buf2: Vec<f32> = (0..48_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 4000.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        b2.process_block(&mut buf2);
+        let rms_high = {
+            let s: f32 = buf2[24_000..].iter().map(|x| x * x).sum();
+            (s / 24_000_f32).sqrt()
+        };
+        let gain_high_db = 20.0 * rms_high.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
+        assert!(gain_high_db.abs() < 1.0, "expected unity at 4 kHz, got {gain_high_db:.2} dB");
     }
 
     #[test]
@@ -263,5 +280,19 @@ mod tests {
         };
         let gain_db = 20.0 * rms.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
         assert!(gain_db > 4.0, "expected ≥ 4 dB lift at 8 kHz, got {gain_db:.2} dB");
+
+        // Non-boosted side: 200 Hz should pass within ±1 dB.
+        let coeffs2 = design_high_shelf(4000.0, 6.0, 1.0, 48_000.0);
+        let mut b2 = Biquad::new(coeffs2);
+        let mut buf2: Vec<f32> = (0..48_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 200.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        b2.process_block(&mut buf2);
+        let rms_low = {
+            let s: f32 = buf2[24_000..].iter().map(|x| x * x).sum();
+            (s / 24_000_f32).sqrt()
+        };
+        let gain_low_db = 20.0 * rms_low.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
+        assert!(gain_low_db.abs() < 1.0, "expected unity at 200 Hz, got {gain_low_db:.2} dB");
     }
 }
