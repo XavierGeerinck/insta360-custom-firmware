@@ -10,7 +10,6 @@ mic_volume = 200
 [api]
 endpoint = "https://localhost:8080/meetings/upload"
 auth_token = ""
-auto_upload = true
 retry_max = 5
 retry_backoff_ms = 1000
 

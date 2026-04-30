@@ -36,10 +36,10 @@ pub struct AudioConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     pub endpoint: String,
     pub auth_token: String,
-    pub auto_upload: bool,
     pub retry_max: u32,
     pub retry_backoff_ms: u64,
 }
@@ -136,5 +136,43 @@ mod tests {
         let path = std::path::Path::new("/nonexistent/config.toml");
         let config = WavedConfig::load_or_default(path);
         assert_eq!(config.device.name, "Wave Open");
+    }
+
+    #[test]
+    fn legacy_config_with_auto_upload_field_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.toml");
+        std::fs::write(
+            &path,
+            r#"
+[device]
+name = "Wave Open"
+language = "en"
+
+[audio]
+mode = "omni"
+speaker_volume = 150
+mic_volume = 200
+
+[api]
+endpoint = "https://localhost:8080/meetings/upload"
+auth_token = ""
+auto_upload = true
+retry_max = 5
+retry_backoff_ms = 1000
+
+[security]
+device_password = ""
+ota_server = ""
+
+[ntp]
+servers = ["pool.ntp.org"]
+"#,
+        ).unwrap();
+        let result = WavedConfig::load(&path);
+        assert!(
+            result.is_err(),
+            "config with deprecated auto_upload field must fail to load"
+        );
     }
 }

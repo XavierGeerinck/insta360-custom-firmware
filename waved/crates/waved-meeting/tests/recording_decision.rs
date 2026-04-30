@@ -27,7 +27,6 @@ fn test_config(endpoint: &str) -> WavedConfig {
         api: ApiConfig {
             endpoint: endpoint.into(),
             auth_token: "".into(),
-            auto_upload: false,
             retry_max: 1,
             retry_backoff_ms: 10,
         },
