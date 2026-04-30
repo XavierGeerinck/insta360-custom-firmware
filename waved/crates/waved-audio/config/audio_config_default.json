@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "capture": {
     "mic_device": "hw:0,2",
     "mic_channels": 8,

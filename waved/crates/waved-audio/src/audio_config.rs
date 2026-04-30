@@ -42,6 +42,24 @@ pub struct PlaybackSection {
     pub format: SampleFormat,
     pub period_frames: usize,
     pub buffer_periods: u32,
+    #[serde(default)]
+    pub dsp: Option<PlaybackDspConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PlaybackDspConfig {
+    #[serde(default)]
+    pub voice: Option<PlaybackPresetTuningJson>,
+    #[serde(default)]
+    pub media: Option<PlaybackPresetTuningJson>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct PlaybackPresetTuningJson {
+    pub hpf_cutoff_hz: f32,
+    pub eq: [[crate::playback::dsp::eq::BiquadParams; 4]; 2],
+    pub mbagc: crate::playback::dsp::mbagc::MbagcParams,
+    pub limiter: crate::playback::dsp::limiter::LimiterParams,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -113,9 +131,9 @@ impl AudioConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.version != 3 {
+        if self.version != 3 && self.version != 4 {
             return Err(ConfigError::Invalid(format!(
-                "unsupported config version {}, expected 3", self.version
+                "unsupported config version {}, expected 3 or 4", self.version
             )));
         }
         if self.capture.mic_channels == 0 {
@@ -155,6 +173,28 @@ impl AudioConfig {
             if p.buffer_periods < 2 {
                 return Err(ConfigError::Invalid("playback.buffer_periods must be >= 2".into()));
             }
+            if let Some(dsp) = &p.dsp {
+                for (name, t) in [("voice", &dsp.voice), ("media", &dsp.media)] {
+                    if let Some(t) = t {
+                        if !(20.0..=200.0).contains(&t.hpf_cutoff_hz) {
+                            return Err(ConfigError::Invalid(format!(
+                                "{name}.hpf_cutoff_hz must be in [20, 200], got {}", t.hpf_cutoff_hz
+                            )));
+                        }
+                        if !(-3.0..=0.0).contains(&t.limiter.ceiling_dbfs) {
+                            return Err(ConfigError::Invalid(format!(
+                                "{name}.limiter.ceiling_dbfs must be in [-3, 0], got {}", t.limiter.ceiling_dbfs
+                            )));
+                        }
+                        let cf = t.mbagc.crossover_freq_hz;
+                        if !(cf[0] < cf[1] && cf[1] < cf[2]) {
+                            return Err(ConfigError::Invalid(format!(
+                                "{name}.mbagc.crossover_freq_hz must be strictly increasing, got {cf:?}"
+                            )));
+                        }
+                    }
+                }
+            }
         }
         // Hardware loopback and software reference are mutually exclusive;
         // enabling both is ambiguous for stats_collector reporting.
@@ -180,9 +220,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_default_parses_and_is_version_3() {
+    fn embedded_default_parses_and_is_version_4() {
         let cfg = AudioConfig::default_embedded();
-        assert_eq!(cfg.version, 3);
+        assert_eq!(cfg.version, 4);
         assert_eq!(cfg.capture.mic_device, "hw:0,2");
         assert_eq!(cfg.capture.mic_channels, 8);
         assert!(cfg.capture.reference_device.is_none());
@@ -195,9 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn embedded_default_is_v3_with_wave_geometry() {
+    fn embedded_default_is_v4_with_wave_geometry() {
         let cfg = AudioConfig::default_embedded();
-        assert_eq!(cfg.version, 3);
+        assert_eq!(cfg.version, 4);
         let geom = cfg.mic_geometry.as_ref().expect("default includes geometry");
         assert_eq!(geom.positions_mm.len(), 8);
         assert_eq!(geom.positions_mm[0].z, 0.0);
@@ -281,7 +321,7 @@ mod tests {
     fn load_or_default_missing_file_uses_fallback() {
         let (cfg, src) = AudioConfig::load_or_default(Path::new("/definitely/not/here.json"));
         assert_eq!(src, ConfigSource::Fallback);
-        assert_eq!(cfg.version, 3);
+        assert_eq!(cfg.version, 4);
     }
 
     #[test]
@@ -293,5 +333,101 @@ mod tests {
         assert_eq!(cfg.capture.mic_device, "hw:5,5");
         assert_eq!(cfg.capture.mic_channels, 4);
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn v3_config_still_parses() {
+        let json = r#"{
+            "version": 3,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "playback": {
+                "device": "hw:0,1",
+                "channels": 2,
+                "sample_rate": 48000,
+                "format": "S16_LE",
+                "period_frames": 1024,
+                "buffer_periods": 4
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v3 should parse");
+        assert_eq!(cfg.version, 3);
+        assert!(cfg.playback.unwrap().dsp.is_none());
+    }
+
+    #[test]
+    fn v4_config_with_dsp_block_parses() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "playback": {
+                "device": "hw:0,1",
+                "channels": 2,
+                "sample_rate": 48000,
+                "format": "S16_LE",
+                "period_frames": 1024,
+                "buffer_periods": 4,
+                "dsp": {
+                    "voice": {
+                        "hpf_cutoff_hz": 80.0,
+                        "eq": [
+                            [
+                                {"kind":"peaking","center_freq_hz":150.0,"gain_db":-6.0,"q":1.0},
+                                {"kind":"peaking","center_freq_hz":800.0,"gain_db":2.0,"q":2.0},
+                                {"kind":"peaking","center_freq_hz":400.0,"gain_db":-5.0,"q":1.5},
+                                {"kind":"peaking","center_freq_hz":3500.0,"gain_db":5.0,"q":2.0}
+                            ],
+                            [
+                                {"kind":"peaking","center_freq_hz":150.0,"gain_db":-6.0,"q":1.0},
+                                {"kind":"peaking","center_freq_hz":800.0,"gain_db":2.0,"q":2.0},
+                                {"kind":"peaking","center_freq_hz":400.0,"gain_db":-5.0,"q":1.5},
+                                {"kind":"peaking","center_freq_hz":3500.0,"gain_db":5.0,"q":2.0}
+                            ]
+                        ],
+                        "mbagc": {
+                            "enabled": true,
+                            "crossover_freq_hz": [300.0, 4000.0, 7000.0],
+                            "target_dbfs": [-12.0, -6.0, -29.0, -35.0],
+                            "max_gain_db": [6.0, 20.0, 10.0, 10.0],
+                            "knee_db": [5.0, 5.0, 5.0, 5.0],
+                            "release_ms": [200.0, 200.0, 200.0, 200.0]
+                        },
+                        "limiter": {
+                            "ceiling_dbfs": -1.0,
+                            "lookahead_samples": 96,
+                            "release_ms": 50.0
+                        }
+                    }
+                }
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v4 should parse");
+        assert_eq!(cfg.version, 4);
+        let voice = cfg.playback.unwrap().dsp.unwrap().voice.unwrap();
+        assert_eq!(voice.hpf_cutoff_hz, 80.0);
+        assert!(voice.mbagc.enabled);
+    }
+
+    #[test]
+    fn invalid_hpf_cutoff_rejected() {
+        let mut json = r#"{"version":4,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4,"dsp":{"voice":{"hpf_cutoff_hz":5.0,"eq":[[{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0}],[{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0},{"kind":"bypass","center_freq_hz":0.0,"gain_db":0.0,"q":0.0}]],"mbagc":{"enabled":false,"crossover_freq_hz":[300.0,4000.0,7000.0],"target_dbfs":[0.0,0.0,0.0,0.0],"max_gain_db":[0.0,0.0,0.0,0.0],"knee_db":[5.0,5.0,5.0,5.0],"release_ms":[200.0,200.0,200.0,200.0]},"limiter":{"ceiling_dbfs":-1.0,"lookahead_samples":96,"release_ms":50.0}}}},"period_frames":1024,"buffer_periods":8}"#.to_string();
+        let res = AudioConfig::from_json(&json);
+        assert!(res.is_err(), "hpf_cutoff_hz=5 should be rejected");
+        json = json.replace("\"hpf_cutoff_hz\":5.0", "\"hpf_cutoff_hz\":80.0");
+        let cfg = AudioConfig::from_json(&json).expect("80 Hz should validate");
+        assert_eq!(cfg.version, 4);
     }
 }
