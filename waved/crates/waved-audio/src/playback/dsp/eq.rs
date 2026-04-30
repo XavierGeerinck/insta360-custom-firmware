@@ -31,11 +31,14 @@ pub struct BiquadParams {
 }
 
 impl BiquadParams {
+    /// All non-`kind` fields are unused when `kind == Bypass` (`coeffs()`
+    /// returns `BiquadCoeffs::PASSTHROUGH` without reading them). Set to 0.0
+    /// so a serialised preset doesn't carry misleading tuning numbers.
     pub const BYPASS: BiquadParams = BiquadParams {
         kind: BiquadKind::Bypass,
-        center_freq_hz: 1000.0,
+        center_freq_hz: 0.0,
         gain_db: 0.0,
-        q: 1.0,
+        q: 0.0,
     };
 
     pub fn coeffs(&self, sample_rate_hz: f32) -> BiquadCoeffs {
