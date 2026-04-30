@@ -15,3 +15,6 @@ pub mod hpf;
 pub mod eq;
 pub mod mbagc;
 pub mod limiter;
+pub mod chain;
+
+pub use chain::PlaybackDspChain;
