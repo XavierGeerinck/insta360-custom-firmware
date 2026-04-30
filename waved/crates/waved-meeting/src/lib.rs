@@ -90,6 +90,10 @@ impl MeetingService {
                                         warn!("already recording, ignoring start");
                                         continue;
                                     }
+                                    if self.meeting_tx.borrow().pending_decision.is_some() {
+                                        warn!("ignoring StartRecording: previous take awaits decision");
+                                        continue;
+                                    }
                                     match recorder::ActiveRecording::start(
                                         &self.recordings_dir,
                                         &format!("{:?}", self.config.audio.mode),
@@ -133,16 +137,28 @@ impl MeetingService {
                                 Command::DiscardRecording(id) => {
                                     self.handle_discard_recording(id).await;
                                 }
-                                // Errata #8: handle Shutdown
                                 Command::Shutdown => {
                                     if let Some(rec) = active.take() {
                                         info!("shutdown: stopping active recording first");
                                         self.stop_recording(rec).await;
                                     }
-                                    // Pending-decision handling on shutdown is
-                                    // added in a later task. For now, rely on
-                                    // the post-stop pending_decision being a
-                                    // no-op shutdown-side.
+                                    // If a decision is still pending at shutdown,
+                                    // implicit-save: never auto-discard data the
+                                    // user hasn't decided on.
+                                    let pending_id = self.meeting_tx
+                                        .borrow()
+                                        .pending_decision
+                                        .as_ref()
+                                        .map(|d| d.id);
+                                    if let Some(id) = pending_id {
+                                        info!("shutdown: implicit save for pending {id}");
+                                        if let Err(e) = db::set_upload_status(
+                                            &self.pool, &id, "local_only",
+                                        ).await {
+                                            warn!("shutdown: db update failed for {id}: {e}");
+                                        }
+                                        self.clear_pending();
+                                    }
                                     return;
                                 }
                                 _ => {}

@@ -189,3 +189,32 @@ async fn discard_removes_file_and_db_row() {
     let dir = h.recordings_dir.join(id.to_string());
     assert!(!dir.exists(), "discard must rm -rf the recording dir");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_during_pending_decision_implicit_saves() {
+    let mut h = boot(false).await;
+    let id = record_and_stop(&mut h).await;
+    h.cmd_tx.send(Command::Shutdown).unwrap();
+    // Service exits after Shutdown — give it a beat to set local_only.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let dir = h.recordings_dir.join(id.to_string());
+    assert!(
+        dir.join("audio.wav").exists(),
+        "implicit save must preserve the audio file"
+    );
+    // pending_decision should be cleared in state too (last seen value).
+    assert!(h.meeting_rx.borrow().pending_decision.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn start_during_pending_decision_is_ignored() {
+    let mut h = boot(false).await;
+    let id = record_and_stop(&mut h).await;
+    let pending_before = h.meeting_rx.borrow().pending_decision.clone();
+    h.cmd_tx.send(Command::StartRecording).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let s = h.meeting_rx.borrow().clone();
+    assert!(!s.recording, "StartRecording must be ignored while pending");
+    assert_eq!(s.pending_decision, pending_before);
+    let _ = id;
+}

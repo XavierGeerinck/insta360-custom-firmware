@@ -92,7 +92,7 @@ pub struct MeetingState {
     pub pending_decision: Option<PendingDecision>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PendingDecision {
     pub id: Uuid,
     pub audio_path: PathBuf,
