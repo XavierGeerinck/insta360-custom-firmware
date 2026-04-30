@@ -21,6 +21,9 @@
 //! mechanism. Tune `PlaybackConfig::period_frames` / `buffer_periods` to trade
 //! stability for latency.
 
+pub mod dsp;
+pub mod preset;
+
 use crate::audio_config::SampleFormat;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
