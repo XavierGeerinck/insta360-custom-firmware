@@ -106,6 +106,7 @@ fn ui_thread_main(
     let mut noise_red  = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
     let mut system     = screens::system::SystemScreen::new(Arc::clone(&bus));
     let mut volume     = screens::volume::VolumeScreen::new(Arc::clone(&bus));
+    let mut confirmation = screens::confirmation::ConfirmationScreen::new(Arc::clone(&bus));
 
     // Track which non-settings screen to return to when settings closes.
     let mut return_to_recording = false;
@@ -170,22 +171,44 @@ fn ui_thread_main(
         unsafe { lv_timer_handler(); }
         unsafe { toast.tick(); }
 
-        // Auto-navigate Home ↔ Recording based on meeting.recording state.
-        // Only when on Home or Recording (not Settings/AudioMode).
-        if nav.current == UiScreen::Home || nav.current == UiScreen::Recording {
-            let recording_active = meeting_rx.borrow().recording;
-            if recording_active && !prev_recording {
-                let root = recording.create();
+        // Auto-navigate based on meeting state. Three states drive the
+        // top-level recording flow:
+        //   recording=true                            → RecordingScreen
+        //   recording=false, pending_decision=Some(_) → ConfirmationScreen
+        //   recording=false, pending_decision=None    → HomeScreen
+        // Only fires from Home / Recording / Confirmation; settings
+        // sub-pages keep the user where they are.
+        let snap = meeting_rx.borrow().clone();
+        let on_recording_axis = matches!(
+            nav.current,
+            UiScreen::Home | UiScreen::Recording | UiScreen::Confirmation,
+        );
+        if on_recording_axis {
+            let want = match (snap.recording, snap.pending_decision.is_some()) {
+                (true, _)      => UiScreen::Recording,
+                (false, true)  => UiScreen::Confirmation,
+                (false, false) => UiScreen::Home,
+            };
+            if want != nav.current {
+                let root = match want {
+                    UiScreen::Recording => {
+                        prev_recording = true;
+                        recording.create()
+                    }
+                    UiScreen::Confirmation => {
+                        prev_recording = false;
+                        confirmation.set_decision(snap.pending_decision.clone().unwrap());
+                        confirmation.create()
+                    }
+                    UiScreen::Home => {
+                        prev_recording = false;
+                        home.create()
+                    }
+                    _ => unreachable!(),
+                };
                 unsafe { lv_screen_load(root); }
-                nav.navigate_to(UiScreen::Recording);
+                nav.navigate_to(want);
                 nav.set_root(root);
-                prev_recording = true;
-            } else if !recording_active && prev_recording {
-                let root = home.create();
-                unsafe { lv_screen_load(root); }
-                nav.navigate_to(UiScreen::Home);
-                nav.set_root(root);
-                prev_recording = false;
             }
         }
 
@@ -215,7 +238,10 @@ fn ui_thread_main(
                 let audio = audio_rx.borrow().clone();
                 unsafe { noise_red.update_state(&audio); }
             }
-            UiScreen::Confirmation => {}
+            UiScreen::Confirmation => {
+                let meeting = meeting_rx.borrow().clone();
+                unsafe { confirmation.update_state(&meeting); }
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));
