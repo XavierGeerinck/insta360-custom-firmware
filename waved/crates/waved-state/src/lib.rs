@@ -30,6 +30,7 @@ pub struct AudioState {
     /// Same shape, but for the reference / far-end channel.
     pub incoming_freq_bands: [f32; FREQ_BAND_COUNT],
     pub nr_level: NrLevel,
+    pub playback_preset: PlaybackPreset,  // SP#5
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -51,6 +52,14 @@ pub enum NrLevel {
     Low,
     Med,
     High,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackPreset {
+    #[default]
+    Voice,
+    Media,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -154,6 +163,7 @@ pub enum ButtonType {
 pub enum Command {
     SetAudioMode(AudioMode),
     SetNrLevel(NrLevel),
+    SetPlaybackPreset(PlaybackPreset),
     ToggleMicMute,
     ToggleSpeakerMute,
     SetSpeakerVolume(u16),
@@ -316,5 +326,17 @@ mod tests {
         let _save = Command::SaveRecording(id);
         let _send = Command::SendRecording(id);
         let _discard = Command::DiscardRecording(id);
+    }
+
+    #[test]
+    fn playback_preset_default_is_voice() {
+        let s = AudioState::default();
+        assert_eq!(s.playback_preset, PlaybackPreset::Voice);
+    }
+
+    #[test]
+    fn set_playback_preset_command_routes() {
+        let cmd = Command::SetPlaybackPreset(PlaybackPreset::Media);
+        assert!(matches!(cmd, Command::SetPlaybackPreset(PlaybackPreset::Media)));
     }
 }

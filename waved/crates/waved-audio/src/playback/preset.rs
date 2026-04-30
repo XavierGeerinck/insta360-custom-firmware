@@ -8,10 +8,7 @@
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-// Local placeholder — replaced by `pub use waved_state::PlaybackPreset;` in Task 13.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaybackPreset { Voice, Media }
-impl Default for PlaybackPreset { fn default() -> Self { PlaybackPreset::Voice } }
+pub use waved_state::PlaybackPreset;
 
 use super::dsp::eq::{BiquadKind, BiquadParams, N_BANDS, N_CHANNELS};
 use super::dsp::limiter::LimiterParams;
