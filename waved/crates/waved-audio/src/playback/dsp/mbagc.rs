@@ -44,10 +44,6 @@ pub struct MultibandAgc {
 }
 
 /// Per-band per-channel filter cascade and envelope state.
-/// `filters` and `envelope` are populated by `rebuild_filters`/`reset` here
-/// and consumed by Task 7's `band_sample`/`band_gain_linear`. The allow
-/// silences dead_code warnings during the bypass-only window.
-#[allow(dead_code)]
 struct BandState {
     /// Per-channel filter cascade producing this band.
     /// For each channel: (low-pass-1, low-pass-2, high-pass-1, high-pass-2).
@@ -129,11 +125,70 @@ impl MultibandAgc {
         self.last_gain_db
     }
 
-    /// Bypass path — Task 7 replaces this with the envelope+gain implementation.
+    /// Pull one sample of band `band_idx` from per-channel input via the LR4
+    /// cascade. Returns `(left_band, right_band)`. The cascade is HP-then-LP;
+    /// either side is `BiquadCoeffs::PASSTHROUGH` for the lowest/highest band.
+    fn band_sample(&mut self, band_idx: usize, l_in: f32, r_in: f32) -> (f32, f32) {
+        let band = &mut self.bands[band_idx];
+        let process_chain = |x: f32, fil: &mut (Biquad, Biquad, Biquad, Biquad)| -> f32 {
+            // HP cascade (lower edge — passthrough for band 0)
+            let mut y = fil.2.process_sample(x);
+            y = fil.3.process_sample(y);
+            // LP cascade (upper edge — passthrough for last band)
+            y = fil.0.process_sample(y);
+            y = fil.1.process_sample(y);
+            y
+        };
+        let l = process_chain(l_in, &mut band.filters[0]);
+        let r = process_chain(r_in, &mut band.filters[1]);
+        (l, r)
+    }
+
+    /// Update per-band envelope state and compute the linear gain for this
+    /// sample. Envelope is peak-with-exponential-release; gain is floored at 0
+    /// (lift-only, no cut) and ceiled at `max_gain_db`.
+    fn band_gain_linear(&mut self, band_idx: usize, peak: f32, sample_rate_hz: f32) -> f32 {
+        let release_ms = self.params.release_ms[band_idx];
+        let alpha = (-1.0_f32 / (release_ms * 1e-3 * sample_rate_hz)).exp();
+        let env_l = self.bands[band_idx].envelope[0];
+        let env_r = self.bands[band_idx].envelope[1];
+        let new_env_l = if peak > env_l { peak } else { env_l * alpha };
+        let new_env_r = if peak > env_r { peak } else { env_r * alpha };
+        self.bands[band_idx].envelope[0] = new_env_l;
+        self.bands[band_idx].envelope[1] = new_env_r;
+        let env = new_env_l.max(new_env_r).max(1e-12);
+
+        let env_dbfs = 20.0 * env.log10();
+        let target = self.params.target_dbfs[band_idx];
+        let max_gain = self.params.max_gain_db[band_idx];
+        let knee = self.params.knee_db[band_idx];
+
+        let raw = target - env_dbfs;
+        // Bound by [-knee, max_gain] then floor at 0 (lift-only).
+        let gain_db = raw.clamp(-knee, max_gain).max(0.0);
+        self.last_gain_db[band_idx] = gain_db;
+        10.0_f32.powf(gain_db / 20.0)
+    }
+
     pub fn process_interleaved(&mut self, buf: &mut [f32]) {
         if !self.enabled { return; }
-        // Until Task 7 lands, "enabled" is a no-op so the chain composes.
-        let _ = buf;
+        debug_assert_eq!(buf.len() % N_CHANNELS, 0, "buf length must be a multiple of N_CHANNELS");
+        let sr = self.sample_rate_hz;
+        for frame in buf.chunks_exact_mut(N_CHANNELS) {
+            let l_in = frame[0];
+            let r_in = frame[1];
+            let mut l_out = 0.0_f32;
+            let mut r_out = 0.0_f32;
+            for band in 0..N_BANDS {
+                let (lb, rb) = self.band_sample(band, l_in, r_in);
+                let peak = lb.abs().max(rb.abs());
+                let g = self.band_gain_linear(band, peak, sr);
+                l_out += lb * g;
+                r_out += rb * g;
+            }
+            frame[0] = l_out;
+            frame[1] = r_out;
+        }
     }
 }
 
@@ -151,14 +206,59 @@ mod tests {
     }
 
     #[test]
-    fn enabled_mbagc_currently_no_op_until_task_7() {
+    fn soft_input_lifted_toward_target() {
+        // Voice preset's mid-low band is targeted at -6 dBFS (16406 / 32768).
+        // A −20 dBFS sine in the mid-low band should be lifted toward target.
         let mut params = MbagcParams::PASSTHROUGH;
         params.enabled = true;
+        params.target_dbfs = [-12.0, -6.0, -29.0, -35.0];
+        params.max_gain_db = [6.0, 20.0, 10.0, 10.0];
+        params.knee_db = [5.0, 5.0, 5.0, 5.0];
+        params.release_ms = [200.0, 200.0, 200.0, 200.0];
         let mut m = MultibandAgc::new(params, 48_000.0);
-        let mut buf = vec![0.5_f32, -0.5];
-        let copy = buf.clone();
+
+        // 1 kHz sine at −20 dBFS, stereo, 2 seconds (96_000 frames).
+        let amp = 10.0_f32.powf(-20.0 / 20.0); // 0.1
+        let mut buf: Vec<f32> = (0..96_000)
+            .flat_map(|i| {
+                let s = amp * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin();
+                [s, s]
+            })
+            .collect();
         m.process_interleaved(&mut buf);
-        // Task 7 will replace this assertion.
-        assert_eq!(buf, copy);
+
+        // RMS over second half of L channel: indices 96_000.. step_by 2 = 48_000 samples.
+        let l_sq: f32 = buf[96_000..].iter().step_by(2).map(|x| x * x).sum();
+        let l_rms = (l_sq / 48_000_f32).sqrt();
+        let l_db = 20.0 * l_rms.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
+        // mid-low band target is -6 dBFS, max gain 20 dB. Expect within ±3 dB of target.
+        assert!((l_db - (-6.0)).abs() < 3.0, "expected ≈ -6 dBFS, got {l_db:.2} dBFS");
+    }
+
+    #[test]
+    fn hot_input_attenuated_below_max_gain() {
+        // 0 dBFS input — gain calculation says we should attenuate (gain < 0),
+        // but the gain is floored at 0.0 (only lift, never cut). Output stays ≈ 0 dBFS.
+        let mut params = MbagcParams::PASSTHROUGH;
+        params.enabled = true;
+        params.target_dbfs = [-12.0, -6.0, -29.0, -35.0];
+        params.max_gain_db = [6.0, 20.0, 10.0, 10.0];
+        params.knee_db = [5.0, 5.0, 5.0, 5.0];
+        params.release_ms = [200.0, 200.0, 200.0, 200.0];
+        let mut m = MultibandAgc::new(params, 48_000.0);
+
+        let mut buf: Vec<f32> = (0..96_000)
+            .flat_map(|i| {
+                let s = (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin();
+                [s, s]
+            })
+            .collect();
+        m.process_interleaved(&mut buf);
+
+        let l_sq: f32 = buf[96_000..].iter().step_by(2).map(|x| x * x).sum();
+        let l_rms = (l_sq / 48_000_f32).sqrt();
+        let l_db = 20.0 * l_rms.log10() - 20.0 * (1.0_f32 / 2.0_f32.sqrt()).log10();
+        // Should stay ≈ 0 dBFS (no cut). Within 1 dB.
+        assert!(l_db.abs() < 1.0, "expected ≈ 0 dBFS, got {l_db:.2} dBFS");
     }
 }
