@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -84,6 +85,21 @@ pub struct MeetingState {
     pub duration_secs: u32,
     pub pending_uploads: u32,
     pub failed_uploads: u32,
+    /// `Some(...)` while the recording-screen Stop has fired but the user
+    /// has not yet chosen Save / Send / Discard. UI uses presence of this
+    /// field to switch to the ConfirmationScreen, and clears it via one of
+    /// the three new `Command` variants.
+    pub pending_decision: Option<PendingDecision>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingDecision {
+    pub id: Uuid,
+    pub audio_path: PathBuf,
+    pub duration_secs: u32,
+    pub size_bytes: u64,
+    /// Snapshot of `config.api.endpoint` at stop time.
+    pub endpoint: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -168,6 +184,15 @@ pub enum Command {
     /// Used by `scripts/test-beamforming.sh` Test 1 to measure front-to-back ratio
     /// against a known fixed axis.
     SetDoaOverride(Option<(f32, f32)>),
+    /// User chose Save on the confirmation screen — keep the file locally,
+    /// mark `upload_status='local_only'`, do not upload.
+    SaveRecording(Uuid),
+    /// User chose Send on the confirmation screen — keep the file locally
+    /// and queue an upload through the existing retry-with-backoff path.
+    SendRecording(Uuid),
+    /// User chose Discard on the confirmation screen — hard-delete the
+    /// recording dir, the meeting row, and any bookmarks for it.
+    DiscardRecording(Uuid),
 }
 
 // --- State Bus ---
@@ -277,5 +302,19 @@ mod tests {
     fn command_set_nr_level_exists() {
         let cmd = Command::SetNrLevel(NrLevel::High);
         assert!(matches!(cmd, Command::SetNrLevel(NrLevel::High)));
+    }
+
+    #[test]
+    fn meeting_state_default_has_no_pending_decision() {
+        let s = MeetingState::default();
+        assert!(s.pending_decision.is_none());
+    }
+
+    #[test]
+    fn save_send_discard_commands_carry_uuid() {
+        let id = Uuid::new_v4();
+        let _save = Command::SaveRecording(id);
+        let _send = Command::SendRecording(id);
+        let _discard = Command::DiscardRecording(id);
     }
 }
