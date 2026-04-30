@@ -230,7 +230,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                 format: pb.format,
                 period_frames: pb.period_frames,
                 buffer_periods: pb.buffer_periods,
-                initial_preset: waved_audio::playback::preset::PlaybackPreset::Voice,
+                initial_preset: bus.audio.borrow().playback_preset,
             }) {
                 Ok(p) => p,
                 Err(e) => {
@@ -254,6 +254,18 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // batches while keeping the service alive for the rest of the
             // process lifetime.
             let playback = Arc::new(playback);
+            // SP#5: forward preset commands from the bus to the playback loop.
+            tokio::spawn({
+                let playback = Arc::clone(&playback);
+                let mut cmd_rx = bus.commands.subscribe();
+                async move {
+                    while let Ok(cmd) = cmd_rx.recv().await {
+                        if let Command::SetPlaybackPreset(p) = cmd {
+                            playback.set_preset(p);
+                        }
+                    }
+                }
+            });
             tokio::spawn(test_tone_handler(Arc::clone(&playback)));
             tokio::spawn(file_play_handler(Arc::clone(&playback)));
             // Keep one Arc alive for process lifetime — the playback thread
@@ -498,7 +510,7 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
     };
 
     info!(
-        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override, /tmp/waved-nr)"
+        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override, /tmp/waved-nr, /tmp/waved-playback-preset)"
     );
 
     while sighup.recv().await.is_some() {
@@ -544,6 +556,27 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => warn!("SIGHUP: {NR_PATH}: {e}"),
+        }
+
+        const PRESET_PATH: &str = "/tmp/waved-playback-preset";
+        match std::fs::read_to_string(PRESET_PATH) {
+            Ok(raw) => {
+                let preset = match raw.trim().to_ascii_lowercase().as_str() {
+                    "voice" => Some(waved_state::PlaybackPreset::Voice),
+                    "media" => Some(waved_state::PlaybackPreset::Media),
+                    "" => None,
+                    other => {
+                        warn!("SIGHUP: unknown playback preset {other:?}");
+                        None
+                    }
+                };
+                if let Some(p) = preset {
+                    info!("SIGHUP: setting playback preset → {p:?}");
+                    let _ = commands.send(Command::SetPlaybackPreset(p));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {PRESET_PATH}: {e}"),
         }
 
         const DOA_PATH: &str = "/tmp/waved-doa-override";

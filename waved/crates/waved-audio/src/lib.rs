@@ -397,6 +397,10 @@ impl AudioService {
                             self.noise_suppressor = ns;
                             self.audio_tx.send_modify(|s| s.nr_level = level);
                         }
+                        Ok(Command::SetPlaybackPreset(p)) => {
+                            info!("playback preset → {p:?}");
+                            self.audio_tx.send_modify(|s| s.playback_preset = p);
+                        }
                         Ok(Command::ToggleMicMute) => {
                             self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
                         }
