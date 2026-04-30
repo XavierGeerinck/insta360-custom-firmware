@@ -11,3 +11,4 @@
 //!   chain  — Task 9 (adds `pub use chain::PlaybackDspChain;`)
 
 pub mod biquad;
+pub mod hpf;
