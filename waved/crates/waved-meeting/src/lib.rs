@@ -6,11 +6,12 @@ pub mod upload;
 pub mod simulate;
 
 use sqlx::SqlitePool;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::WavedConfig;
 use waved_state::{Command, DeviceEvent, MeetingState, PendingDecision, WifiState};
@@ -123,6 +124,15 @@ impl MeetingService {
                                         info!("bookmark at {}s", ts);
                                     }
                                 }
+                                Command::SaveRecording(id) => {
+                                    self.handle_save_recording(id).await;
+                                }
+                                Command::SendRecording(id) => {
+                                    self.handle_send_recording(id, &wifi_rx).await;
+                                }
+                                Command::DiscardRecording(id) => {
+                                    self.handle_discard_recording(id).await;
+                                }
                                 // Errata #8: handle Shutdown
                                 Command::Shutdown => {
                                     if let Some(rec) = active.take() {
@@ -193,61 +203,149 @@ impl MeetingService {
         );
     }
 
-    // Errata #7: upload with retry loop
-    async fn try_upload_with_retry(&self, meeting_id: &str, audio_path: &std::path::Path) {
-        let max_retries = self.config.api.retry_max;
-        let backoff_ms = self.config.api.retry_backoff_ms;
-
-        for attempt in 1..=max_retries {
-            #[cfg(not(feature = "simulate"))]
-            let upload_result = upload::upload_recording(
-                &self.config.api.endpoint,
-                &self.config.api.auth_token,
-                meeting_id,
-                audio_path,
-            )
-            .await;
-
-            #[cfg(feature = "simulate")]
-            let upload_result = simulate::upload_recording(
-                &self.config.api.endpoint,
-                &self.config.api.auth_token,
-                meeting_id,
-                audio_path,
-            )
-            .await;
-
-            match upload_result {
-                Ok(()) => {
-                    if let Ok(uuid) = meeting_id.parse() {
-                        let _ = db::set_upload_status(&self.pool, &uuid, "uploaded").await;
-                    }
-                    return;
-                }
-                Err(e) => {
-                    warn!("upload attempt {attempt}/{max_retries} failed for {meeting_id}: {e}");
-                    if attempt < max_retries {
-                        let delay = Duration::from_millis(backoff_ms * attempt as u64);
-                        tokio::time::sleep(delay).await;
-                    }
-                }
-            }
-        }
-        warn!("all upload attempts exhausted for {meeting_id}");
-        if let Ok(uuid) = meeting_id.parse() {
-            let _ = db::set_upload_status(&self.pool, &uuid, "upload_failed").await;
-        }
-    }
-
     async fn flush_pending_uploads(&self) {
         match db::get_pending_uploads(&self.pool).await {
             Ok(pending) => {
-                for (id, path) in pending {
+                for (id_str, path) in pending {
+                    let Ok(id) = id_str.parse::<Uuid>() else {
+                        warn!("flush: skipping unparseable id {id_str}");
+                        continue;
+                    };
                     let audio_path = std::path::PathBuf::from(&path).join("audio.wav");
-                    self.try_upload_with_retry(&id, &audio_path).await;
+                    upload_with_retry_standalone(
+                        &self.pool,
+                        &self.config.api.endpoint,
+                        &self.config.api.auth_token,
+                        self.config.api.retry_max,
+                        self.config.api.retry_backoff_ms,
+                        &id,
+                        &audio_path,
+                    )
+                    .await;
                 }
             }
             Err(e) => error!("failed to get pending uploads: {e}"),
         }
     }
+
+    /// Returns the recording dir for an id under self.recordings_dir.
+    fn dir_for(&self, id: &Uuid) -> PathBuf {
+        self.recordings_dir.join(id.to_string())
+    }
+
+    /// Verify the carried id matches the active pending_decision and
+    /// return the decision. None if mismatch / absent — caller should
+    /// warn and ignore (stale tap).
+    fn validate_pending(&self, id: &Uuid) -> Option<PendingDecision> {
+        let s = self.meeting_tx.borrow().clone();
+        match s.pending_decision {
+            Some(d) if &d.id == id => Some(d),
+            Some(d) => {
+                warn!(
+                    "ignoring decision for {id}: pending_decision is for {}",
+                    d.id
+                );
+                None
+            }
+            None => {
+                warn!("ignoring decision for {id}: no pending_decision");
+                None
+            }
+        }
+    }
+
+    fn clear_pending(&self) {
+        self.meeting_tx
+            .send_modify(|s| s.pending_decision = None);
+    }
+
+    async fn handle_save_recording(&self, id: Uuid) {
+        if self.validate_pending(&id).is_none() { return; }
+        if let Err(e) = db::set_upload_status(&self.pool, &id, "local_only").await {
+            warn!("save: db update failed for {id}: {e}");
+        }
+        self.clear_pending();
+        info!("save: {id} kept locally");
+    }
+
+    async fn handle_send_recording(
+        &self,
+        id: Uuid,
+        wifi_rx: &watch::Receiver<WifiState>,
+    ) {
+        let Some(decision) = self.validate_pending(&id) else { return; };
+        if let Err(e) = db::set_upload_status(&self.pool, &id, "pending").await {
+            warn!("send: db update failed for {id}: {e}");
+        }
+        if wifi_rx.borrow().connected {
+            // Spawn so the command-loop iteration completes immediately
+            // (the modal-clearing send_modify below must run before the
+            // upload's first await yields).
+            let pool = self.pool.clone();
+            let endpoint = self.config.api.endpoint.clone();
+            let token = self.config.api.auth_token.clone();
+            let max = self.config.api.retry_max;
+            let backoff = self.config.api.retry_backoff_ms;
+            let audio_path = decision.audio_path.clone();
+            tokio::spawn(async move {
+                upload_with_retry_standalone(
+                    &pool, &endpoint, &token, max, backoff, &id, &audio_path,
+                )
+                .await;
+            });
+        } else {
+            info!("send: {id} queued (offline) — wifi-flush will retry");
+        }
+        self.clear_pending();
+    }
+
+    async fn handle_discard_recording(&self, id: Uuid) {
+        if self.validate_pending(&id).is_none() { return; }
+        if let Err(e) = db::delete_meeting_cascade(&self.pool, &id).await {
+            warn!("discard: db delete failed for {id}: {e}");
+        }
+        let dir = self.dir_for(&id);
+        match tokio::fs::remove_dir_all(&dir).await {
+            Ok(()) => info!("discard: {id} dir removed ({})", dir.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("discard: rm -rf {} failed: {e}", dir.display()),
+        }
+        self.clear_pending();
+    }
+}
+
+async fn upload_with_retry_standalone(
+    pool: &SqlitePool,
+    endpoint: &str,
+    auth_token: &str,
+    max_retries: u32,
+    backoff_ms: u64,
+    meeting_id: &Uuid,
+    audio_path: &Path,
+) {
+    let id_str = meeting_id.to_string();
+    for attempt in 1..=max_retries {
+        #[cfg(not(feature = "simulate"))]
+        let upload_result = upload::upload_recording(
+            endpoint, auth_token, &id_str, audio_path,
+        ).await;
+        #[cfg(feature = "simulate")]
+        let upload_result = simulate::upload_recording(
+            endpoint, auth_token, &id_str, audio_path,
+        ).await;
+
+        match upload_result {
+            Ok(()) => {
+                let _ = db::set_upload_status(pool, meeting_id, "uploaded").await;
+                return;
+            }
+            Err(e) => {
+                warn!("upload attempt {attempt}/{max_retries} failed for {id_str}: {e}");
+                if attempt < max_retries {
+                    tokio::time::sleep(Duration::from_millis(backoff_ms * attempt as u64)).await;
+                }
+            }
+        }
+    }
+    let _ = db::set_upload_status(pool, meeting_id, "upload_failed").await;
 }

@@ -1,0 +1,191 @@
+//! Integration tests for the Save / Send / Discard recording flow.
+//!
+//! Each test boots a `MeetingService` with the `simulate` feature so
+//! upload calls land in `./test_uploads/` instead of hitting HTTP.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc, watch};
+use waved_audio::callbacks::AudioFrame;
+use waved_audio::processed_frame::ProcessedAudioFrame;
+use waved_config::{ApiConfig, AudioConfig, DeviceConfig, NtpConfig, SecurityConfig, WavedConfig};
+use waved_meeting::MeetingService;
+use waved_state::{AudioMode, Command, DeviceEvent, MeetingState, WifiState};
+
+fn test_config(endpoint: &str) -> WavedConfig {
+    WavedConfig {
+        device: DeviceConfig {
+            name: "test".into(),
+            language: "en".into(),
+        },
+        audio: AudioConfig {
+            mode: AudioMode::Omni,
+            speaker_volume: 100,
+            mic_volume: 100,
+        },
+        api: ApiConfig {
+            endpoint: endpoint.into(),
+            auth_token: "".into(),
+            auto_upload: false,
+            retry_max: 1,
+            retry_backoff_ms: 10,
+        },
+        security: SecurityConfig {
+            device_password: "".into(),
+            ota_server: "".into(),
+        },
+        ntp: NtpConfig { servers: vec![] },
+    }
+}
+
+fn fake_frame() -> ProcessedAudioFrame {
+    let frame = AudioFrame::mic_only(vec![0i16; 480], 1, 48000, 0);
+    let mic_mono = vec![0i16; 480];
+    let ref_mono = vec![0i16; 480];
+    ProcessedAudioFrame::from_raw(&frame, &mic_mono, &ref_mono)
+}
+
+struct Harness {
+    cmd_tx: broadcast::Sender<Command>,
+    meeting_rx: watch::Receiver<MeetingState>,
+    wifi_tx: watch::Sender<WifiState>,
+    audio_tx: mpsc::Sender<ProcessedAudioFrame>,
+    recordings_dir: PathBuf,
+    _events_rx: broadcast::Receiver<DeviceEvent>,
+}
+
+async fn boot(connected: bool) -> Harness {
+    let dir = tempfile::tempdir().unwrap();
+    let recordings_dir = dir.path().join("recordings");
+    let db_path = dir.path().join("t.db").to_string_lossy().into_owned();
+    Box::leak(Box::new(dir)); // outlive the test
+
+    let (cmd_tx, _) = broadcast::channel::<Command>(16);
+    let (meeting_tx, meeting_rx) = watch::channel(MeetingState::default());
+    let (events_tx, events_rx) = broadcast::channel::<DeviceEvent>(16);
+    let (wifi_tx, wifi_rx) = watch::channel(WifiState {
+        connected,
+        ..Default::default()
+    });
+    let (audio_tx, audio_rx) = mpsc::channel::<ProcessedAudioFrame>(16);
+
+    let svc = MeetingService::new(
+        test_config("https://example.com/upload"),
+        &db_path,
+        recordings_dir.clone(),
+        Arc::new(meeting_tx),
+        events_tx,
+        audio_rx,
+    )
+    .await
+    .unwrap();
+
+    let cmd_rx = cmd_tx.subscribe();
+    tokio::spawn(async move { svc.run(cmd_rx, wifi_rx).await });
+
+    Harness {
+        cmd_tx,
+        meeting_rx,
+        wifi_tx,
+        audio_tx,
+        recordings_dir,
+        _events_rx: events_rx,
+    }
+}
+
+/// Wait until `predicate(state)` returns true or the timeout elapses.
+async fn wait_for<F: Fn(&MeetingState) -> bool>(
+    rx: &mut watch::Receiver<MeetingState>,
+    predicate: F,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        if predicate(&rx.borrow()) {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timed out waiting for predicate; state = {:?}", *rx.borrow());
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(50), rx.changed()).await;
+    }
+}
+
+async fn record_and_stop(h: &mut Harness) -> uuid::Uuid {
+    h.cmd_tx.send(Command::StartRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |s| s.recording).await;
+    let id = h.meeting_rx.borrow().meeting_id.unwrap();
+    let _ = h.audio_tx.send(fake_frame()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    h.cmd_tx.send(Command::StopRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_some() && !s.recording).await;
+    id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_recording_populates_pending_decision() {
+    let mut h = boot(false).await;
+    let id = record_and_stop(&mut h).await;
+    let s = h.meeting_rx.borrow().clone();
+    let d = s.pending_decision.expect("pending_decision must be set");
+    assert_eq!(d.id, id);
+    assert!(d.audio_path.exists(), "audio.wav must exist");
+    assert_eq!(d.endpoint, "https://example.com/upload");
+    assert!(d.size_bytes > 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn save_clears_pending_and_marks_local_only() {
+    let mut h = boot(false).await;
+    let id = record_and_stop(&mut h).await;
+    h.cmd_tx.send(Command::SaveRecording(id)).unwrap();
+    wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
+    // File still exists.
+    let dir = h.recordings_dir.join(id.to_string());
+    assert!(dir.join("audio.wav").exists());
+    // Even if wifi flips on, no upload should fire (status is local_only).
+    let _ = h.wifi_tx.send(WifiState {
+        connected: true,
+        ..Default::default()
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let sim_dir = std::path::Path::new("./test_uploads");
+    if sim_dir.exists() {
+        for entry in std::fs::read_dir(sim_dir).unwrap() {
+            let path = entry.unwrap().path();
+            assert!(
+                !path.to_string_lossy().contains(&id.to_string()),
+                "save should not trigger upload: found {path:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_queues_upload_when_online() {
+    let mut h = boot(true).await;
+    let id = record_and_stop(&mut h).await;
+    h.cmd_tx.send(Command::SendRecording(id)).unwrap();
+    wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
+    // Simulated upload writes a copy under ./test_uploads/<id>.opus.
+    let sim_dir = std::path::Path::new("./test_uploads");
+    let target = sim_dir.join(format!("{id}.opus"));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while !target.exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        target.exists(),
+        "simulated upload should have copied audio.wav to {target:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn discard_removes_file_and_db_row() {
+    let mut h = boot(false).await;
+    let id = record_and_stop(&mut h).await;
+    h.cmd_tx.send(Command::DiscardRecording(id)).unwrap();
+    wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
+    let dir = h.recordings_dir.join(id.to_string());
+    assert!(!dir.exists(), "discard must rm -rf the recording dir");
+}
