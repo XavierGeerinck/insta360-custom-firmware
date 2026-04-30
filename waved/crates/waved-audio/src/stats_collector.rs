@@ -5,6 +5,7 @@
 use crate::callbacks::AudioFrame;
 use crate::capture::{ChannelMapSource, CaptureStats};
 use crate::metrics::{clipping_rate, correlation_matrix, dc_offset, rms_per_channel};
+use crate::playback::DspMetrics;
 use crate::processed_frame::ProcessedAudioFrame;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,9 @@ pub struct AudioStats {
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
     pub mode: AudioMode,
+    pub playback_preset: String,
+    pub mbagc_active_gain_db: [f32; 4],
+    pub limiter_reduction_db: f32,
 }
 
 pub async fn run(
@@ -48,6 +52,7 @@ pub async fn run(
     out_path: PathBuf,
     period: std::time::Duration,
     alignment: String,
+    dsp_metrics: Option<Arc<DspMetrics>>,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
@@ -80,7 +85,7 @@ pub async fn run(
                     let state = audio_state_rx.borrow().clone();
                     let s = compute_stats_with_processed(
                         frame, &stats, map_source, last_write_error.clone(), &alignment,
-                        latest_post_aec_rms, &state,
+                        latest_post_aec_rms, &state, dsp_metrics.as_deref(),
                     );
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
@@ -118,7 +123,7 @@ pub fn compute_stats(
     alignment: &str,
 ) -> AudioStats {
     compute_stats_with_processed(
-        frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(),
+        frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(), None,
     )
 }
 
@@ -130,6 +135,7 @@ pub fn compute_stats_with_processed(
     alignment: &str,
     mic_post_aec_rms: Option<f32>,
     audio_state: &AudioState,
+    dsp_metrics: Option<&DspMetrics>,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -152,6 +158,23 @@ pub fn compute_stats_with_processed(
     } else {
         vec![]
     };
+    let playback_preset = match audio_state.playback_preset {
+        waved_state::PlaybackPreset::Voice => "voice".to_string(),
+        waved_state::PlaybackPreset::Media => "media".to_string(),
+    };
+    let (mbagc_active_gain_db, limiter_reduction_db) = if let Some(m) = dsp_metrics {
+        let gains = [
+            m.mbagc_gain_db_x100[0].load(Ordering::Relaxed) as f32 / 100.0,
+            m.mbagc_gain_db_x100[1].load(Ordering::Relaxed) as f32 / 100.0,
+            m.mbagc_gain_db_x100[2].load(Ordering::Relaxed) as f32 / 100.0,
+            m.mbagc_gain_db_x100[3].load(Ordering::Relaxed) as f32 / 100.0,
+        ];
+        let limiter = m.limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
+        (gains, limiter)
+    } else {
+        ([0.0_f32; 4], 0.0_f32)
+    };
+
     AudioStats {
         last_updated_ms: frame.timestamp_ms,
         channel_map_source: match map_source {
@@ -174,6 +197,9 @@ pub fn compute_stats_with_processed(
         doa_horizontal: audio_state.doa_horizontal,
         doa_pitch: audio_state.doa_pitch,
         mode: audio_state.mode.clone(),
+        playback_preset,
+        mbagc_active_gain_db,
+        limiter_reduction_db,
     }
 }
 
@@ -291,7 +317,7 @@ mod tests {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
         let s = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(),
+            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(), None,
         );
         assert_eq!(s.mic_post_aec_rms, Some(123.4));
     }
@@ -308,7 +334,7 @@ mod tests {
             ..Default::default()
         };
         let s = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", None, &state,
+            &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
         );
         assert_eq!(s.mode, AudioMode::Cardioid);
         assert!((s.doa_horizontal - 47.5).abs() < 1e-6);

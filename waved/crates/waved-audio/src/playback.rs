@@ -26,7 +26,7 @@ pub mod preset;
 
 use crate::audio_config::SampleFormat;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
@@ -61,6 +61,20 @@ pub struct PlaybackStats {
     pub underruns: AtomicU64,
 }
 
+/// DSP runtime metrics exposed for `/tmp/audio_stats.json` consumers.
+/// Single writer (playback thread), single reader (stats collector) — Relaxed
+/// ordering is sufficient.
+#[derive(Debug, Default)]
+pub struct DspMetrics {
+    /// Per-band MBAGC gain (dB), packed `[b0, b1, b2, b3]` as fixed-point
+    /// i32 = `dB × 100`. Atomic updates — readers may see partial state for
+    /// a single 500 ms stats tick, but values rarely move that fast.
+    pub mbagc_gain_db_x100: [AtomicI32; 4],
+    /// Limiter peak attenuation over the most recent block (`dB × 100`,
+    /// negative = attenuating).
+    pub limiter_reduction_db_x100: AtomicI32,
+}
+
 pub struct PlaybackService {
     cmd_tx: mpsc::Sender<Vec<i16>>,
     preset_tx: mpsc::Sender<crate::playback::preset::PlaybackPreset>,
@@ -69,6 +83,7 @@ pub struct PlaybackService {
     period_frames: usize,
     sample_rate: u32,
     stats: Arc<PlaybackStats>,
+    dsp_metrics: Arc<DspMetrics>,
 }
 
 impl PlaybackService {
@@ -96,6 +111,10 @@ impl PlaybackService {
         Arc::clone(&self.stats)
     }
 
+    pub fn dsp_metrics(&self) -> Arc<DspMetrics> {
+        Arc::clone(&self.dsp_metrics)
+    }
+
     pub fn channels(&self) -> u32 { self.channels }
     pub fn period_frames(&self) -> usize { self.period_frames }
     pub fn sample_rate(&self) -> u32 { self.sample_rate }
@@ -113,6 +132,7 @@ pub fn run_playback_loop<S: PlaybackSink>(
     period_samples: usize,
     sample_rate: u32,
     initial_preset: crate::playback::preset::PlaybackPreset,
+    dsp_metrics: Arc<DspMetrics>,
 ) {
     use crate::playback::dsp::PlaybackDspChain;
     use crate::playback::preset::tuning_for;
@@ -168,6 +188,17 @@ pub fn run_playback_loop<S: PlaybackSink>(
         // taps the post-DSP buffer so the cancellation reference matches what
         // actually reaches the speaker.
         chain.process_i16(&mut normalized);
+
+        // Snapshot post-DSP state for /tmp/audio_stats.json consumers.
+        let mbagc = chain.last_mbagc_gain_db();
+        for i in 0..4 {
+            dsp_metrics.mbagc_gain_db_x100[i].store(
+                (mbagc[i] * 100.0) as i32, Ordering::Relaxed,
+            );
+        }
+        dsp_metrics.limiter_reduction_db_x100.store(
+            (chain.last_limiter_reduction_db() * 100.0) as i32, Ordering::Relaxed,
+        );
 
         match sink.write(&normalized) {
             Ok(()) => {
@@ -294,19 +325,21 @@ mod alsa_impl {
         let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(32);
         let stats = Arc::new(PlaybackStats::default());
+        let dsp_metrics = Arc::new(DspMetrics::default());
         let period_samples = cfg.period_frames * cfg.channels as usize;
         let sample_rate = cfg.sample_rate;
         let initial_preset = cfg.initial_preset;
 
         let ref_tx_thread = ref_tx.clone();
         let stats_thread = Arc::clone(&stats);
+        let dsp_metrics_thread = Arc::clone(&dsp_metrics);
         std::thread::Builder::new()
             .name("audio-playback".into())
             .spawn(move || {
                 super::set_realtime_priority();
                 run_playback_loop(
                     sink, cmd_rx, preset_rx, ref_tx_thread, stats_thread,
-                    period_samples, sample_rate, initial_preset,
+                    period_samples, sample_rate, initial_preset, dsp_metrics_thread,
                 );
             })
             .map_err(|e| PlaybackError::Invalid(format!("spawn playback thread: {e}")))?;
@@ -319,6 +352,7 @@ mod alsa_impl {
             period_frames: cfg.period_frames,
             sample_rate: cfg.sample_rate,
             stats,
+            dsp_metrics,
         })
     }
 }
@@ -407,6 +441,7 @@ mod tests {
             run_playback_loop(
                 sink, cmd_rx, preset_rx, ref_tx, stats_thread,
                 period_samples, 48_000, PlaybackPreset::Voice,
+                Arc::new(DspMetrics::default()),
             )
         });
         // Mock returns Fatal when stop_after is reached, which exits the loop;

@@ -208,6 +208,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             })
         };
 
+        let mut dsp_metrics_handle: Option<Arc<waved_audio::playback::DspMetrics>> = None;
+
         let (source, alignment) = if cfg.reference_enabled() {
             match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
                 Ok(s) => {
@@ -254,6 +256,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // batches while keeping the service alive for the rest of the
             // process lifetime.
             let playback = Arc::new(playback);
+            dsp_metrics_handle = Some(playback.dsp_metrics());
             // SP#5: forward preset commands from the bus to the playback loop.
             tokio::spawn({
                 let playback = Arc::clone(&playback);
@@ -300,6 +303,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             std::path::PathBuf::from("/tmp/audio_stats.json"),
             std::time::Duration::from_millis(500),
             alignment.clone(),
+            dsp_metrics_handle,
         ));
 
         let stats_c = Arc::clone(&capture_stats);
