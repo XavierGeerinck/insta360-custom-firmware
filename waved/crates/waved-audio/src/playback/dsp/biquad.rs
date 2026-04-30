@@ -28,6 +28,9 @@ impl Biquad {
         Self { coeffs, x1: 0.0, x2: 0.0, y1: 0.0, y2: 0.0 }
     }
 
+    /// Update filter coefficients without resetting the state — used by the
+    /// preset switch in `PlaybackDspChain::set_preset` so the filter doesn't
+    /// re-introduce its startup transient on every preset change.
     pub fn set_coeffs(&mut self, coeffs: BiquadCoeffs) {
         self.coeffs = coeffs;
     }
@@ -80,5 +83,20 @@ mod tests {
         assert!((buf[1] - 1.0).abs() < 1e-9);
         assert!((buf[2] - 2.0).abs() < 1e-9);
         assert!((buf[3] - 3.0).abs() < 1e-9);
+    }
+
+    /// Leaky integrator (b0=0.5, a1=-0.5) — exponential decay on an impulse.
+    /// Reference values computed in Python f64 on the same direct-form-1 formula.
+    /// This exercises the recursive (a-coefficient) path that the FIR-only tests
+    /// above do not cover. Catches sign/aliasing errors in the y[n-1], y[n-2] update.
+    #[test]
+    fn iir_impulse_response_decays_exponentially() {
+        let mut b = Biquad::new(BiquadCoeffs { b0: 0.5, b1: 0.0, b2: 0.0, a1: -0.5, a2: 0.0 });
+        let mut buf = [1.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0];
+        b.process_block(&mut buf);
+        let expected = [0.5_f32, 0.25, 0.125, 0.0625, 0.03125, 0.015625];
+        for (i, (got, exp)) in buf.iter().zip(expected.iter()).enumerate() {
+            assert!((got - exp).abs() < 1e-6, "sample {i}: got {got}, expected {exp}");
+        }
     }
 }
