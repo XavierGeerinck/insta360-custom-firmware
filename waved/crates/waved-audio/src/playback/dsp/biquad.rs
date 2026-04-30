@@ -81,6 +81,29 @@ pub fn design_butterworth_hpf(cutoff_hz: f32, sample_rate_hz: f32) -> BiquadCoef
     }
 }
 
+/// Butterworth 2nd-order low-pass — RBJ cookbook with Q = 1/√2.
+pub fn design_butterworth_lpf(cutoff_hz: f32, sample_rate_hz: f32) -> BiquadCoeffs {
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    let w0 = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate_hz;
+    let cos_w0 = w0.cos();
+    let alpha = w0.sin() / (2.0 * q);
+
+    let b0 = (1.0 - cos_w0) * 0.5;
+    let b1 = 1.0 - cos_w0;
+    let b2 = (1.0 - cos_w0) * 0.5;
+    let a0 = 1.0 + alpha;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha;
+
+    BiquadCoeffs {
+        b0: b0 / a0,
+        b1: b1 / a0,
+        b2: b2 / a0,
+        a1: a1 / a0,
+        a2: a2 / a0,
+    }
+}
+
 /// RBJ peaking EQ.
 pub fn design_peaking_eq(center_hz: f32, gain_db: f32, q: f32, sample_rate_hz: f32) -> BiquadCoeffs {
     let a = 10.0_f32.powf(gain_db / 40.0);

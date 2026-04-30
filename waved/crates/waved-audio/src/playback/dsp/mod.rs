@@ -13,3 +13,4 @@
 pub mod biquad;
 pub mod hpf;
 pub mod eq;
+pub mod mbagc;
