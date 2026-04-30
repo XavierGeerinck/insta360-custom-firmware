@@ -106,3 +106,71 @@ pub async fn add_bookmark(
         .await?;
     Ok(())
 }
+
+/// Delete a meeting and all its bookmarks atomically.
+/// Used by `Command::DiscardRecording`. NotFound is a no-op (returns Ok).
+pub async fn delete_meeting_cascade(
+    pool: &SqlitePool,
+    id: &Uuid,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM bookmarks WHERE meeting_id = ?")
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM meetings WHERE id = ?")
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    async fn fresh_pool() -> SqlitePool {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db").to_string_lossy().into_owned();
+        // The tempdir must outlive the pool; leak it here for test purposes.
+        Box::leak(Box::new(dir));
+        init_pool(&path).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn delete_meeting_cascade_removes_meeting_and_bookmarks() {
+        let pool = fresh_pool().await;
+        let id = Uuid::new_v4();
+        insert_meeting(&pool, &id, "Omni", "/tmp/x").await.unwrap();
+        add_bookmark(&pool, &id, 5).await.unwrap();
+        add_bookmark(&pool, &id, 12).await.unwrap();
+
+        delete_meeting_cascade(&pool, &id).await.unwrap();
+
+        let meeting_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM meetings WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let bookmark_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM bookmarks WHERE meeting_id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(meeting_count.0, 0);
+        assert_eq!(bookmark_count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_meeting_cascade_is_noop_for_unknown_id() {
+        let pool = fresh_pool().await;
+        let id = Uuid::new_v4();
+        // No insert. Should still succeed.
+        delete_meeting_cascade(&pool, &id).await.unwrap();
+    }
+}
