@@ -113,10 +113,18 @@ def save_icon():
 
 
 def send_icon():
+    """Upload-arrow icon: thick up-pointing arrow with a base bar.
+
+    Reads as "send to remote" — a paper-plane silhouette is too noisy at
+    36×36 mono. Vertices designed for clean fill at this resolution.
+    """
     c = make_canvas()
-    fill_triangle(c, (4, 32), (32, 4), (18, 18))
-    draw_line(c, 18, 18, 14, 28, thickness=2)
-    draw_line(c, 32, 4, 18, 18, thickness=2)
+    # Arrowhead — filled triangle pointing up.
+    fill_triangle(c, (18, 4), (4, 18), (32, 18))
+    # Shaft — vertical filled rect under the head.
+    fill_rect(c, 14, 18, 22, 28)
+    # Base bar — short horizontal "ground" line for the upload metaphor.
+    fill_rect(c, 8, 30, 28, 32)
     return c
 
 

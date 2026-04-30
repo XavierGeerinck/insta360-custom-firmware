@@ -15,8 +15,18 @@ use uuid::Uuid;
 
 const BTN_SIZE: i32 = 64;
 const BTN_GAP: i32 = 16;
+/// Vertical offset from BOTTOM_MID for the button row's centre. -52 puts the
+/// button centre at y=220 (top edge y=188, bottom edge y=252) — sits clearly
+/// above the bottom of the readable circle and gives the labels above more
+/// breathing room than the original -28 placement.
+const BTN_Y_OFFSET: i32 = -52;
 
 const CLR_TITLE_GREEN: u32 = 0x34c759;
+/// Per-button background colours. Match brightness so opaque white-on-tint
+/// icons read uniformly. See mockup A in the design doc.
+const CLR_BTN_SAVE: u32    = 0x2563eb; // blue
+const CLR_BTN_SEND: u32    = 0x16a34a; // green
+const CLR_BTN_DISCARD: u32 = 0xdc2626; // red
 
 extern "C" {
     static lv_font_montserrat_12: lv_font_t;
@@ -25,12 +35,15 @@ extern "C" {
 
 /// Format a recording's audio path for the confirmation screen.
 ///
-/// Takes the absolute path (e.g. `/mnt/udisk/recordings/4f3a8e2c-…/audio.wav`),
-/// truncates the immediate parent dir name to 8 chars + `…`, and keeps the
-/// filename. Returns e.g. `4f3a8e2c…/audio.wav`.
+/// Takes the absolute path (e.g. `/mnt/udisk/recordings/4f3a8e2c-.../audio.wav`),
+/// truncates the immediate parent dir name to 8 chars + `...`, and keeps the
+/// filename. Returns e.g. `4f3a8e2c.../audio.wav`.
 ///
-/// If the path has no parent dir or the parent name is shorter than 8
-/// chars, it's returned without truncation.
+/// If the path has no parent dir or the parent name is 8 chars or fewer,
+/// it's returned without truncation.
+///
+/// Uses ASCII `...` rather than Unicode `…` (U+2026) because the on-device
+/// Montserrat 12 build lacks the ellipsis glyph and renders it as tofu.
 pub fn format_path(audio_path: &Path) -> String {
     let filename = audio_path
         .file_name()
@@ -43,7 +56,7 @@ pub fn format_path(audio_path: &Path) -> String {
         .unwrap_or_default();
     let parent_disp = if parent.chars().count() > 8 {
         let truncated: String = parent.chars().take(8).collect();
-        format!("{truncated}…")
+        format!("{truncated}...")
     } else {
         parent
     };
@@ -61,7 +74,9 @@ pub fn format_path(audio_path: &Path) -> String {
 /// host:port and the last path segment intact:
 ///
 ///   `https://example.com/api/v2/very/long/path/upload`
-///   → `example.com/…/upload`
+///   → `example.com/.../upload`
+///
+/// Uses ASCII `...` rather than Unicode `…` (see `format_path`).
 pub fn format_endpoint(url: &str) -> String {
     let without_scheme = url
         .strip_prefix("https://")
@@ -78,7 +93,7 @@ pub fn format_endpoint(url: &str) -> String {
     if last_seg.is_empty() {
         without_scheme.to_string()
     } else {
-        format!("{host}/…/{last_seg}")
+        format!("{host}/.../{last_seg}")
     }
 }
 
@@ -209,15 +224,14 @@ impl super::Screen for ConfirmationScreen {
             lv_obj_align(lbl_ep, lv_align_t_LV_ALIGN_TOP_MID, 0, 132);
 
             // ── Three icon buttons ──────────────────────────────────────────
-            // Buttons are 64×64. Centred on x via three fixed offsets that
-            // give a 16 px gap between adjacent buttons:
-            //   centre - (BTN_SIZE + BTN_GAP),  centre,  centre + (BTN_SIZE + BTN_GAP)
-            // Y is BOTTOM_MID with offset -28 → button vertical centre at
-            // y = 304 - 28 - 32 = 244, top edge at 212, bottom edge at 276.
-            let x_offset = BTN_SIZE + BTN_GAP; // 80
+            // Buttons are 64×64 circles. Centred on x via three fixed offsets
+            // that give a BTN_GAP px gap between adjacent buttons.
+            // Y is BOTTOM_MID with BTN_Y_OFFSET.
+            let x_offset = BTN_SIZE + BTN_GAP;
             self.add_button(
                 screen,
                 -x_offset,
+                CLR_BTN_SAVE,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_save.png\0",
                 save_btn_cb,
                 decision.id,
@@ -225,6 +239,7 @@ impl super::Screen for ConfirmationScreen {
             self.add_button(
                 screen,
                 0,
+                CLR_BTN_SEND,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_send.png\0",
                 send_btn_cb,
                 decision.id,
@@ -232,6 +247,7 @@ impl super::Screen for ConfirmationScreen {
             self.add_button(
                 screen,
                 x_offset,
+                CLR_BTN_DISCARD,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_discard.png\0",
                 discard_btn_cb,
                 decision.id,
@@ -247,22 +263,31 @@ impl ConfirmationScreen {
         &self,
         parent: *mut lv_obj_t,
         x_offset: i32,
+        bg_color: u32,
         icon_path_nul: &[u8],
         cb: unsafe extern "C" fn(*mut lv_event_t),
         id: Uuid,
     ) {
-        // Tinted bg button (re-using the recording screen's btn bg asset).
-        let btn = lv_image_create(parent);
-        lv_image_set_src(
-            btn,
-            b"A:/etc/pspapp/lvgl/icon/msc/bg_airecord_stop.png\0".as_ptr() as *const _,
-        );
+        // Circular button — styled lv_obj rather than an image background.
+        // bg_airecord_stop.png is sized for the 90×90 record-screen button;
+        // at 64×64 LVGL renders it at native size and clips, producing a
+        // square. Rolling our own circle via radius=BTN_SIZE/2 avoids that
+        // and lets us colour-code per action.
+        let btn = lv_obj_create(parent);
         lv_obj_set_size(btn, BTN_SIZE, BTN_SIZE);
-        lv_obj_align(btn, lv_align_t_LV_ALIGN_BOTTOM_MID, x_offset, -28);
-        lv_obj_remove_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST);
+        lv_obj_align(btn, lv_align_t_LV_ALIGN_BOTTOM_MID, x_offset, BTN_Y_OFFSET);
+        lv_obj_set_style_radius(btn, BTN_SIZE / 2, 0);
+        lv_obj_set_style_bg_color(btn, rgb(bg_color), 0);
+        lv_obj_set_style_bg_opa(btn, 255, 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_pad_top(btn, 0, 0);
+        lv_obj_set_style_pad_bottom(btn, 0, 0);
+        lv_obj_set_style_pad_left(btn, 0, 0);
+        lv_obj_set_style_pad_right(btn, 0, 0);
+        lv_obj_remove_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
 
-        // Foreground icon centred on the bg.
+        // Foreground icon centred.
         let icon = lv_image_create(btn);
         lv_image_set_src(icon, icon_path_nul.as_ptr() as *const _);
         lv_obj_center(icon);
@@ -291,7 +316,7 @@ mod tests {
     #[test]
     fn format_path_truncates_uuid_parent_dir() {
         let p = PathBuf::from("/mnt/udisk/recordings/4f3a8e2c-1234-5678-9abc-def012345678/audio.wav");
-        assert_eq!(format_path(&p), "4f3a8e2c…/audio.wav");
+        assert_eq!(format_path(&p), "4f3a8e2c.../audio.wav");
     }
 
     #[test]
@@ -330,7 +355,7 @@ mod tests {
     #[test]
     fn format_endpoint_long_path_is_ellipsised_keeping_last_segment() {
         let r = format_endpoint("https://meetings.example.com/api/v2/very/long/path/upload");
-        assert_eq!(r, "meetings.example.com/…/upload");
+        assert_eq!(r, "meetings.example.com/.../upload");
     }
 
     #[test]
