@@ -215,6 +215,7 @@ fn ui_thread_main(
                 let audio = audio_rx.borrow().clone();
                 unsafe { noise_red.update_state(&audio); }
             }
+            UiScreen::Confirmation => {}
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));

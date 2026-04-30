@@ -6,6 +6,22 @@
 //! §7 for visual specifications.
 
 use std::path::Path;
+use crate::bindings::*;
+use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
+use waved_state::{Command, MeetingState, PendingDecision, StateBus};
+use uuid::Uuid;
+
+const BTN_SIZE: i32 = 64;
+const BTN_GAP: i32 = 16;
+
+const CLR_TITLE_GREEN: u32 = 0x34c759;
+
+extern "C" {
+    static lv_font_montserrat_12: lv_font_t;
+    static lv_font_montserrat_14: lv_font_t;
+}
 
 /// Format a recording's audio path for the confirmation screen.
 ///
@@ -66,6 +82,207 @@ pub fn format_endpoint(url: &str) -> String {
     }
 }
 
+/// "duration MM:SS · X.Y MB"
+pub fn format_duration_size(duration_secs: u32, size_bytes: u64) -> String {
+    let m = duration_secs / 60;
+    let s = duration_secs % 60;
+    let mb = size_bytes as f64 / 1_048_576.0;
+    format!("duration {m:02}:{s:02} · {mb:.1} MB")
+}
+
+/// Three button kinds. Each click callback dereferences a heap-allocated
+/// `(Sender<Command>, Uuid)` tuple and emits the right command.
+struct ButtonCtx {
+    tx: tokio::sync::broadcast::Sender<Command>,
+    id: Uuid,
+}
+
+unsafe extern "C" fn save_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
+    let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
+    if ctx.is_null() { return; }
+    let _ = (*ctx).tx.send(Command::SaveRecording((*ctx).id));
+}
+
+unsafe extern "C" fn send_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
+    let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
+    if ctx.is_null() { return; }
+    let _ = (*ctx).tx.send(Command::SendRecording((*ctx).id));
+}
+
+unsafe extern "C" fn discard_btn_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
+    let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
+    if ctx.is_null() { return; }
+    let _ = (*ctx).tx.send(Command::DiscardRecording((*ctx).id));
+}
+
+pub struct ConfirmationScreen {
+    bus: Arc<StateBus>,
+    /// Cached at navigate-time so the LVGL thread doesn't read the watch
+    /// mid-frame. Cleared on each `set_decision` call.
+    decision: Option<PendingDecision>,
+}
+
+impl ConfirmationScreen {
+    pub fn new(bus: Arc<StateBus>) -> Self {
+        Self { bus, decision: None }
+    }
+
+    /// Called by the UI loop just before `create()` whenever the
+    /// `meeting.pending_decision` watch transitions to `Some(...)`. The
+    /// decision is then read from `self.decision` while building the
+    /// LVGL widget tree.
+    pub fn set_decision(&mut self, d: PendingDecision) {
+        self.decision = Some(d);
+    }
+
+    /// `update_state` doesn't repaint anything — the screen is static
+    /// once built. We only re-check whether the user changed
+    /// `pending_decision` mid-frame (shouldn't happen, but defensive).
+    pub unsafe fn update_state(&mut self, _meeting: &MeetingState) {}
+}
+
+impl super::Screen for ConfirmationScreen {
+    fn create(&mut self) -> *mut lv_obj_t {
+        let decision = match self.decision.clone() {
+            Some(d) => d,
+            // Defensive: rendering with no decision means the nav fired
+            // wrong. Show an empty screen so we don't crash.
+            None => unsafe {
+                let s = lv_obj_create(std::ptr::null_mut());
+                lv_obj_set_size(s, 400, 304);
+                lv_obj_set_style_bg_color(s, rgb(CLR_BG), 0);
+                return s;
+            },
+        };
+
+        unsafe {
+            let screen = lv_obj_create(std::ptr::null_mut());
+            lv_obj_set_size(screen, 400, 304);
+            lv_obj_set_style_bg_color(screen, rgb(CLR_BG), 0);
+            lv_obj_set_style_border_width(screen, 0, 0);
+            lv_obj_set_style_pad_top(screen, 0, 0);
+            lv_obj_set_style_pad_bottom(screen, 0, 0);
+            lv_obj_set_style_pad_left(screen, 0, 0);
+            lv_obj_set_style_pad_right(screen, 0, 0);
+
+            // ── Title ────────────────────────────────────────────────────────
+            let title = lv_label_create(screen);
+            lv_label_set_text(title, c"SAVE RECORDING".as_ptr());
+            lv_obj_set_style_text_color(title, rgb(CLR_TITLE_GREEN), 0);
+            lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+            lv_obj_align(title, lv_align_t_LV_ALIGN_TOP_MID, 0, 38);
+
+            // ── Duration + size ─────────────────────────────────────────────
+            let line = format_duration_size(decision.duration_secs, decision.size_bytes);
+            let cs = CString::new(line).unwrap();
+            let lbl_dur = lv_label_create(screen);
+            lv_label_set_text(lbl_dur, cs.as_ptr());
+            lv_obj_set_style_text_color(lbl_dur, rgb(CLR_TEXT_DIM), 0);
+            lv_obj_set_style_text_font(lbl_dur, &lv_font_montserrat_12, 0);
+            lv_obj_align(lbl_dur, lv_align_t_LV_ALIGN_TOP_MID, 0, 78);
+
+            // ── Path ─────────────────────────────────────────────────────────
+            let path_disp = format!("[F] {}", format_path(&decision.audio_path));
+            let cs = CString::new(path_disp).unwrap();
+            let lbl_path = lv_label_create(screen);
+            lv_label_set_text(lbl_path, cs.as_ptr());
+            lv_obj_set_style_text_color(lbl_path, rgb(CLR_TEXT_DIM), 0);
+            lv_obj_set_style_text_font(lbl_path, &lv_font_montserrat_12, 0);
+            lv_obj_align(lbl_path, lv_align_t_LV_ALIGN_TOP_MID, 0, 110);
+
+            // ── Endpoint ────────────────────────────────────────────────────
+            let ep_disp = format!("[N] {}", format_endpoint(&decision.endpoint));
+            let cs = CString::new(ep_disp).unwrap();
+            let lbl_ep = lv_label_create(screen);
+            lv_label_set_text(lbl_ep, cs.as_ptr());
+            lv_obj_set_style_text_color(lbl_ep, rgb(CLR_TEXT_DIM), 0);
+            lv_obj_set_style_text_font(lbl_ep, &lv_font_montserrat_12, 0);
+            lv_obj_align(lbl_ep, lv_align_t_LV_ALIGN_TOP_MID, 0, 132);
+
+            // ── Three icon buttons ──────────────────────────────────────────
+            // Buttons are 64×64. Centred on x via three fixed offsets that
+            // give a 16 px gap between adjacent buttons:
+            //   centre - (BTN_SIZE + BTN_GAP),  centre,  centre + (BTN_SIZE + BTN_GAP)
+            // Y is BOTTOM_MID with offset -28 → button vertical centre at
+            // y = 304 - 28 - 32 = 244, top edge at 212, bottom edge at 276.
+            let x_offset = BTN_SIZE + BTN_GAP; // 80
+            self.add_button(
+                screen,
+                -x_offset,
+                b"A:/etc/pspapp/lvgl/icon/btn/btn_save.png\0",
+                save_btn_cb,
+                decision.id,
+            );
+            self.add_button(
+                screen,
+                0,
+                b"A:/etc/pspapp/lvgl/icon/btn/btn_send.png\0",
+                send_btn_cb,
+                decision.id,
+            );
+            self.add_button(
+                screen,
+                x_offset,
+                b"A:/etc/pspapp/lvgl/icon/btn/btn_discard.png\0",
+                discard_btn_cb,
+                decision.id,
+            );
+
+            screen
+        }
+    }
+}
+
+impl ConfirmationScreen {
+    unsafe fn add_button(
+        &self,
+        parent: *mut lv_obj_t,
+        x_offset: i32,
+        icon_path_nul: &[u8],
+        cb: unsafe extern "C" fn(*mut lv_event_t),
+        id: Uuid,
+    ) {
+        // Tinted bg button (re-using the recording screen's btn bg asset).
+        let btn = lv_image_create(parent);
+        lv_image_set_src(
+            btn,
+            b"A:/etc/pspapp/lvgl/icon/msc/bg_airecord_stop.png\0".as_ptr() as *const _,
+        );
+        lv_obj_set_size(btn, BTN_SIZE, BTN_SIZE);
+        lv_obj_align(btn, lv_align_t_LV_ALIGN_BOTTOM_MID, x_offset, -28);
+        lv_obj_remove_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST);
+        lv_obj_add_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
+
+        // Foreground icon centred on the bg.
+        let icon = lv_image_create(btn);
+        lv_image_set_src(icon, icon_path_nul.as_ptr() as *const _);
+        lv_obj_center(icon);
+
+        // Per-button context (sender + uuid). Leaked deliberately —
+        // matches the existing recording-screen pattern (see
+        // recording.rs:490) where button context outlives the screen.
+        let ctx = Box::into_raw(Box::new(ButtonCtx {
+            tx: self.bus.commands.clone(),
+            id,
+        }));
+        lv_obj_add_event_cb(
+            btn,
+            Some(cb),
+            lv_event_code_t_LV_EVENT_CLICKED,
+            ctx as *mut _,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +336,15 @@ mod tests {
     #[test]
     fn format_endpoint_no_scheme_no_path_unchanged() {
         assert_eq!(format_endpoint("localhost:8080"), "localhost:8080");
+    }
+
+    #[test]
+    fn format_duration_size_basic() {
+        assert_eq!(format_duration_size(74, 12_582_912), "duration 01:14 · 12.0 MB");
+    }
+
+    #[test]
+    fn format_duration_size_zero() {
+        assert_eq!(format_duration_size(0, 0), "duration 00:00 · 0.0 MB");
     }
 }

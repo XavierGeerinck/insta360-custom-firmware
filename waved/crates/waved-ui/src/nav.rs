@@ -4,6 +4,9 @@
 pub enum UiScreen {
     Home,
     Recording,
+    /// Save / Send / Discard prompt shown after Stop fires while
+    /// MeetingState.pending_decision.is_some().
+    Confirmation,
     /// "More" page — pspapp page 0xb / `ui_setting_screen`.
     Settings,
     /// Audio mode carousel — pspapp beamforming page.
