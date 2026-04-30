@@ -39,6 +39,8 @@ pub struct PlaybackConfig {
     pub format: SampleFormat,
     pub period_frames: usize,
     pub buffer_periods: u32,
+    /// Initial preset on spawn. Default `PlaybackPreset::Voice`.
+    pub initial_preset: crate::playback::preset::PlaybackPreset,
 }
 
 #[derive(Debug, Error)]
@@ -61,6 +63,7 @@ pub struct PlaybackStats {
 
 pub struct PlaybackService {
     cmd_tx: mpsc::Sender<Vec<i16>>,
+    preset_tx: mpsc::Sender<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     channels: u32,
     period_frames: usize,
@@ -76,6 +79,11 @@ impl PlaybackService {
         self.cmd_tx
             .try_send(samples)
             .map_err(|_| PlaybackError::Stopped)
+    }
+
+    /// Submit a preset switch. Drops silently if the playback thread has exited.
+    pub fn set_preset(&self, preset: crate::playback::preset::PlaybackPreset) {
+        let _ = self.preset_tx.try_send(preset);
     }
 
     /// Subscribe to the reference signal — a copy of every batch written to
@@ -99,15 +107,41 @@ impl PlaybackService {
 pub fn run_playback_loop<S: PlaybackSink>(
     mut sink: S,
     mut cmd_rx: mpsc::Receiver<Vec<i16>>,
+    mut preset_rx: mpsc::Receiver<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     stats: Arc<PlaybackStats>,
     period_samples: usize,
+    sample_rate: u32,
+    initial_preset: crate::playback::preset::PlaybackPreset,
 ) {
+    use crate::playback::dsp::PlaybackDspChain;
+    use crate::playback::preset::tuning_for;
+
     let silence: Vec<i16> = vec![0; period_samples];
     info!("playback loop starting: samples/period={period_samples}");
+
+    let mut tuning = tuning_for(initial_preset);
+    let mut chain = PlaybackDspChain::new(
+        tuning.hpf_cutoff_hz,
+        &tuning.eq,
+        tuning.mbagc,
+        tuning.limiter,
+        sample_rate as f32,
+    );
+
     loop {
-        // Try to pull a batch without blocking. If nothing is queued, write
-        // silence so the hardware keeps ticking.
+        // Drain any pending preset switches; only the most recent matters.
+        while let Ok(p) = preset_rx.try_recv() {
+            tuning = tuning_for(p);
+            chain.set_preset(
+                tuning.hpf_cutoff_hz,
+                &tuning.eq,
+                tuning.mbagc,
+                tuning.limiter,
+            );
+            info!("playback preset switched → {:?}", p);
+        }
+
         let (batch, is_silence) = match cmd_rx.try_recv() {
             Ok(b) => (b, false),
             Err(mpsc::error::TryRecvError::Empty) => (silence.clone(), true),
@@ -118,17 +152,23 @@ pub fn run_playback_loop<S: PlaybackSink>(
         };
         // Pad/trim to period. Callers should normally submit period-sized
         // batches; we defensively reshape so the sink always gets whole periods.
-        let normalized = if batch.len() == period_samples {
+        let mut normalized = if batch.len() == period_samples {
             batch
         } else if batch.len() < period_samples {
             let mut v = batch;
             v.resize(period_samples, 0);
             v
         } else {
-            // Oversized: truncate and drop the tail. Logging ratelimited in sink.
+            // Oversized: truncate and drop the tail.
             warn!("playback batch truncated: {} > {}", batch.len(), period_samples);
             batch.into_iter().take(period_samples).collect()
         };
+
+        // SP#5: DSP applied before the ALSA write. AEC reference broadcast
+        // taps the post-DSP buffer so the cancellation reference matches what
+        // actually reaches the speaker.
+        chain.process_i16(&mut normalized);
+
         match sink.write(&normalized) {
             Ok(()) => {
                 if is_silence {
@@ -251,9 +291,12 @@ mod alsa_impl {
     pub fn spawn_playback(cfg: PlaybackConfig) -> Result<PlaybackService, PlaybackError> {
         let sink = AlsaPlaybackSink::open(&cfg)?;
         let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(64);
+        let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(32);
         let stats = Arc::new(PlaybackStats::default());
         let period_samples = cfg.period_frames * cfg.channels as usize;
+        let sample_rate = cfg.sample_rate;
+        let initial_preset = cfg.initial_preset;
 
         let ref_tx_thread = ref_tx.clone();
         let stats_thread = Arc::clone(&stats);
@@ -261,12 +304,16 @@ mod alsa_impl {
             .name("audio-playback".into())
             .spawn(move || {
                 super::set_realtime_priority();
-                run_playback_loop(sink, cmd_rx, ref_tx_thread, stats_thread, period_samples);
+                run_playback_loop(
+                    sink, cmd_rx, preset_rx, ref_tx_thread, stats_thread,
+                    period_samples, sample_rate, initial_preset,
+                );
             })
             .map_err(|e| PlaybackError::Invalid(format!("spawn playback thread: {e}")))?;
 
         Ok(PlaybackService {
             cmd_tx,
+            preset_tx,
             ref_tx,
             channels: cfg.channels,
             period_frames: cfg.period_frames,
@@ -297,6 +344,7 @@ fn set_realtime_priority() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::playback::preset::PlaybackPreset;
     use std::sync::Mutex;
 
     /// MockSink with a per-write counter so tests can deterministically stop
@@ -348,12 +396,18 @@ mod tests {
         for b in prefill {
             cmd_tx.try_send(b).unwrap();
         }
+        let (preset_tx, preset_rx) = mpsc::channel::<PlaybackPreset>(8);
+        // Drop preset_tx immediately so no preset switches happen during the test.
+        drop(preset_tx);
         let (ref_tx, mut ref_rx) = broadcast::channel::<Vec<i16>>(64);
         let stats = Arc::new(PlaybackStats::default());
         let stats_thread = Arc::clone(&stats);
 
         let handle = std::thread::spawn(move || {
-            run_playback_loop(sink, cmd_rx, ref_tx, stats_thread, period_samples)
+            run_playback_loop(
+                sink, cmd_rx, preset_rx, ref_tx, stats_thread,
+                period_samples, 48_000, PlaybackPreset::Voice,
+            )
         });
         // Mock returns Fatal when stop_after is reached, which exits the loop;
         // join waits for it.
@@ -374,6 +428,7 @@ mod tests {
         assert!(batches.len() >= 3);
         for b in &batches {
             assert_eq!(b.len(), 8);
+            // DSP on silence emits silence (HPF on zero is zero, etc.).
             assert!(b.iter().all(|&s| s == 0));
         }
         assert!(stats.frames_silence.load(Ordering::Relaxed) > 0);
@@ -386,18 +441,26 @@ mod tests {
         let payload = vec![1i16, 2, 3, 4, 5, 6, 7, 8];
         let (batches, stats, ref_batches) =
             run_with_mock(2, false, vec![payload.clone()], 8, 2);
-        assert_eq!(batches[0], payload);
-        assert!(stats.frames_written.load(Ordering::Relaxed) > 0);
-        assert!(ref_batches.iter().any(|b| *b == payload));
+        // Post-SP#5: the limiter's 96-frame lookahead means the first batch
+        // emerges as silence during warmup. We can't byte-compare. Instead,
+        // verify the plumbing: the batch flowed through DSP, advanced stats,
+        // and was published on the broadcast.
+        assert_eq!(batches.len(), 2, "two batches written before mock stop");
+        assert_eq!(batches[0].len(), payload.len(), "batch length preserved");
+        assert!(stats.frames_written.load(Ordering::Relaxed) > 0,
+                "frames_written advanced");
+        assert!(!ref_batches.is_empty(),
+                "broadcast received post-DSP frame(s)");
+        // Sanity: broadcast and sink see the same data (same post-DSP buffer).
+        assert_eq!(ref_batches[0].len(), batches[0].len());
     }
 
     #[test]
     fn short_batch_is_padded_with_silence() {
         let (batches, _, _) = run_with_mock(1, false, vec![vec![99, 99]], 8, 2);
         let first = &batches[0];
-        assert_eq!(first.len(), 8);
-        assert_eq!(&first[0..2], &[99, 99]);
-        assert_eq!(&first[2..], &[0, 0, 0, 0, 0, 0]);
+        assert_eq!(first.len(), 8, "short batch padded to period");
+        // Don't assert specific sample values — DSP warmup obscures the first batch.
     }
 
     #[test]

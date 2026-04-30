@@ -230,6 +230,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                 format: pb.format,
                 period_frames: pb.period_frames,
                 buffer_periods: pb.buffer_periods,
+                initial_preset: waved_audio::playback::preset::PlaybackPreset::Voice,
             }) {
                 Ok(p) => p,
                 Err(e) => {
