@@ -28,7 +28,7 @@ pub async fn upload_recording(
             "audio",
             multipart::Part::bytes(file_bytes)
                 .file_name(file_name)
-                .mime_str("audio/opus")
+                .mime_str("audio/wav")
                 .unwrap(),
         );
 

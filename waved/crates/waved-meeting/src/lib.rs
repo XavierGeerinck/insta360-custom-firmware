@@ -54,15 +54,31 @@ impl MeetingService {
         info!("meeting_srv started");
         let mut active: Option<recorder::ActiveRecording> = None;
 
+        // 1 Hz tick to publish elapsed-seconds onto MeetingState while
+        // recording. The watch broadcasts to anyone holding a Receiver
+        // (e.g. the UI thread); subscribers see the new value next time
+        // they `borrow()`. Tick fires every second regardless of recording
+        // state — branch is gated by `active.is_some()`.
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         loop {
             tokio::select! {
-                // Drain post-AEC frames into the active recording. The full
-                // encode pipeline isn't wired yet; when it lands, it will feed
-                // `frame.mic_mono_f32` (already cleaned of echo + noise) via
-                // `waved_audio::processed_frame::f32_to_i16_saturating` to the
-                // encoder's i16 input buffer, then append to audio.opus.
-                Some(_frame) = self.audio_rx.recv(), if active.is_some() => {
-                    // no-op: consume to keep the channel draining
+                // Drain post-AEC mono frames into the active recording's WAV
+                // writer. Append is synchronous (BufWriter under the hood),
+                // a few hundred microseconds per ~21 ms ALSA period.
+                Some(frame) = self.audio_rx.recv(), if active.is_some() => {
+                    if let Some(rec) = active.as_mut() {
+                        rec.append_samples(&frame.mic_mono_f32);
+                    }
+                }
+                _ = tick.tick(), if active.is_some() => {
+                    if let Some(rec) = active.as_ref() {
+                        let secs = rec.duration_secs();
+                        self.meeting_tx.send_modify(|s| {
+                            s.duration_secs = secs;
+                        });
+                    }
                 }
                 cmd_result = cmd_rx.recv() => {
                     match cmd_result {
@@ -133,9 +149,16 @@ impl MeetingService {
         }
     }
 
-    async fn stop_recording(&self, rec: recorder::ActiveRecording, wifi_rx: &watch::Receiver<WifiState>) {
+    async fn stop_recording(
+        &self,
+        mut rec: recorder::ActiveRecording,
+        wifi_rx: &watch::Receiver<WifiState>,
+    ) {
         let duration = rec.duration_secs();
         let id = rec.id;
+        // Close the WAV header before anyone (upload, UI playback) reads
+        // the file. The Drop impl is a fallback for panic paths only.
+        rec.finalize();
         let _ = db::finish_meeting(&self.pool, &id, duration).await;
         let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
         self.meeting_tx.send_modify(|s| {
@@ -146,7 +169,8 @@ impl MeetingService {
         });
         info!("recording stopped: {} ({}s)", id, duration);
         if self.config.api.auto_upload && wifi_rx.borrow().connected {
-            self.try_upload_with_retry(&id.to_string(), &rec.audio_path()).await;
+            self.try_upload_with_retry(&id.to_string(), &rec.audio_path())
+                .await;
         }
     }
 
@@ -162,7 +186,8 @@ impl MeetingService {
                 &self.config.api.auth_token,
                 meeting_id,
                 audio_path,
-            ).await;
+            )
+            .await;
 
             #[cfg(feature = "simulate")]
             let upload_result = simulate::upload_recording(
@@ -170,7 +195,8 @@ impl MeetingService {
                 &self.config.api.auth_token,
                 meeting_id,
                 audio_path,
-            ).await;
+            )
+            .await;
 
             match upload_result {
                 Ok(()) => {
@@ -198,7 +224,7 @@ impl MeetingService {
         match db::get_pending_uploads(&self.pool).await {
             Ok(pending) => {
                 for (id, path) in pending {
-                    let audio_path = std::path::PathBuf::from(&path).join("audio.opus");
+                    let audio_path = std::path::PathBuf::from(&path).join("audio.wav");
                     self.try_upload_with_retry(&id, &audio_path).await;
                 }
             }

@@ -36,7 +36,10 @@ impl SimAudioService {
                         frame_count * FRAME_INTERVAL_MS,
                     );
                     let vu = crate::compute_vu(&frame.data, 8);
-                    self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
+                    self.audio_tx.send_modify(|s| {
+                        s.vu_level.copy_from_slice(&vu);
+                        s.incoming_vu_level = [0.0; 8];
+                    });
                     // Simulated frames are already silence — skip the DSP
                     // pipeline and emit a silent ProcessedAudioFrame directly.
                     let silent_mono = vec![0i16; SAMPLES_PER_FRAME];

@@ -8,6 +8,7 @@ pub mod playback;
 pub mod processed_frame;
 pub mod stats_collector;
 pub mod speaker_mixer;
+pub mod spectrum;
 pub mod fixtures;
 pub mod metrics;
 
@@ -158,6 +159,13 @@ pub struct AudioService {
     /// Used by the on-device FBR acceptance test.
     doa_override: Option<(f32, f32)>,
     mic_8ch_f32_scratch: Vec<f32>,
+    /// FFT-based magnitude-spectrum binner for the recording-screen pill.
+    /// Single-threaded, reused across frames so the FFT plan and Hann
+    /// window are computed once.
+    mic_spectrum: spectrum::Spectrum,
+    ref_spectrum: spectrum::Spectrum,
+    /// Mono downmix scratch for the mic spectrum input.
+    mic_spectrum_input: Vec<i16>,
 }
 
 impl AudioService {
@@ -203,6 +211,9 @@ impl AudioService {
             doa,
             doa_override: None,
             mic_8ch_f32_scratch: vec![0.0; frame_size * 8],
+            mic_spectrum: spectrum::Spectrum::new(sample_rate),
+            ref_spectrum: spectrum::Spectrum::new(sample_rate),
+            mic_spectrum_input: vec![0i16; frame_size],
         }
     }
 
@@ -326,7 +337,38 @@ impl AudioService {
                         let muted = self.audio_tx.borrow().mic_muted;
                         apply_mic_mute(&mut frame.data, muted);
                         let vu = compute_vu(&frame.data, 8);
-                        self.audio_tx.send_modify(|s| s.vu_level.copy_from_slice(&vu));
+                        let incoming_vu = frame
+                            .reference
+                            .as_deref()
+                            .map(|reference| compute_vu(reference, 8))
+                            .unwrap_or_else(|| vec![0.0; 8]);
+
+                        // Mic spectrum: downmix 8-ch → mono i16, FFT,
+                        // log-spaced bin to FREQ_BAND_COUNT magnitudes.
+                        let mono = mix_to_mono(&frame.data, frame.channels.max(1) as usize);
+                        let n = mono.len().min(self.mic_spectrum_input.len());
+                        self.mic_spectrum_input[..n].copy_from_slice(&mono[..n]);
+                        if n < self.mic_spectrum_input.len() {
+                            self.mic_spectrum_input[n..].fill(0);
+                        }
+                        let mut mic_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
+                        self.mic_spectrum.compute(&self.mic_spectrum_input, &mut mic_bands);
+
+                        // Reference spectrum: same pipeline on the
+                        // far-end / playback signal when present.
+                        let mut ref_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
+                        if let Some(reference) = frame.reference.as_deref() {
+                            let chs = frame.reference_channels.max(1) as usize;
+                            let mono = mix_to_mono(reference, chs);
+                            self.ref_spectrum.compute(&mono, &mut ref_bands);
+                        }
+
+                        self.audio_tx.send_modify(|s| {
+                            s.vu_level.copy_from_slice(&vu);
+                            s.incoming_vu_level.copy_from_slice(&incoming_vu);
+                            s.vu_freq_bands.copy_from_slice(&mic_bands);
+                            s.incoming_freq_bands.copy_from_slice(&ref_bands);
+                        });
                         let _ = self.stats_tee.send(frame.clone());
 
                         let processed = self.process_frame(&frame);

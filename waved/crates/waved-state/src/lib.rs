@@ -5,6 +5,12 @@ use uuid::Uuid;
 
 // --- Continuous State Types (watch channels) ---
 
+/// Number of log-spaced frequency bands the audio service publishes for
+/// the recording-screen pill. 32 covers 100 Hz – 8 kHz at speech-friendly
+/// resolution and stays well below the FFT bin count (512 from a 1024-pt
+/// real FFT).
+pub const FREQ_BAND_COUNT: usize = 32;
+
 #[derive(Clone, Debug, Default)]
 pub struct AudioState {
     pub mode: AudioMode,
@@ -15,6 +21,13 @@ pub struct AudioState {
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
     pub vu_level: [f32; 8],
+    pub incoming_vu_level: [f32; 8],
+    /// Magnitude spectrum of the mic signal binned into log-spaced
+    /// frequency bands. Each value is normalised to ~[0, 1] so the UI
+    /// can pulse a bar per band without rescaling.
+    pub vu_freq_bands: [f32; FREQ_BAND_COUNT],
+    /// Same shape, but for the reference / far-end channel.
+    pub incoming_freq_bands: [f32; FREQ_BAND_COUNT],
     pub nr_level: NrLevel,
 }
 
@@ -256,6 +269,7 @@ mod tests {
     fn audio_state_has_vu_level() {
         let state = AudioState::default();
         assert_eq!(state.vu_level, [0.0f32; 8]);
+        assert_eq!(state.incoming_vu_level, [0.0f32; 8]);
         assert_eq!(state.nr_level, NrLevel::Off);
     }
 

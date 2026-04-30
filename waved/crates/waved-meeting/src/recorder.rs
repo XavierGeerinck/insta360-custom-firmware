@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::info;
@@ -16,10 +18,16 @@ pub struct MeetingMetadata {
     pub codec: String,
 }
 
+pub const RECORDING_SAMPLE_RATE: u32 = 48_000;
+
 pub struct ActiveRecording {
     pub id: Uuid,
     pub dir: PathBuf,
     pub start: std::time::Instant,
+    /// Open WAV writer. `Some` while recording, `None` once finalized.
+    /// We keep the writer hot so each `ProcessedAudioFrame` appends with
+    /// no per-frame open/seek overhead.
+    writer: Option<hound::WavWriter<BufWriter<File>>>,
 }
 
 impl ActiveRecording {
@@ -34,20 +42,33 @@ impl ActiveRecording {
             duration_secs: 0,
             audio_mode: audio_mode.to_string(),
             device_id: String::new(),
-            sample_rate: 48000,
-            channels: 2,
-            codec: "opus".to_string(),
+            sample_rate: RECORDING_SAMPLE_RATE,
+            channels: 1,
+            codec: "wav_s16le".to_string(),
         };
 
         let meta_json = serde_json::to_string_pretty(&metadata).unwrap();
         fs::write(dir.join("metadata.json"), meta_json).await?;
-        fs::write(dir.join("audio.opus"), []).await?;
+
+        // Create the WAV file synchronously — `hound::WavWriter` is sync, and
+        // open is cheap (one ~44-byte header write). The hot path is
+        // `append_samples`, also sync.
+        let wav_path = dir.join("audio.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: RECORDING_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let writer = hound::WavWriter::create(&wav_path, spec)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
         info!("recording started: {} at {}", id, dir.display());
         Ok(Self {
             id,
             dir,
             start: std::time::Instant::now(),
+            writer: Some(writer),
         })
     }
 
@@ -56,7 +77,41 @@ impl ActiveRecording {
     }
 
     pub fn audio_path(&self) -> PathBuf {
-        self.dir.join("audio.opus")
+        self.dir.join("audio.wav")
+    }
+
+    /// Append a block of f32 mono samples in [-1.0, 1.0]. Saturating
+    /// clamp to S16. Errors are logged but don't tear down the recording —
+    /// a bad frame mid-meeting is better than losing the whole take.
+    pub fn append_samples(&mut self, samples: &[f32]) {
+        let Some(writer) = self.writer.as_mut() else {
+            return;
+        };
+        for &s in samples {
+            let clamped = (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32);
+            if let Err(e) = writer.write_sample(clamped as i16) {
+                tracing::warn!("wav write error: {e}");
+                return;
+            }
+        }
+    }
+
+    /// Close the WAV file (writes header sizes). Must be called before
+    /// upload — the file is unreadable until then.
+    pub fn finalize(&mut self) {
+        if let Some(writer) = self.writer.take() {
+            if let Err(e) = writer.finalize() {
+                tracing::warn!("wav finalize error: {e}");
+            }
+        }
+    }
+}
+
+impl Drop for ActiveRecording {
+    fn drop(&mut self) {
+        // Safety net: if the recording is dropped without an explicit
+        // `finalize` (e.g. on panic), still flush the header.
+        self.finalize();
     }
 }
 
@@ -73,15 +128,15 @@ mod tests {
             audio_mode: "Omni".to_string(),
             device_id: "wave-001".to_string(),
             sample_rate: 48000,
-            channels: 2,
-            codec: "opus".to_string(),
+            channels: 1,
+            codec: "wav_s16le".to_string(),
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: MeetingMetadata = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.id, "test-id");
         assert_eq!(parsed.sample_rate, 48000);
-        assert_eq!(parsed.channels, 2);
-        assert_eq!(parsed.codec, "opus");
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.codec, "wav_s16le");
         assert_eq!(parsed.duration_secs, 300);
     }
 
@@ -92,9 +147,11 @@ mod tests {
 
         assert!(rec.dir.exists());
         assert!(rec.dir.join("metadata.json").exists());
-        assert!(rec.dir.join("audio.opus").exists());
+        assert!(rec.dir.join("audio.wav").exists());
 
-        let meta_json = tokio::fs::read_to_string(rec.dir.join("metadata.json")).await.unwrap();
+        let meta_json = tokio::fs::read_to_string(rec.dir.join("metadata.json"))
+            .await
+            .unwrap();
         let meta: MeetingMetadata = serde_json::from_str(&meta_json).unwrap();
         assert_eq!(meta.id, rec.id.to_string());
         assert_eq!(meta.audio_mode, "Omni");
@@ -105,6 +162,22 @@ mod tests {
     async fn audio_path_returns_correct_path() {
         let dir = tempfile::tempdir().unwrap();
         let rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
-        assert_eq!(rec.audio_path(), rec.dir.join("audio.opus"));
+        assert_eq!(rec.audio_path(), rec.dir.join("audio.wav"));
+    }
+
+    #[tokio::test]
+    async fn append_then_finalize_produces_readable_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        // 100 ms of silence
+        let n = (RECORDING_SAMPLE_RATE / 10) as usize;
+        let zeros = vec![0.0f32; n];
+        rec.append_samples(&zeros);
+        rec.finalize();
+
+        let reader = hound::WavReader::open(rec.audio_path()).unwrap();
+        assert_eq!(reader.spec().sample_rate, 48_000);
+        assert_eq!(reader.spec().channels, 1);
+        assert_eq!(reader.duration() as usize, n);
     }
 }
