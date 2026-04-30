@@ -13,7 +13,7 @@ use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::WavedConfig;
-use waved_state::{Command, DeviceEvent, MeetingState, WifiState};
+use waved_state::{Command, DeviceEvent, MeetingState, PendingDecision, WifiState};
 
 pub struct MeetingService {
     config: WavedConfig,
@@ -113,7 +113,7 @@ impl MeetingService {
                                 }
                                 Command::StopRecording => {
                                     if let Some(rec) = active.take() {
-                                        self.stop_recording(rec, &wifi_rx).await;
+                                        self.stop_recording(rec).await;
                                     }
                                 }
                                 Command::AddBookmark => {
@@ -127,8 +127,12 @@ impl MeetingService {
                                 Command::Shutdown => {
                                     if let Some(rec) = active.take() {
                                         info!("shutdown: stopping active recording first");
-                                        self.stop_recording(rec, &wifi_rx).await;
+                                        self.stop_recording(rec).await;
                                     }
+                                    // Pending-decision handling on shutdown is
+                                    // added in a later task. For now, rely on
+                                    // the post-stop pending_decision being a
+                                    // no-op shutdown-side.
                                     return;
                                 }
                                 _ => {}
@@ -149,29 +153,44 @@ impl MeetingService {
         }
     }
 
+    /// Finalise the WAV, persist end_time/duration to the db, and publish
+    /// a `pending_decision` for the confirmation screen. Does NOT upload —
+    /// that's the SendRecording handler's job.
     async fn stop_recording(
         &self,
         mut rec: recorder::ActiveRecording,
-        wifi_rx: &watch::Receiver<WifiState>,
     ) {
         let duration = rec.duration_secs();
         let id = rec.id;
-        // Close the WAV header before anyone (upload, UI playback) reads
-        // the file. The Drop impl is a fallback for panic paths only.
+        let audio_path = rec.audio_path();
         rec.finalize();
         let _ = db::finish_meeting(&self.pool, &id, duration).await;
         let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
+
+        let size_bytes = tokio::fs::metadata(&audio_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let decision = PendingDecision {
+            id,
+            audio_path: audio_path.clone(),
+            duration_secs: duration,
+            size_bytes,
+            endpoint: self.config.api.endpoint.clone(),
+        };
+
         self.meeting_tx.send_modify(|s| {
             s.recording = false;
             s.paused = false;
             s.meeting_id = None;
             s.duration_secs = duration;
+            s.pending_decision = Some(decision);
         });
-        info!("recording stopped: {} ({}s)", id, duration);
-        if self.config.api.auto_upload && wifi_rx.borrow().connected {
-            self.try_upload_with_retry(&id.to_string(), &rec.audio_path())
-                .await;
-        }
+        info!(
+            "recording stopped: {} ({}s, {} bytes) — awaiting decision",
+            id, duration, size_bytes
+        );
     }
 
     // Errata #7: upload with retry loop
