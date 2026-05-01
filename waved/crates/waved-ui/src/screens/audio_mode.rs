@@ -140,6 +140,12 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
     if count == 0 {
         return;
     }
+    // `lv_obj_get_x(child)` returns position in the carousel's content
+    // frame, already including scroll_x (LVGL pad=0 here). The viewport
+    // midline in the same frame is `scroll_x + carousel_width/2` because
+    // the carousel spans the full 400px parent (x1 == 0). If the carousel
+    // were ever resized or off-centred, this formula would need to add
+    // the carousel's parent-relative offset.
     let scroll_x = lv_obj_get_scroll_x(carousel);
     let viewport_mid = scroll_x + lv_obj_get_width(carousel) / 2;
 
@@ -151,7 +157,7 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
         centres.push(cx);
     }
     let idx = nearest_index_to_midline(&centres, viewport_mid);
-    tracing::debug!(target: "waved_ui::audio_mode", "carousel centered idx = {}", idx);
+    tracing::info!(target: "waved_ui::audio_mode", "carousel centered idx = {}", idx);
     (*cell_ptr).store(idx, Ordering::Relaxed);
 }
 
