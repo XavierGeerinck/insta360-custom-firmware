@@ -41,6 +41,9 @@ pub struct AudioStats {
     pub playback_preset: String,
     pub mbagc_active_gain_db: [f32; 4],
     pub limiter_reduction_db: f32,
+    #[cfg(feature = "capture-alsa")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uac: Option<crate::uac::UacStatsSnapshot>,
 }
 
 pub async fn run(
@@ -53,6 +56,8 @@ pub async fn run(
     period: std::time::Duration,
     alignment: String,
     dsp_metrics: Option<Arc<DspMetrics>>,
+    #[cfg(feature = "capture-alsa")]
+    uac_stats: Option<Arc<crate::uac::UacStats>>,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
@@ -86,6 +91,8 @@ pub async fn run(
                     let s = compute_stats_with_processed(
                         frame, &stats, map_source, last_write_error.clone(), &alignment,
                         latest_post_aec_rms, &state, dsp_metrics.as_deref(),
+                        #[cfg(feature = "capture-alsa")]
+                        uac_stats.as_deref(),
                     );
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
@@ -124,6 +131,8 @@ pub fn compute_stats(
 ) -> AudioStats {
     compute_stats_with_processed(
         frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(), None,
+        #[cfg(feature = "capture-alsa")]
+        None,
     )
 }
 
@@ -136,6 +145,8 @@ pub fn compute_stats_with_processed(
     mic_post_aec_rms: Option<f32>,
     audio_state: &AudioState,
     dsp_metrics: Option<&DspMetrics>,
+    #[cfg(feature = "capture-alsa")]
+    uac_stats: Option<&crate::uac::UacStats>,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -175,6 +186,9 @@ pub fn compute_stats_with_processed(
         ([0.0_f32; 4], 0.0_f32)
     };
 
+    #[cfg(feature = "capture-alsa")]
+    let uac = uac_stats.map(|s| s.snapshot());
+
     AudioStats {
         last_updated_ms: frame.timestamp_ms,
         channel_map_source: match map_source {
@@ -200,6 +214,8 @@ pub fn compute_stats_with_processed(
         playback_preset,
         mbagc_active_gain_db,
         limiter_reduction_db,
+        #[cfg(feature = "capture-alsa")]
+        uac,
     }
 }
 
@@ -318,6 +334,8 @@ mod tests {
         let cs = CaptureStats::new();
         let s = compute_stats_with_processed(
             &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(), None,
+            #[cfg(feature = "capture-alsa")]
+            None,
         );
         assert_eq!(s.mic_post_aec_rms, Some(123.4));
     }
@@ -335,6 +353,8 @@ mod tests {
         };
         let s = compute_stats_with_processed(
             &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
+            #[cfg(feature = "capture-alsa")]
+            None,
         );
         assert_eq!(s.mode, AudioMode::Cardioid);
         assert!((s.doa_horizontal - 47.5).abs() < 1e-6);

@@ -210,6 +210,9 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
         let mut dsp_metrics_handle: Option<Arc<waved_audio::playback::DspMetrics>> = None;
 
+        #[cfg(feature = "capture-alsa")]
+        let mut uac_stats_handle: Option<Arc<waved_audio::uac::UacStats>> = None;
+
         let (source, alignment) = if cfg.reference_enabled() {
             match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
                 Ok(s) => {
@@ -272,6 +275,10 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // SP#6: UAC2 routing — host ↔ device speakerphone bridges.
             let uac_cfg = cfg.uac.clone().unwrap_or_default();
             let uac_stats: Arc<waved_audio::uac::UacStats> = Arc::new(waved_audio::uac::UacStats::default());
+            #[cfg(feature = "capture-alsa")]
+            {
+                uac_stats_handle = Some(Arc::clone(&uac_stats));
+            }
 
             if uac_cfg.enabled {
                 let bridge_cfg = waved_audio::uac::bridge::UacBridgeConfig {
@@ -353,6 +360,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             std::time::Duration::from_millis(500),
             alignment.clone(),
             dsp_metrics_handle,
+            #[cfg(feature = "capture-alsa")]
+            uac_stats_handle,
         ));
 
         let stats_c = Arc::clone(&capture_stats);
