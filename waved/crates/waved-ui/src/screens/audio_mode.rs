@@ -129,6 +129,7 @@ pub struct AudioModeScreen {
     cards:      [*mut lv_obj_t; 5],
     radios:     [*mut lv_obj_t; 5],
     indicators: [*mut lv_obj_t; 5],
+    doa_arrows: [*mut lv_obj_t; 5],
     prev_mode:  Option<AudioMode>,
 }
 
@@ -139,6 +140,7 @@ impl AudioModeScreen {
             cards:      [std::ptr::null_mut(); 5],
             radios:     [std::ptr::null_mut(); 5],
             indicators: [std::ptr::null_mut(); 5],
+            doa_arrows: [std::ptr::null_mut(); 5],
             prev_mode:  None,
         }
     }
@@ -193,6 +195,7 @@ impl super::Screen for AudioModeScreen {
             self.cards      = [std::ptr::null_mut(); 5];
             self.radios     = [std::ptr::null_mut(); 5];
             self.indicators = [std::ptr::null_mut(); 5];
+            self.doa_arrows = [std::ptr::null_mut(); 5];
 
             let screen = lv_obj_create(std::ptr::null_mut());
             lv_obj_set_size(screen, 400, 304);
@@ -266,6 +269,20 @@ impl super::Screen for AudioModeScreen {
                 lv_obj_set_pos(mode_img, 16, 21);
                 lv_image_set_src(mode_img, CARD_IMGS[i].as_ptr() as *const _);
                 lv_obj_remove_flag(mode_img, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
+
+                // DOA arrow overlay — child of the polar-pattern bg image. Initially
+                // hidden; shown/rotated by update_state on the centered card only.
+                let arrow = lv_image_create(mode_img);
+                lv_obj_set_size(arrow, 124, 124);
+                lv_obj_set_pos(arrow, 0, 0);
+                lv_image_set_src(
+                    arrow,
+                    b"A:/etc/pspapp/lvgl/icon/beamforming/bf_doa.png\0".as_ptr() as *const _,
+                );
+                lv_image_set_pivot(arrow, 62, 62);
+                lv_obj_remove_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_add_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_HIDDEN);
+                self.doa_arrows[i] = arrow;
 
                 // Mode name label: width=142, aligned OUT_RIGHT_TOP of mode_img +10,+10.
                 let lbl = lv_label_create(card);
