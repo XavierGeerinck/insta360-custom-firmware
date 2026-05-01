@@ -85,7 +85,7 @@ WAVED_PID=$(adb shell "pidof waved" | tr -d '\r')
 # but is sufficient evidence that the host sees mixer changes).
 adb shell "amixer -c 1 sset PCM 75% 2>&1 | tail -3" | tee -a "$LOG"
 sleep 1
-DEV_VOL=$(adb shell "amixer -c 1 sget PCM 2>/dev/null | grep 'Mono: Playback' | grep -oE '[0-9]+%' | head -1 | tr -d '%'")
+DEV_VOL=$(adb shell "amixer -c 1 sget PCM 2>/dev/null | grep 'Mono: Playback' | grep -oE '[0-9]+%' | head -1 | tr -d '%'" | tr -d '\r\n')
 echo "  hw:1 PCM Playback (host-visible) = ${DEV_VOL}%" | tee -a "$LOG"
 if [ "$DEV_VOL" = "75" ]; then
     echo "4/5 volume mirror: PASS" | tee -a "$LOG"
