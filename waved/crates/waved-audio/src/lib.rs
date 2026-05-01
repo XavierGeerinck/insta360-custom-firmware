@@ -7,7 +7,6 @@ pub mod capture;
 pub mod playback;
 pub mod processed_frame;
 pub mod stats_collector;
-pub mod speaker_mixer;
 pub mod spectrum;
 pub mod fixtures;
 pub mod metrics;
@@ -148,7 +147,6 @@ pub struct AudioService {
     meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
     stats_tee: broadcast::Sender<AudioFrame>,
     processed_tx: broadcast::Sender<ProcessedAudioFrame>,
-    speaker_control: Option<String>,
     frame_size: usize,
     sample_rate: u32,
     echo_canceller: Box<dyn EchoCanceller>,
@@ -183,10 +181,6 @@ impl AudioService {
     ) -> Self {
         let (stats_tee, _) = broadcast::channel(16);
         let (processed_tx, _) = broadcast::channel(16);
-        let speaker_control = speaker_mixer::discover_control();
-        if speaker_control.is_none() {
-            warn!("no amixer speaker control found — speaker mute/volume will be state-only");
-        }
         let (initial_nr, initial_mode) = {
             let s = audio_tx.borrow();
             (s.nr_level.clone(), s.mode.clone())
@@ -203,7 +197,6 @@ impl AudioService {
             meeting_tx,
             stats_tee,
             processed_tx,
-            speaker_control,
             frame_size,
             sample_rate,
             echo_canceller,
@@ -408,30 +401,17 @@ impl AudioService {
                             self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
                         }
                         Ok(Command::ToggleSpeakerMute) => {
-                            let (new_muted, restore_vol) = {
-                                let s = self.audio_tx.borrow();
-                                (!s.speaker_muted, s.speaker_volume)
-                            };
-                            if let Some(ctrl) = self.speaker_control.clone() {
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    let _ = speaker_mixer::set_mute(&ctrl, new_muted);
-                                    if !new_muted {
-                                        let _ = speaker_mixer::set_volume(&ctrl, restore_vol.max(10) as u32);
-                                    }
-                                }).await;
-                            }
+                            let new_muted = !self.audio_tx.borrow().speaker_muted;
                             self.audio_tx.send_modify(|s| {
                                 s.speaker_muted = new_muted;
                                 if !new_muted && s.speaker_volume < 10 { s.speaker_volume = 10; }
                             });
+                            // SP#6: UacControl mirrors the new state to hw:1
+                            // PCM Playback Switch on the next state-watch tick.
                         }
                         Ok(Command::SetSpeakerVolume(v)) => {
-                            if let Some(ctrl) = self.speaker_control.clone() {
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    let _ = speaker_mixer::set_volume(&ctrl, v as u32);
-                                }).await;
-                            }
                             self.audio_tx.send_modify(|s| s.speaker_volume = v);
+                            // SP#6: UacControl mirrors to hw:1 PCM Playback Volume.
                         }
                         Ok(Command::SetMicVolume(v)) => {
                             self.audio_tx.send_modify(|s| s.mic_volume = v);
