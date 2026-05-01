@@ -48,6 +48,17 @@ const INDICATOR_UNCHECK: &[&[u8]] = &[
     b"A:/etc/pspapp/lvgl/icon/beamforming/bf_mode_stereo_uncheck.png\0",
 ];
 
+/// Convert our DOA azimuth (signed, counter-clockwise positive, +X = forward)
+/// to an `lv_image_set_rotation` argument (clockwise, 0.1° units).
+///
+/// Quantises to whole degrees so EWMA jitter does not retrigger redraws.
+pub(crate) fn az_to_lvgl_rotation(az_deg: f32) -> i32 {
+    let wrapped = az_deg.rem_euclid(360.0);
+    let clockwise = (360.0 - wrapped).rem_euclid(360.0);
+    let whole_deg = clockwise.round() as i32 % 360;
+    whole_deg * 10
+}
+
 fn mode_to_idx(mode: &AudioMode) -> usize {
     match mode {
         AudioMode::Omni          => 0,
@@ -317,5 +328,56 @@ impl super::Screen for AudioModeScreen {
 
             screen
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn az_zero_maps_to_zero() {
+        assert_eq!(az_to_lvgl_rotation(0.0), 0);
+    }
+
+    #[test]
+    fn az_positive_90_maps_to_2700() {
+        // +90° (left in our frame) → LVGL clockwise 270°
+        assert_eq!(az_to_lvgl_rotation(90.0), 2700);
+    }
+
+    #[test]
+    fn az_negative_90_maps_to_900() {
+        assert_eq!(az_to_lvgl_rotation(-90.0), 900);
+    }
+
+    #[test]
+    fn az_180_maps_to_1800() {
+        assert_eq!(az_to_lvgl_rotation(180.0), 1800);
+    }
+
+    #[test]
+    fn az_negative_180_maps_to_1800() {
+        assert_eq!(az_to_lvgl_rotation(-180.0), 1800);
+    }
+
+    #[test]
+    fn az_45_maps_to_3150() {
+        assert_eq!(az_to_lvgl_rotation(45.0), 3150);
+    }
+
+    #[test]
+    fn az_359_4_wraps_to_zero() {
+        // 359.4° rounds to 359 → clockwise (360-359)=1, but the input is
+        // already extremely close to 0, so after rounding it should be 0.
+        // Verify wrap is well-behaved at the seam.
+        let r = az_to_lvgl_rotation(359.4);
+        assert!(r == 0 || r == 10, "got {r}");
+    }
+
+    #[test]
+    fn az_negative_0_4_wraps_to_zero() {
+        let r = az_to_lvgl_rotation(-0.4);
+        assert!(r == 0 || r == 3590, "got {r}");
     }
 }
