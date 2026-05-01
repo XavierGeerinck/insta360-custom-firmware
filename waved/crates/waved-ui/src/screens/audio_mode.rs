@@ -229,8 +229,11 @@ impl AudioModeScreen {
             }
 
             // Slide carousel to the newly-selected card so centered tracks
-            // selection on every tap. Skipped on the first tick (prev_mode None
-            // means we just entered the screen and create() already aligned).
+            // selection on every tap. Skipped on the first tick (prev_mode
+            // None means we just entered the screen and create() already
+            // aligned). During the slide animation, centered_idx still
+            // reflects the old card — the DOA arrow stays on it until
+            // SCROLL_END fires and the next tick rebuilds the cache key.
             if self.prev_mode.is_some() && !self.cards[selected_idx].is_null() {
                 lv_obj_scroll_to_view(
                     self.cards[selected_idx],
