@@ -138,6 +138,16 @@ async fn run_mixer_poll(
                 stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
+
+        // SP#6: source-of-truth for host attachment is the kernel's
+        // PCM Playback State / PCM Capture State switches. Update the
+        // *_active stats flags here so the bridges don't have to.
+        if let Some(active) = read_state_switch(&mixer, "PCM Playback State") {
+            stats.upstream_active.store(active, Ordering::Relaxed);
+        }
+        if let Some(active) = read_state_switch(&mixer, "PCM Capture State") {
+            stats.downstream_active.store(active, Ordering::Relaxed);
+        }
     }
 }
 
@@ -198,6 +208,19 @@ fn read_switch(mixer: &Mixer, name: &str, capture: bool) -> Option<bool> {
     };
     // ALSA: 1 = unmuted, 0 = muted. Our `*_muted` semantics: true = muted.
     Some(active == 0)
+}
+
+/// Read the value of a card-level switch control like "PCM Playback State"
+/// or "PCM Capture State". These are *not* the per-element switches that
+/// `read_switch` reads — they're separate `numid` entries the kernel
+/// exposes for `f_uac2` host-attachment status. Returns `Some(true)` when
+/// the host has the endpoint open, `Some(false)` when closed.
+fn read_state_switch(mixer: &Mixer, name: &str) -> Option<bool> {
+    let id = SelemId::new(name, 0);
+    let elem = mixer.find_selem(&id)?;
+    // The State controls are mono playback switches.
+    let active = elem.get_playback_switch(SelemChannelId::mono()).ok()?;
+    Some(active != 0)
 }
 
 fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16) -> Result<(), alsa::Error> {

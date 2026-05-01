@@ -66,7 +66,6 @@ fn run_upstream(
                 if let Err(e) = pump_loop(&pcm, &cfg, &mut rx, &stats) {
                     warn!("uac-upstream pump stopped: {e}");
                 }
-                stats.upstream_active.store(false, Ordering::Relaxed);
             }
             Err(e) => {
                 warn!("uac-upstream open failed: {e}; retrying in 1 s");
@@ -105,12 +104,9 @@ fn pump_loop(
                 mono_to_stereo_i16(&frame.mic_mono_f32, &mut stereo);
                 let io = pcm.io_i16()?;
                 match io.writei(&stereo) {
-                    Ok(_) => {
-                        stats.upstream_active.store(true, Ordering::Relaxed);
-                    }
+                    Ok(_) => {}
                     Err(e) => match e.errno() {
                         libc::EBADFD => {
-                            stats.upstream_active.store(false, Ordering::Relaxed);
                             std::thread::sleep(Duration::from_millis(50));
                         }
                         libc::EPIPE => {

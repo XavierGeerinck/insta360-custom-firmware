@@ -69,7 +69,6 @@ fn run_downstream(
                 if let Err(e) = drain_loop(&pcm, &cfg, &playback, &stats) {
                     warn!("uac-downstream drain stopped: {e}");
                 }
-                stats.downstream_active.store(false, Ordering::Relaxed);
             }
             Err(e) => {
                 warn!("uac-downstream open failed: {e}; retrying in 1 s");
@@ -112,11 +111,9 @@ fn drain_loop(
         let io = pcm.io_i16()?;
         match io.readi(&mut buf) {
             Ok(0) => {
-                stats.downstream_active.store(false, Ordering::Relaxed);
                 std::thread::sleep(Duration::from_millis(50));
             }
             Ok(frames) => {
-                stats.downstream_active.store(true, Ordering::Relaxed);
                 if playback.queue_depth() >= drop_threshold {
                     stats.downstream_drops.fetch_add(1, Ordering::Relaxed);
                     continue;
@@ -126,7 +123,6 @@ fn drain_loop(
             }
             Err(e) => match e.errno() {
                 libc::EAGAIN => {
-                    stats.downstream_active.store(false, Ordering::Relaxed);
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 libc::EPIPE => {
