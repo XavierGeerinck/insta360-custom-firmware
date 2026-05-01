@@ -59,6 +59,23 @@ pub(crate) fn az_to_lvgl_rotation(az_deg: f32) -> i32 {
     whole_deg * 10
 }
 
+/// Return the index of the centre closest to `midline`. Ties go to the
+/// lower index (deterministic). Panics on empty input — caller should
+/// always have ≥1 card.
+pub(crate) fn nearest_index_to_midline(centres: &[i32], midline: i32) -> usize {
+    assert!(!centres.is_empty(), "no carousel children");
+    let mut best_idx = 0usize;
+    let mut best_dist = (centres[0] - midline).abs();
+    for (i, &c) in centres.iter().enumerate().skip(1) {
+        let d = (c - midline).abs();
+        if d < best_dist {
+            best_dist = d;
+            best_idx = i;
+        }
+    }
+    best_idx
+}
+
 fn mode_to_idx(mode: &AudioMode) -> usize {
     match mode {
         AudioMode::Omni          => 0,
@@ -383,5 +400,38 @@ mod tests {
         // 0.4° → wrapped=0.4 → clockwise=359.6 → round=360 → 360 % 360 = 0
         // The `% 360` guard is what prevents the function returning 3600.
         assert_eq!(az_to_lvgl_rotation(0.4), 0);
+    }
+
+    #[test]
+    fn nearest_single_child_returns_zero() {
+        assert_eq!(nearest_index_to_midline(&[100], 200), 0);
+    }
+
+    #[test]
+    fn nearest_three_children_picks_closest_to_midline() {
+        // Three card centres at 50, 200, 350; midline at 220 → centre #1 is closest.
+        assert_eq!(nearest_index_to_midline(&[50, 200, 350], 220), 1);
+    }
+
+    #[test]
+    fn nearest_picks_lower_index_on_tie() {
+        // Two equidistant from midline → return the lower index, deterministically.
+        assert_eq!(nearest_index_to_midline(&[100, 300], 200), 0);
+    }
+
+    #[test]
+    fn nearest_works_when_midline_left_of_all() {
+        assert_eq!(nearest_index_to_midline(&[100, 200, 300], 0), 0);
+    }
+
+    #[test]
+    fn nearest_works_when_midline_right_of_all() {
+        assert_eq!(nearest_index_to_midline(&[100, 200, 300], 1000), 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn nearest_panics_on_empty() {
+        nearest_index_to_midline(&[], 0);
     }
 }
