@@ -37,6 +37,7 @@ pub struct AudioStats {
     pub mic_post_aec_rms: Option<f32>,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
+    pub doa_active: bool,
     pub mode: AudioMode,
     pub playback_preset: String,
     pub mbagc_active_gain_db: [f32; 4],
@@ -210,6 +211,7 @@ pub fn compute_stats_with_processed(
         mic_post_aec_rms,
         doa_horizontal: audio_state.doa_horizontal,
         doa_pitch: audio_state.doa_pitch,
+        doa_active: audio_state.doa_active,
         mode: audio_state.mode.clone(),
         playback_preset,
         mbagc_active_gain_db,
@@ -349,6 +351,7 @@ mod tests {
             mode: AudioMode::Cardioid,
             doa_horizontal: 47.5,
             doa_pitch: -12.0,
+            doa_active: true,
             ..Default::default()
         };
         let s = compute_stats_with_processed(
@@ -359,6 +362,7 @@ mod tests {
         assert_eq!(s.mode, AudioMode::Cardioid);
         assert!((s.doa_horizontal - 47.5).abs() < 1e-6);
         assert!((s.doa_pitch + 12.0).abs() < 1e-6);
+        assert!(s.doa_active);
     }
 
     #[test]

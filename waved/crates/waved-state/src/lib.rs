@@ -21,6 +21,9 @@ pub struct AudioState {
     pub mic_volume: u16,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
+    /// True when the DOA VAD gate is open (speech energy detected). The
+    /// arrow may still display a stale `doa_horizontal` on frames where
+    /// the solver fails to converge — `doa_active` reflects VAD only.
     pub doa_active: bool,
     pub vu_level: [f32; 8],
     pub incoming_vu_level: [f32; 8],
