@@ -12,6 +12,7 @@
 //!   Done button (bg_image=btn_done_white.png) 64px at BOTTOM_MID y=-8 → CloseSettings
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::bindings::*;
 use crate::theme::*;
 use waved_state::{AudioMode, AudioState, Command, StateBus};
@@ -122,26 +123,60 @@ unsafe extern "C" fn done_btn_cb(e: *mut lv_event_t) {
     }
 }
 
+/// LVGL `SCROLL_END` handler on the carousel. user_data is a raw
+/// `Arc<AtomicUsize>` (via `Arc::into_raw`) sharing the centered-card
+/// index with `AudioModeScreen::update_state`.
+unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_SCROLL_END {
+        return;
+    }
+    let carousel = lv_event_get_target(e) as *mut lv_obj_t;
+    let cell_ptr = lv_event_get_user_data(e) as *const AtomicUsize;
+    if carousel.is_null() || cell_ptr.is_null() {
+        return;
+    }
+
+    let count = lv_obj_get_child_count(carousel) as usize;
+    if count == 0 {
+        return;
+    }
+    let scroll_x = lv_obj_get_scroll_x(carousel);
+    let viewport_mid = scroll_x + lv_obj_get_width(carousel) / 2;
+
+    let mut centres = Vec::with_capacity(count);
+    for i in 0..count {
+        let child = lv_obj_get_child(carousel, i as i32);
+        if child.is_null() { return; }
+        let cx = lv_obj_get_x(child) + lv_obj_get_width(child) / 2;
+        centres.push(cx);
+    }
+    let idx = nearest_index_to_midline(&centres, viewport_mid);
+    tracing::debug!(target: "waved_ui::audio_mode", "carousel centered idx = {}", idx);
+    (*cell_ptr).store(idx, Ordering::Relaxed);
+}
+
 // ── Struct ────────────────────────────────────────────────────────────────────
 
 pub struct AudioModeScreen {
-    bus:        Arc<StateBus>,
-    cards:      [*mut lv_obj_t; 5],
-    radios:     [*mut lv_obj_t; 5],
-    indicators: [*mut lv_obj_t; 5],
-    doa_arrows: [*mut lv_obj_t; 5],
-    prev_mode:  Option<AudioMode>,
+    bus:          Arc<StateBus>,
+    cards:        [*mut lv_obj_t; 5],
+    radios:       [*mut lv_obj_t; 5],
+    indicators:   [*mut lv_obj_t; 5],
+    doa_arrows:   [*mut lv_obj_t; 5],
+    centered_idx: Arc<AtomicUsize>,
+    prev_mode:    Option<AudioMode>,
 }
 
 impl AudioModeScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
             bus,
-            cards:      [std::ptr::null_mut(); 5],
-            radios:     [std::ptr::null_mut(); 5],
-            indicators: [std::ptr::null_mut(); 5],
-            doa_arrows: [std::ptr::null_mut(); 5],
-            prev_mode:  None,
+            cards:        [std::ptr::null_mut(); 5],
+            radios:       [std::ptr::null_mut(); 5],
+            indicators:   [std::ptr::null_mut(); 5],
+            doa_arrows:   [std::ptr::null_mut(); 5],
+            centered_idx: Arc::new(AtomicUsize::new(0)),
+            prev_mode:    None,
         }
     }
 
@@ -230,9 +265,18 @@ impl super::Screen for AudioModeScreen {
             lv_obj_add_flag(carousel, lv_obj_flag_t_LV_OBJ_FLAG_SCROLL_ONE);
             lv_obj_set_scroll_dir(carousel, lv_dir_t_LV_DIR_HOR);
 
+            let cell_raw = Arc::into_raw(Arc::clone(&self.centered_idx)) as *mut std::ffi::c_void;
+            lv_obj_add_event_cb(
+                carousel,
+                Some(carousel_scroll_end_cb),
+                lv_event_code_t_LV_EVENT_SCROLL_END,
+                cell_raw,
+            );
+
             // ── 5 mode cards ─────────────────────────────────────────────────
             let current_mode = self.bus.audio.borrow().mode.clone();
             let initial_idx  = mode_to_idx(&current_mode);
+            self.centered_idx.store(initial_idx, Ordering::Relaxed);
 
             for i in 0..5usize {
                 // Card: 307×167, white bg opa=25, border 2px 0x32e59e, radius=16.
