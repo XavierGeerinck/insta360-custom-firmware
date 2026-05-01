@@ -28,6 +28,8 @@ pub struct AudioConfig {
     /// from `MicGeometry::default()` via serde.
     #[serde(default = "default_mic_geometry")]
     pub mic_geometry: Option<MicGeometry>,
+    #[serde(default)]
+    pub uac: Option<UacConfig>,
 }
 
 fn default_mic_geometry() -> Option<MicGeometry> {
@@ -60,6 +62,41 @@ pub struct PlaybackPresetTuningJson {
     pub eq: [[crate::playback::dsp::eq::BiquadParams; 4]; 2],
     pub mbagc: crate::playback::dsp::mbagc::MbagcParams,
     pub limiter: crate::playback::dsp::limiter::LimiterParams,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct UacConfig {
+    #[serde(default = "default_uac_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_uac_dev")]
+    pub downstream_device: String,
+    #[serde(default = "default_uac_dev")]
+    pub upstream_device: String,
+    #[serde(default = "default_uac_period")]
+    pub period_frames: usize,
+    #[serde(default = "default_uac_periods")]
+    pub buffer_periods: u32,
+    #[serde(default = "default_uac_mixer_card")]
+    pub mixer_card: String,
+}
+
+fn default_uac_enabled() -> bool { true }
+fn default_uac_dev() -> String { "hw:1,0".to_string() }
+fn default_uac_period() -> usize { 1024 }
+fn default_uac_periods() -> u32 { 4 }
+fn default_uac_mixer_card() -> String { "hw:1".to_string() }
+
+impl Default for UacConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_uac_enabled(),
+            downstream_device: default_uac_dev(),
+            upstream_device: default_uac_dev(),
+            period_frames: default_uac_period(),
+            buffer_periods: default_uac_periods(),
+            mixer_card: default_uac_mixer_card(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -202,6 +239,18 @@ impl AudioConfig {
             return Err(ConfigError::Invalid(
                 "reference_device (hardware loopback) and playback (software reference) are mutually exclusive".into()
             ));
+        }
+        if let Some(u) = &self.uac {
+            if u.period_frames == 0 {
+                return Err(ConfigError::Invalid("uac.period_frames must be > 0".into()));
+            }
+            if u.buffer_periods < 2 {
+                return Err(ConfigError::Invalid("uac.buffer_periods must be >= 2".into()));
+            }
+            if u.downstream_device.is_empty() || u.upstream_device.is_empty()
+               || u.mixer_card.is_empty() {
+                return Err(ConfigError::Invalid("uac device strings must be non-empty".into()));
+            }
         }
         Ok(())
     }
@@ -419,6 +468,86 @@ mod tests {
         let voice = cfg.playback.unwrap().dsp.unwrap().voice.unwrap();
         assert_eq!(voice.hpf_cutoff_hz, 80.0);
         assert!(voice.mbagc.enabled);
+    }
+
+    #[test]
+    fn uac_config_default_when_absent() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v4 should parse");
+        assert!(cfg.uac.is_none(), "uac block defaults to None when absent");
+    }
+
+    #[test]
+    fn uac_config_with_overrides_parses() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8,
+            "uac": {
+                "enabled": false,
+                "downstream_device": "hw:2,0",
+                "upstream_device": "hw:2,0",
+                "period_frames": 512,
+                "buffer_periods": 8,
+                "mixer_card": "hw:2"
+            }
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v4 should parse");
+        let u = cfg.uac.unwrap();
+        assert!(!u.enabled);
+        assert_eq!(u.downstream_device, "hw:2,0");
+        assert_eq!(u.period_frames, 512);
+    }
+
+    #[test]
+    fn uac_config_rejects_zero_period() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8,
+            "uac": {
+                "enabled": true,
+                "downstream_device": "hw:1,0",
+                "upstream_device": "hw:1,0",
+                "period_frames": 0,
+                "buffer_periods": 4,
+                "mixer_card": "hw:1"
+            }
+        }"#;
+        assert!(AudioConfig::from_json(json).is_err());
+    }
+
+    #[test]
+    fn uac_config_default_round_trip() {
+        let d = UacConfig::default();
+        assert!(d.enabled);
+        assert_eq!(d.downstream_device, "hw:1,0");
+        assert_eq!(d.upstream_device, "hw:1,0");
+        assert_eq!(d.period_frames, 1024);
+        assert_eq!(d.buffer_periods, 4);
+        assert_eq!(d.mixer_card, "hw:1");
     }
 
     #[test]
