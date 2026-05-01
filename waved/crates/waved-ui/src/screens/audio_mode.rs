@@ -367,17 +367,21 @@ mod tests {
     }
 
     #[test]
-    fn az_359_4_wraps_to_zero() {
-        // 359.4° rounds to 359 → clockwise (360-359)=1, but the input is
-        // already extremely close to 0, so after rounding it should be 0.
-        // Verify wrap is well-behaved at the seam.
-        let r = az_to_lvgl_rotation(359.4);
-        assert!(r == 0 || r == 10, "got {r}");
+    fn az_359_4_maps_to_10() {
+        // 359.4° → wrapped=359.4 → clockwise=0.6 → round=1 → 10
+        assert_eq!(az_to_lvgl_rotation(359.4), 10);
     }
 
     #[test]
-    fn az_negative_0_4_wraps_to_zero() {
-        let r = az_to_lvgl_rotation(-0.4);
-        assert!(r == 0 || r == 3590, "got {r}");
+    fn az_negative_0_4_maps_to_0() {
+        // -0.4° → wrapped=359.6 → clockwise=0.4 → round=0 → 0
+        assert_eq!(az_to_lvgl_rotation(-0.4), 0);
+    }
+
+    #[test]
+    fn az_0_4_round_clamps_to_zero() {
+        // 0.4° → wrapped=0.4 → clockwise=359.6 → round=360 → 360 % 360 = 0
+        // The `% 360` guard is what prevents the function returning 3600.
+        assert_eq!(az_to_lvgl_rotation(0.4), 0);
     }
 }
