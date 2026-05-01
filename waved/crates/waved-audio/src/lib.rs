@@ -15,6 +15,9 @@ pub mod metrics;
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
+#[cfg(feature = "capture-alsa")]
+pub mod uac;
+
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
