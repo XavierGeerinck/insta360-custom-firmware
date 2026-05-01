@@ -32,7 +32,7 @@ The NPU path was probed exhaustively before pivoting:
   - ❌ Replacing galcore with 6.4.18.5: feasible but requires sourcing Insta360's GPL kernel + porting an Amlogic platform file into eYs3D's source — weeks of work, not days.
 
   **Net**: producing a `.nb` that runs on this exact chip without a VeriSilicon Acuity license costs weeks; running DFN3 ONNX on CPU costs days and the CPU has the headroom. The NPU stack stays a future optimization. Full path-status matrix in `docs/COMPUTE_HARDWARE.md`.
-- [ ] SP#5 — Playback EQ + gain staging
+- [x] **SP#5 — Playback EQ + gain staging** (HPF + 4-biquad EQ + 4-band MBAGC + lookahead limiter inside `PlaybackService`; voice preset matches stock `dynamic_eq_config_2.json` byte-for-byte; media preset bypasses MBAGC and flattens EQ; AEC reference tap moved to post-DSP — ERLE 23.2 dB on device, beats SP#2 baseline 22.7 dB; preset switch via `/tmp/waved-playback-preset` + SIGHUP. See `scripts/test-playback-eq.sh`, `scripts/test-aec-on-device.sh`, `docs/AUDIO_HARDWARE.md` Playback DSP Chain section.)
 - [ ] SP#6 — UAC2 routing for Wave Controller
 
 ASR (Silero VAD, WeNet, SenseVoice) is already open-source and out of scope.

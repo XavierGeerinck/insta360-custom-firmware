@@ -200,6 +200,62 @@ Per-thread breakdown at Omni (15 s, silence):
 | audio-playback    | ~0.3% |
 | ui-lvgl           | ~0.2% |
 
+## Playback DSP Chain (SP#5)
+
+`PlaybackService::run_playback_loop` (in `crates/waved-audio/src/playback.rs`)
+processes every batch through the chain below before the ALSA write. The
+broadcast tap (`subscribe_reference()`) publishes the **post-DSP** buffer —
+this is what AEC consumes as the far-end reference, and matches what the
+speaker actually emits.
+
+```
+mpsc<Vec<i16>> → HPF → 4-biquad EQ → 4-band MBAGC → lookahead limiter
+                                                          │
+                                       ┌──────────────────┤
+                                       ▼                  ▼
+                              ALSA write hw:0,1   broadcast<Vec<i16>>
+                              (TDM-B → acm8625s)        (AEC ref)
+```
+
+Default HPF cutoff: 80 Hz. Default limiter ceiling: −1 dBFS, 96-sample
+lookahead (≈ 2 ms latency).
+
+**Voice preset** mirrors stock `dynamic_eq_config_2.json` (vendored at
+`crates/waved-audio/data/dynamic_eq_config_2.json`). 4 EQ biquads + 4-band
+MBAGC. **Media preset** = Voice with MBAGC bypassed and EQ flattened.
+Switched at runtime via `Command::SetPlaybackPreset` or
+`/tmp/waved-playback-preset` (`voice` | `media`) + SIGHUP — same wiring as
+`/tmp/waved-nr` for SP#4.
+
+### SP#5 acceptance results (measured 2026-04-30)
+
+- **AEC ERLE non-regression: 23.2 dB** (SP#2 baseline 22.7 dB; SP#5 bar
+  20.7 dB). The post-DSP tap actually delivers a *more* accurate reference
+  than the pre-DSP tap — AEC sees what the speaker emits including EQ and
+  limiting, so cancellation tightens slightly. Test: `scripts/test-aec-on-device.sh`
+  with `ERLE_THRESHOLD_DB=20.7`.
+- **Bit-exact biquad regression**: `cargo test -p waved-audio --test biquad_regression`
+  pins direct-form-1 + RBJ peaking against a Python f64 reference impulse
+  response within 1e-6.
+- **Voice EQ stats sanity** (test 1 of `scripts/test-playback-eq.sh`): pass —
+  `playback_preset="voice"`, `mbagc_active_gain_db=[6.0, 20.0, 10.0, 10.0]`.
+- **Soft-talk MBAGC** (test 2): pass — total per-band gain 46.0 dB on
+  −40 dBFS multi-tone input (bar ≥ 4 dB).
+
+### Known caveats (acceptance test)
+
+- **`limiter_reduction_db` snapshot is last-block, not peak-hold.** Test 3
+  of `scripts/test-playback-eq.sh` reads stats *after* SIGUSR2 file-play
+  finishes; by then playback is silent and the limiter envelope has
+  released back to 1.0 (`reduction_db = 0.0`). The limiter still functions
+  correctly during the actual square wave — just not visible in stats
+  post-hoc. Fix is a small change to `LookaheadLimiter` (peak-hold with slow
+  decay window matching the 500 ms stats cadence). Future SP#5.5 cleanup.
+- **CPU baseline 11.5% in `scripts/cpu_delta.py` is pre-SP#4.** With DFN3
+  enabled by default, the post-SP#4 baseline at silence is much higher
+  (~43% observed). Re-baselining belongs with the SP#4 follow-up that
+  pre-builds DFN3 at startup.
+
 ## 4-Point DOA Validation Protocol
 
 With speaker at top-ring level, 1 m out:
