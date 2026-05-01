@@ -163,6 +163,13 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
 
 // ── Struct ────────────────────────────────────────────────────────────────────
 
+#[derive(Clone, PartialEq)]
+struct DoaCacheKey {
+    centered: usize,
+    rotation: i32,
+    active:   bool,
+}
+
 pub struct AudioModeScreen {
     bus:          Arc<StateBus>,
     cards:        [*mut lv_obj_t; 5],
@@ -171,6 +178,7 @@ pub struct AudioModeScreen {
     doa_arrows:   [*mut lv_obj_t; 5],
     centered_idx: Arc<AtomicUsize>,
     prev_mode:    Option<AudioMode>,
+    prev_doa:     Option<DoaCacheKey>,
 }
 
 impl AudioModeScreen {
@@ -183,46 +191,75 @@ impl AudioModeScreen {
             doa_arrows:   [std::ptr::null_mut(); 5],
             centered_idx: Arc::new(AtomicUsize::new(0)),
             prev_mode:    None,
+            prev_doa:     None,
         }
     }
 
-    /// Called each tick to update radio icons + indicator based on current audio mode.
+    /// Called each tick to update radio icons, indicator strip, border, and DOA arrow.
     pub unsafe fn update_state(&mut self, audio: &AudioState) {
-        if self.prev_mode.as_ref() == Some(&audio.mode) { return; }
+        let selected_idx = mode_to_idx(&audio.mode);
 
-        let idx = mode_to_idx(&audio.mode);
+        // ── Selection visuals: border, radio icon, indicator strip ─────────────
+        if self.prev_mode.as_ref() != Some(&audio.mode) {
+            for i in 0..5 {
+                if !self.radios[i].is_null() {
+                    let src = if i == selected_idx {
+                        b"A:/etc/pspapp/lvgl/icon/btn/radio_checked.png\0".as_ptr()
+                    } else {
+                        b"A:/etc/pspapp/lvgl/icon/btn/radio_unchecked.png\0".as_ptr()
+                    };
+                    lv_image_set_src(self.radios[i], src as *const _);
+                }
+                if !self.cards[i].is_null() {
+                    let side = if i == selected_idx {
+                        lv_border_side_t_LV_BORDER_SIDE_FULL
+                    } else {
+                        lv_border_side_t_LV_BORDER_SIDE_NONE
+                    };
+                    lv_obj_set_style_border_side(self.cards[i], side as u32, 0);
+                }
+                if !self.indicators[i].is_null() {
+                    let src = if i == selected_idx {
+                        INDICATOR_CHECK[i].as_ptr()
+                    } else {
+                        INDICATOR_UNCHECK[i].as_ptr()
+                    };
+                    lv_image_set_src(self.indicators[i], src as *const _);
+                }
+            }
 
-        for i in 0..5 {
-            // Radio icon: checked on selected card, unchecked otherwise.
-            if !self.radios[i].is_null() {
-                let src = if i == idx {
-                    b"A:/etc/pspapp/lvgl/icon/btn/radio_checked.png\0".as_ptr()
-                } else {
-                    b"A:/etc/pspapp/lvgl/icon/btn/radio_unchecked.png\0".as_ptr()
-                };
-                lv_image_set_src(self.radios[i], src as *const _);
+            // Slide carousel to the newly-selected card so centered tracks
+            // selection on every tap. Skipped on the first tick (prev_mode None
+            // means we just entered the screen and create() already aligned).
+            if self.prev_mode.is_some() && !self.cards[selected_idx].is_null() {
+                lv_obj_scroll_to_view(
+                    self.cards[selected_idx],
+                    lv_anim_enable_t_LV_ANIM_ON,
+                );
             }
-            // Card border: full on selected, none otherwise.
-            if !self.cards[i].is_null() {
-                let side = if i == idx {
-                    lv_border_side_t_LV_BORDER_SIDE_FULL
-                } else {
-                    lv_border_side_t_LV_BORDER_SIDE_NONE
-                };
-                lv_obj_set_style_border_side(self.cards[i], side as u32, 0);
-            }
-            // Indicator icon.
-            if !self.indicators[i].is_null() {
-                let src = if i == idx {
-                    INDICATOR_CHECK[i].as_ptr()
-                } else {
-                    INDICATOR_UNCHECK[i].as_ptr()
-                };
-                lv_image_set_src(self.indicators[i], src as *const _);
-            }
+
+            self.prev_mode = Some(audio.mode.clone());
         }
 
-        self.prev_mode = Some(audio.mode.clone());
+        // ── DOA arrow on the carousel-centered card ────────────────────────────
+        let centered = self.centered_idx.load(Ordering::Relaxed);
+        let rotation = az_to_lvgl_rotation(audio.doa_horizontal);
+        let key = DoaCacheKey { centered, rotation, active: audio.doa_active };
+
+        if self.prev_doa.as_ref() != Some(&key) {
+            for i in 0..5 {
+                let arrow = self.doa_arrows[i];
+                if arrow.is_null() { continue; }
+                let show = i == centered && audio.doa_active;
+                if show {
+                    lv_image_set_rotation(arrow, rotation);
+                    lv_obj_remove_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+            self.prev_doa = Some(key);
+        }
     }
 }
 
@@ -233,10 +270,11 @@ impl super::Screen for AudioModeScreen {
         unsafe {
             // Reset state so update_state triggers on first tick.
             self.prev_mode = None;
-            self.cards      = [std::ptr::null_mut(); 5];
-            self.radios     = [std::ptr::null_mut(); 5];
-            self.indicators = [std::ptr::null_mut(); 5];
-            self.doa_arrows = [std::ptr::null_mut(); 5];
+            self.prev_doa  = None;
+            self.cards        = [std::ptr::null_mut(); 5];
+            self.radios       = [std::ptr::null_mut(); 5];
+            self.indicators   = [std::ptr::null_mut(); 5];
+            self.doa_arrows   = [std::ptr::null_mut(); 5];
 
             let screen = lv_obj_create(std::ptr::null_mut());
             lv_obj_set_size(screen, 400, 304);
