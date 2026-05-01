@@ -267,6 +267,90 @@ Switched at runtime via `Command::SetPlaybackPreset` or
   transition. Voice preset therefore diverges slightly from stock at the
   gain-curve knee. See `TODO.md` SP#5 follow-ups.
 
+## UAC2 Routing (SP#6)
+
+The kernel `f_uac2` gadget exposes the Wave as a stereo S16 48 kHz USB
+Audio Class 2 device on `card 1` (`UAC2Gadget`). `crates/waved-audio/src/uac/`
+bridges both directions to the on-device speaker and mics.
+
+```
+host (Mac/Wave Controller)
+  ↑ ALSA writei                  ↓ ALSA readi
+hw:1,0p                       hw:1,0c
+(UAC2 IN — what host reads)   (UAC2 OUT — what host writes)
+  ↑                              ↓
+UacUpstreamSink ──┐         ┌── UacBridge
+(std::thread)     │         │   (std::thread)
+  ↑               │         ▼
+ProcessedAudioFrame   PlaybackService::play_batch
+(post-AEC mono)              ↓
+  ↑                          SP#5 DSP chain
+audio-capture                ↓
+                       hw:0,1 (TDM-B → acm8625s)
+                       broadcast tap → AEC reference
+```
+
+Both `uac-downstream` and `uac-upstream` threads run at SCHED_FIFO
+priority 18 (one less than the speaker playback thread's 20, so
+speaker-clock wins on contention). Drift handling is drop-on-overflow at
+the period boundary: when the host clock outruns the device clock and
+`play_batch` queue depth exceeds `buffer_periods`, the bridge drops the
+period (`uac.downstream_drops` in `/tmp/audio_stats.json`). Same pattern
+on upstream via the `broadcast::Receiver::Lagged` path.
+
+### Volume + mute mirror
+
+`UacControl` polls the `hw:1` ALSA mixer at 50 ms cadence. On a host
+SET_CUR (Mac slider drag), the kernel emits a value-change event;
+`UacControl` translates it to `Command::SetSpeakerVolume(v)` /
+`Command::SetMicVolume(v)` / `Command::Toggle*Mute` on the bus. Reverse
+direction: a `watch::Receiver<AudioState>` observer writes back to the
+mixer when the device-side state changes, so the Mac slider mirrors
+within ~1 s.
+
+A `LastWrite` cell suppresses self-event echo: when the device writes a
+new volume, the matching kernel-emitted value-change event is recognised
+and not redispatched onto the bus (no infinite ping-pong).
+
+`uac.upstream_active` and `uac.downstream_active` flags are the
+authoritative host-attach indicators — they read the kernel's
+`PCM Playback State` and `PCM Capture State` mixer switches every 50 ms.
+The bridges' own I/O success was an unreliable proxy (writei to a UAC2 IN
+endpoint succeeds even with no host reading; the kernel's State control
+only flips `on` when the host has the endpoint open).
+
+This SP also retired the `speaker_mixer::amixer` shell-out from the
+`Command::ToggleSpeakerMute` / `Command::SetSpeakerVolume` handlers in
+`AudioService::run`. Volume control is now end-to-end through one
+mechanism — `UacControl` → UAC2 mixer.
+
+### SP#6 acceptance results (measured 2026-05-01)
+
+- **Host-attach detection latency:** `downstream_active` flips true
+  6 s after the Mac's `afplay` start; `upstream_active` flips true 1 s
+  after `sox -d` start (50 ms polling cadence + macOS open latency).
+- **Host → speaker audible:** `mic_rms[0] = 102.1` during 1 kHz
+  afplay through the Wave (bar > 100 = mics confirm the speaker
+  emitted audible signal).
+- **Volume mirror device → host:** `amixer -c 1 sset PCM 75%` →
+  `amixer -c 1 sget PCM` reports `Mono: Playback 75 [75%]`.
+- **AEC ERLE with host-played music** (Apple Music continuous): median
+  **26.6 dB**, range 21.8–29.5 dB across 6 samples (bar ≥ 20 dB; SP#5
+  1 kHz reference was 23.2 dB — diverse program material gives the AEC
+  more spectral lock-in). The "remote party doesn't hear themselves"
+  gate from spec §2.10 holds with comfortable margin.
+- **60 s sustained stream:** 0 drops total once the host is actively
+  draining (host-disconnect lag was 58k frames pre-attach, drops to 0
+  while the Mac consumes).
+
+### Known minor
+
+- `scripts/test-uac2-routing-host.sh`'s `system_profiler` grep for
+  `UAC2_Gadget` doesn't match — the Mac may report the device under a
+  different name (e.g. `Insta360 Wave`). Cosmetic only; the actual
+  acceptance signal is what `/tmp/audio_stats.json` reports on the
+  device side.
+
 ## 4-Point DOA Validation Protocol
 
 With speaker at top-ring level, 1 m out:
