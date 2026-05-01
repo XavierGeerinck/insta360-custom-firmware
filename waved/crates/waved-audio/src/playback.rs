@@ -118,6 +118,13 @@ impl PlaybackService {
     pub fn channels(&self) -> u32 { self.channels }
     pub fn period_frames(&self) -> usize { self.period_frames }
     pub fn sample_rate(&self) -> u32 { self.sample_rate }
+
+    /// Number of `play_batch` periods currently queued in the mpsc buffer.
+    /// Used by the UAC2 downstream bridge for drift detection — drop a
+    /// period when this grows past `buffer_periods`.
+    pub fn queue_depth(&self) -> usize {
+        self.cmd_tx.max_capacity() - self.cmd_tx.capacity()
+    }
 }
 
 /// Run the playback loop synchronously on the current thread until `cmd_rx`
@@ -504,5 +511,33 @@ mod tests {
         let (batches, stats, _) = run_with_mock(3, true, vec![], 4, 1);
         assert_eq!(stats.underruns.load(Ordering::Relaxed), 1);
         assert!(batches.len() >= 3);
+    }
+
+    #[test]
+    fn queue_depth_reports_pending_batches() {
+        // Build a stand-alone PlaybackService stub by exposing the constructor
+        // shape used by spawn_playback. The simplest test is to construct a
+        // pair of channels manually and call the same accessor.
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<i16>>(4);
+        let (preset_tx, _preset_rx) =
+            mpsc::channel::<crate::playback::preset::PlaybackPreset>(2);
+        let (ref_tx, _) = broadcast::channel::<Vec<i16>>(2);
+        let svc = PlaybackService {
+            cmd_tx: cmd_tx.clone(),
+            preset_tx,
+            ref_tx,
+            channels: 2,
+            period_frames: 1024,
+            sample_rate: 48_000,
+            stats: Arc::new(PlaybackStats::default()),
+            dsp_metrics: Arc::new(DspMetrics::default()),
+        };
+        assert_eq!(svc.queue_depth(), 0);
+        cmd_tx.try_send(vec![0; 4]).unwrap();
+        cmd_tx.try_send(vec![0; 4]).unwrap();
+        assert_eq!(svc.queue_depth(), 2);
+        // Read one back via the receiver — depth drops by one.
+        let _ = cmd_rx.try_recv().ok();
+        assert_eq!(svc.queue_depth(), 1);
     }
 }
