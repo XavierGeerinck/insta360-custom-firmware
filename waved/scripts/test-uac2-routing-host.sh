@@ -10,10 +10,14 @@
 
 set -euo pipefail
 
-# Verify the Wave is selected as an audio device
-WAVE_OUT=$(/usr/sbin/system_profiler SPAudioDataType 2>/dev/null | grep -B 2 'UAC2_Gadget' | head -3 || true)
-echo "Wave device info:"
-echo "$WAVE_OUT"
+# Verify the Wave is selected as an audio device. macOS reports the gadget
+# under several literals depending on the configfs strings the firmware
+# advertises (UAC2_Gadget, Insta360 Wave, sometimes the iSerialNumber).
+# Match any of them, and don't fail if none — this is a sanity print, not a gate.
+WAVE_OUT=$(/usr/sbin/system_profiler SPAudioDataType 2>/dev/null \
+    | grep -B 2 -iE 'UAC2_Gadget|Insta360|Wave' | head -8 || true)
+echo "Wave device info (best-effort match):"
+echo "${WAVE_OUT:-<no matching audio device — pick the Wave manually in System Settings → Sound>}"
 echo
 
 if ! command -v afplay >/dev/null; then

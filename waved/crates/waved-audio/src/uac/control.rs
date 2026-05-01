@@ -13,7 +13,7 @@
 //! Both directions go through a shared `LastWrite` cell so a self-write
 //! event isn't re-dispatched as a host event.
 
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,6 +37,8 @@ pub struct UacControlConfig {
 struct LastWrite {
     speaker_volume: AtomicU16,
     mic_volume: AtomicU16,
+    speaker_muted: AtomicBool,
+    mic_muted: AtomicBool,
 }
 
 pub struct UacControl {
@@ -127,15 +129,21 @@ async fn run_mixer_poll(
         if let Some(muted) = read_switch(&mixer, "PCM", false) {
             if muted != prev_speaker_muted {
                 prev_speaker_muted = muted;
-                let _ = commands.send(Command::ToggleSpeakerMute);
-                stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                if last_write.speaker_muted.load(Ordering::Relaxed) != muted {
+                    info!("uac-control: host set speaker mute → {muted}");
+                    let _ = commands.send(Command::ToggleSpeakerMute);
+                    stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
         if let Some(muted) = read_switch(&mixer, "PCM", true) {
             if muted != prev_mic_muted {
                 prev_mic_muted = muted;
-                let _ = commands.send(Command::ToggleMicMute);
-                stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                if last_write.mic_muted.load(Ordering::Relaxed) != muted {
+                    info!("uac-control: host set mic mute → {muted}");
+                    let _ = commands.send(Command::ToggleMicMute);
+                    stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -159,6 +167,8 @@ async fn run_state_mirror(
 ) -> Result<(), alsa::Error> {
     let mut prev_speaker_vol = state_rx.borrow().speaker_volume;
     let mut prev_mic_vol = state_rx.borrow().mic_volume;
+    let mut prev_speaker_muted = state_rx.borrow().speaker_muted;
+    let mut prev_mic_muted = state_rx.borrow().mic_muted;
 
     while state_rx.changed().await.is_ok() {
         let s = state_rx.borrow().clone();
@@ -177,6 +187,22 @@ async fn run_state_mirror(
             last_write.mic_volume.store(s.mic_volume, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
                 let _ = write_volume(&mixer, "PCM", true, s.mic_volume);
+                stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if s.speaker_muted != prev_speaker_muted {
+            prev_speaker_muted = s.speaker_muted;
+            last_write.speaker_muted.store(s.speaker_muted, Ordering::Relaxed);
+            if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
+                let _ = write_switch(&mixer, "PCM", false, s.speaker_muted);
+                stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if s.mic_muted != prev_mic_muted {
+            prev_mic_muted = s.mic_muted;
+            last_write.mic_muted.store(s.mic_muted, Ordering::Relaxed);
+            if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
+                let _ = write_switch(&mixer, "PCM", true, s.mic_muted);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -236,6 +262,22 @@ fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16) -> Resul
         elem.set_capture_volume_all(raw)?;
     } else {
         elem.set_playback_volume_all(raw)?;
+    }
+    Ok(())
+}
+
+fn write_switch(mixer: &Mixer, name: &str, capture: bool, muted: bool) -> Result<(), alsa::Error> {
+    let id = SelemId::new(name, 0);
+    let elem = match mixer.find_selem(&id) {
+        Some(e) => e,
+        None => return Ok(()),
+    };
+    // ALSA: 1 = unmuted, 0 = muted. Our `*_muted` semantics: true = muted.
+    let active: i32 = if muted { 0 } else { 1 };
+    if capture {
+        elem.set_capture_switch_all(active)?;
+    } else {
+        elem.set_playback_switch_all(active)?;
     }
     Ok(())
 }

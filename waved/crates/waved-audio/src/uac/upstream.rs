@@ -101,6 +101,12 @@ fn pump_loop(
     loop {
         match rx.blocking_recv() {
             Ok(frame) => {
+                // Pre-attach: kernel buffer fills and writei blocks/errs, which
+                // backs up the broadcast and inflates upstream_drops. Drain the
+                // frame and skip the write until a host opens the endpoint.
+                if !stats.upstream_active.load(Ordering::Relaxed) {
+                    continue;
+                }
                 mono_to_stereo_i16(&frame.mic_mono_f32, &mut stereo);
                 let io = pcm.io_i16()?;
                 match io.writei(&stereo) {
