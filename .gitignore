@@ -21,6 +21,7 @@ config/local.toml
 *.db-shm
 *.db-wal
 recordings/
+pulled-recordings/
 
 # Debug dumps
 *.pcm
