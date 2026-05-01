@@ -269,6 +269,55 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     }
                 }
             });
+            // SP#6: UAC2 routing — host ↔ device speakerphone bridges.
+            let uac_cfg = cfg.uac.clone().unwrap_or_default();
+            let uac_stats: Arc<waved_audio::uac::UacStats> = Arc::new(waved_audio::uac::UacStats::default());
+
+            if uac_cfg.enabled {
+                let bridge_cfg = waved_audio::uac::bridge::UacBridgeConfig {
+                    device: uac_cfg.downstream_device.clone(),
+                    channels: 2,
+                    sample_rate: 48_000,
+                    period_frames: uac_cfg.period_frames,
+                    buffer_periods: uac_cfg.buffer_periods,
+                };
+                let bridge = waved_audio::uac::bridge::UacBridge::spawn(
+                    bridge_cfg,
+                    Arc::clone(&playback),
+                    Arc::clone(&uac_stats),
+                );
+                std::mem::forget(bridge); // run for process lifetime
+
+                let upstream_cfg = waved_audio::uac::upstream::UacUpstreamConfig {
+                    device: uac_cfg.upstream_device.clone(),
+                    channels: 2,
+                    sample_rate: 48_000,
+                    period_frames: uac_cfg.period_frames,
+                    buffer_periods: uac_cfg.buffer_periods,
+                };
+                let upstream = waved_audio::uac::upstream::UacUpstreamSink::spawn(
+                    upstream_cfg,
+                    audio_svc.subscribe_processed(),
+                    Arc::clone(&uac_stats),
+                );
+                std::mem::forget(upstream);
+
+                let control_cfg = waved_audio::uac::control::UacControlConfig {
+                    mixer_card: uac_cfg.mixer_card.clone(),
+                };
+                let _control = waved_audio::uac::control::UacControl::spawn(
+                    control_cfg,
+                    bus.commands.clone(),
+                    bus.audio.subscribe(),
+                    Arc::clone(&uac_stats),
+                );
+                tracing::info!(
+                    "uac: routing live (downstream={} upstream={} mixer={})",
+                    uac_cfg.downstream_device, uac_cfg.upstream_device, uac_cfg.mixer_card
+                );
+            } else {
+                tracing::info!("uac: disabled by config");
+            }
             tokio::spawn(test_tone_handler(Arc::clone(&playback)));
             tokio::spawn(file_play_handler(Arc::clone(&playback)));
             // Keep one Arc alive for process lifetime — the playback thread
