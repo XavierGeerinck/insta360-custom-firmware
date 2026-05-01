@@ -21,6 +21,7 @@ pub struct AudioState {
     pub mic_volume: u16,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
+    pub doa_active: bool,
     pub vu_level: [f32; 8],
     pub incoming_vu_level: [f32; 8],
     /// Magnitude spectrum of the mic signal binned into log-spaced

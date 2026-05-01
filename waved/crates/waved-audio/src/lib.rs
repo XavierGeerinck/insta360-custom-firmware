@@ -270,6 +270,7 @@ impl AudioService {
             self.audio_tx.send_modify(|s| {
                 s.doa_horizontal = doa.azimuth_deg;
                 s.doa_pitch = doa.elevation_deg;
+                s.doa_active = doa.vad_active;
             });
             let (steer_az, steer_el) = self
                 .doa_override
