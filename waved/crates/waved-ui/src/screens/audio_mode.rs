@@ -430,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "no carousel children")]
     fn nearest_panics_on_empty() {
         nearest_index_to_midline(&[], 0);
     }
