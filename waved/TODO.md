@@ -60,9 +60,14 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - `ns_backend` + `ns_frame_ms` stats fields (per spec §5.2) — useful for ongoing observability; deferred until we have a stats consumer that needs them.
 - NR strength wiring: NrLevel::Low/Med/High currently all engage the same DFN3 atten settings. Map to `RuntimeParams::with_atten_lim` per the SP#4 spec §2.5 wet/dry idea.
 
-### SP#5 (Playback EQ + gain staging)
-- Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.
-- Add `playback` block to `AudioConfig` under a version bump.
+### SP#5 follow-ups (not blockers)
+- **MBAGC `knee_db` is dead.** `MbagcParams.knee_db` is populated from stock JSON and round-trips through config, but `band_gain_linear` ignores it (hard clamp `raw.min(max_gain).max(0.0)`). Voice preset therefore diverges from stock at the gain-curve knee. Implement a soft knee (e.g., quadratic transition over `knee_db` dB approaching the target from below) so the stock numbers actually behave per stock.
+- **Preset switch cosine ramp not implemented.** Spec §2.8 calls for a 5 ms cosine envelope on switch to mask coefficient discontinuity. Hard swap currently lands directly at the period boundary. Manual listening on `scripts/test-playback-eq.sh` test 4 didn't surface a click, but the risk is real if presets ever differ more aggressively. Add `pending_tuning` + N-frame gain envelope in `PlaybackDspChain::set_preset`.
+- **`limiter_reduction_db` snapshot is last-block, not peak-hold.** Acceptance test 3 reads after playback finishes → silence → `reduction_db = 0.0`. Add peak-hold-with-decay (window matching the 500 ms stats cadence) so the field reflects observed limiter activity over the recent past.
+- **`scripts/cpu_delta.py` baseline (11.5%) is pre-SP#4.** With DFN3 enabled by default, the post-SP#4 baseline at silence is ~43%. Re-baseline once SP#4's pre-build-at-startup follow-up lands; until then test 5 will fire on outdated numbers.
+- **`AudioConfig::validate()` doesn't shape-check the EQ array.** Spec §5.1 lists `eq.len() == 2` and `eq[0].len() == 4` checks; only HPF/limiter/crossover bounds are enforced. The Rust type system catches it for the embedded preset (fixed-size array), but a malformed JSON gets a serde error, not a `ConfigError::Invalid` with a readable message.
+- **No unit-level test for mid-playback preset switch.** The acceptance script's manual test 4 is the only coverage. Add a `playback.rs::tests` case that sends a preset on `preset_tx` after N batches and asserts MBAGC envelope state was reset.
+- **Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.** Originally listed pre-implementation; descoped per the SP#5 spec §4 non-goals (the amixer path manages the unused TDMOUT_A; cleanup belongs alongside SP#6 once the new pipeline owns volume control end-to-end).
 
 ### SP#6 (UAC2 routing)
 - Expose Wave Controller audio via USB Audio Class 2 gadget.

@@ -255,6 +255,17 @@ Switched at runtime via `Command::SetPlaybackPreset` or
   enabled by default, the post-SP#4 baseline at silence is much higher
   (~43% observed). Re-baselining belongs with the SP#4 follow-up that
   pre-builds DFN3 at startup.
+- **Preset switch is a hard swap, no cosine gain ramp.** Spec §2.8 called
+  for a 5 ms ramp at the boundary; current `PlaybackDspChain::set_preset`
+  swaps coefficients directly at the next period and resets MBAGC envelopes.
+  Test 4 (manual rapid voice↔media flip under pink noise) passed without an
+  audible click on this hardware, but the risk is real if presets ever
+  differ more aggressively. See `TODO.md` SP#5 follow-ups.
+- **`MbagcParams.knee_db` is currently a dead field.** It is populated from
+  the stock voice preset (`[5.0, 5.0, 5.0, 5.0]`) and round-trips through
+  config, but `band_gain_linear` does a hard clamp instead of a soft-knee
+  transition. Voice preset therefore diverges slightly from stock at the
+  gain-curve knee. See `TODO.md` SP#5 follow-ups.
 
 ## 4-Point DOA Validation Protocol
 
