@@ -114,9 +114,15 @@ pub struct CaptureConfig {
     pub reference_sample_rate: u32,
     #[serde(default)]
     pub reference_format: Option<SampleFormat>,
+    /// PDM hardware preamp gain (ALSA `numid=9` on `hw:0`). Range 0..=48.
+    /// Set once at daemon startup; static across the device's run so DSP
+    /// tuning sees a stable input level. See the mic-volume-pipeline spec.
+    #[serde(default = "default_pdm_gain")]
+    pub pdm_gain: u8,
 }
 
 fn default_sample_rate() -> u32 { 48000 }
+fn default_pdm_gain() -> u8 { 24 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[allow(non_camel_case_types)] // intentional: matches ALSA format string names
@@ -178,6 +184,11 @@ impl AudioConfig {
         }
         if self.capture.mic_sample_rate == 0 {
             return Err(ConfigError::Invalid("mic_sample_rate must be > 0".into()));
+        }
+        if self.capture.pdm_gain > 48 {
+            return Err(ConfigError::Invalid(format!(
+                "pdm_gain must be in [0, 48], got {}", self.capture.pdm_gain
+            )));
         }
         if self.period_frames == 0 {
             return Err(ConfigError::Invalid("period_frames must be > 0".into()));
@@ -548,6 +559,64 @@ mod tests {
         assert_eq!(d.period_frames, 1024);
         assert_eq!(d.buffer_periods, 4);
         assert_eq!(d.mixer_card, "hw:1");
+    }
+
+    #[test]
+    fn embedded_default_has_pdm_gain_24() {
+        let cfg = AudioConfig::default_embedded();
+        assert_eq!(cfg.capture.pdm_gain, 24);
+    }
+
+    #[test]
+    fn pdm_gain_above_48_is_rejected() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE",
+                "pdm_gain": 49
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+    }
+
+    #[test]
+    fn pdm_gain_at_48_is_accepted() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE",
+                "pdm_gain": 48
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("48 should validate");
+        assert_eq!(cfg.capture.pdm_gain, 48);
+    }
+
+    #[test]
+    fn pdm_gain_absent_uses_serde_default() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("missing pdm_gain should default");
+        assert_eq!(cfg.capture.pdm_gain, 24);
     }
 
     #[test]

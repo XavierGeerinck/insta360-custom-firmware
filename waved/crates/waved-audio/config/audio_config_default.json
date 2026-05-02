@@ -4,7 +4,8 @@
     "mic_device": "hw:0,2",
     "mic_channels": 8,
     "mic_sample_rate": 48000,
-    "mic_format": "S32_LE"
+    "mic_format": "S32_LE",
+    "pdm_gain": 24
   },
   "playback": {
     "device": "hw:0,1",
