@@ -312,6 +312,32 @@ A `LastWrite` cell suppresses self-event echo: when the device writes a
 new volume, the matching kernel-emitted value-change event is recognised
 and not redispatched onto the bus (no infinite ping-pong).
 
+`run_playback_loop` reads `speaker_volume` / `speaker_muted` from the
+state watch once per batch and applies the result as a scalar to the
+post-DSP buffer (mute → 0, otherwise `volume_pct/100`, linear). The AEC
+reference broadcast taps **after** the gain so the canceller sees what
+actually reaches the mics.
+
+### `f_uac2` configfs gotcha — playback volume range
+
+Stock `/etc/init.d/S89usbgadget` writes `p_volume_min=-100`,
+`p_volume_max=0`, `p_volume_res=1` (units of 1/256 dB) — so the device
+advertises only `~0.4 dB` of HW Output volume range. macOS treats that
+as "not a real HW Output volume", silently disables hardware Output
+volume control, and **does not** dispatch UAC2 SET_CUR for Mac volume /
+mute keys. Mac volume/mute then has no effect on the speakerphone (Mac
+also doesn't fall back to software-side attenuation for this case).
+
+The capture (Input) side is unaffected — macOS dispatches UAC2 SET_CUR
+for Input gain regardless of advertised range, since mic preamp gain is
+conventionally HW-controlled.
+
+**Fix:** advertise a useful playback range. `scripts/patch-uac2-volume-range.sh`
+patches the init script to `p_volume_min=-16384` / `p_volume_res=256`
+(= -64 dB to 0 dB in 1 dB steps), backs up the original to
+`S89usbgadget.bak.<ts>`, and is idempotent. After patching, reboot —
+the gadget needs to come up fresh for macOS to re-read descriptors.
+
 `uac.upstream_active` and `uac.downstream_active` flags are the
 authoritative host-attach indicators — they read the kernel's
 `PCM Playback State` and `PCM Capture State` mixer switches every 50 ms.
