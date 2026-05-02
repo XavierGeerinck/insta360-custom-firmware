@@ -3547,9 +3547,11 @@ name = "waved-aec-probe"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "waved-audio",
+ "waved-state",
 ]
 
 [[package]]

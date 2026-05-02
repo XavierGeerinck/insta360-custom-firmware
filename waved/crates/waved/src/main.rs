@@ -182,7 +182,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         capture_stop_flag = Arc::clone(&capture_stop);
 
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
-        let audio_svc = waved_audio::AudioService::new(
+        let mut audio_svc = waved_audio::AudioService::new(
             Arc::clone(&bus.audio),
             frame_tx.clone(),
             frame_rx,

@@ -493,6 +493,9 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
     }
     if let Some(metrics) = svc.dsp_metrics.as_ref() {
         let mono = svc.recording_limiter_mono.last_reduction_db();
+        // last_reduction_db is always ≤ 0 (zero or negative). Using 0.0
+        // as the "no stereo path" sentinel means mono.min(stereo) collapses
+        // to mono whenever stereo isn't actively running.
         let stereo = if processed.mic_stereo_f32.is_some() {
             svc.recording_limiter_stereo.last_reduction_db()
         } else {
@@ -874,5 +877,69 @@ mod tests {
             (ratio - 2.0).abs() < 0.05,
             "expected gain ratio ~2.0 (200/100), got {ratio:.4} (unity max={max_unity:.6}, double max={max_double:.6})",
         );
+    }
+
+    #[test]
+    fn process_frame_writes_recording_limiter_reduction_to_dsp_metrics() {
+        use crate::callbacks::AudioFrame;
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+
+        // mic_volume = 800 + loud sine → limiter must engage and write a
+        // negative reduction to the shared DspMetrics atomic.
+        let mut state = AudioState::default();
+        state.mic_volume = 800;
+        let (audio_tx, _audio_rx) = watch::channel(state);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
+            256, 48_000, crate::beam::MicGeometry::default(),
+        );
+        let metrics = Arc::new(crate::playback::DspMetrics::default());
+        svc.set_dsp_metrics(Arc::clone(&metrics));
+
+        // Push enough frames to flush the lookahead and engage the limiter.
+        for frame_idx in 0..6_u32 {
+            let mut raw = vec![0i16; 256];
+            for (i, s) in raw.iter_mut().enumerate() {
+                let phase = (frame_idx as usize * 256 + i) as f32;
+                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+            }
+            let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
+            let _ = svc.process_frame(&frame);
+        }
+
+        let reduction_x100 = metrics.recording_limiter_reduction_db_x100.load(Ordering::Relaxed);
+        assert!(
+            reduction_x100 < 0,
+            "expected negative reduction (limiter engaged), got {reduction_x100}"
+        );
+    }
+
+    #[test]
+    fn process_frame_skips_dsp_metrics_write_when_handle_absent() {
+        use crate::callbacks::AudioFrame;
+        use std::sync::Arc;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+
+        // No set_dsp_metrics call → dsp_metrics is None → apply_gain skips
+        // the atomic write. Just verify process_frame returns without panic.
+        let mut state = AudioState::default();
+        state.mic_volume = 800;
+        let (audio_tx, _audio_rx) = watch::channel(state);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
+            256, 48_000, crate::beam::MicGeometry::default(),
+        );
+
+        let raw = vec![16000i16; 256];
+        let frame = AudioFrame::mic_only(raw, 1, 48_000, 0);
+        let _ = svc.process_frame(&frame); // must not panic
     }
 }
