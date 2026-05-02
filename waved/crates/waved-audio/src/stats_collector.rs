@@ -405,6 +405,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn audio_stats_mic_gain_zero_volume_emits_minus_inf_dB_as_neg_120() {
         use waved_state::AudioState;
         let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
