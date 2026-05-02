@@ -196,7 +196,7 @@ pub fn compute_stats_with_processed(
     #[cfg(feature = "capture-alsa")]
     let uac = uac_stats.map(|s| s.snapshot());
 
-    let mic_gain_linear = (audio_state.mic_volume.min(400) as f32) / 100.0;
+    let mic_gain_linear = (audio_state.mic_volume.min(800) as f32) / 100.0;
     let mic_gain_db = if mic_gain_linear > 0.0 {
         20.0 * mic_gain_linear.log10()
     } else {

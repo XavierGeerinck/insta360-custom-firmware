@@ -141,14 +141,15 @@ fn build_noise_suppressor(
 
 /// Apply user mic volume to a slice of mono f32 samples in-place.
 /// `pct` is linear percent: 100 = unity, 200 = 2×, 0 = silence.
-/// Values above 400 are clamped to 400 to prevent catastrophic gain.
-/// Output samples are hard-clamped to [-1.0, 1.0] so downstream i16
-/// quantization never wraps.
+/// Values above 800 are clamped to 800 to prevent catastrophic gain.
+/// The output is **not** clamped to [-1.0, 1.0]; the recording-path
+/// limiter (see `apply_gain`) is responsible for taming peaks above
+/// the limiter's ceiling.
 pub fn apply_mic_volume(samples: &mut [f32], pct: u16) {
-    let pct = pct.min(400);
+    let pct = pct.min(800);
     let g = pct as f32 / 100.0;
     for s in samples.iter_mut() {
-        *s = (*s * g).clamp(-1.0, 1.0);
+        *s = *s * g;
     }
 }
 
@@ -650,19 +651,20 @@ mod tests {
     }
 
     #[test]
-    fn apply_mic_volume_clamps_to_plus_minus_unity() {
-        let mut s = vec![0.6, -0.6, 0.7, -0.7];
-        apply_mic_volume(&mut s, 200);
-        assert_eq!(s, vec![1.0, -1.0, 1.0, -1.0]);
+    fn apply_mic_volume_caps_pct_at_800() {
+        let mut a = vec![0.001];
+        let mut b = vec![0.001];
+        apply_mic_volume(&mut a, 900);
+        apply_mic_volume(&mut b, 800);
+        assert!(a[0] > 0.005, "expected ~0.008 at pct=800, got {}", a[0]);
+        assert_eq!(a, b, "pct above 800 should produce same output as 800");
     }
 
     #[test]
-    fn apply_mic_volume_clamps_input_pct_above_400() {
-        let mut a = vec![0.1];
-        let mut b = vec![0.1];
-        apply_mic_volume(&mut a, 500);
-        apply_mic_volume(&mut b, 400);
-        assert_eq!(a, b);
+    fn apply_mic_volume_no_longer_clamps_output() {
+        let mut s = vec![0.5_f32];
+        apply_mic_volume(&mut s, 800);
+        assert!((s[0] - 4.0).abs() < 1e-6, "expected 4.0, got {}", s[0]);
     }
 
     #[test]
