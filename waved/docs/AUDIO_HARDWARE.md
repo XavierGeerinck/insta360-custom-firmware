@@ -337,22 +337,42 @@ music-listener UX), `"mic"` (headset UX, original behaviour), or
 `"both"`). Mac F10 then silences the speaker — which is what most users
 want from a music-output speakerphone.
 
-The volume-key case has no device-side workaround on this kernel.
-Practical paths:
-- Use Wave's touch UI for speaker volume (works today via the SP#6
-  follow-up that reads `speaker_volume` in the playback loop and scales
-  the post-DSP buffer).
-- Or stock-style: `uac_hid`-equivalent path — write Consumer-page HID
-  INPUT reports (`VolumeUp` / `VolumeDown`) to `/dev/hidg0` so when a
-  user adjusts volume on the Wave, the Mac receives a media-key event,
-  Mac scales its system Output volume host-side, and audio arrives
-  pre-attenuated. This loops volume control through the *host* even
-  though the source of intent is the device. Stock used this; not yet
-  ported.
-- Long-term: backport the Master Volume control patch to the device's
-  `f_uac2` module so macOS dispatches UAC2 SET_CUR(VOLUME) directly.
-  Would require the vendor's kernel source — open question whether
-  that's accessible.
+The volume-key case has no clean device-side workaround on this kernel.
+Practical paths in increasing engineering cost:
+
+1. **Wave's touch UI for speaker volume** — works today via the SP#6
+   follow-up that reads `speaker_volume` in the playback loop and scales
+   the post-DSP buffer. Volume control just lives on the device, not
+   the Mac.
+
+2. **`scripts/wave-volume-mac.lua` (Hammerspoon shim).** Catches Mac
+   F10/F11/F12 system media keys and translates each press into
+   `adb shell amixer -c 1 cset numid={1,2} ...`. UacControl picks up
+   the mixer change and the SP#6 gain code applies it. Per-Mac install
+   (Hammerspoon + Accessibility permission), runs only when Wave is the
+   active output device. See the script header for setup. This is the
+   recommended workaround until/unless the kernel patch lands.
+
+3. **Stock-style `uac_hid` pattern** — write Consumer-page HID INPUT
+   reports (`VolumeUp` / `VolumeDown`) to `/dev/hidg0` from waved when
+   the touch-UI volume changes. Mac receives a media-key event, scales
+   its system Output volume host-side, and audio arrives pre-attenuated.
+   This is the reverse direction (Wave→Mac) and only useful if you
+   want Mac's slider to track Wave's touch-UI changes. Doesn't help
+   Mac F11/F12. Not yet ported.
+
+4. **Backport Master Volume control to `f_uac2`.** The right long-term
+   answer: ~10–20 lines of C in `drivers/usb/gadget/function/f_uac2.c`
+   to advertise a Master channel control in the playback FU's
+   `bmaControls`, which is what macOS USBAudio.kext keys on. Requires
+   the vendor's kernel source (likely available via the GPL but not
+   yet sourced) and a kernel-module deploy path.
+
+We tried disabling `p_volume_present` / `p_mute_present` /
+`c_mute_present` to coax macOS into software-side attenuation. macOS
+silently no-ops instead — it does not fall back to SW attenuation for
+UAC2 devices the way it does for HDMI / built-in speakers. Don't
+disable those flags (also kills the F10 mute redirect).
 
 ### `f_uac2` configfs gotcha — playback volume range
 
