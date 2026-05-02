@@ -71,14 +71,14 @@ run() {
 }
 
 echo "=== mic_volume runtime control path ==="
-run check_stage "host capture 50% (boot default → mic_volume=200)"   50 2.0  6.02
-run check_stage "host capture 25% (→ mic_volume=100, unity)"          25 1.0  0.0
+run check_stage "host capture 25% (boot default → mic_volume=200)"   25 2.0  6.02
+run check_stage "host capture 50% (→ mic_volume=400, +12 dB)"         50 4.0 12.04
 run check_stage "host capture 100% (→ mic_volume=800, +18 dB)"       100 8.0 18.06
 run check_stage "host capture 0%  (→ mic_volume=0,   −120 dB sentinel)" 0 0.0 -120.0
 
 echo
 echo "=== recording limiter (idle) ==="
-amixer -c 1 sset 'PCM' 50% capture > /dev/null
+amixer -c 1 sset 'PCM' 25% capture > /dev/null
 sleep 1
 RED_IDLE=$(grep -oE '"recording_limiter_reduction_db":[^,}]*' /tmp/audio_stats.json | sed -E 's/.*: *([0-9.-]+).*/\1/')
 echo "  idle reduction: $RED_IDLE dB (expected ~0.0 with no input)"
@@ -109,7 +109,7 @@ fi
 
 echo
 echo "=== reset to boot default ==="
-amixer -c 1 sset 'PCM' 50% capture > /dev/null
+amixer -c 1 sset 'PCM' 25% capture > /dev/null
 sleep 1
 echo "  current: linear=$(read_gain_linear) dB=$(read_gain_db)"
 
