@@ -74,6 +74,10 @@ pub struct DspMetrics {
     /// Limiter peak attenuation over the most recent block (`dB × 100`,
     /// negative = attenuating).
     pub limiter_reduction_db_x100: AtomicI32,
+    /// Recording-path limiter peak attenuation over the most recent block
+    /// (`dB × 100`, negative = attenuating). Written by the audio service
+    /// after `apply_gain`; 0 when no limiting was needed.
+    pub recording_limiter_reduction_db_x100: AtomicI32,
 }
 
 pub struct PlaybackService {

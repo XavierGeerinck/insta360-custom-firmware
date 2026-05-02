@@ -48,6 +48,9 @@ pub struct AudioStats {
     /// Same as `mic_gain_linear` but expressed in dB.
     /// -120.0 when `mic_volume` is 0 (sentinel for -inf; kept finite for JSON).
     pub mic_gain_db: f32,
+    /// Peak attenuation (dB, negative) the recording limiter applied during
+    /// the last collection block. 0.0 when no limiting was needed.
+    pub recording_limiter_reduction_db: f32,
     #[cfg(feature = "capture-alsa")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uac: Option<crate::uac::UacStatsSnapshot>,
@@ -180,18 +183,20 @@ pub fn compute_stats_with_processed(
         waved_state::PlaybackPreset::Voice => "voice".to_string(),
         waved_state::PlaybackPreset::Media => "media".to_string(),
     };
-    let (mbagc_active_gain_db, limiter_reduction_db) = if let Some(m) = dsp_metrics {
-        let gains = [
-            m.mbagc_gain_db_x100[0].load(Ordering::Relaxed) as f32 / 100.0,
-            m.mbagc_gain_db_x100[1].load(Ordering::Relaxed) as f32 / 100.0,
-            m.mbagc_gain_db_x100[2].load(Ordering::Relaxed) as f32 / 100.0,
-            m.mbagc_gain_db_x100[3].load(Ordering::Relaxed) as f32 / 100.0,
-        ];
-        let limiter = m.limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
-        (gains, limiter)
-    } else {
-        ([0.0_f32; 4], 0.0_f32)
-    };
+    let (mbagc_active_gain_db, limiter_reduction_db, recording_limiter_reduction_db) =
+        if let Some(m) = dsp_metrics {
+            let gains = [
+                m.mbagc_gain_db_x100[0].load(Ordering::Relaxed) as f32 / 100.0,
+                m.mbagc_gain_db_x100[1].load(Ordering::Relaxed) as f32 / 100.0,
+                m.mbagc_gain_db_x100[2].load(Ordering::Relaxed) as f32 / 100.0,
+                m.mbagc_gain_db_x100[3].load(Ordering::Relaxed) as f32 / 100.0,
+            ];
+            let limiter = m.limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
+            let rec_limiter = m.recording_limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
+            (gains, limiter, rec_limiter)
+        } else {
+            ([0.0_f32; 4], 0.0_f32, 0.0_f32)
+        };
 
     #[cfg(feature = "capture-alsa")]
     let uac = uac_stats.map(|s| s.snapshot());
@@ -231,6 +236,7 @@ pub fn compute_stats_with_processed(
         limiter_reduction_db,
         mic_gain_linear,
         mic_gain_db,
+        recording_limiter_reduction_db,
         #[cfg(feature = "capture-alsa")]
         uac,
     }
@@ -421,5 +427,40 @@ mod tests {
         assert_eq!(stats.mic_gain_linear, 0.0);
         // Convention: clamp -inf to -120 dB so JSON stays finite.
         assert_eq!(stats.mic_gain_db, -120.0);
+    }
+
+    #[test]
+    fn audio_stats_recording_limiter_reduction_db_zero_when_metrics_absent() {
+        use waved_state::AudioState;
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
+        let cs = CaptureStats::new();
+        let state = AudioState::default();
+        let stats = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none",
+            Some(123.4), &state, None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+        );
+        assert_eq!(stats.recording_limiter_reduction_db, 0.0);
+    }
+
+    #[test]
+    fn audio_stats_recording_limiter_reduction_db_reads_from_dsp_metrics() {
+        use std::sync::atomic::Ordering;
+        use waved_state::AudioState;
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
+        let cs = CaptureStats::new();
+        let state = AudioState::default();
+        let m = crate::playback::DspMetrics::default();
+        // Limiter pulled signal down by 3.5 dB → store as -350 (×100).
+        m.recording_limiter_reduction_db_x100.store(-350, Ordering::Relaxed);
+        let stats = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none",
+            None, &state, Some(&m),
+            #[cfg(feature = "capture-alsa")]
+            None,
+        );
+        assert!((stats.recording_limiter_reduction_db - (-3.5)).abs() < 1e-6,
+            "got {}", stats.recording_limiter_reduction_db);
     }
 }

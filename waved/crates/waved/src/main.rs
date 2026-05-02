@@ -276,6 +276,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // process lifetime.
             let playback = Arc::new(playback);
             dsp_metrics_handle = Some(playback.dsp_metrics());
+            audio_svc.set_dsp_metrics(playback.dsp_metrics());
             // SP#5: forward preset commands from the bus to the playback loop.
             tokio::spawn({
                 let playback = Arc::clone(&playback);

@@ -189,6 +189,11 @@ pub struct AudioService {
     /// Same shape, but for the stereo mic pair (only exercised when beam
     /// mode is `Stereo`). Shared gain across L/R preserves stereo image.
     recording_limiter_stereo: LookaheadLimiter,
+    /// Optional handle to the shared DSP metrics. Set by main once both the
+    /// audio and playback services exist (they share the same Arc). When
+    /// present, `apply_gain` writes the recording limiter's reduction into
+    /// it after each frame; the stats collector reads from the same Arc.
+    dsp_metrics: Option<Arc<crate::playback::DspMetrics>>,
 }
 
 impl AudioService {
@@ -238,6 +243,7 @@ impl AudioService {
             recording_limiter_stereo: LookaheadLimiter::new(
                 LimiterParams::DEFAULT, 2, sample_rate as f32,
             ),
+            dsp_metrics: None,
         }
     }
 
@@ -259,6 +265,12 @@ impl AudioService {
     /// and by any downstream uplink path beyond meeting recording.
     pub fn subscribe_processed(&self) -> broadcast::Receiver<ProcessedAudioFrame> {
         self.processed_tx.subscribe()
+    }
+
+    /// Wire the shared DSP metrics handle. Call once at startup, after
+    /// `PlaybackService` is constructed (since playback owns the Arc).
+    pub fn set_dsp_metrics(&mut self, metrics: Arc<crate::playback::DspMetrics>) {
+        self.dsp_metrics = Some(metrics);
     }
 
     /// Run the DSP pipeline on a single `AudioFrame`. Separate method so the
@@ -478,6 +490,19 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
             l[i] = chunk[0];
             r[i] = chunk[1];
         }
+    }
+    if let Some(metrics) = svc.dsp_metrics.as_ref() {
+        let mono = svc.recording_limiter_mono.last_reduction_db();
+        let stereo = if processed.mic_stereo_f32.is_some() {
+            svc.recording_limiter_stereo.last_reduction_db()
+        } else {
+            0.0
+        };
+        let worst = mono.min(stereo);
+        metrics.recording_limiter_reduction_db_x100.store(
+            (worst * 100.0) as i32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
     processed
 }
