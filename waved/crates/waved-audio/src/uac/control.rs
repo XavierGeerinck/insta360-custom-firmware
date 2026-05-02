@@ -174,6 +174,15 @@ async fn run_state_mirror(
     // starts in sync with AudioState.mic_volume (which is itself seeded
     // from TOML). Without this, the mixer keeps whatever the kernel
     // initialised it to and the host's first read will not match.
+    //
+    // Concurrency note: this opens a separate Mixer handle while
+    // run_mixer_poll holds one for the same card. ALSA's snd_mixer is
+    // not thread-safe across handles. This is safe here only because
+    // both tasks are cooperative and run on the same tokio runtime —
+    // this block completes synchronously before yielding, and
+    // run_mixer_poll won't have ticked yet on first spawn. Do not
+    // restructure either task into a multi-threaded executor without
+    // adding a Mutex around the mixer.
     if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
         let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, 400);
         let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, 100);
