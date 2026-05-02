@@ -42,6 +42,11 @@ pub struct AudioStats {
     pub playback_preset: String,
     pub mbagc_active_gain_db: [f32; 4],
     pub limiter_reduction_db: f32,
+    /// Linear mic gain currently applied post-DSP. 1.0 = unity, 2.0 = +6 dB.
+    /// Tracks `AudioState.mic_volume / 100`.
+    pub mic_gain_linear: f32,
+    /// Same as `mic_gain_linear` but expressed in dB; -120.0 when muted.
+    pub mic_gain_db: f32,
     #[cfg(feature = "capture-alsa")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uac: Option<crate::uac::UacStatsSnapshot>,
@@ -190,6 +195,13 @@ pub fn compute_stats_with_processed(
     #[cfg(feature = "capture-alsa")]
     let uac = uac_stats.map(|s| s.snapshot());
 
+    let mic_gain_linear = (audio_state.mic_volume.min(400) as f32) / 100.0;
+    let mic_gain_db = if mic_gain_linear > 0.0 {
+        20.0 * mic_gain_linear.log10()
+    } else {
+        -120.0
+    };
+
     AudioStats {
         last_updated_ms: frame.timestamp_ms,
         channel_map_source: match map_source {
@@ -216,6 +228,8 @@ pub fn compute_stats_with_processed(
         playback_preset,
         mbagc_active_gain_db,
         limiter_reduction_db,
+        mic_gain_linear,
+        mic_gain_db,
         #[cfg(feature = "capture-alsa")]
         uac,
     }
@@ -372,5 +386,38 @@ mod tests {
         let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "none");
         assert!(s.reference_rms.is_empty());
         assert_eq!(s.alignment, "none");
+    }
+
+    #[test]
+    fn audio_stats_includes_mic_gain_when_volume_set() {
+        use waved_state::AudioState;
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
+        let cs = CaptureStats::new();
+        let mut state = AudioState::default();
+        state.mic_volume = 200; // 2× linear, +6 dB
+        let stats = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &state, None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+        );
+        assert!((stats.mic_gain_linear - 2.0).abs() < 1e-6, "expected 2.0, got {}", stats.mic_gain_linear);
+        assert!((stats.mic_gain_db - 6.0205994).abs() < 0.01, "expected ~6.02 dB, got {}", stats.mic_gain_db);
+    }
+
+    #[test]
+    fn audio_stats_mic_gain_zero_volume_emits_minus_inf_dB_as_neg_120() {
+        use waved_state::AudioState;
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
+        let cs = CaptureStats::new();
+        let mut state = AudioState::default();
+        state.mic_volume = 0;
+        let stats = compute_stats_with_processed(
+            &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+        );
+        assert_eq!(stats.mic_gain_linear, 0.0);
+        // Convention: clamp -inf to -120 dB so JSON stays finite.
+        assert_eq!(stats.mic_gain_db, -120.0);
     }
 }
