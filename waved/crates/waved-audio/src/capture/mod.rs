@@ -6,6 +6,9 @@ pub mod mock;
 #[cfg(feature = "capture-alsa")]
 pub mod alsa;
 
+#[cfg(feature = "capture-alsa")]
+pub mod pdm_gain;
+
 #[cfg(feature = "capture-replay")]
 pub mod replay;
 
