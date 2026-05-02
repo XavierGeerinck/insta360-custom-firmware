@@ -310,7 +310,7 @@ impl AudioService {
             if let Some((l, r)) = beam_out.stereo {
                 p = p.with_stereo(l, r);
             }
-            p
+            apply_gain(self, p)
         } else {
             // Legacy path: used by host tests that inject <8ch mic data.
             let mono_mic = mix_to_mono(&frame.data, frame.channels as usize);
@@ -330,7 +330,8 @@ impl AudioService {
                 ns.process(&mut aec_out);
             }
 
-            ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch)
+            let p = ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch);
+            apply_gain(self, p)
         }
     }
 
@@ -440,6 +441,16 @@ impl AudioService {
             }
         }
     }
+}
+
+fn apply_gain(svc: &AudioService, mut processed: ProcessedAudioFrame) -> ProcessedAudioFrame {
+    let mic_vol = svc.audio_tx.borrow().mic_volume;
+    apply_mic_volume(&mut processed.mic_mono_f32, mic_vol);
+    if let Some((l, r)) = processed.mic_stereo_f32.as_mut() {
+        apply_mic_volume(l, mic_vol);
+        apply_mic_volume(r, mic_vol);
+    }
+    processed
 }
 
 #[cfg(test)]
@@ -652,5 +663,58 @@ mod tests {
         apply_mic_volume(&mut a, 500);
         apply_mic_volume(&mut b, 400);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn process_frame_applies_mic_volume_to_mono() {
+        use crate::callbacks::AudioFrame;
+        use std::sync::Arc;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+
+        // Helper: build a fresh AudioService with the given mic_volume.
+        let make_svc = |mic_vol: u16| {
+            let mut state = AudioState::default();
+            state.mic_volume = mic_vol;
+            let (audio_tx, _audio_rx) = watch::channel(state);
+            let (frame_tx, frame_rx) = mpsc::channel(8);
+            let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+            AudioService::new(
+                Arc::new(audio_tx),
+                frame_tx,
+                frame_rx,
+                meeting_tx,
+                256,
+                48_000,
+                crate::beam::MicGeometry::default(),
+            )
+        };
+
+        let raw = vec![1000i16; 256];
+
+        // Unity (100) — reference level through the DSP chain.
+        let mut svc_unity = make_svc(100);
+        let frame_unity = AudioFrame::mic_only(raw.clone(), 1, 48_000, 0);
+        let out_unity = svc_unity.process_frame(&frame_unity);
+        let max_unity = out_unity.mic_mono_f32.iter().cloned().fold(0.0_f32, f32::max);
+
+        // Double gain (200) — same DSP chain, fresh service, identical input.
+        let mut svc_double = make_svc(200);
+        let frame_double = AudioFrame::mic_only(raw, 1, 48_000, 0);
+        let out_double = svc_double.process_frame(&frame_double);
+        let max_double = out_double.mic_mono_f32.iter().cloned().fold(0.0_f32, f32::max);
+
+        // The ratio should be exactly 2× regardless of AEC attenuation,
+        // since both services see the same input and the gain is applied
+        // after all DSP processing.
+        assert!(
+            max_unity > 0.0,
+            "unity output was zero — gain stage silenced signal unexpectedly",
+        );
+        let ratio = max_double / max_unity;
+        assert!(
+            (ratio - 2.0).abs() < 0.05,
+            "expected gain ratio ~2.0 (200/100), got {ratio:.4} (unity max={max_unity:.6}, double max={max_double:.6})",
+        );
     }
 }

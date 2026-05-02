@@ -12,12 +12,15 @@ use uuid::Uuid;
 /// real FFT).
 pub const FREQ_BAND_COUNT: usize = 32;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AudioState {
     pub mode: AudioMode,
     pub mic_muted: bool,
     pub speaker_muted: bool,
     pub speaker_volume: u16,
+    /// Linear-percent mic gain. 100 = unity (0 dB). Range 0..=400.
+    /// Default 100 so the DSP chain is transparent unless explicitly
+    /// configured. Production startup seeds this from TOML (Task 3).
     pub mic_volume: u16,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
@@ -35,6 +38,27 @@ pub struct AudioState {
     pub incoming_freq_bands: [f32; FREQ_BAND_COUNT],
     pub nr_level: NrLevel,
     pub playback_preset: PlaybackPreset,  // SP#5
+}
+
+impl Default for AudioState {
+    fn default() -> Self {
+        Self {
+            mode: AudioMode::default(),
+            mic_muted: false,
+            speaker_muted: false,
+            speaker_volume: 0,
+            mic_volume: 100,
+            doa_horizontal: 0.0,
+            doa_pitch: 0.0,
+            doa_active: false,
+            vu_level: [0.0; 8],
+            incoming_vu_level: [0.0; 8],
+            vu_freq_bands: [0.0; FREQ_BAND_COUNT],
+            incoming_freq_bands: [0.0; FREQ_BAND_COUNT],
+            nr_level: NrLevel::default(),
+            playback_preset: PlaybackPreset::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
