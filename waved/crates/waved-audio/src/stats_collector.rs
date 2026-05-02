@@ -42,8 +42,8 @@ pub struct AudioStats {
     pub playback_preset: String,
     pub mbagc_active_gain_db: [f32; 4],
     pub limiter_reduction_db: f32,
-    /// Linear mic gain currently applied post-DSP. 1.0 = unity, 2.0 = +6 dB.
-    /// Tracks `AudioState.mic_volume / 100`.
+    /// Linear mic gain currently applied post-DSP. 1.0 = unity, 2.0 = +6 dB,
+    /// 8.0 = +18 dB (maximum). Tracks `AudioState.mic_volume / 100`, capped at 8.0.
     pub mic_gain_linear: f32,
     /// Same as `mic_gain_linear` but expressed in dB.
     /// -120.0 when `mic_volume` is 0 (sentinel for -inf; kept finite for JSON).
