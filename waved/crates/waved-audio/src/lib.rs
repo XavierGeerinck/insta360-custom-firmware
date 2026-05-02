@@ -139,6 +139,19 @@ fn build_noise_suppressor(
     ))
 }
 
+/// Apply user mic volume to a slice of mono f32 samples in-place.
+/// `pct` is linear percent: 100 = unity, 200 = 2×, 0 = silence.
+/// Values above 400 are clamped to 400 to prevent catastrophic gain.
+/// Output samples are hard-clamped to [-1.0, 1.0] so downstream i16
+/// quantization never wraps.
+pub fn apply_mic_volume(samples: &mut [f32], pct: u16) {
+    let pct = pct.min(400);
+    let g = pct as f32 / 100.0;
+    for s in samples.iter_mut() {
+        *s = (*s * g).clamp(-1.0, 1.0);
+    }
+}
+
 pub struct AudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
     /// Kept alive so the channel stays open for future C SDK callback registration.
@@ -600,5 +613,44 @@ mod tests {
             (sq / processed.mic_mono_f32.len() as f32).sqrt()
         };
         assert!(rms_front > 0.05, "beamformer produced silence: rms={rms_front}");
+    }
+
+    #[test]
+    fn apply_mic_volume_unity_is_identity() {
+        let mut s = vec![0.1, -0.2, 0.5, -0.5];
+        apply_mic_volume(&mut s, 100);
+        assert_eq!(s, vec![0.1, -0.2, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn apply_mic_volume_doubles_at_200() {
+        let mut s = vec![0.4, -0.3, 0.0];
+        apply_mic_volume(&mut s, 200);
+        assert!((s[0] - 0.8).abs() < 1e-6, "expected 0.8, got {}", s[0]);
+        assert!((s[1] - (-0.6)).abs() < 1e-6, "expected -0.6, got {}", s[1]);
+        assert_eq!(s[2], 0.0);
+    }
+
+    #[test]
+    fn apply_mic_volume_silences_at_zero() {
+        let mut s = vec![0.5, -0.3, 1.0];
+        apply_mic_volume(&mut s, 0);
+        assert_eq!(s, vec![0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn apply_mic_volume_clamps_to_plus_minus_unity() {
+        let mut s = vec![0.6, -0.6, 0.7, -0.7];
+        apply_mic_volume(&mut s, 200);
+        assert_eq!(s, vec![1.0, -1.0, 1.0, -1.0]);
+    }
+
+    #[test]
+    fn apply_mic_volume_clamps_input_pct_above_400() {
+        let mut a = vec![0.1];
+        let mut b = vec![0.1];
+        apply_mic_volume(&mut a, 500);
+        apply_mic_volume(&mut b, 400);
+        assert_eq!(a, b);
     }
 }
