@@ -49,6 +49,8 @@ fn main() {
 
     // Seed mutable audio state from TOML so apply_mic_volume sees the
     // user-configured boot value before the first frame is processed.
+    // This must run before any service thread is spawned — the Tokio
+    // runtime is constructed below and all service spawns happen there.
     bus.audio.send_modify(|s| {
         s.mic_volume = config.audio.mic_volume;
     });
