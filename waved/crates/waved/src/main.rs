@@ -172,6 +172,11 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             ConfigSource::Fallback => "fallback",
         };
 
+        // Set the hardware preamp once. Static across the device's run
+        // so DSP (AEC, DFN3) sees a stable input level. See
+        // docs/superpowers/specs/2026-05-01-mic-volume-pipeline-design.md.
+        waved_audio::capture::pdm_gain::init_or_warn("hw:0", cfg.capture.pdm_gain);
+
         let capture_stats = CaptureStats::new();
         let capture_stop = Arc::new(AtomicBool::new(false));
         capture_stop_flag = Arc::clone(&capture_stop);
