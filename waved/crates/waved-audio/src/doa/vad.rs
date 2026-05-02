@@ -7,7 +7,9 @@ pub trait Vad {
 }
 
 /// Threshold-based VAD — "is speech" if frame RMS exceeds `threshold`.
-/// Threshold 0.003 (~ -50 dBFS) is the default that rejects most room tone.
+/// Threshold 0.002 (~ -54 dBFS) balances rejecting most room tone (typically
+/// −57 dBFS in a quiet office) against catching moderate-volume music and
+/// conversational speech.
 pub struct EnergyVad {
     threshold: f32,
 }
@@ -20,7 +22,7 @@ impl EnergyVad {
 
 impl Default for EnergyVad {
     fn default() -> Self {
-        Self::new(0.003)
+        Self::new(0.002)
     }
 }
 
