@@ -45,7 +45,8 @@ pub struct AudioStats {
     /// Linear mic gain currently applied post-DSP. 1.0 = unity, 2.0 = +6 dB.
     /// Tracks `AudioState.mic_volume / 100`.
     pub mic_gain_linear: f32,
-    /// Same as `mic_gain_linear` but expressed in dB; -120.0 when muted.
+    /// Same as `mic_gain_linear` but expressed in dB.
+    /// -120.0 when `mic_volume` is 0 (sentinel for -inf; kept finite for JSON).
     pub mic_gain_db: f32,
     #[cfg(feature = "capture-alsa")]
     #[serde(skip_serializing_if = "Option::is_none")]
