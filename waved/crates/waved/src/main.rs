@@ -47,6 +47,12 @@ fn main() {
     // Create state bus
     let bus = Arc::new(StateBus::new());
 
+    // Seed mutable audio state from TOML so apply_mic_volume sees the
+    // user-configured boot value before the first frame is processed.
+    bus.audio.send_modify(|s| {
+        s.mic_volume = config.audio.mic_volume;
+    });
+
     // --- Hardware services: real or simulated ---
     #[cfg(not(feature = "simulate"))]
     {

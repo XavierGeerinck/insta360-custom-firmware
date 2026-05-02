@@ -367,4 +367,12 @@ mod tests {
         let cmd = Command::SetPlaybackPreset(PlaybackPreset::Media);
         assert!(matches!(cmd, Command::SetPlaybackPreset(PlaybackPreset::Media)));
     }
+
+    #[test]
+    fn audio_state_seed_helper_writes_mic_volume() {
+        let bus = StateBus::new();
+        // Simulate the seed call main.rs will make.
+        bus.audio.send_modify(|s| s.mic_volume = 250);
+        assert_eq!(bus.audio.borrow().mic_volume, 250);
+    }
 }
