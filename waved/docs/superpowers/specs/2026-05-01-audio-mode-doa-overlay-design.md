@@ -1,8 +1,16 @@
 # Audio Mode DOA Overlay — Design
 
 **Date:** 2026-05-01
-**Status:** Spec
+**Status:** Implemented (with on-device-tuned deviations — see *Implementation findings* at end)
 **Scope:** UI only (waved-ui, plus a one-field state plumb in waved-state / waved-audio)
+
+> **Note:** This document is the design intent captured during brainstorming.
+> On-device acceptance revealed that two assumptions in the original
+> rotation formula were wrong (chirality of the FB flip, asset native
+> orientation), and that VAD-only gating jitters during silence at this
+> device's mic SNR. The final implementation differs from the formulae and
+> test expectations below — see the *Implementation findings* section at the
+> end and `docs/AUDIO_HARDWARE.md` for the authoritative reference.
 
 ## Motivation
 
@@ -114,12 +122,12 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
     let carousel = lv_event_get_target(e) as *mut lv_obj_t;
     let cell_ptr = lv_event_get_user_data(e) as *const AtomicUsize;
     if cell_ptr.is_null() || carousel.is_null() { return; }
-    let new_idx = closest_centered_child(carousel);
+    let new_idx = nearest_index_to_midline(carousel);
     (*cell_ptr).store(new_idx, Ordering::Relaxed);
 }
 ```
 
-`closest_centered_child` is a small helper that walks `lv_obj_get_child_count` children, computes each child's x-centre (`lv_obj_get_x` + half its width minus carousel scroll-x), and returns the index of the one nearest the carousel's mid-x in viewport space. Single LVGL-dependent function; we extract the index-selection arithmetic into a pure helper for unit testing (input: list of (centre_x, width), viewport mid-x → output: index).
+`nearest_index_to_midline` is a small helper that walks `lv_obj_get_child_count` children, computes each child's x-centre (`lv_obj_get_x` + half its width minus carousel scroll-x), and returns the index of the one nearest the carousel's mid-x in viewport space. Single LVGL-dependent function; we extract the index-selection arithmetic into a pure helper for unit testing (input: list of (centre_x, width), viewport mid-x → output: index).
 
 #### 2e. Per-tick update
 
@@ -181,7 +189,7 @@ When `prev_mode` changes (i.e. selection committed), additionally call `lv_obj_s
 - 359.4° → 0 (wrap edge)
 - −0.4° → 0 (wrap edge)
 
-`closest_centered_child` arithmetic helper:
+`nearest_index_to_midline` arithmetic helper:
 - Single child centred → index 0.
 - Three equal-width children, viewport-mid between #1 and #2 (closer to #1) → index 1.
 - Equal distance ties → lower index (deterministic).
@@ -208,3 +216,69 @@ When `prev_mode` changes (i.e. selection committed), additionally call `lv_obj_s
 - `waved/crates/waved-state/src/lib.rs` — add `doa_active: bool` to `AudioState`.
 - `waved/crates/waved-audio/src/lib.rs` — assign `s.doa_active = doa.vad_active`.
 - `waved/crates/waved-ui/src/screens/audio_mode.rs` — arrow creation, per-tick update, `az_to_lvgl_rotation` helper + unit tests.
+- `waved/crates/waved-audio/src/stats_collector.rs` — mirror `doa_active` into `AudioStatsSnapshot` (added during implementation review for surface symmetry with `doa_horizontal` / `doa_pitch`).
+
+## Implementation findings
+
+Three on-device-tuned deviations from the spec above:
+
+### 1. Rotation formula — drop the chirality flip, add a +270° asset offset
+
+The spec's `(360 - az) * 10` factor inverted chirality on the assumption that
+the FB flush 180° flip flipped chirality through the pipeline. On-device
+four-position testing showed front/back rendered correctly under the bug
+(vertical axis is symmetric under chirality flip) but device-left/right were
+mirrored. Two findings:
+
+- The OLED is mounted 180° upside-down AND `display.rs::flush()` rotates the
+  framebuffer 180°. The two flips cancel — LVGL coords equal visual coords
+  on this device (see `docs/ui/COORDINATE_SYSTEM.md`).
+- `bf_doa.png`'s "source dot" sits at LVGL-LEFT natively. We want it at
+  LVGL-TOP for `az=0` (front of device, where the user is sitting), which
+  means rotating CW by 270°.
+
+Final formula:
+
+```rust
+pub(crate) fn az_to_lvgl_rotation(az_deg: f32) -> i32 {
+    let wrapped = az_deg.rem_euclid(360.0);
+    let whole_deg = wrapped.round() as i32 % 360;
+    (whole_deg * 10 + 2700) % 3600
+}
+```
+
+| Input | Final output | Visual direction (after FB flip cancels mount) |
+|-------|-------------|------------------------------------------------|
+| 0°    | 2700        | dot at BOTTOM (toward user, arcs opening up to centre) |
+| +90°  | 0           | dot at LEFT  |
+| +180° | 900         | dot at TOP   |
+| −90°  | 1800        | dot at RIGHT |
+
+The 9 unit tests in `screens/audio_mode.rs` assert these final values.
+
+### 2. VAD threshold + UI hysteresis
+
+The spec assumed `AudioState.doa_active` (= raw VAD-active) was a clean
+"signal present" indicator. On-device measurement at the user's quiet desk
+showed mic ch0 RMS for phone music at ~13 int16 (~0.0004 float) is barely
+above silence-floor noise bursts at ~10 int16 (~0.00027 float) — only ~30%
+SNR margin. Per-frame energy thresholding cannot cleanly separate them.
+
+Two-layer fix landed:
+
+- VAD threshold kept at the original 0.0003 (catches everything above the
+  noise floor, including occasional bursts during silence).
+- UI layer adds **temporal hysteresis** on `audio.doa_active`: require 3
+  consecutive `true` ticks to engage, 2 consecutive `false` ticks to
+  release. State lives in `AudioModeScreen.{doa_show, doa_streak}`.
+  Engage takes ~150 ms at 50 ms UI ticks; release ~100 ms.
+
+The `update_hysteresis` pure function carries 5 unit tests for engage,
+release, streak-reset-on-flip, and the brief-noise-burst rejection case.
+
+### 3. Tracing level promoted to `info!`
+
+Spec's draft used `tracing::debug!` for the `SCROLL_END` trace.
+Implementation found every other UI-event trace in `waved-ui` uses `info!`
+and Task 7's acceptance grep relied on default `RUST_LOG=info` to surface
+the line — so promoted to match the existing convention.
