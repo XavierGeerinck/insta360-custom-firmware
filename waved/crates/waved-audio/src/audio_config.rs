@@ -114,9 +114,10 @@ pub struct CaptureConfig {
     pub reference_sample_rate: u32,
     #[serde(default)]
     pub reference_format: Option<SampleFormat>,
-    /// PDM hardware preamp gain (ALSA `numid=9` on `hw:0`). Range 0..=48.
-    /// Set once at daemon startup; static across the device's run so DSP
-    /// tuning sees a stable input level. See the mic-volume-pipeline spec.
+    /// PDM hardware preamp gain (ALSA `numid=9` on `hw:0`). Range 0..=48,
+    /// where each step is ~0.5 dB; 24 (default) ≈ +12 dB above the ADC
+    /// floor. Set once at daemon startup; static across the device's run so
+    /// DSP tuning sees a stable input level. See the mic-volume-pipeline spec.
     #[serde(default = "default_pdm_gain")]
     pub pdm_gain: u8,
 }
@@ -617,6 +618,24 @@ mod tests {
         }"#;
         let cfg = AudioConfig::from_json(json).expect("missing pdm_gain should default");
         assert_eq!(cfg.capture.pdm_gain, 24);
+    }
+
+    #[test]
+    fn pdm_gain_at_0_is_accepted() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE",
+                "pdm_gain": 0
+            },
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("0 should validate");
+        assert_eq!(cfg.capture.pdm_gain, 0);
     }
 
     #[test]
