@@ -49,23 +49,26 @@ const INDICATOR_UNCHECK: &[&[u8]] = &[
     b"A:/etc/pspapp/lvgl/icon/beamforming/bf_mode_stereo_uncheck.png\0",
 ];
 
-/// Convert our DOA azimuth (signed, counter-clockwise positive, +X = forward)
-/// to an `lv_image_set_rotation` argument for the `bf_doa.png` overlay.
+/// Convert our DOA azimuth (signed, +X = forward, +Y = left, range −180..+180
+/// or 0..360 — both accepted) to an `lv_image_set_rotation` argument for the
+/// `bf_doa.png` overlay.
 ///
-/// Combines two mappings:
-///   • Signed CCW azimuth → LVGL clockwise rotation (0.1° units).
-///   • +270° (= 2700 LVGL units) asset-orientation offset: the asset's
-///     "source dot" sits at LVGL-LEFT natively. We want the dot at LVGL-TOP
-///     for az=0 — which, after the 180° framebuffer flip in display.rs,
-///     renders as visual BOTTOM with the arcs opening upward toward the
-///     screen centre.
+/// Maps world-frame azimuth directly to LVGL clockwise rotation (no chirality
+/// flip — the 180° framebuffer flip in display.rs preserves rotational
+/// chirality, so increasing azimuth → increasing LVGL rotation → CW visual
+/// rotation, which matches the world-frame CCW-positive convention through
+/// the flip).
+///
+/// Adds a +270° (= 2700 LVGL units) asset-orientation offset: the asset's
+/// "source dot" sits at LVGL-LEFT natively, but we want it at LVGL-TOP for
+/// az=0 — which renders as visual BOTTOM after the FB flip, with the arcs
+/// opening upward toward the screen centre.
 ///
 /// Quantises to whole degrees so EWMA-smoother jitter does not retrigger
 /// redraws.
 pub(crate) fn az_to_lvgl_rotation(az_deg: f32) -> i32 {
     let wrapped = az_deg.rem_euclid(360.0);
-    let clockwise = (360.0 - wrapped).rem_euclid(360.0);
-    let whole_deg = clockwise.round() as i32 % 360;
+    let whole_deg = wrapped.round() as i32 % 360;
     (whole_deg * 10 + 2700) % 3600
 }
 
@@ -471,58 +474,57 @@ mod tests {
 
     #[test]
     fn az_zero_maps_to_2700() {
-        // az=0 (front of device) → rotation 2700 → after FB flip, dot at
-        // visual BOTTOM with arcs opening up toward screen centre.
+        // az=0 (front of device) → wrap=0 → 0*10=0 → +2700=2700 → visual BOTTOM.
         assert_eq!(az_to_lvgl_rotation(0.0), 2700);
     }
 
     #[test]
-    fn az_positive_90_maps_to_1800() {
-        // az=+90 (left of device) → rotation 1800 → visual RIGHT.
-        assert_eq!(az_to_lvgl_rotation(90.0), 1800);
+    fn az_positive_90_maps_to_0() {
+        // az=+90 (device left) → wrap=90 → 90*10=900 → +2700=3600 → %3600=0 → visual LEFT.
+        assert_eq!(az_to_lvgl_rotation(90.0), 0);
     }
 
     #[test]
-    fn az_negative_90_maps_to_0() {
-        // az=-90 (right of device) → rotation 3600 mod 3600 = 0 → visual LEFT.
-        // Trace: rem_euclid(-90, 360) = 270 → clockwise = 90 → whole_deg = 90
-        // → (90*10 + 2700) % 3600 = (900+2700)%3600 = 3600%3600 = 0.
-        assert_eq!(az_to_lvgl_rotation(-90.0), 0);
+    fn az_negative_90_maps_to_1800() {
+        // az=-90 (device right) → wrap=270 → 270*10=2700 → +2700=5400 → %3600=1800 → visual RIGHT.
+        assert_eq!(az_to_lvgl_rotation(-90.0), 1800);
     }
 
     #[test]
     fn az_180_maps_to_900() {
-        // az=180 (back) → rotation 900 → visual TOP.
+        // az=180 (back) → wrap=180 → 180*10=1800 → +2700=4500 → %3600=900 → visual TOP.
         assert_eq!(az_to_lvgl_rotation(180.0), 900);
     }
 
     #[test]
     fn az_negative_180_maps_to_900() {
+        // az=-180 → wrap=180 → same as +180 → 900.
         assert_eq!(az_to_lvgl_rotation(-180.0), 900);
     }
 
     #[test]
-    fn az_45_maps_to_2250() {
-        // 45° → wrapped=45 → clockwise=315 → 315*10=3150 → +2700=5850 → %3600 = 2250.
-        assert_eq!(az_to_lvgl_rotation(45.0), 2250);
+    fn az_45_maps_to_3150() {
+        // az=45 → wrap=45 → 45*10=450 → +2700=3150 → visual between BOTTOM and LEFT.
+        assert_eq!(az_to_lvgl_rotation(45.0), 3150);
     }
 
     #[test]
-    fn az_359_4_maps_to_2710() {
-        // az=359.4 → wrapped=359.4 → clockwise=0.6 → round=1 → 1*10=10 → +2700=2710.
-        assert_eq!(az_to_lvgl_rotation(359.4), 2710);
+    fn az_359_4_maps_to_2690() {
+        // az=359.4 → wrap=359.4 → round=359 → 359*10=3590 → +2700=6290 → %3600=2690.
+        assert_eq!(az_to_lvgl_rotation(359.4), 2690);
     }
 
     #[test]
     fn az_negative_0_4_maps_to_2700() {
-        // az=-0.4 → wrapped=359.6 → clockwise=0.4 → round=0 → 0*10=0 → +2700=2700.
+        // az=-0.4 → wrap=359.6 → round=360 → %360=0 → 0*10=0 → +2700=2700.
         assert_eq!(az_to_lvgl_rotation(-0.4), 2700);
     }
 
     #[test]
     fn az_0_4_round_clamps_to_2700() {
-        // az=0.4 → wrapped=0.4 → clockwise=359.6 → round=360 → 360%360=0 → 0*10=0 → +2700=2700.
-        // The `% 360` guard is what prevents 3600 (which would wrap to 0 by the outer mod anyway).
+        // az=0.4 → wrap=0.4 → round=0 → 0*10=0 → +2700=2700.
+        // (Round-up at 0.5 boundary: 0.5 → 0 in Rust's banker rounding for round() ties to even,
+        //  but here we have 0.4 < 0.5 anyway, so → 0.)
         assert_eq!(az_to_lvgl_rotation(0.4), 2700);
     }
 
