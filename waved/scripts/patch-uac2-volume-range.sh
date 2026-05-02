@@ -1,31 +1,32 @@
 #!/usr/bin/env bash
 # Patch /etc/init.d/S89usbgadget on a Wave so the f_uac2 gadget advertises
-# the right UAC2 control surface to USB hosts.
+# a useful playback (Output) volume range to USB hosts.
 #
-# What we change (all in `uac_init()`):
-#   1. p_volume_present = 0   (was 1, the default)
-#   2. p_mute_present   = 0   (was 1)
-#   3. c_mute_present   = 0   (was 1)
+# What we change (in `uac_init()`):
+#   p_volume_min  -100  →  -16384  (= -64 dB)
+#   p_volume_res     1  →  256     (= 1 dB steps)
 #
-# Why: kernel 5.4 `f_uac2` in this build claims it has hardware volume +
-# mute on the playback Feature Unit, but it doesn't expose a Master
-# channel control that macOS's USBAudio.kext recognises. macOS then
-# dispatches NEITHER hardware UAC2 SET_CUR(VOLUME) for output volume,
-# NOR falls back to software-side attenuation — F11/F12/Sound-prefs
-# slider all become inert.
+# Why: the stock value `-100..0` in 1/256 dB units gives only ~0.4 dB of
+# advertised HW volume range, which macOS treats as "not a real HW
+# Output volume" — it dismisses the path entirely and doesn't fall
+# back to software attenuation either. With a proper range, macOS at
+# least *attempts* the UAC2 SET_CUR(VOLUME) path.
 #
-# By telling f_uac2 to NOT advertise these controls, macOS knows the
-# device has no HW playback volume, applies attenuation in its own
-# audio engine before sending samples, and Mac F10/F11/F12 all work
-# the way a generic keyboard's volume keys would.
+# IMPORTANT — known limitation kept here for future work:
+# Even with the wider range, kernel 5.4 `f_uac2` does not advertise a
+# Master channel control in the playback Feature Unit's `bmaControls`,
+# so macOS USBAudio.kext still doesn't dispatch SET_CUR for F11/F12 or
+# the Output slider. The realistic fix is patching the kernel module
+# itself; we attempted disabling `p_volume_present`/`p_mute_present`
+# to coax macOS into software attenuation, but macOS silently no-ops
+# instead — and disabling `c_mute_present` removed F10's working path
+# (the capture-FU redirect onto speaker mute lives in waved/UacControl).
+# So we leave all three `_present` flags at their defaults (=1).
 #
-# Capture (mic) volume control stays advertised — Mac Sound prefs Input
-# slider remains useful for hardware preamp gain. Capture mute is
-# disabled so F10 silences system Output (the natural meaning) instead
-# of hitting the headset-semantic mic-mute path.
-#
-# Wave's touch-UI volume + mute are unaffected; they live in AudioState
-# and the playback DSP loop, independent of UAC2 mixer.
+# Wave's own touch-UI volume + mute work regardless of this, since they
+# live in AudioState and the playback DSP loop, independent of the UAC2
+# mixer. F10 silences the speaker via UacControl's host_mute_target=
+# Speaker redirect.
 #
 # After the patch, reboot the device:    adb reboot
 #
@@ -41,39 +42,21 @@ if [ ! -f "$INIT" ]; then
     exit 1
 fi
 
-if grep -q "echo 0 > functions/uac2.0/p_volume_present" "$INIT"; then
+if grep -q "echo -16384 > functions/uac2.0/p_volume_min" "$INIT"; then
     echo "already patched"
     exit 0
 fi
 
 cp "$INIT" "${INIT}.bak.$(date +%s)"
 
-# Add the three new lines just after the p_volume_res block, inside uac_init().
-# We anchor on the closing `fi` of the p_volume_res block.
-awk '
-    /echo .* > functions\/uac2.0\/p_volume_res/ { in_pres=1 }
-    { print }
-    in_pres && /^[[:space:]]*fi[[:space:]]*$/ {
-        print ""
-        print "\tif [ -f functions/uac2.0/p_volume_present ]; then"
-        print "\t\techo 0 > functions/uac2.0/p_volume_present"
-        print "\tfi"
-        print "\tif [ -f functions/uac2.0/p_mute_present ]; then"
-        print "\t\techo 0 > functions/uac2.0/p_mute_present"
-        print "\tfi"
-        print "\tif [ -f functions/uac2.0/c_mute_present ]; then"
-        print "\t\techo 0 > functions/uac2.0/c_mute_present"
-        print "\tfi"
-        in_pres=0
-    }
-' "$INIT" > "${INIT}.new"
+sed -i \
+    -e 's|echo -100 > functions/uac2.0/p_volume_min|echo -16384 > functions/uac2.0/p_volume_min|' \
+    -e 's|echo 1 > functions/uac2.0/p_volume_res|echo 256 > functions/uac2.0/p_volume_res|' \
+    "$INIT"
 
-mv "${INIT}.new" "$INIT"
-chmod +x "$INIT"
-
-echo "patched. uac2.0 control flags now:"
-grep -n "_volume_present\|_mute_present" "$INIT" || echo "(none — patch may not have applied)"
+echo "patched. relevant lines:"
+grep -n "p_volume_min\|p_volume_max\|p_volume_res" "$INIT"
 
 echo
-echo "reboot the device for the new descriptors to take effect:"
+echo "reboot the device for the new range to take effect:"
 echo "  adb reboot"
