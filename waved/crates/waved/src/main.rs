@@ -585,7 +585,7 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
     };
 
     info!(
-        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override, /tmp/waved-nr, /tmp/waved-playback-preset)"
+        "SIGHUP handler ready (sources: /tmp/waved-mode, /tmp/waved-doa-override, /tmp/waved-nr, /tmp/waved-playback-preset, /tmp/waved-volume)"
     );
 
     while sighup.recv().await.is_some() {
@@ -652,6 +652,25 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => warn!("SIGHUP: {PRESET_PATH}: {e}"),
+        }
+
+        const VOLUME_PATH: &str = "/tmp/waved-volume";
+        match std::fs::read_to_string(VOLUME_PATH) {
+            Ok(raw) => {
+                let trimmed = raw.trim();
+                if !trimmed.is_empty() {
+                    match trimmed.parse::<u16>() {
+                        Ok(v) if v <= 100 => {
+                            info!("SIGHUP: setting speaker volume → {v}%");
+                            let _ = commands.send(Command::SetSpeakerVolume(v));
+                        }
+                        Ok(v) => warn!("SIGHUP: {VOLUME_PATH}: {v} out of range (0..=100)"),
+                        Err(e) => warn!("SIGHUP: {VOLUME_PATH}: parse error: {e}"),
+                    }
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {VOLUME_PATH}: {e}"),
         }
 
         const DOA_PATH: &str = "/tmp/waved-doa-override";

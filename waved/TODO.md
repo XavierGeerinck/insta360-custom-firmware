@@ -1,6 +1,6 @@
 # Waved — Roadmap
 
-This repository replaces the stock Insta360 Wave firmware's closed-source audio stack with an open-source equivalent. The work is split into six sub-projects (SPs); each gets its own spec → plan → implementation cycle.
+This repository replaces the stock Insta360 Wave firmware's closed-source audio stack with an open-source equivalent. The work is split into seven sub-projects (SPs); each gets its own spec → plan → implementation cycle.
 
 See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.md` for the authoritative SP#1 design.
 
@@ -34,6 +34,7 @@ The NPU path was probed exhaustively before pivoting:
   **Net**: producing a `.nb` that runs on this exact chip without a VeriSilicon Acuity license costs weeks; running DFN3 ONNX on CPU costs days and the CPU has the headroom. The NPU stack stays a future optimization. Full path-status matrix in `docs/COMPUTE_HARDWARE.md`.
 - [x] **SP#5 — Playback EQ + gain staging** (HPF + 4-biquad EQ + 4-band MBAGC + lookahead limiter inside `PlaybackService`; voice preset matches stock `dynamic_eq_config_2.json` byte-for-byte; media preset bypasses MBAGC and flattens EQ; AEC reference tap moved to post-DSP — ERLE 23.2 dB on device, beats SP#2 baseline 22.7 dB; preset switch via `/tmp/waved-playback-preset` + SIGHUP. See `scripts/test-playback-eq.sh`, `scripts/test-aec-on-device.sh`, `docs/AUDIO_HARDWARE.md` Playback DSP Chain section.)
 - [x] **SP#6 — UAC2 routing for Wave Controller** (`crates/waved-audio/src/uac/`: `UacBridge` reads `hw:1,0c` → `play_batch` (host audio gets the SP#5 DSP chain + AEC reference for free), `UacUpstreamSink` reads `subscribe_processed()` → `hw:1,0p` (post-AEC mono → stereo dup), `UacControl` mirrors `hw:1` mixer events ↔ `AudioState`. ALSA-mixer-based volume + mute is now end-to-end through one mechanism — `speaker_mixer::amixer` shell-out gone. **AEC ERLE with host-played music: median 26.6 dB** (bar ≥ 20). See `scripts/test-uac2-routing.sh`, `docs/AUDIO_HARDWARE.md` UAC2 Routing section.)
+- [ ] **SP#7 — Wave Controller native compatibility** (vendor-specific UAC2 control surface + multichannel raw-mic upstream). Standard UAC2 already works for generic apps (Apple Music, Zoom, etc.); SP#7 covers what stock firmware did extra so the official Wave Controller app talks to the device natively. Two open work items, both deferred until a host-side test demands them — see "SP#7 scope" below.
 
 ASR (Silero VAD, WeNet, SenseVoice) is already open-source and out of scope.
 
@@ -70,10 +71,13 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - **Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.** Originally listed pre-implementation; descoped per the SP#5 spec §4 non-goals (the amixer path manages the unused TDMOUT_A; cleanup belongs alongside SP#6 once the new pipeline owns volume control end-to-end).
 
 ### SP#6 follow-ups (not blockers)
-- **No `/tmp/waved-volume` SIGHUP source.** The acceptance script test 4 falls back to writing the UAC2 mixer directly (`amixer -c 1 sset PCM 75%`), which exercises the host→device path but not the device→host mirror. Add a `/tmp/waved-volume` reader to `mode_switch_handler` (mirror the `/tmp/waved-playback-preset` pattern) so the touch-UI volume path can be acceptance-tested without UI hardware.
-- **Wave Controller protocol probe.** Spec §8 open question: stock firmware likely handles Wave Controller-specific UAC2 control surface (sidetone, mic gain table, telephony class units). Standard UAC2 currently works for generic apps (Apple Music, Zoom, etc.) — but Wave Controller integration may need vendor descriptors. Diagnose with `usbmon` + Wireshark vs stock firmware *if* a host-side test reveals incompatibility.
-- **Multichannel UAC2 upstream (raw 8-ch mics).** Future SP#6.5 if a host-side beamforming app wants the raw array. Requires kernel `c_chmask=0xff` configfs change and a separate UAC2 vendor-specific interface descriptor.
-- **Upstream EQ / gain.** Stock firmware had `Insta360_UplinkAsr*` paths suggesting upstream signal shaping (probably mic-FR compensation). Defer until a host-side listening test reveals a need; one biquad in the upstream sink would suffice.
+
+(All landed. Symmetric mute mirror, pre-attach upstream skip, relaxed Mac grep, `/tmp/waved-volume` SIGHUP source — done. Wave Controller protocol probe and multichannel UAC2 upstream graduated to SP#7 below.)
+
+### SP#7 scope — Wave Controller native compatibility (deferred)
+- **Wave Controller protocol probe.** Stock firmware likely exposes a vendor-specific UAC2 control surface (sidetone level, mic-gain table, telephony class units) that the official Wave Controller app drives. Capture with `usbmon` + Wireshark vs stock firmware to enumerate the descriptor set. Trigger: a host-side test reveals the official app cannot configure the device.
+- **Multichannel UAC2 upstream (raw 8-ch mics).** A second UAC2 vendor-specific interface descriptor + `c_chmask=0xff` configfs entry, exposing the raw eight-mic array for host-side beamforming experiments. Trigger: a host application requests the raw streams.
+- **Upstream EQ / gain.** Stock had `Insta360_UplinkAsr*` paths suggesting upstream signal shaping (probably mic-FR compensation). One biquad in the upstream sink would suffice. Trigger: a host listening test reveals an audible difference vs stock.
 
 ## SP#1 v1 → v2 minor items (follow-ups, not blocking)
 

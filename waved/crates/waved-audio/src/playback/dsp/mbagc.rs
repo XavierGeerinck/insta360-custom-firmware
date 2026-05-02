@@ -150,6 +150,12 @@ impl MultibandAgc {
     /// Update per-band envelope state and compute the linear gain for this
     /// sample. Envelope is peak-with-exponential-release; gain is floored at 0
     /// (lift-only, no cut) and ceiled at `max_gain_db`.
+    ///
+    /// `knee_db` softens the lower edge of the lift curve where the gain
+    /// fades out as `env_dbfs` approaches `target` from below. With knee = 0
+    /// the curve is hard (`max(raw, 0)`); with knee > 0 the transition is a
+    /// quadratic that meets the hard curve tangentially at `raw = knee/2`
+    /// and reaches zero at `raw = -knee/2`.
     fn band_gain_linear(&mut self, band_idx: usize, peak: f32) -> f32 {
         let alpha = self.bands[band_idx].release_alpha;
         let env = self.bands[band_idx].envelope;
@@ -160,9 +166,22 @@ impl MultibandAgc {
         let env_dbfs = 20.0 * env.log10();
         let target = self.params.target_dbfs[band_idx];
         let max_gain = self.params.max_gain_db[band_idx];
+        let knee = self.params.knee_db[band_idx].max(0.0);
 
         let raw = target - env_dbfs;
-        let gain_db = raw.min(max_gain).max(0.0);  // lift-only
+        let half = knee * 0.5;
+        let lifted = if knee <= 1e-6 {
+            raw.max(0.0)
+        } else if raw >= half {
+            raw
+        } else if raw <= -half {
+            0.0
+        } else {
+            // Quadratic on [-half, half]: g(-half)=0, g(half)=half, g'(half)=1.
+            let x = raw + half;
+            x * x / (2.0 * knee)
+        };
+        let gain_db = lifted.min(max_gain);
         self.last_gain_db[band_idx] = gain_db;
         10.0_f32.powf(gain_db / 20.0)
     }

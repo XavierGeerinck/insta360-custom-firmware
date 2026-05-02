@@ -21,18 +21,26 @@ impl LimiterParams {
     };
 }
 
+/// dB/s the held peak reduction recovers toward 0 between batches. Picked
+/// to outlive the 500 ms stats cadence — at 6 dB/s, a -10 dB reduction
+/// remains visible (~ -7 dB) on the next stats sample.
+const PEAK_HOLD_DECAY_DB_PER_S: f32 = 6.0;
+
 pub struct LookaheadLimiter {
     /// Frame ring buffer (one Vec<f32> per frame, length = channels).
     ring: VecDeque<Vec<f32>>,
     channels: usize,
+    sample_rate_hz: f32,
     /// Configured lookahead (frames). The emit gate is `ring.len() > lookahead`.
     lookahead: usize,
     ceiling: f32,
     release_alpha: f32,
     /// Current attenuation factor (1.0 = no attenuation).
     current_atten: f32,
-    /// Snapshot for stats: peak attenuation over the most recent block (dB,
-    /// negative = more attenuation, 0.0 = no limiting).
+    /// Peak-held reduction (dB, ≤ 0). Updated on every batch: takes the
+    /// deeper of {block-min reduction, decayed previous peak}. Decays toward
+    /// zero at `PEAK_HOLD_DECAY_DB_PER_S` so /tmp/audio_stats.json reflects
+    /// recent activity at the 500 ms cadence rather than the last block alone.
     last_reduction_db: f32,
 }
 
@@ -42,6 +50,7 @@ impl LookaheadLimiter {
         Self {
             ring: VecDeque::with_capacity(params.lookahead_samples + 1),
             channels,
+            sample_rate_hz,
             lookahead: params.lookahead_samples,
             ceiling: 10.0_f32.powf(params.ceiling_dbfs / 20.0),
             release_alpha,
@@ -112,9 +121,15 @@ impl LookaheadLimiter {
             }
         }
         buf.copy_from_slice(&out);
-        self.last_reduction_db = if min_atten_this_block < 1.0 {
+        let now_db = if min_atten_this_block < 1.0 {
             20.0 * min_atten_this_block.log10()
         } else { 0.0 };
+        // Decay the held peak toward 0 by the time spanned by this batch,
+        // then keep the deeper of {decayed-held, this-block}.
+        let n_frames = (buf.len() / self.channels) as f32;
+        let dt_s = n_frames / self.sample_rate_hz;
+        let decayed = (self.last_reduction_db + PEAK_HOLD_DECAY_DB_PER_S * dt_s).min(0.0);
+        self.last_reduction_db = decayed.min(now_db);
     }
 }
 
