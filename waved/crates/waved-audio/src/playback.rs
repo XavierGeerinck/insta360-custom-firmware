@@ -63,8 +63,10 @@ pub struct PlaybackStats {
 }
 
 /// DSP runtime metrics exposed for `/tmp/audio_stats.json` consumers.
-/// Single writer (playback thread), single reader (stats collector) — Relaxed
-/// ordering is sufficient.
+/// Writers: playback DSP thread (mbagc + playback limiter) and audio
+/// capture task (recording limiter). Single reader: stats collector.
+/// Relaxed ordering is sufficient — values are only consumed at the 500 ms
+/// stats cadence; stale-by-one-frame data is acceptable.
 #[derive(Debug, Default)]
 pub struct DspMetrics {
     /// Per-band MBAGC gain (dB), packed `[b0, b1, b2, b3]` as fixed-point
