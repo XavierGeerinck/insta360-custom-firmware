@@ -191,6 +191,34 @@ pub struct AudioModeScreen {
     centered_idx: Arc<AtomicUsize>,
     prev_mode:    Option<AudioMode>,
     prev_doa:     Option<DoaCacheKey>,
+    doa_show:     bool,
+    doa_streak:   i32,
+}
+
+/// Engage after this many consecutive ticks where `audio.doa_active` is true.
+/// At ~50 ms UI ticks this is ~150 ms — long enough to reject brief
+/// noise bursts during silence, short enough to feel responsive.
+const DOA_ENGAGE_TICKS: i32 = 3;
+
+/// Release after this many consecutive ticks where `audio.doa_active` is
+/// false. Shorter than ENGAGE so the arrow disappears promptly when audio
+/// stops.
+const DOA_RELEASE_TICKS: i32 = 2;
+
+/// Update doa_streak and doa_show based on the per-tick `active` flag.
+/// Pure function — exposed for unit testing the temporal hysteresis.
+fn update_hysteresis(streak: &mut i32, show: &mut bool, active: bool) {
+    if active {
+        *streak = streak.saturating_add(1).max(1); // reset to +1 when crossing zero
+        if *streak >= DOA_ENGAGE_TICKS {
+            *show = true;
+        }
+    } else {
+        *streak = streak.saturating_sub(1).min(-1); // reset to -1 when crossing zero
+        if *streak <= -DOA_RELEASE_TICKS {
+            *show = false;
+        }
+    }
 }
 
 impl AudioModeScreen {
@@ -204,6 +232,8 @@ impl AudioModeScreen {
             centered_idx: Arc::new(AtomicUsize::new(0)),
             prev_mode:    None,
             prev_doa:     None,
+            doa_show:     false,
+            doa_streak:   0,
         }
     }
 
@@ -257,15 +287,23 @@ impl AudioModeScreen {
         }
 
         // ── DOA arrow on the carousel-centered card ────────────────────────────
+        //
+        // Apply temporal hysteresis on top of the audio-thread `doa_active` flag:
+        // require ENGAGE consecutive true ticks before showing, RELEASE consecutive
+        // false ticks before hiding. This decouples the UI from the VAD layer's
+        // per-frame jitter — brief noise bursts during silence don't sustain long
+        // enough to flip the arrow on.
+        update_hysteresis(&mut self.doa_streak, &mut self.doa_show, audio.doa_active);
+
         let centered = self.centered_idx.load(Ordering::Relaxed);
         let rotation = az_to_lvgl_rotation(audio.doa_horizontal);
-        let key = DoaCacheKey { centered, rotation, active: audio.doa_active };
+        let key = DoaCacheKey { centered, rotation, active: self.doa_show };
 
         if self.prev_doa.as_ref() != Some(&key) {
             for i in 0..5 {
                 let arrow = self.doa_arrows[i];
                 if arrow.is_null() { continue; }
-                let show = i == centered && audio.doa_active;
+                let show = i == centered && self.doa_show;
                 if show {
                     lv_image_set_rotation(arrow, rotation);
                     lv_obj_remove_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_HIDDEN);
@@ -286,6 +324,8 @@ impl super::Screen for AudioModeScreen {
             // Reset state so update_state triggers on first tick.
             self.prev_mode = None;
             self.prev_doa  = None;
+            self.doa_show   = false;
+            self.doa_streak = 0;
             self.cards        = [std::ptr::null_mut(); 5];
             self.radios       = [std::ptr::null_mut(); 5];
             self.indicators   = [std::ptr::null_mut(); 5];
@@ -559,5 +599,63 @@ mod tests {
     #[should_panic(expected = "no carousel children")]
     fn nearest_panics_on_empty() {
         nearest_index_to_midline(&[], 0);
+    }
+
+    #[test]
+    fn hysteresis_starts_hidden() {
+        let mut streak = 0;
+        let mut show = false;
+        update_hysteresis(&mut streak, &mut show, false);
+        assert!(!show);
+    }
+
+    #[test]
+    fn hysteresis_engages_after_three_active_ticks() {
+        let mut streak = 0;
+        let mut show = false;
+        update_hysteresis(&mut streak, &mut show, true);
+        assert!(!show, "1 active tick — still hidden");
+        update_hysteresis(&mut streak, &mut show, true);
+        assert!(!show, "2 active ticks — still hidden");
+        update_hysteresis(&mut streak, &mut show, true);
+        assert!(show, "3 active ticks — now visible");
+    }
+
+    #[test]
+    fn hysteresis_releases_after_two_inactive_ticks() {
+        let mut streak = 5;
+        let mut show = true;
+        update_hysteresis(&mut streak, &mut show, false);
+        assert!(show, "1 inactive tick — still visible");
+        update_hysteresis(&mut streak, &mut show, false);
+        assert!(!show, "2 inactive ticks — now hidden");
+    }
+
+    #[test]
+    fn hysteresis_resets_streak_on_state_flip() {
+        let mut streak = 0;
+        let mut show = false;
+        // Active for 2 ticks (not enough to engage), then inactive for 1.
+        update_hysteresis(&mut streak, &mut show, true);
+        update_hysteresis(&mut streak, &mut show, true);
+        assert_eq!(streak, 2);
+        update_hysteresis(&mut streak, &mut show, false);
+        // Streak should be -1, not -3 — flipping resets the counter.
+        assert_eq!(streak, -1);
+        assert!(!show);
+    }
+
+    #[test]
+    fn hysteresis_brief_noise_burst_during_silence_does_not_engage() {
+        // Simulate: 5 ticks silent, 2 ticks burst, 5 ticks silent again.
+        let mut streak = 0;
+        let mut show = false;
+        for _ in 0..5 { update_hysteresis(&mut streak, &mut show, false); }
+        assert!(!show);
+        update_hysteresis(&mut streak, &mut show, true);
+        update_hysteresis(&mut streak, &mut show, true);
+        assert!(!show, "2-tick burst is below ENGAGE=3 threshold");
+        for _ in 0..5 { update_hysteresis(&mut streak, &mut show, false); }
+        assert!(!show);
     }
 }
