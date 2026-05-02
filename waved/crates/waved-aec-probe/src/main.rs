@@ -13,8 +13,10 @@ use clap::Parser;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+use tokio::sync::watch;
 use waved_audio::audio_config::SampleFormat;
-use waved_audio::playback::{spawn_playback, PlaybackConfig};
+use waved_audio::playback::{preset::PlaybackPreset, spawn_playback, PlaybackConfig};
+use waved_state::AudioState;
 
 #[derive(Parser, Debug)]
 #[command(about = "Play a sine tone through PlaybackService (SP#2 AEC probe)")]
@@ -79,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         format: SampleFormat::S16_LE,
         period_frames: args.period_frames,
         buffer_periods: args.buffer_periods,
+        initial_preset: PlaybackPreset::default(),
     };
 
     info!(
@@ -90,7 +93,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.freq, args.amplitude, args.duration
     );
 
-    let playback = spawn_playback(cfg)?;
+    // Probe runs at full volume — no UI / state bus to drive volume.
+    let (_state_tx, state_rx) = watch::channel(AudioState {
+        speaker_volume: 100,
+        speaker_muted: false,
+        ..AudioState::default()
+    });
+    let playback = spawn_playback(cfg, state_rx)?;
     let period_samples = args.period_frames * args.channels as usize;
     let peak = (args.amplitude * i16::MAX as f32) as i32;
     let step = 2.0 * std::f32::consts::PI * args.freq / args.sample_rate as f32;

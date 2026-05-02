@@ -241,15 +241,18 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         } else if let Some(pb) = cfg.playback.clone() {
             // Spawn playback first so the broadcast receiver can be subscribed
             // before capture starts emitting frames.
-            let playback = match spawn_playback(PlaybackConfig {
-                device: pb.device.clone(),
-                channels: pb.channels,
-                sample_rate: pb.sample_rate,
-                format: pb.format,
-                period_frames: pb.period_frames,
-                buffer_periods: pb.buffer_periods,
-                initial_preset: bus.audio.borrow().playback_preset,
-            }) {
+            let playback = match spawn_playback(
+                PlaybackConfig {
+                    device: pb.device.clone(),
+                    channels: pb.channels,
+                    sample_rate: pb.sample_rate,
+                    format: pb.format,
+                    period_frames: pb.period_frames,
+                    buffer_periods: pb.buffer_periods,
+                    initial_preset: bus.audio.borrow().playback_preset,
+                },
+                bus.audio.subscribe(),
+            ) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("FATAL: ALSA playback open failed: {e}");

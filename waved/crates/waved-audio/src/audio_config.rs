@@ -379,6 +379,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_wrong_shape_eq_array() {
+        // Spec §5.1 EQ shape (eq.len() == 2, eq[0].len() == 4) is enforced
+        // by the [[BiquadParams; 4]; 2] field type — serde rejects any other
+        // shape at parse time. ConfigError::Parse is the right classification:
+        // the JSON is structurally malformed, not just out of policy.
+        let bad = r#"{
+            "version": 4,
+            "capture": {"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames": 1024,
+            "buffer_periods": 4,
+            "playback": {
+                "device": "hw:0,1",
+                "channels": 2,
+                "sample_rate": 48000,
+                "format": "S16_LE",
+                "period_frames": 1024,
+                "buffer_periods": 4,
+                "dsp": {
+                    "voice": {
+                        "hpf_cutoff_hz": 80.0,
+                        "eq": [
+                            [{"kind":"bypass"}, {"kind":"bypass"}, {"kind":"bypass"}]
+                        ],
+                        "mbagc": {"enabled":false,"crossover_freq_hz":[300.0,4000.0,7000.0],"target_dbfs":[-12.0,-6.0,-29.0,-35.0],"max_gain_db":[6.0,20.0,10.0,10.0],"knee_db":[5.0,5.0,5.0,5.0],"release_ms":[200.0,200.0,200.0,200.0]},
+                        "limiter": {"ceiling_dbfs":-1.0,"lookahead_samples":96,"release_ms":50.0}
+                    }
+                }
+            }
+        }"#;
+        let err = AudioConfig::from_json(bad).expect_err("wrong-shape eq must fail");
+        assert!(matches!(err, ConfigError::Parse(_)),
+                "expected Parse error for malformed eq array, got {err:?}");
+    }
+
+    #[test]
     fn load_or_default_missing_file_uses_fallback() {
         let (cfg, src) = AudioConfig::load_or_default(Path::new("/definitely/not/here.json"));
         assert_eq!(src, ConfigSource::Fallback);

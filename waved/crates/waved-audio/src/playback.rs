@@ -28,8 +28,9 @@ use crate::audio_config::SampleFormat;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use thiserror::Error;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
+use waved_state::AudioState;
 
 #[derive(Debug, Clone)]
 pub struct PlaybackConfig {
@@ -140,6 +141,7 @@ pub fn run_playback_loop<S: PlaybackSink>(
     sample_rate: u32,
     initial_preset: crate::playback::preset::PlaybackPreset,
     dsp_metrics: Arc<DspMetrics>,
+    state_rx: watch::Receiver<AudioState>,
 ) {
     use crate::playback::dsp::PlaybackDspChain;
     use crate::playback::preset::tuning_for;
@@ -206,6 +208,27 @@ pub fn run_playback_loop<S: PlaybackSink>(
         dsp_metrics.limiter_reduction_db_x100.store(
             (chain.last_limiter_reduction_db() * 100.0) as i32, Ordering::Relaxed,
         );
+
+        // User volume + mute. Read once per batch from the watch channel; mute
+        // forces a hard 0, otherwise scale by speaker_volume / 100. Linear for
+        // now — macOS already log-tapers the slider before sending UAC2 SET_CUR
+        // values, so a second log curve here would feel double-attenuated.
+        // The AEC reference broadcast happens AFTER scaling so it reflects the
+        // actual signal hitting the mics.
+        let st = state_rx.borrow();
+        let muted = st.speaker_muted;
+        let volume_pct = st.speaker_volume.min(100);
+        drop(st);
+        if muted {
+            for s in normalized.iter_mut() {
+                *s = 0;
+            }
+        } else if volume_pct < 100 {
+            let gain = volume_pct as f32 / 100.0;
+            for s in normalized.iter_mut() {
+                *s = ((*s as f32) * gain) as i16;
+            }
+        }
 
         match sink.write(&normalized) {
             Ok(()) => {
@@ -326,7 +349,10 @@ mod alsa_impl {
     /// Convenience: open the ALSA device, spawn a SCHED_FIFO thread running
     /// the playback loop, and return a `PlaybackService` handle. The thread
     /// exits when `play_batch` senders all drop.
-    pub fn spawn_playback(cfg: PlaybackConfig) -> Result<PlaybackService, PlaybackError> {
+    pub fn spawn_playback(
+        cfg: PlaybackConfig,
+        state_rx: watch::Receiver<AudioState>,
+    ) -> Result<PlaybackService, PlaybackError> {
         let sink = AlsaPlaybackSink::open(&cfg)?;
         let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(64);
         let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
@@ -347,6 +373,7 @@ mod alsa_impl {
                 run_playback_loop(
                     sink, cmd_rx, preset_rx, ref_tx_thread, stats_thread,
                     period_samples, sample_rate, initial_preset, dsp_metrics_thread,
+                    state_rx,
                 );
             })
             .map_err(|e| PlaybackError::Invalid(format!("spawn playback thread: {e}")))?;
@@ -444,11 +471,18 @@ mod tests {
         let stats = Arc::new(PlaybackStats::default());
         let stats_thread = Arc::clone(&stats);
 
+        // Tests run with full volume + unmuted so post-DSP plumbing is observable.
+        let (_state_tx, state_rx) = watch::channel(AudioState {
+            speaker_volume: 100,
+            speaker_muted: false,
+            ..AudioState::default()
+        });
         let handle = std::thread::spawn(move || {
             run_playback_loop(
                 sink, cmd_rx, preset_rx, ref_tx, stats_thread,
                 period_samples, 48_000, PlaybackPreset::Voice,
                 Arc::new(DspMetrics::default()),
+                state_rx,
             )
         });
         // Mock returns Fatal when stop_after is reached, which exits the loop;

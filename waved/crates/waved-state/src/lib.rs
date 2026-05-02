@@ -46,7 +46,11 @@ impl Default for AudioState {
             mode: AudioMode::default(),
             mic_muted: false,
             speaker_muted: false,
-            speaker_volume: 0,
+            // Default unity gain — speaker plays at full digital volume on boot.
+            // Pre-fix the playback loop ignored this field; post-fix (SP#6
+            // follow-up) it scales the signal directly, so 0 would silence the
+            // device until the host or user moves a slider.
+            speaker_volume: 100,
             mic_volume: 100,
             doa_horizontal: 0.0,
             doa_pitch: 0.0,
