@@ -27,6 +27,16 @@ use waved_state::{AudioState, Command};
 use super::UacStats;
 use crate::audio_config::HostMuteTarget;
 
+/// Internal percent ceiling for the mic gain path (0..=MIC_MAX_PCT).
+/// 800 = 8× / +18 dB. Matches `apply_mic_volume`'s cap in `lib.rs`.
+/// If you change this, also change the `.min(...)` in `apply_mic_volume`
+/// and the `.min(...)` in `stats_collector::compute_stats_with_processed`.
+const MIC_MAX_PCT: u16 = 800;
+
+/// Internal percent ceiling for the speaker volume path (0..=SPEAKER_MAX_PCT).
+/// 100 means the host slider's full-scale corresponds to internal 100.
+const SPEAKER_MAX_PCT: u16 = 100;
+
 #[derive(Debug, Clone)]
 pub struct UacControlConfig {
     pub mixer_card: String,    // "hw:1"
@@ -97,8 +107,8 @@ async fn run_mixer_poll(
     let mixer = Mixer::new(&cfg.mixer_card, false)?;
 
     // Cache the current values so we only emit on change.
-    let mut prev_speaker_vol = read_volume(&mixer, "PCM", false, 100).unwrap_or(0);
-    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, 800).unwrap_or(0);
+    let mut prev_speaker_vol = read_volume(&mixer, "PCM", false, SPEAKER_MAX_PCT).unwrap_or(0);
+    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, MIC_MAX_PCT).unwrap_or(0);
     let mut prev_speaker_muted = read_switch(&mixer, "PCM", false).unwrap_or(false);
     let mut prev_mic_muted = read_switch(&mixer, "PCM", true).unwrap_or(false);
 
@@ -108,7 +118,7 @@ async fn run_mixer_poll(
         // Drain pending mixer events. `handle_events` is non-blocking.
         let _ = mixer.handle_events();
 
-        if let Some(v) = read_volume(&mixer, "PCM", false, 100) {
+        if let Some(v) = read_volume(&mixer, "PCM", false, SPEAKER_MAX_PCT) {
             if v != prev_speaker_vol {
                 prev_speaker_vol = v;
                 if last_write.speaker_volume.load(Ordering::Relaxed) != v {
@@ -118,7 +128,7 @@ async fn run_mixer_poll(
                 }
             }
         }
-        if let Some(v) = read_volume(&mixer, "PCM", true, 800) {
+        if let Some(v) = read_volume(&mixer, "PCM", true, MIC_MAX_PCT) {
             if v != prev_mic_vol {
                 prev_mic_vol = v;
                 if last_write.mic_volume.load(Ordering::Relaxed) != v {
@@ -205,8 +215,8 @@ async fn run_state_mirror(
     // restructure either task into a multi-threaded executor without
     // adding a Mutex around the mixer.
     if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, 800);
-        let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, 100);
+        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, MIC_MAX_PCT);
+        let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, SPEAKER_MAX_PCT);
         last_write.mic_volume.store(prev_mic_vol, Ordering::Relaxed);
         last_write.speaker_volume.store(prev_speaker_vol, Ordering::Relaxed);
     }
@@ -219,7 +229,7 @@ async fn run_state_mirror(
             // Open the mixer fresh on each write — short-lived, avoids
             // holding state across await points.
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", false, s.speaker_volume, 100);
+                let _ = write_volume(&mixer, "PCM", false, s.speaker_volume, SPEAKER_MAX_PCT);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -227,7 +237,7 @@ async fn run_state_mirror(
             prev_mic_vol = s.mic_volume;
             last_write.mic_volume.store(s.mic_volume, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, 800);
+                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, MIC_MAX_PCT);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
