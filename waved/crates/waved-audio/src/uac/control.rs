@@ -25,10 +25,12 @@ use tracing::{info, warn};
 use waved_state::{AudioState, Command};
 
 use super::UacStats;
+use crate::audio_config::HostMuteTarget;
 
 #[derive(Debug, Clone)]
 pub struct UacControlConfig {
     pub mixer_card: String,    // "hw:1"
+    pub host_mute_target: HostMuteTarget,
 }
 
 /// Cell tracking what we last wrote to the mixer ourselves (to suppress the
@@ -126,23 +128,42 @@ async fn run_mixer_poll(
                 }
             }
         }
+        // Host mute on the playback FU. macOS rarely dispatches here (it
+        // prefers the capture FU for system mute on bidirectional devices),
+        // but stock UAC2 hosts may, so mirror it onto whatever target the
+        // config selects. By default speaker → speaker (one-to-one), which
+        // is the natural meaning.
         if let Some(muted) = read_switch(&mixer, "PCM", false) {
             if muted != prev_speaker_muted {
                 prev_speaker_muted = muted;
                 if last_write.speaker_muted.load(Ordering::Relaxed) != muted {
                     info!("uac-control: host set speaker mute → {muted}");
-                    let _ = commands.send(Command::ToggleSpeakerMute);
+                    dispatch_host_mute(&commands, cfg.host_mute_target);
                     stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                    // Track host's value so the next toggle is detected as
+                    // a change vs. last_write (state-mirror won't write back
+                    // when redirect target ≠ speaker).
+                    last_write.speaker_muted.store(muted, Ordering::Relaxed);
                 }
             }
         }
+        // Host mute on the capture FU. This is what macOS F10 lands on for
+        // a UAC2 speakerphone. Redirect per `host_mute_target`: default
+        // "speaker" silences playback (music-listener UX), "mic" preserves
+        // the headset semantic, "both" toggles both at once.
         if let Some(muted) = read_switch(&mixer, "PCM", true) {
             if muted != prev_mic_muted {
                 prev_mic_muted = muted;
                 if last_write.mic_muted.load(Ordering::Relaxed) != muted {
-                    info!("uac-control: host set mic mute → {muted}");
-                    let _ = commands.send(Command::ToggleMicMute);
+                    info!(
+                        "uac-control: host set mic mute → {muted} (target={:?})",
+                        cfg.host_mute_target
+                    );
+                    dispatch_host_mute(&commands, cfg.host_mute_target);
                     stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
+                    // See speaker-mute branch above — sync last_write so a
+                    // subsequent host toggle isn't echo-suppressed.
+                    last_write.mic_muted.store(muted, Ordering::Relaxed);
                 }
             }
         }
@@ -297,6 +318,24 @@ fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16, max_pct:
         elem.set_playback_volume_all(raw)?;
     }
     Ok(())
+}
+
+fn dispatch_host_mute(
+    commands: &broadcast::Sender<Command>,
+    target: HostMuteTarget,
+) {
+    match target {
+        HostMuteTarget::Speaker => {
+            let _ = commands.send(Command::ToggleSpeakerMute);
+        }
+        HostMuteTarget::Mic => {
+            let _ = commands.send(Command::ToggleMicMute);
+        }
+        HostMuteTarget::Both => {
+            let _ = commands.send(Command::ToggleSpeakerMute);
+            let _ = commands.send(Command::ToggleMicMute);
+        }
+    }
 }
 
 fn write_switch(mixer: &Mixer, name: &str, capture: bool, muted: bool) -> Result<(), alsa::Error> {

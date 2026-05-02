@@ -64,6 +64,26 @@ pub struct PlaybackPresetTuningJson {
     pub limiter: crate::playback::dsp::limiter::LimiterParams,
 }
 
+/// Where to apply a UAC2 host-side mute event.
+///
+/// macOS dispatches its system mute key (F10) as UAC2 SET_CUR(MUTE) on the
+/// **capture** Feature Unit (mic / Input terminal) by default — it picks the
+/// headset semantic for any bidirectional UAC2 device. For users who want
+/// F10 to silence the speaker (music-listener semantic), this knob redirects.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum HostMuteTarget {
+    /// Mac F10 silences the speaker. Mic mute remains on touch UI / hardware
+    /// button. Default — matches the speakerphone-as-music-listener UX the
+    /// stock firmware did *not* support either (Mac→Wave volume/mute gap).
+    #[default]
+    Speaker,
+    /// Mac F10 mutes the mic. Headset semantic.
+    Mic,
+    /// Mac F10 toggles BOTH speaker and mic mute together.
+    Both,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct UacConfig {
     #[serde(default = "default_uac_enabled")]
@@ -78,6 +98,8 @@ pub struct UacConfig {
     pub buffer_periods: u32,
     #[serde(default = "default_uac_mixer_card")]
     pub mixer_card: String,
+    #[serde(default)]
+    pub host_mute_target: HostMuteTarget,
 }
 
 fn default_uac_enabled() -> bool { true }
@@ -95,6 +117,7 @@ impl Default for UacConfig {
             period_frames: default_uac_period(),
             buffer_periods: default_uac_periods(),
             mixer_card: default_uac_mixer_card(),
+            host_mute_target: HostMuteTarget::default(),
         }
     }
 }

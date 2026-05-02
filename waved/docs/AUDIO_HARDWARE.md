@@ -318,6 +318,42 @@ post-DSP buffer (mute → 0, otherwise `volume_pct/100`, linear). The AEC
 reference broadcast taps **after** the gain so the canceller sees what
 actually reaches the mics.
 
+### Mac → Wave control gaps (kernel `f_uac2` 5.4 limitation)
+
+macOS's behaviour with the Wave's UAC2 gadget on this kernel:
+
+| Mac action | What happens | Why |
+|------------|--------------|-----|
+| Plays audio (Music/Spotify) | Streams over UAC2 OUT terminal, hits `UacBridge` → DSP → speaker. Works. | data path is straightforward |
+| Sound prefs Input slider | Dispatches UAC2 SET_CUR(VOLUME) to capture FU. We see `host set mic volume → N` in the log. Wave's mic_volume in `AudioState` updates. | macOS dispatches Input gain via UAC2 regardless of advertised range |
+| F10 (mute key) | Dispatches UAC2 SET_CUR(MUTE) to **capture FU** (mic), not playback. macOS picks the headset semantic for any bidirectional UAC2 device. | confirmed in log: `host set mic mute → true/false` |
+| F11 / F12 (volume keys) | **Nothing.** Mac doesn't dispatch UAC2 SET_CUR(VOLUME) for either FU, even with the volume range widened to ‑64 dB. | kernel 5.4 `f_uac2` likely doesn't expose a Master channel control in the playback FU's `bmaControls`; macOS USBAudio.kext keys on Master to enable HW Output volume. Without it, neither HW (UAC2) nor SW (host attenuation) gets engaged |
+| Sound prefs Output slider drag | Same — slider is interactive but no UAC2 traffic and no audible level change. | same root cause |
+
+The mute case is mitigated in `UacControl` by redirecting capture-FU mute
+events onto `Command::ToggleSpeakerMute` by default (configurable via
+`uac.host_mute_target` in `audio_config.json`: `"speaker"` (default,
+music-listener UX), `"mic"` (headset UX, original behaviour), or
+`"both"`). Mac F10 then silences the speaker — which is what most users
+want from a music-output speakerphone.
+
+The volume-key case has no device-side workaround on this kernel.
+Practical paths:
+- Use Wave's touch UI for speaker volume (works today via the SP#6
+  follow-up that reads `speaker_volume` in the playback loop and scales
+  the post-DSP buffer).
+- Or stock-style: `uac_hid`-equivalent path — write Consumer-page HID
+  INPUT reports (`VolumeUp` / `VolumeDown`) to `/dev/hidg0` so when a
+  user adjusts volume on the Wave, the Mac receives a media-key event,
+  Mac scales its system Output volume host-side, and audio arrives
+  pre-attenuated. This loops volume control through the *host* even
+  though the source of intent is the device. Stock used this; not yet
+  ported.
+- Long-term: backport the Master Volume control patch to the device's
+  `f_uac2` module so macOS dispatches UAC2 SET_CUR(VOLUME) directly.
+  Would require the vendor's kernel source — open question whether
+  that's accessible.
+
 ### `f_uac2` configfs gotcha — playback volume range
 
 Stock `/etc/init.d/S89usbgadget` writes `p_volume_min=-100`,

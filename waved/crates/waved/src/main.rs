@@ -327,6 +327,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
                 let control_cfg = waved_audio::uac::control::UacControlConfig {
                     mixer_card: uac_cfg.mixer_card.clone(),
+                    host_mute_target: uac_cfg.host_mute_target,
                 };
                 let _control = waved_audio::uac::control::UacControl::spawn(
                     control_cfg,
