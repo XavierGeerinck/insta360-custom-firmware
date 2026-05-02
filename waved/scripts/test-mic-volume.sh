@@ -73,8 +73,36 @@ run() {
 echo "=== mic_volume runtime control path ==="
 run check_stage "host capture 50% (boot default → mic_volume=200)"   50 2.0  6.02
 run check_stage "host capture 25% (→ mic_volume=100, unity)"          25 1.0  0.0
-run check_stage "host capture 100% (→ mic_volume=400, +12 dB)"       100 4.0 12.04
+run check_stage "host capture 100% (→ mic_volume=800, +18 dB)"       100 8.0 18.06
 run check_stage "host capture 0%  (→ mic_volume=0,   −120 dB sentinel)" 0 0.0 -120.0
+
+echo
+echo "=== recording limiter (idle) ==="
+amixer -c 1 sset 'PCM' 50% capture > /dev/null
+sleep 1
+RED_IDLE=$(grep -oE '"recording_limiter_reduction_db":[^,}]*' /tmp/audio_stats.json | sed -E 's/.*: *([0-9.-]+).*/\1/')
+echo "  idle reduction: $RED_IDLE dB (expected ~0.0 with no input)"
+if awk -v v="$RED_IDLE" 'BEGIN { exit (v > -0.1 ? 0 : 1) }'; then
+    echo "  PASS"
+    PASS=$((PASS+1))
+else
+    echo "  FAIL (limiter is reducing at idle — investigate)"
+    FAIL=$((FAIL+1))
+fi
+
+echo
+echo "=== recording limiter (loud — manual: speak loudly close to the mic for 3s) ==="
+amixer -c 1 sset 'PCM' 100% capture > /dev/null
+echo "  *** speak loudly now, 3 second window ***"
+sleep 3
+RED_LOUD=$(grep -oE '"recording_limiter_reduction_db":[^,}]*' /tmp/audio_stats.json | sed -E 's/.*: *([0-9.-]+).*/\1/')
+echo "  loud reduction: $RED_LOUD dB (expected < 0 if limiter engaged)"
+if awk -v v="$RED_LOUD" 'BEGIN { exit (v < -0.1 ? 0 : 1) }'; then
+    echo "  PASS"
+    PASS=$((PASS+1))
+else
+    echo "  WARN (limiter not engaged — your input may not have been loud enough; not a hard fail)"
+fi
 
 echo
 echo "=== reset to boot default ==="

@@ -442,11 +442,20 @@ Two stages, set independently:
    `24`, ~+12 dB lift). Static across the run so DFN3's noise-floor
    estimator doesn't re-adapt every time the user moves the volume knob.
 
-2. **Software gain — `apply_mic_volume`** at the end of `process_frame`.
-   Linear-percent value driven by `AudioState.mic_volume`. `100` = unity,
-   `200` = 2× / +6 dB, range 0..=400. Applied to `mic_mono_f32` and
-   `mic_stereo_f32`, so both meeting recording and the UAC2 uplink share
-   one knob.
+2. **Software gain — `apply_mic_volume`** then **recording-path limiter** at
+   the end of `process_frame`. Gain is a linear-percent value driven by
+   `AudioState.mic_volume`: `100` = unity, `200` = 2× / +6 dB, range
+   0..=800 (8× / +18 dB max). The output of the gain stage is no longer
+   clamped to ±1.0 — instead, a `LookaheadLimiter` (-1 dBFS ceiling, 96
+   sample lookahead, 50 ms release; same unit as the playback DSP from
+   SP#5) compresses peaks above the ceiling. Two limiter instances live
+   on `AudioService`: a mono limiter for `mic_mono_f32` and a 2-channel
+   stereo limiter for `mic_stereo_f32` (shared gain across L/R preserves
+   stereo image). Both meeting recording and the UAC2 uplink see the same
+   limited signal.
+
+   Recording-path latency added by the lookahead: ~2 ms (96 samples at
+   48 kHz). Imperceptible.
 
 Boot order:
 ```
@@ -455,8 +464,8 @@ JSON  → CaptureConfig.pdm_gain        → ALSA numid=9            (one-shot)
 ```
 
 The UAC2 mixer (`hw:1 PCM Capture Volume`) maps its raw range to our
-`0..=400` so the host's "max slider" corresponds to internal `mic_volume=400`,
-and the boot default of `200` sits in the middle of the host's range.
+`0..=800` so the host's "max slider" corresponds to internal `mic_volume=800`
+(+18 dB), and the boot default of `200` sits at 25 % of the host's range.
 
 If recordings come back too quiet or too clipped, **change `pdm_gain`
 in the JSON config and reboot — do not change it dynamically.** Dynamic
