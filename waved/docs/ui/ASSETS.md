@@ -62,6 +62,18 @@ All assets live on the device at `/etc/pspapp/lvgl/`. Accessed via LVGL's POSIX 
 | `bf_mode_eight.png` | Figure-8 |
 | `bf_mode_stereo.png` | Stereo |
 
+### `bf_doa.png` (124×124) — DOA arrow overlay
+
+Used on the audio-mode picker (`screens/audio_mode.rs`) as a child of the
+polar-pattern background image. Draws the "source dot" on the **LVGL-LEFT**
+edge with three concentric wave arcs `)))` opening rightward. Any code that
+rotates this asset must compensate — `az_to_lvgl_rotation` in
+`screens/audio_mode.rs` adds +270° (= 2700 LVGL units) so `az=0` (front of
+device) puts the dot at LVGL-TOP, which renders as visual TOP since LVGL
+coords match visual coords on this device (see `COORDINATE_SYSTEM.md`).
+
+Pivot must be set to centre `(62, 62)` for the rotation to behave.
+
 ## Other
 
 | File | Path | Used for |

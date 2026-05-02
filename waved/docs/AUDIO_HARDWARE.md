@@ -367,6 +367,65 @@ across the 4 points should be close to zero; a consistent non-zero offset
 means either the ALSA permutation is wrong or the geometry rotation is
 off by some multiple of 45°.
 
+## Audio-Mode DOA Preview (UI)
+
+`screens/audio_mode.rs` overlays `bf_doa.png` on the carousel-centered card
+to show direction of arrival in real time, matching the original firmware's
+"preview before selecting" behavior. Three pipeline facts to keep authoritative:
+
+### State plumbing
+`DoaUpdate.vad_active` (audio thread) → `AudioState.doa_active` (state bus)
+→ `AudioStatsSnapshot.doa_active` (stats JSON) → UI hysteresis (next).
+Set in `waved-audio/src/lib.rs` inside the `audio_tx.send_modify` block.
+
+### Asset orientation
+`bf_doa.png` (124×124 PNG under `/etc/pspapp/lvgl/icon/beamforming/`) draws
+its "source dot" on the **LVGL-LEFT** edge with the wave arcs opening
+rightward. This matters for any code that rotates the asset — see the
+`az_to_lvgl_rotation` helper in `screens/audio_mode.rs` for the +270° offset
+that puts the dot at LVGL-TOP for `az=0` (front of device).
+
+LVGL coords = visual coords on this device (the FB flush 180° flip cancels
+with the OLED's 180° physical mount — see `docs/ui/COORDINATE_SYSTEM.md`),
+so the rotation formula is the natural identity mapping plus the asset offset:
+
+```
+rotation_lvgl = (az_deg.rem_euclid(360.0).round() * 10 + 2700) % 3600
+```
+
+### VAD threshold + UI hysteresis
+EnergyVad default is **0.0003** (~−70 dBFS). It is permissive on purpose —
+it catches quiet music and conversational speech but also room noise.
+Per-frame thresholding alone cannot cleanly separate the two on this device:
+silence-floor and phone-music both land in the 0.0003–0.0005 band on a
+quiet desk.
+
+The UI layer compensates with temporal hysteresis on `audio.doa_active`:
+require 3 consecutive `true` ticks to engage, 2 consecutive `false` ticks
+to release. `AudioModeScreen.{doa_show, doa_streak}` in
+`screens/audio_mode.rs`. At ~50 ms UI ticks this gives ~150 ms engage
+latency / ~100 ms release latency.
+
+### Carousel-centered tracking
+DOA arrow follows the **carousel-centered** card, not the selected mode —
+this is what makes the "preview before tapping" UX work. A
+`LV_EVENT_SCROLL_END` callback on the carousel maintains an
+`Arc<AtomicUsize>` with the index of the child closest to the carousel's
+viewport midline. On selection commit, `update_state` calls
+`lv_obj_scroll_to_view(LV_ANIM_ON)` so centered tracks selection after
+every tap, while still letting the user scroll-preview without committing.
+
+### Measured mic-level reference (one device, quiet desk)
+| Source                              | Mic ch0 RMS (int16) | float RMS  |
+|-------------------------------------|---------------------|------------|
+| Silence (typical)                   | ~9                  | ~0.00027   |
+| Silence (occasional noise burst)    | ~40                 | ~0.0012    |
+| Phone music ~30 cm away             | ~13                 | ~0.0004    |
+| Voice (loud, ~30 cm)                | trips at 0.003      | ≥ 0.003    |
+
+These are device- and room-dependent — values above are an order-of-magnitude
+reference for picking thresholds, not a calibration target.
+
 ## Field-Testing Gotcha: init.d Watchdog
 
 `/etc/init.d/S60waved` respawns `waved` without environment variables.
