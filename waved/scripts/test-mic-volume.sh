@@ -82,7 +82,10 @@ amixer -c 1 sset 'PCM' 50% capture > /dev/null
 sleep 1
 RED_IDLE=$(grep -oE '"recording_limiter_reduction_db":[^,}]*' /tmp/audio_stats.json | sed -E 's/.*: *([0-9.-]+).*/\1/')
 echo "  idle reduction: $RED_IDLE dB (expected ~0.0 with no input)"
-if awk -v v="$RED_IDLE" 'BEGIN { exit (v > -0.1 ? 0 : 1) }'; then
+if [ -z "$RED_IDLE" ]; then
+    echo "  FAIL (recording_limiter_reduction_db not found in stats JSON)"
+    FAIL=$((FAIL+1))
+elif awk -v v="$RED_IDLE" 'BEGIN { exit (v > -0.1 ? 0 : 1) }'; then
     echo "  PASS"
     PASS=$((PASS+1))
 else
