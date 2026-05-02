@@ -95,8 +95,8 @@ async fn run_mixer_poll(
     let mixer = Mixer::new(&cfg.mixer_card, false)?;
 
     // Cache the current values so we only emit on change.
-    let mut prev_speaker_vol = read_volume(&mixer, "PCM", false).unwrap_or(0);
-    let mut prev_mic_vol = read_volume(&mixer, "PCM", true).unwrap_or(0);
+    let mut prev_speaker_vol = read_volume(&mixer, "PCM", false, 100).unwrap_or(0);
+    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, 400).unwrap_or(0);
     let mut prev_speaker_muted = read_switch(&mixer, "PCM", false).unwrap_or(false);
     let mut prev_mic_muted = read_switch(&mixer, "PCM", true).unwrap_or(false);
 
@@ -106,7 +106,7 @@ async fn run_mixer_poll(
         // Drain pending mixer events. `handle_events` is non-blocking.
         let _ = mixer.handle_events();
 
-        if let Some(v) = read_volume(&mixer, "PCM", false) {
+        if let Some(v) = read_volume(&mixer, "PCM", false, 100) {
             if v != prev_speaker_vol {
                 prev_speaker_vol = v;
                 if last_write.speaker_volume.load(Ordering::Relaxed) != v {
@@ -116,7 +116,7 @@ async fn run_mixer_poll(
                 }
             }
         }
-        if let Some(v) = read_volume(&mixer, "PCM", true) {
+        if let Some(v) = read_volume(&mixer, "PCM", true, 400) {
             if v != prev_mic_vol {
                 prev_mic_vol = v;
                 if last_write.mic_volume.load(Ordering::Relaxed) != v {
@@ -170,6 +170,17 @@ async fn run_state_mirror(
     let mut prev_speaker_muted = state_rx.borrow().speaker_muted;
     let mut prev_mic_muted = state_rx.borrow().mic_muted;
 
+    // Push the seeded boot value into the UAC2 mixer so the host's view
+    // starts in sync with AudioState.mic_volume (which is itself seeded
+    // from TOML). Without this, the mixer keeps whatever the kernel
+    // initialised it to and the host's first read will not match.
+    if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
+        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, 400);
+        let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, 100);
+        last_write.mic_volume.store(prev_mic_vol, Ordering::Relaxed);
+        last_write.speaker_volume.store(prev_speaker_vol, Ordering::Relaxed);
+    }
+
     while state_rx.changed().await.is_ok() {
         let s = state_rx.borrow().clone();
         if s.speaker_volume != prev_speaker_vol {
@@ -178,7 +189,7 @@ async fn run_state_mirror(
             // Open the mixer fresh on each write — short-lived, avoids
             // holding state across await points.
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", false, s.speaker_volume);
+                let _ = write_volume(&mixer, "PCM", false, s.speaker_volume, 100);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -186,7 +197,7 @@ async fn run_state_mirror(
             prev_mic_vol = s.mic_volume;
             last_write.mic_volume.store(s.mic_volume, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", true, s.mic_volume);
+                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, 400);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -210,7 +221,21 @@ async fn run_state_mirror(
     Ok(())
 }
 
-fn read_volume(mixer: &Mixer, name: &str, capture: bool) -> Option<u16> {
+/// Convert ALSA raw mixer value to our percent space [0, max_pct].
+fn raw_to_pct(raw: i64, min: i64, max: i64, max_pct: u16) -> u16 {
+    let span = (max - min).max(1) as f64;
+    let pct = ((raw - min) as f64 / span * max_pct as f64).round() as i64;
+    pct.clamp(0, max_pct as i64) as u16
+}
+
+/// Convert our percent value [0, max_pct] back to ALSA raw range.
+fn pct_to_raw(pct: u16, min: i64, max: i64, max_pct: u16) -> i64 {
+    let span = (max - min) as f64;
+    let raw = min + (span * pct as f64 / max_pct as f64).round() as i64;
+    raw.clamp(min, max)
+}
+
+fn read_volume(mixer: &Mixer, name: &str, capture: bool, max_pct: u16) -> Option<u16> {
     let id = SelemId::new(name, 0);
     let elem = mixer.find_selem(&id)?;
     let (min, max) = if capture { elem.get_capture_volume_range() }
@@ -220,8 +245,7 @@ fn read_volume(mixer: &Mixer, name: &str, capture: bool) -> Option<u16> {
     } else {
         elem.get_playback_volume(SelemChannelId::mono()).ok()?
     };
-    let pct = ((raw - min) as f64 / (max - min).max(1) as f64 * 100.0).round() as u16;
-    Some(pct.min(100))
+    Some(raw_to_pct(raw, min, max, max_pct))
 }
 
 fn read_switch(mixer: &Mixer, name: &str, capture: bool) -> Option<bool> {
@@ -249,7 +273,7 @@ fn read_state_switch(mixer: &Mixer, name: &str) -> Option<bool> {
     Some(active != 0)
 }
 
-fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16) -> Result<(), alsa::Error> {
+fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16, max_pct: u16) -> Result<(), alsa::Error> {
     let id = SelemId::new(name, 0);
     let elem = match mixer.find_selem(&id) {
         Some(e) => e,
@@ -257,7 +281,7 @@ fn write_volume(mixer: &Mixer, name: &str, capture: bool, percent: u16) -> Resul
     };
     let (min, max) = if capture { elem.get_capture_volume_range() }
                      else       { elem.get_playback_volume_range() };
-    let raw = (min + ((max - min) as f64 * percent as f64 / 100.0).round() as i64).clamp(min, max);
+    let raw = pct_to_raw(percent, min, max, max_pct);
     if capture {
         elem.set_capture_volume_all(raw)?;
     } else {
@@ -280,4 +304,37 @@ fn write_switch(mixer: &Mixer, name: &str, capture: bool, muted: bool) -> Result
         elem.set_playback_switch_all(active)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pct_to_raw_unity_at_max_pct_is_max_raw() {
+        // The conversion logic embedded in write_volume / read_volume:
+        // pct ∈ [0, max_pct], raw ∈ [min_raw, max_raw].
+        assert_eq!(pct_to_raw(0, 0, 64, 100), 0);
+        assert_eq!(pct_to_raw(100, 0, 64, 100), 64);
+        assert_eq!(pct_to_raw(50, 0, 64, 100), 32);
+
+        assert_eq!(pct_to_raw(0, 0, 64, 400), 0);
+        assert_eq!(pct_to_raw(400, 0, 64, 400), 64);
+        assert_eq!(pct_to_raw(200, 0, 64, 400), 32);
+        assert_eq!(pct_to_raw(100, 0, 64, 400), 16);
+    }
+
+    #[test]
+    fn raw_to_pct_inverse() {
+        assert_eq!(raw_to_pct(0, 0, 64, 100), 0);
+        assert_eq!(raw_to_pct(64, 0, 64, 100), 100);
+        assert_eq!(raw_to_pct(64, 0, 64, 400), 400);
+        assert_eq!(raw_to_pct(32, 0, 64, 400), 200);
+    }
+
+    #[test]
+    fn pct_to_raw_clamps_above_max_pct() {
+        assert_eq!(pct_to_raw(500, 0, 64, 400), 64);
+        assert_eq!(pct_to_raw(150, 0, 64, 100), 64);
+    }
 }
