@@ -144,9 +144,8 @@ fn build_noise_suppressor(
 /// `pct` is linear percent: 100 = unity, 200 = 2×, 0 = silence.
 /// Values above 800 are clamped to 800 to prevent catastrophic gain.
 /// The output is **not** clamped to [-1.0, 1.0]; the recording-path
-/// limiter added in the next task (wired into `apply_gain`) will
-/// enforce the ceiling. Until then this function may produce output
-/// magnitudes greater than 1.0.
+/// limiter wired into `apply_gain` enforces the ceiling downstream
+/// using a -1 dBFS soft-knee compressor.
 pub fn apply_mic_volume(samples: &mut [f32], pct: u16) {
     let pct = pct.min(800);
     let g = pct as f32 / 100.0;
