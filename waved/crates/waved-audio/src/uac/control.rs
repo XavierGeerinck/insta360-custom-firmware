@@ -98,7 +98,7 @@ async fn run_mixer_poll(
 
     // Cache the current values so we only emit on change.
     let mut prev_speaker_vol = read_volume(&mixer, "PCM", false, 100).unwrap_or(0);
-    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, 400).unwrap_or(0);
+    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, 800).unwrap_or(0);
     let mut prev_speaker_muted = read_switch(&mixer, "PCM", false).unwrap_or(false);
     let mut prev_mic_muted = read_switch(&mixer, "PCM", true).unwrap_or(false);
 
@@ -118,7 +118,7 @@ async fn run_mixer_poll(
                 }
             }
         }
-        if let Some(v) = read_volume(&mixer, "PCM", true, 400) {
+        if let Some(v) = read_volume(&mixer, "PCM", true, 800) {
             if v != prev_mic_vol {
                 prev_mic_vol = v;
                 if last_write.mic_volume.load(Ordering::Relaxed) != v {
@@ -205,7 +205,7 @@ async fn run_state_mirror(
     // restructure either task into a multi-threaded executor without
     // adding a Mutex around the mixer.
     if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, 400);
+        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, 800);
         let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, 100);
         last_write.mic_volume.store(prev_mic_vol, Ordering::Relaxed);
         last_write.speaker_volume.store(prev_speaker_vol, Ordering::Relaxed);
@@ -227,7 +227,7 @@ async fn run_state_mirror(
             prev_mic_vol = s.mic_volume;
             last_write.mic_volume.store(s.mic_volume, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, 400);
+                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, 800);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -366,23 +366,23 @@ mod tests {
         assert_eq!(pct_to_raw(100, 0, 64, 100), 64);
         assert_eq!(pct_to_raw(50, 0, 64, 100), 32);
 
-        assert_eq!(pct_to_raw(0, 0, 64, 400), 0);
-        assert_eq!(pct_to_raw(400, 0, 64, 400), 64);
-        assert_eq!(pct_to_raw(200, 0, 64, 400), 32);
-        assert_eq!(pct_to_raw(100, 0, 64, 400), 16);
+        assert_eq!(pct_to_raw(0, 0, 64, 800), 0);
+        assert_eq!(pct_to_raw(800, 0, 64, 800), 64);
+        assert_eq!(pct_to_raw(400, 0, 64, 800), 32);
+        assert_eq!(pct_to_raw(200, 0, 64, 800), 16);
     }
 
     #[test]
     fn raw_to_pct_inverse() {
         assert_eq!(raw_to_pct(0, 0, 64, 100), 0);
         assert_eq!(raw_to_pct(64, 0, 64, 100), 100);
-        assert_eq!(raw_to_pct(64, 0, 64, 400), 400);
-        assert_eq!(raw_to_pct(32, 0, 64, 400), 200);
+        assert_eq!(raw_to_pct(64, 0, 64, 800), 800);
+        assert_eq!(raw_to_pct(32, 0, 64, 800), 400);
     }
 
     #[test]
     fn pct_to_raw_clamps_above_max_pct() {
-        assert_eq!(pct_to_raw(500, 0, 64, 400), 64);
+        assert_eq!(pct_to_raw(900, 0, 64, 800), 64);
         assert_eq!(pct_to_raw(150, 0, 64, 100), 64);
     }
 }
