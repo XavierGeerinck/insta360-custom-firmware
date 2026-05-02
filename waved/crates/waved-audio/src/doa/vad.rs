@@ -7,9 +7,10 @@ pub trait Vad {
 }
 
 /// Threshold-based VAD — "is speech" if frame RMS exceeds `threshold`.
-/// Threshold 0.002 (~ -54 dBFS) balances rejecting most room tone (typically
-/// −57 dBFS in a quiet office) against catching moderate-volume music and
-/// conversational speech.
+/// Threshold 0.0003 (~ -70 dBFS) is permissive: it catches quiet music
+/// and conversational speech but also background noise. UI consumers
+/// add temporal hysteresis on top to suppress silence-jitter (see
+/// `screens/audio_mode.rs::update_state`).
 pub struct EnergyVad {
     threshold: f32,
 }
@@ -22,7 +23,7 @@ impl EnergyVad {
 
 impl Default for EnergyVad {
     fn default() -> Self {
-        Self::new(0.002)
+        Self::new(0.0003)
     }
 }
 
