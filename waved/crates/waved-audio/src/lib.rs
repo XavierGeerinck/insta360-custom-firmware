@@ -26,6 +26,7 @@ use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
 use crate::beam::{Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
 use crate::doa::DoaEstimator;
+use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
 use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
@@ -182,6 +183,13 @@ pub struct AudioService {
     ref_spectrum: spectrum::Spectrum,
     /// Mono downmix scratch for the mic spectrum input.
     mic_spectrum_input: Vec<i16>,
+    /// Recording-path peak limiter for the mono mic signal. Replaces the
+    /// hard ±1.0 clamp that used to live in `apply_mic_volume`. SP#5
+    /// voice defaults: -1 dBFS ceiling, 96-sample lookahead, 50 ms release.
+    recording_limiter_mono: LookaheadLimiter,
+    /// Same shape, but for the stereo mic pair (only exercised when beam
+    /// mode is `Stereo`). Shared gain across L/R preserves stereo image.
+    recording_limiter_stereo: LookaheadLimiter,
 }
 
 impl AudioService {
@@ -225,6 +233,12 @@ impl AudioService {
             mic_spectrum: spectrum::Spectrum::new(sample_rate),
             ref_spectrum: spectrum::Spectrum::new(sample_rate),
             mic_spectrum_input: vec![0i16; frame_size],
+            recording_limiter_mono: LookaheadLimiter::new(
+                LimiterParams::DEFAULT, 1, sample_rate as f32,
+            ),
+            recording_limiter_stereo: LookaheadLimiter::new(
+                LimiterParams::DEFAULT, 2, sample_rate as f32,
+            ),
         }
     }
 
@@ -445,12 +459,26 @@ impl AudioService {
     }
 }
 
-fn apply_gain(svc: &AudioService, mut processed: ProcessedAudioFrame) -> ProcessedAudioFrame {
+fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> ProcessedAudioFrame {
     let mic_vol = svc.audio_tx.borrow().mic_volume;
+    // Mono: gain → limiter.
     apply_mic_volume(&mut processed.mic_mono_f32, mic_vol);
+    svc.recording_limiter_mono.process_interleaved(&mut processed.mic_mono_f32);
+    // Stereo (rare; only Stereo beam mode): gain on each channel, then
+    // shared-gain limiter on the interleaved pair to preserve image.
     if let Some((l, r)) = processed.mic_stereo_f32.as_mut() {
         apply_mic_volume(l, mic_vol);
         apply_mic_volume(r, mic_vol);
+        let mut interleaved: Vec<f32> = Vec::with_capacity(l.len() * 2);
+        for i in 0..l.len() {
+            interleaved.push(l[i]);
+            interleaved.push(r[i]);
+        }
+        svc.recording_limiter_stereo.process_interleaved(&mut interleaved);
+        for (i, chunk) in interleaved.chunks_exact(2).enumerate() {
+            l[i] = chunk[0];
+            r[i] = chunk[1];
+        }
     }
     processed
 }
@@ -666,6 +694,109 @@ mod tests {
         let mut s = vec![0.5_f32];
         apply_mic_volume(&mut s, 800);
         assert!((s[0] - 4.0).abs() < 1e-6, "expected 4.0, got {}", s[0]);
+    }
+
+    #[test]
+    fn process_frame_limiter_holds_peak_below_ceiling() {
+        use crate::callbacks::AudioFrame;
+        use std::sync::Arc;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+
+        // mic_volume = 800 (max). Feed an i16 sine that reaches ±16384 (= ±0.5
+        // in f32 after /32768). Post-gain peak is ~4.0, far above the limiter's
+        // -1 dBFS ceiling (≈0.891).
+        let mut state = AudioState::default();
+        state.mic_volume = 800;
+        let (audio_tx, _audio_rx) = watch::channel(state);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
+            256, 48_000, crate::beam::MicGeometry::default(),
+        );
+
+        // Push enough frames through to flush the 96-sample lookahead.
+        let mut max_post_warmup = 0.0_f32;
+        for frame_idx in 0..6_u32 {
+            let mut raw = vec![0i16; 256];
+            for (i, s) in raw.iter_mut().enumerate() {
+                let phase = (frame_idx as usize * 256 + i) as f32;
+                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+            }
+            let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
+            let processed = svc.process_frame(&frame);
+            // Skip the first 96 output samples (lookahead warmup).
+            let start = if frame_idx == 0 { 96 } else { 0 };
+            for &v in &processed.mic_mono_f32[start..] {
+                max_post_warmup = max_post_warmup.max(v.abs());
+            }
+        }
+        let ceiling = 10.0_f32.powf(-1.0 / 20.0); // ≈0.891
+        assert!(
+            max_post_warmup <= ceiling + 0.02,
+            "post-warmup peak {max_post_warmup} exceeded -1 dBFS ceiling {ceiling}"
+        );
+        // Also confirm the limiter actually did something — output isn't silent.
+        assert!(
+            max_post_warmup > 0.5,
+            "post-warmup peak {max_post_warmup} suspiciously low (limiter eating the signal?)"
+        );
+    }
+
+    #[test]
+    fn process_frame_quiet_signal_passes_with_only_gain_post_warmup() {
+        use crate::callbacks::AudioFrame;
+        use std::sync::Arc;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+
+        // Quiet sine: i16 amplitude ±200 (= ±0.0061 in f32). At mic_volume=100
+        // (unity), post-gain ≈ ±0.0061 — well below the -1 dBFS ceiling
+        // (≈0.891). Limiter should be idle; we just confirm the signal is
+        // not clamped to zero or silence. Pure DC is zeroed by the Speex AEC
+        // even with no reference, so we use a 1 kHz sine to survive the AEC.
+        let mut state = AudioState::default();
+        state.mic_volume = 100;
+        let (audio_tx, _audio_rx) = watch::channel(state);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
+            256, 48_000, crate::beam::MicGeometry::default(),
+        );
+
+        // Push enough frames through to flush the 96-sample lookahead, then
+        // measure the peak on post-warmup samples. With mic_volume=100 (unity)
+        // and amplitude 200/32768 ≈ 0.0061, the post-gain peak should stay
+        // well below the -1 dBFS ceiling (≈0.891). The limiter should be
+        // completely idle.
+        let ceiling = 10.0_f32.powf(-1.0 / 20.0); // ≈0.891
+        let mut max_post_warmup = 0.0_f32;
+        for frame_idx in 0..6_u32 {
+            let mut raw = vec![0i16; 256];
+            for (i, s) in raw.iter_mut().enumerate() {
+                let phase = (frame_idx as usize * 256 + i) as f32;
+                *s = (200.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+            }
+            let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
+            let processed = svc.process_frame(&frame);
+            // Skip the first 96 output samples (lookahead warmup).
+            let start = if frame_idx == 0 { 96 } else { 0 };
+            for &v in &processed.mic_mono_f32[start..] {
+                max_post_warmup = max_post_warmup.max(v.abs());
+            }
+        }
+        // Quiet signal must not have been muted or clamped to silence.
+        assert!(
+            max_post_warmup > 0.001,
+            "quiet signal was silenced unexpectedly: max_post_warmup={max_post_warmup}",
+        );
+        // And the limiter must not have engaged — peak must stay well below ceiling.
+        assert!(
+            max_post_warmup < ceiling * 0.5,
+            "limiter appeared to engage on quiet signal: peak={max_post_warmup} ceiling={ceiling}",
+        );
     }
 
     #[test]
