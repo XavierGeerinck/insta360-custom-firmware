@@ -46,7 +46,7 @@ if [ "$ALREADY_HID" = "0" ]; then
     awk -v desc="$DESCRIPTOR" '
         BEGIN { inserted = 0 }
         /^[[:space:]]*usb_flash[[:space:]]*$/ && !inserted {
-            print "\t# SP#7(d\\47) HID control surface (Vendor + Telephony_V4 + Consumer)"
+            print "\t# SP#7d HID control surface (Vendor + Telephony_V4 + Consumer)"
             print "\tmkdir -p functions/hid.0"
             print "\techo 1  > functions/hid.0/protocol"
             print "\techo 1  > functions/hid.0/subclass"
