@@ -15,9 +15,11 @@ const HID_GADGET_PATH: &str = "/dev/hidg0";
 
 // Stock-correct Report IDs (were swapped prior to SP#7(d')).
 const REPORT_ID_CONSUMER:  u8 = 0x01;
-#[allow(dead_code)] // used by watch.rs (Task 7) via report::REPORT_ID_TELEPHONY
-const REPORT_ID_TELEPHONY: u8 = 0x02;
 
+// TODO(Task 5): replace these raw literals with `report::CONSUMER_*` constants
+// and route through `report::event_to_press_release(button_to_event(b))`.
+// Kept in this shape for now to land report.rs cleanly before the HidService
+// refactor in Task 5.
 fn build_hid_report(button: &ButtonType) -> (Vec<u8>, Vec<u8>) {
     // Stock Consumer page bit mapping:
     //   bit0 VolumeUp, bit1 VolumeDown, bit2 Mute.
@@ -98,6 +100,7 @@ mod tests {
 
     #[test]
     fn volume_up_report() {
+        // Stock Consumer VolumeUp = Report 0x01, bit0 (was Report 0x02, bit0 pre-swap).
         let (press, release) = build_hid_report(&ButtonType::VolumeUp);
         assert_eq!(press, vec![0x01, 0b0000_0001]);
         assert_eq!(release, vec![0x01, 0x00]);
@@ -105,6 +108,7 @@ mod tests {
 
     #[test]
     fn volume_down_report() {
+        // Stock Consumer VolumeDown = Report 0x01, bit1 (was Report 0x02, bit1 pre-swap).
         let (press, release) = build_hid_report(&ButtonType::VolumeDown);
         assert_eq!(press, vec![0x01, 0b0000_0010]);
         assert_eq!(release, vec![0x01, 0x00]);
@@ -112,6 +116,7 @@ mod tests {
 
     #[test]
     fn mute_long_press_report() {
+        // Stock Consumer Mute = Report 0x01, bit2 (was Report 0x01, bit0 pre-swap).
         let (press, release) = build_hid_report(&ButtonType::MuteLongPress);
         assert_eq!(press, vec![0x01, 0b0000_0100]);
         assert_eq!(release, vec![0x01, 0x00]);

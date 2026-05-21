@@ -55,14 +55,16 @@ mod tests {
 
     #[test]
     fn consumer_mute_bit2() {
-        let (p, _r) = event_to_press_release(HidEvent::ConsumerMute);
+        let (p, r) = event_to_press_release(HidEvent::ConsumerMute);
         assert_eq!(p, [0x01, 0b0000_0100]);
+        assert_eq!(r, [0x01, 0x00]);
     }
 
     #[test]
     fn telephony_phone_mute_bit1_on_report_2() {
-        let (p, _r) = event_to_press_release(HidEvent::TelephonyPhoneMute);
+        let (p, r) = event_to_press_release(HidEvent::TelephonyPhoneMute);
         assert_eq!(p, [0x02, 0b0000_0010]);
+        assert_eq!(r, [0x02, 0x00]);
     }
 
     #[test]
