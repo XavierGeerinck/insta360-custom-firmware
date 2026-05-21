@@ -1,6 +1,6 @@
 # SP#7(d') — HID Consumer / Telephony control interface
 
-Date: 2026-05-21
+Date: 2026-05-21 (v2: revised 2026-05-21 after `waved-hid` discovery)
 Status: spec
 Parent roadmap: `waved/TODO.md` — SP#7 (Wave Controller native compatibility), item (d) reframed.
 
@@ -13,6 +13,18 @@ Static analysis of `fw_v1.1.6.6/rootfs/etc/init.d/S89usbgadget` shows that **sto
 SP#7(d') replaces (d) with the stock-equivalent design. The kernel patch stays available as a future option but is no longer a roadmap blocker.
 
 Vendor channel (Report 0x03) is **out of scope** for (d'); it is the deliverable of SP#7(a) (Wave Controller protocol probe).
+
+### 1.1 Pre-existing state discovered after v1 spec (revision note)
+
+`waved/crates/waved-hid/` already exists and is wired live at `crates/waved/src/main.rs:453`. Today its `HidService` consumes `DeviceEvent::ButtonPress(ButtonType)` from `waved-mcu` (physical hardware buttons on the device) and writes 2-byte HID reports to `/dev/hidg0`. Three correctness gaps in the current implementation:
+
+1. **Report IDs are swapped vs stock.** Current code declares `REPORT_ID_TELEPHONE = 0x01, REPORT_ID_CONSUMER = 0x02`. The stock descriptor (and the one Task 11 installs) is the opposite: `0x01 = Consumer, 0x02 = Telephony`. With the stock descriptor present, an MCU `VolumeUp` press today writes `[0x02, 0x01]`, which the host reads as Telephony `HookSwitch` (answer call) — not a volume key. SP#7(d') fixes this.
+2. **No host → device path.** `waved-hid` has no reader; LED Set_Report writes from the host (Off-hook / Mute / Ring) are silently discarded and never reach `AudioState`.
+3. **No state-driven event source.** Only MCU physical button presses produce HID reports. Wave touch UI volume / mute changes (which mutate `speaker_volume` / `speaker_muted` in `AudioState`) do not currently emit anything to the host.
+
+`waved-mcu` decodes button codes `0x40/0x41/...` into `ButtonType::{MuteToggle, MuteLongPress, VolumeUp, VolumeDown}` (`crates/waved-mcu/src/buttons.rs:8`). The `ButtonType` enum has nothing for Play/Pause/Next/Prev or telephony hook-switch (matches the spec's goal scope — we keep MCU-driven inputs minimal and add state-driven sources for richer keys).
+
+SP#7(d') therefore **extends `waved-hid` in place** rather than introducing a parallel module. The new files all land under `crates/waved-hid/src/`.
 
 ## 2. Goals
 
@@ -37,22 +49,70 @@ Vendor channel (Report 0x03) is **out of scope** for (d'); it is the deliverable
 ## 4. Architecture
 
 ```
-crates/waved-audio/src/hid/
-├── mod.rs        — HidConfig, HidEvent, public spawn() returning task handles
-├── writer.rs     — tokio task; owns /dev/hidg0 write side; consumes mpsc<HidEvent>
-└── reader.rs    — tokio task; owns /dev/hidg0 read side; updates AudioState bools
+crates/waved-hid/src/                       (existing crate; extended)
+├── lib.rs           — HidService entry (existing); refactored so all
+│                      sources push HidEvent into a single internal
+│                      mpsc, drained by one writer task. Existing
+│                      DeviceEvent::ButtonPress(ButtonType) bridge stays
+│                      intact and now feeds the same mpsc.
+├── events.rs        — NEW: HidEvent enum (single output type).
+├── report.rs        — NEW: pure event_to_press_release + Report-ID/bit
+│                      constants matching the STOCK descriptor
+│                      (0x01 = Consumer, 0x02 = Telephony).
+├── reader.rs        — NEW: blocking thread owning /dev/hidg0 read side;
+│                      parses Reports 0x05 / 0x06 / 0x07 → AudioState.call_*.
+├── watch.rs         — NEW: tokio tasks subscribed to audio_tx —
+│                      volume_watch (speaker_volume delta → VolumeStep)
+│                      and mute_watch (speaker_muted edge → ConsumerMute
+│                      [+ TelephonyPhoneMute when call_off_hook=true]).
+├── stats.rs         — NEW: HidStats atomics + HidStatsSnapshot.
+└── simulate.rs      — existing; updated for the new event enum +
+                       report IDs so log lines match real wire format.
 
-crates/waved/src/main.rs
-   SoftwareRef branch, post-UAC spawn:
-   - spawn HidWriter + HidReader if HidConfig.enabled
-   - spawn volume_watch + mute_watch glue tasks (bridge AudioState → HidEvent)
+crates/waved-audio/src/stats_collector.rs   (existing; extended)
+   adds `hid: Option<waved_hid::HidStatsSnapshot>` on AudioStats; threads
+   `hid_stats: Option<Arc<waved_hid::HidStats>>` through `run()` and
+   `compute_stats_with_processed()`.
 
-scripts/patch-stock-usbgadget.sh
-   — rename + extend of patch-uac2-volume-range.sh; adds functions/hid.0
-     setup with the stock report descriptor and links it into amlogic.1
+crates/waved-audio/src/audio_config.rs      (existing; extended)
+   adds `HidConfig` block + `pub hid: Option<HidConfig>` on AudioConfig.
+   Lives here (not in waved-hid) to follow the UacConfig precedent —
+   audio_config.rs is the single config aggregation point.
+
+crates/waved/src/main.rs                    (existing; extended)
+   The existing HidService spawn (line 453) becomes a richer
+   HidService::spawn taking HidConfig, the audio_tx (Arc<watch::Sender<
+   AudioState>>) for the watchers + reader, and an Arc<HidStats>. The
+   MCU-driven path (DeviceEvent::ButtonPress) is preserved inside
+   HidService.
+
+scripts/patch-stock-usbgadget.sh            — rename + extend of
+   patch-uac2-volume-range.sh; adds functions/hid.0 setup with the
+   stock-extracted Vendor + Telephony_V4 + Consumer report descriptor
+   and links it into amlogic.1.
 ```
 
-Modules `bridge.rs`, `upstream.rs`, `control.rs` under `uac/` (SP#6) provide the precedent for layout, error handling, and stats integration.
+Modules `bridge.rs`, `upstream.rs`, `control.rs` under `crates/waved-audio/src/uac/` (SP#6) provide the precedent for module-internal layout, error handling, and stats integration patterns.
+
+### 4.1 Single ingress (HidEvent), multiple sources
+
+`HidEvent` is the unified output type. Three sources push to a single `mpsc::Sender<HidEvent>` inside `HidService`:
+
+1. **MCU-button bridge** — existing path. `HidService` receives `DeviceEvent::ButtonPress(ButtonType)` from `bus.events` and maps each to one `HidEvent` (e.g. `ButtonType::VolumeUp → HidEvent::ConsumerVolumeStep { up: true }`). Today this code constructs the wire bytes inline; the v2 refactor pushes a `HidEvent` to the channel instead, and the writer drains and serializes.
+2. **`volume_watch`** task — subscribes to `audio_tx`, computes `speaker_volume` deltas, pushes `ConsumerVolumeStep` per integer step (rate-capped at `volume_step_rate_hz`).
+3. **`mute_watch`** task — subscribes to `audio_tx`, on `speaker_muted` edge pushes `ConsumerMute`, and additionally `TelephonyPhoneMute` if `call_off_hook == true` at the moment of the edge.
+
+Single writer task drains the mpsc and writes 2-byte press-release pairs to `/dev/hidg0`. `HidReader` runs in a blocking `std::thread` (the gadget read syscall does not yield until the host writes a Set_Report).
+
+### 4.2 Behavioural change vs current `waved-hid` (non-backwards-compat fix)
+
+This is a one-time correction, not a feature regression:
+
+- **Report IDs**: current `REPORT_ID_TELEPHONE = 0x01, REPORT_ID_CONSUMER = 0x02` → **new** `0x01 = Consumer, 0x02 = Telephony`. After this change, MCU `VolumeUp` / `VolumeDown` produce a real Consumer-page volume key event on the host (was previously misread as Telephony HookSwitch / PhoneMute depending on the descriptor in use).
+- **Bit positions**: current `VolumeUp = bit0 of byte`, `VolumeDown = bit1 of byte` on the (now-renumbered) Consumer report → **kept**, since stock descriptor's Consumer page also has `bit0 = VolumeUp, bit1 = VolumeDown`. Stock additionally defines `bit2 = Mute, bit3 = PlayPause, bit4 = Next, bit5 = Prev`.
+- **Telephony page**: `ButtonType::MuteToggle / MuteLongPress` currently emit a Telephony Report at byte=`0x01` (bit0 — which on stock's Telephony_V4 is `HookSwitch`, not mute). **After**: `MuteToggle` produces `HidEvent::ConsumerMute` (the right semantic on a music-listener device). `MuteLongPress` reserved for future PhoneMute-during-call usage (currently mapped to `ConsumerMute` for parity until UX decides).
+
+The existing unit tests at `crates/waved-hid/src/lib.rs:86-110` will be updated to assert against the corrected bytes.
 
 ## 5. Components
 
@@ -237,6 +297,8 @@ On-device script `scripts/test-hid-control.sh` automates as many steps as possib
 | 6 | Wave touch mute during Zoom call → Zoom mic mute | Zoom mic-mute UI within 500 ms |
 | 7 | Linux host volume tracking | `pactl get-sink-volume @DEFAULT_SINK@` tracks Wave touch ticks (PulseAudio or PipeWire) |
 | 8 | Hostless boot | No /dev/hidg0, no host: waved logs WARN once, no crashes, no busy-loop, normal heartbeat |
+| 9 | MCU button regression (post-swap) | Press physical Volume Up button on Wave → Mac volume rises by 1 step. Validates that the Report-ID fix in §4.2 produces correct host-side behaviour for the existing MCU-driven path. |
+| 10 | MCU MuteToggle button (post-swap) | Press physical mute button on Wave → Mac mute icon flips on; was previously sending HookSwitch and would have hung up calls. |
 
 ## 10. Open questions to settle during implementation
 
