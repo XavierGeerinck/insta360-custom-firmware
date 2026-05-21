@@ -388,7 +388,7 @@ The capture (Input) side is unaffected — macOS dispatches UAC2 SET_CUR
 for Input gain regardless of advertised range, since mic preamp gain is
 conventionally HW-controlled.
 
-**Fix:** advertise a useful playback range. `scripts/patch-uac2-volume-range.sh`
+**Fix:** advertise a useful playback range. `scripts/patch-stock-usbgadget.sh`
 patches the init script to `p_volume_min=-16384` / `p_volume_res=256`
 (= -64 dB to 0 dB in 1 dB steps), backs up the original to
 `S89usbgadget.bak.<ts>`, and is idempotent. After patching, reboot —
