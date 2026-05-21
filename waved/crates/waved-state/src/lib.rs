@@ -38,6 +38,15 @@ pub struct AudioState {
     pub incoming_freq_bands: [f32; FREQ_BAND_COUNT],
     pub nr_level: NrLevel,
     pub playback_preset: PlaybackPreset,  // SP#5
+    /// Host wrote Report 0x05 (Off-hook LED) — `true` while the host
+    /// signals "you are in a call". Plumbed by `waved-audio::hid::HidReader`.
+    pub call_off_hook: bool,
+    /// Host wrote Report 0x07 (Ring LED) — `true` while the host signals
+    /// "you have an incoming call".
+    pub call_ringing: bool,
+    /// Host wrote Report 0x06 (Mute LED) — `true` while the host signals
+    /// "the call is muted host-side". Informational only.
+    pub call_host_muted: bool,
 }
 
 impl Default for AudioState {
@@ -61,6 +70,9 @@ impl Default for AudioState {
             incoming_freq_bands: [0.0; FREQ_BAND_COUNT],
             nr_level: NrLevel::default(),
             playback_preset: PlaybackPreset::default(),
+            call_off_hook: false,
+            call_ringing: false,
+            call_host_muted: false,
         }
     }
 }
@@ -378,5 +390,13 @@ mod tests {
         // Simulate the seed call main.rs will make.
         bus.audio.send_modify(|s| s.mic_volume = 250);
         assert_eq!(bus.audio.borrow().mic_volume, 250);
+    }
+
+    #[test]
+    fn audio_state_default_call_fields_false() {
+        let s = AudioState::default();
+        assert!(!s.call_off_hook);
+        assert!(!s.call_ringing);
+        assert!(!s.call_host_muted);
     }
 }
