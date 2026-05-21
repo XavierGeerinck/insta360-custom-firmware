@@ -110,6 +110,16 @@ impl HidService {
         }
     }
 
+    // Note: `f.write_all(&press)` and `f.write_all(&release)` are blocking
+    // std::io calls on the async executor thread. For `/dev/hidg0`
+    // specifically this is acceptable because: (a) the writes are exactly
+    // 2 bytes each, going to a kernel-buffered character device, with a
+    // fast-return path; (b) the host-side bulk pipe is rarely backpressured
+    // (Consumer/Telephony events are sparse compared to UAC2 streams);
+    // (c) we `tokio::time::sleep(gap)` between press and release, yielding
+    // the executor in the middle of the pair. If host-side stalls become
+    // observed (look for `write_errors` climbing in stats), wrap the two
+    // writes in a single `spawn_blocking` future.
     async fn write_event(
         f: &mut std::fs::File,
         ev: events::HidEvent,

@@ -391,7 +391,7 @@ Practical paths in increasing engineering cost:
    its system Output volume host-side, and audio arrives pre-attenuated.
    This is the reverse direction (Wave→Mac) and only useful if you
    want Mac's slider to track Wave's touch-UI changes. Doesn't help
-   Mac F11/F12. Not yet ported.
+   Mac F11/F12. Implemented by SP#7(d') — see "HID control surface (SP#7d)" above.
 
 4. **Backport Master Volume control to `f_uac2`.** The right long-term
    answer: ~10–20 lines of C in `drivers/usb/gadget/function/f_uac2.c`

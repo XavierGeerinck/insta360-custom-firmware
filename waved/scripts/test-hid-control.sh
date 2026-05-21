@@ -91,7 +91,13 @@ echo "    (manual: press F10 on the Mac while music is playing; verify speaker s
 echo "7/8 SP#6 mute regression: MANUAL" | tee -a "$LOG"
 
 echo "==> hostless stats query" | tee -a "$LOG"
-adb shell "cat /tmp/audio_stats.json" | python3 -c "import json, sys; json.loads(sys.stdin.read())['hid']" >/dev/null
+adb shell "cat /tmp/audio_stats.json" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+if data.get('hid') is None:
+    print('hostless stats: FAIL — hid block missing from /tmp/audio_stats.json', file=sys.stderr)
+    sys.exit(1)
+" >/dev/null
 echo "8/8 hostless stats query: PASS" | tee -a "$LOG"
 
 echo "==> acceptance complete; see $LOG" | tee -a "$LOG"
