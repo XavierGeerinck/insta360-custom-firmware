@@ -726,6 +726,9 @@ mod tests {
         assert_eq!(cfg.capture.pdm_gain, 0);
     }
 
+    // Test fixtures use JSON because AudioConfig is JSON-only on-device:
+    // `AudioConfig::from_json` wraps the real config-load path. No `toml`
+    // dev-dep is added.
     #[test]
     fn hid_config_default_when_absent() {
         let json = r#"{
@@ -772,6 +775,30 @@ mod tests {
         assert_eq!(hid.device, "/dev/hidg1");
         assert_eq!(hid.press_release_gap_ms, 25);
         assert_eq!(hid.volume_step_rate_hz, 20);
+    }
+
+    #[test]
+    fn hid_config_partial_override_uses_defaults_for_omitted() {
+        // Operator-realistic case: only `enabled` overridden; other fields
+        // should fall back to their `#[serde(default = "default_hid_*")]` values.
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,0",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S16_LE"
+            },
+            "period_frames": 512,
+            "buffer_periods": 4,
+            "hid": { "enabled": false }
+        }"#;
+        let cfg: AudioConfig = AudioConfig::from_json(json).unwrap();
+        let hid = cfg.hid.unwrap();
+        assert!(!hid.enabled);
+        assert_eq!(hid.device, "/dev/hidg0");
+        assert_eq!(hid.press_release_gap_ms, 10);
+        assert_eq!(hid.volume_step_rate_hz, 40);
     }
 
     #[test]
