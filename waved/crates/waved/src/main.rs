@@ -346,52 +346,6 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                 tracing::info!("uac: disabled by config");
             }
 
-            // SP#7(d'): HID Consumer/Telephony control surface.
-            let hid_cfg = cfg.hid.clone().unwrap_or_default();
-            if hid_cfg.enabled {
-                let hid_stats = waved_hid::stats::HidStats::new();
-                hid_stats_handle = Some(Arc::clone(&hid_stats));
-
-                let (ev_tx, ev_rx) = tokio::sync::mpsc::channel::<waved_hid::events::HidEvent>(64);
-
-                let bus_rx = bus.events.subscribe();
-                let svc_cfg = waved_hid::HidServiceConfig {
-                    device: hid_cfg.device.clone(),
-                    press_release_gap_ms: hid_cfg.press_release_gap_ms,
-                };
-                tokio::spawn({
-                    let stats = Arc::clone(&hid_stats);
-                    async move { waved_hid::HidService::run(svc_cfg, bus_rx, ev_rx, stats).await }
-                });
-
-                // Reader for host LED writes — blocking std::thread.
-                waved_hid::reader::HidReader::spawn(
-                    waved_hid::reader::HidReaderConfig { device: hid_cfg.device.clone() },
-                    Arc::clone(&bus.audio),
-                    Arc::clone(&hid_stats),
-                );
-
-                // State-driven event sources.
-                let _vh = waved_hid::watch::spawn_volume_watch(
-                    bus.audio.subscribe(),
-                    ev_tx.clone(),
-                    Arc::clone(&hid_stats),
-                    hid_cfg.volume_step_rate_hz,
-                );
-                let _mh = waved_hid::watch::spawn_mute_watch(
-                    bus.audio.subscribe(),
-                    ev_tx,
-                    Arc::clone(&hid_stats),
-                );
-
-                tracing::info!(
-                    "hid: control surface live (device={} press_release_gap_ms={} step_rate_hz={})",
-                    hid_cfg.device, hid_cfg.press_release_gap_ms, hid_cfg.volume_step_rate_hz
-                );
-            } else {
-                tracing::info!("hid: disabled by config");
-            }
-
             tokio::spawn(test_tone_handler(Arc::clone(&playback)));
             tokio::spawn(file_play_handler(Arc::clone(&playback)));
             // Keep one Arc alive for process lifetime — the playback thread
@@ -416,6 +370,54 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     .to_string(),
             )
         };
+
+        // SP#7(d'): HID Consumer/Telephony control surface.
+        // Placed at top-level scope so it activates on all audio source modes
+        // (Dual / SoftwareRef / Single), not only when playback is configured.
+        let hid_cfg = cfg.hid.clone().unwrap_or_default();
+        if hid_cfg.enabled {
+            let hid_stats = waved_hid::stats::HidStats::new();
+            hid_stats_handle = Some(Arc::clone(&hid_stats));
+
+            let (ev_tx, ev_rx) = tokio::sync::mpsc::channel::<waved_hid::events::HidEvent>(64);
+
+            let bus_rx = bus.events.subscribe();
+            let svc_cfg = waved_hid::HidServiceConfig {
+                device: hid_cfg.device.clone(),
+                press_release_gap_ms: hid_cfg.press_release_gap_ms,
+            };
+            tokio::spawn({
+                let stats = Arc::clone(&hid_stats);
+                async move { waved_hid::HidService::run(svc_cfg, bus_rx, ev_rx, stats).await }
+            });
+
+            // Reader for host LED writes — blocking std::thread.
+            waved_hid::reader::HidReader::spawn(
+                waved_hid::reader::HidReaderConfig { device: hid_cfg.device.clone() },
+                Arc::clone(&bus.audio),
+                Arc::clone(&hid_stats),
+            );
+
+            // State-driven event sources.
+            let _vh = waved_hid::watch::spawn_volume_watch(
+                bus.audio.subscribe(),
+                ev_tx.clone(),
+                Arc::clone(&hid_stats),
+                hid_cfg.volume_step_rate_hz,
+            );
+            let _mh = waved_hid::watch::spawn_mute_watch(
+                bus.audio.subscribe(),
+                ev_tx,
+                Arc::clone(&hid_stats),
+            );
+
+            tracing::info!(
+                "hid: control surface live (device={} press_release_gap_ms={} step_rate_hz={})",
+                hid_cfg.device, hid_cfg.press_release_gap_ms, hid_cfg.volume_step_rate_hz
+            );
+        } else {
+            tracing::info!("hid: disabled by config");
+        }
 
         tokio::spawn(stats_collector::run(
             stats_rx,
