@@ -3569,6 +3569,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "waved-hid",
  "waved-npu",
  "waved-state",
 ]
@@ -3636,6 +3637,8 @@ dependencies = [
 name = "waved-hid"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
