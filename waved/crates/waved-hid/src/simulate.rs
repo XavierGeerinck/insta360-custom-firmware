@@ -12,10 +12,10 @@ impl SimHidService {
             match events_rx.recv().await {
                 Ok(DeviceEvent::ButtonPress(btn)) => {
                     let desc = match btn {
-                        ButtonType::MuteToggle => "TELEPHONE:mute_toggle",
-                        ButtonType::VolumeUp => "CONSUMER:volume_up",
-                        ButtonType::VolumeDown => "CONSUMER:volume_down",
-                        ButtonType::MuteLongPress => "TELEPHONE:mute_long",
+                        ButtonType::MuteToggle    => "CONSUMER:mute",
+                        ButtonType::VolumeUp      => "CONSUMER:volume_up",
+                        ButtonType::VolumeDown    => "CONSUMER:volume_down",
+                        ButtonType::MuteLongPress => "CONSUMER:mute",
                     };
                     info!("[SIM] HID report: {desc} (press + release)");
                 }

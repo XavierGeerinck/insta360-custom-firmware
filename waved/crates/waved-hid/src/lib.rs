@@ -1,6 +1,9 @@
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
+pub mod events;
+pub mod report;
+
 use std::path::Path;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
@@ -10,15 +13,19 @@ use waved_state::{ButtonType, DeviceEvent};
 
 const HID_GADGET_PATH: &str = "/dev/hidg0";
 
-const REPORT_ID_TELEPHONE: u8 = 0x01;
-const REPORT_ID_CONSUMER: u8 = 0x02;
+// Stock-correct Report IDs (were swapped prior to SP#7(d')).
+const REPORT_ID_CONSUMER:  u8 = 0x01;
+#[allow(dead_code)] // used by watch.rs (Task 7) via report::REPORT_ID_TELEPHONY
+const REPORT_ID_TELEPHONY: u8 = 0x02;
 
 fn build_hid_report(button: &ButtonType) -> (Vec<u8>, Vec<u8>) {
+    // Stock Consumer page bit mapping:
+    //   bit0 VolumeUp, bit1 VolumeDown, bit2 Mute.
     let press = match button {
-        ButtonType::MuteToggle => vec![REPORT_ID_TELEPHONE, 0x01],
-        ButtonType::VolumeUp => vec![REPORT_ID_CONSUMER, 0x01],
-        ButtonType::VolumeDown => vec![REPORT_ID_CONSUMER, 0x02],
-        ButtonType::MuteLongPress => vec![REPORT_ID_TELEPHONE, 0x01],
+        ButtonType::MuteToggle    => vec![REPORT_ID_CONSUMER, 0b0000_0100], // Mute
+        ButtonType::MuteLongPress => vec![REPORT_ID_CONSUMER, 0b0000_0100], // Mute (PhoneMute deferred to watch.rs)
+        ButtonType::VolumeUp      => vec![REPORT_ID_CONSUMER, 0b0000_0001],
+        ButtonType::VolumeDown    => vec![REPORT_ID_CONSUMER, 0b0000_0010],
     };
     let release = vec![press[0], 0x00];
     (press, release)
@@ -83,29 +90,30 @@ mod tests {
 
     #[test]
     fn mute_toggle_report() {
+        // Stock Consumer Mute = Report 0x01, bit2.
         let (press, release) = build_hid_report(&ButtonType::MuteToggle);
-        assert_eq!(press, vec![0x01, 0x01]);
+        assert_eq!(press, vec![0x01, 0b0000_0100]);
         assert_eq!(release, vec![0x01, 0x00]);
     }
 
     #[test]
     fn volume_up_report() {
         let (press, release) = build_hid_report(&ButtonType::VolumeUp);
-        assert_eq!(press, vec![0x02, 0x01]);
-        assert_eq!(release, vec![0x02, 0x00]);
+        assert_eq!(press, vec![0x01, 0b0000_0001]);
+        assert_eq!(release, vec![0x01, 0x00]);
     }
 
     #[test]
     fn volume_down_report() {
         let (press, release) = build_hid_report(&ButtonType::VolumeDown);
-        assert_eq!(press, vec![0x02, 0x02]);
-        assert_eq!(release, vec![0x02, 0x00]);
+        assert_eq!(press, vec![0x01, 0b0000_0010]);
+        assert_eq!(release, vec![0x01, 0x00]);
     }
 
     #[test]
     fn mute_long_press_report() {
         let (press, release) = build_hid_report(&ButtonType::MuteLongPress);
-        assert_eq!(press, vec![0x01, 0x01]);
+        assert_eq!(press, vec![0x01, 0b0000_0100]);
         assert_eq!(release, vec![0x01, 0x00]);
     }
 }
