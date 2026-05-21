@@ -226,6 +226,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         #[cfg(feature = "capture-alsa")]
         let mut uac_stats_handle: Option<Arc<waved_audio::uac::UacStats>> = None;
 
+        let mut hid_stats_handle: Option<Arc<waved_hid::stats::HidStats>> = None;
+
         let (source, alignment) = if cfg.reference_enabled() {
             match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
                 Ok(s) => {
@@ -380,6 +382,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             dsp_metrics_handle,
             #[cfg(feature = "capture-alsa")]
             uac_stats_handle,
+            hid_stats_handle,
         ));
 
         let stats_c = Arc::clone(&capture_stats);

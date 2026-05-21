@@ -11,6 +11,7 @@ capture-alsa = ["dep:alsa"]
 [dependencies]
 waved-state = { path = "../waved-state" }
 waved-npu = { path = "../waved-npu" }
+waved-hid = { path = "../waved-hid" }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
 thiserror.workspace = true

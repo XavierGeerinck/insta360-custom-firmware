@@ -54,6 +54,8 @@ pub struct AudioStats {
     #[cfg(feature = "capture-alsa")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uac: Option<crate::uac::UacStatsSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hid: Option<waved_hid::stats::HidStatsSnapshot>,
 }
 
 pub async fn run(
@@ -68,6 +70,7 @@ pub async fn run(
     dsp_metrics: Option<Arc<DspMetrics>>,
     #[cfg(feature = "capture-alsa")]
     uac_stats: Option<Arc<crate::uac::UacStats>>,
+    hid_stats: Option<Arc<waved_hid::stats::HidStats>>,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
@@ -103,6 +106,7 @@ pub async fn run(
                         latest_post_aec_rms, &state, dsp_metrics.as_deref(),
                         #[cfg(feature = "capture-alsa")]
                         uac_stats.as_deref(),
+                        hid_stats.as_deref(),
                     );
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
@@ -143,6 +147,7 @@ pub fn compute_stats(
         frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(), None,
         #[cfg(feature = "capture-alsa")]
         None,
+        None,
     )
 }
 
@@ -157,6 +162,7 @@ pub fn compute_stats_with_processed(
     dsp_metrics: Option<&DspMetrics>,
     #[cfg(feature = "capture-alsa")]
     uac_stats: Option<&crate::uac::UacStats>,
+    hid_stats: Option<&waved_hid::stats::HidStats>,
 ) -> AudioStats {
     let ch = frame.channels as usize;
     let per_ch_rms = rms_per_channel(&frame.data, ch);
@@ -201,6 +207,8 @@ pub fn compute_stats_with_processed(
     #[cfg(feature = "capture-alsa")]
     let uac = uac_stats.map(|s| s.snapshot());
 
+    let hid = hid_stats.map(|s| s.snapshot());
+
     let mic_gain_linear = (audio_state.mic_volume.min(800) as f32) / 100.0;
     let mic_gain_db = if mic_gain_linear > 0.0 {
         20.0 * mic_gain_linear.log10()
@@ -239,6 +247,7 @@ pub fn compute_stats_with_processed(
         recording_limiter_reduction_db,
         #[cfg(feature = "capture-alsa")]
         uac,
+        hid,
     }
 }
 
@@ -359,6 +368,7 @@ mod tests {
             &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(), None,
             #[cfg(feature = "capture-alsa")]
             None,
+            None,
         );
         assert_eq!(s.mic_post_aec_rms, Some(123.4));
     }
@@ -378,6 +388,7 @@ mod tests {
         let s = compute_stats_with_processed(
             &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
             #[cfg(feature = "capture-alsa")]
+            None,
             None,
         );
         assert_eq!(s.mode, AudioMode::Cardioid);
@@ -406,6 +417,7 @@ mod tests {
             &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &state, None,
             #[cfg(feature = "capture-alsa")]
             None,
+            None,
         );
         assert!((stats.mic_gain_linear - 2.0).abs() < 1e-6, "expected 2.0, got {}", stats.mic_gain_linear);
         assert!((stats.mic_gain_db - 6.0205994).abs() < 0.01, "expected ~6.02 dB, got {}", stats.mic_gain_db);
@@ -423,6 +435,7 @@ mod tests {
             &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
             #[cfg(feature = "capture-alsa")]
             None,
+            None,
         );
         assert_eq!(stats.mic_gain_linear, 0.0);
         // Convention: clamp -inf to -120 dB so JSON stays finite.
@@ -439,6 +452,7 @@ mod tests {
             &frame, &cs, ChannelMapSource::File, None, "none",
             Some(123.4), &state, None,
             #[cfg(feature = "capture-alsa")]
+            None,
             None,
         );
         assert_eq!(stats.recording_limiter_reduction_db, 0.0);
@@ -459,8 +473,68 @@ mod tests {
             None, &state, Some(&m),
             #[cfg(feature = "capture-alsa")]
             None,
+            None,
         );
         assert!((stats.recording_limiter_reduction_db - (-3.5)).abs() < 1e-6,
             "got {}", stats.recording_limiter_reduction_db);
+    }
+}
+
+#[cfg(test)]
+mod tests_hid_wiring {
+    use super::*;
+    use waved_hid::stats::HidStats;
+
+    #[test]
+    fn audio_stats_serializes_hid_when_present() {
+        let stats = HidStats::default();
+        stats.events_volume_step.fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        let snap = stats.snapshot();
+
+        let mut audio = sample_audio_stats();
+        audio.hid = Some(snap);
+
+        let json = serde_json::to_value(&audio).unwrap();
+        assert_eq!(json["hid"]["events_emitted"]["volume_step"], 5);
+    }
+
+    #[test]
+    fn audio_stats_omits_hid_when_none() {
+        let audio = sample_audio_stats();
+        let json = serde_json::to_value(&audio).unwrap();
+        assert!(json.get("hid").is_none(), "expected hid field absent when None");
+    }
+
+    fn sample_audio_stats() -> AudioStats {
+        AudioStats {
+            last_updated_ms: 0,
+            channel_map_source: "fallback".into(),
+            sample_rate: 48_000,
+            channels: 1,
+            frames_emitted: 0,
+            frames_dropped: 0,
+            xrun_count: 0,
+            rms_per_channel: vec![],
+            clipping_rate_per_channel: vec![],
+            dc_offset_per_channel: vec![],
+            correlation_matrix: vec![],
+            last_write_error: None,
+            reference_rms: vec![],
+            alignment: String::new(),
+            mic_post_aec_rms: None,
+            doa_horizontal: 0.0,
+            doa_pitch: 0.0,
+            doa_active: false,
+            mode: waved_state::AudioMode::default(),
+            playback_preset: "voice".into(),
+            mbagc_active_gain_db: [0.0; 4],
+            limiter_reduction_db: 0.0,
+            mic_gain_linear: 1.0,
+            mic_gain_db: 0.0,
+            recording_limiter_reduction_db: 0.0,
+            #[cfg(feature = "capture-alsa")]
+            uac: None,
+            hid: None,
+        }
     }
 }

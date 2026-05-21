@@ -3,6 +3,7 @@ pub mod simulate;
 
 pub mod events;
 pub mod report;
+pub mod stats;
 
 use std::path::Path;
 use tokio::fs::OpenOptions;
