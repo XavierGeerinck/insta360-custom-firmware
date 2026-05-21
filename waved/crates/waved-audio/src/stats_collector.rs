@@ -58,6 +58,7 @@ pub struct AudioStats {
     pub hid: Option<waved_hid::stats::HidStatsSnapshot>,
 }
 
+#[allow(clippy::too_many_arguments)] // tracking issue: collapse into StatsCollectorConfig once SP#7(d') lands
 pub async fn run(
     mut rx: broadcast::Receiver<AudioFrame>,
     mut processed_rx: broadcast::Receiver<ProcessedAudioFrame>,
@@ -151,6 +152,7 @@ pub fn compute_stats(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // tracking issue: collapse into StatsCollectorConfig once SP#7(d') lands
 pub fn compute_stats_with_processed(
     frame: &AudioFrame,
     cap_stats: &CaptureStats,
