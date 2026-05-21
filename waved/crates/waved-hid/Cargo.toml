@@ -12,3 +12,7 @@ serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "io-util", "fs"] }
 tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
