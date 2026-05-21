@@ -4,6 +4,7 @@ pub mod simulate;
 pub mod events;
 pub mod report;
 pub mod stats;
+pub mod reader;
 
 use tracing::{info, warn};
 use waved_state::ButtonType;
