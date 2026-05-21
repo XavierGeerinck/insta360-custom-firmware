@@ -98,6 +98,8 @@ impl HidReader {
                     Ok(n) => {
                         if let Some(led) = parse_led(&buf[..n]) {
                             apply_led(led, &stats, &audio_tx);
+                        } else {
+                            stats.glue_drops.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     Err(e) => {
@@ -159,7 +161,10 @@ mod tests {
         let (tx, rx) = watch::channel(AudioState::default());
         let stats = HidStats::default();
         apply_led(LedReport::OffHook(true), &stats, &tx);
-        assert!(rx.borrow().call_off_hook);
+        let s = rx.borrow();
+        assert!(s.call_off_hook);
+        assert!(!s.call_ringing,    "Off-hook LED must not touch call_ringing");
+        assert!(!s.call_host_muted, "Off-hook LED must not touch call_host_muted");
         assert_eq!(stats.leds_off_hook.load(Ordering::Relaxed), 1);
         assert!(stats.call_off_hook.load(Ordering::Relaxed));
     }
@@ -169,7 +174,10 @@ mod tests {
         let (tx, rx) = watch::channel(AudioState::default());
         let stats = HidStats::default();
         apply_led(LedReport::Ringing(true), &stats, &tx);
-        assert!(rx.borrow().call_ringing);
+        let s = rx.borrow();
+        assert!(s.call_ringing);
+        assert!(!s.call_off_hook,   "Ringing LED must not touch call_off_hook");
+        assert!(!s.call_host_muted, "Ringing LED must not touch call_host_muted");
         assert_eq!(stats.leds_ringing.load(Ordering::Relaxed), 1);
         assert!(stats.call_ringing.load(Ordering::Relaxed));
     }
@@ -181,7 +189,9 @@ mod tests {
         apply_led(LedReport::Mute(true), &stats, &tx);
         let s = rx.borrow();
         assert!(s.call_host_muted);
+        assert!(!s.call_off_hook, "Mute LED must not touch call_off_hook");
+        assert!(!s.call_ringing,  "Mute LED must not touch call_ringing");
         assert!(!s.speaker_muted, "Mute LED must not touch speaker_muted");
-        assert!(!s.mic_muted, "Mute LED must not touch mic_muted");
+        assert!(!s.mic_muted,     "Mute LED must not touch mic_muted");
     }
 }
