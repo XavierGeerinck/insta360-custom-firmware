@@ -318,6 +318,38 @@ post-DSP buffer (mute → 0, otherwise `volume_pct/100`, linear). The AEC
 reference broadcast taps **after** the gain so the canceller sees what
 actually reaches the mics.
 
+### HID control surface (SP#7d)
+
+The device exposes a `functions/hid.0` USB-gadget interface with a combined
+**Vendor (Report 0x03) + Telephony_V4 (Reports 0x02/0x05/0x06/0x07) +
+Consumer (Report 0x01)** report descriptor, copied byte-for-byte from stock
+fw v1.1.6.6. The Rust implementation lives in `crates/waved-hid/`:
+
+- `HidService::run` (`lib.rs`) — owns `/dev/hidg0` write side. Bridges
+  `DeviceEvent::ButtonPress(ButtonType)` from `waved-mcu` and drains an
+  `mpsc<HidEvent>` from state-driven sources. Writes press-release pairs.
+- `watch.rs` glue tasks — subscribe to `audio_tx`:
+  - `spawn_volume_watch` — one `ConsumerVolumeStep` per `speaker_volume`
+    step delta, rate-capped at `hid.volume_step_rate_hz` (default 40 Hz).
+  - `spawn_mute_watch` — one `ConsumerMute` per `speaker_muted` edge;
+    additionally one `TelephonyPhoneMute` when `call_off_hook == true`.
+- `reader.rs` — blocking std::thread reads `/dev/hidg0`, parses LED
+  Set_Reports (0x05/0x06/0x07) into `AudioState.call_off_hook /
+  call_host_muted / call_ringing`.
+
+Vendor channel (Report 0x03) is declared but not handled (SP#7(a) future).
+
+Report IDs match the stock descriptor: **0x01 = Consumer, 0x02 = Telephony**.
+This is the opposite of the original `waved-hid` constants prior to SP#7d,
+which had the IDs swapped — see §4.2 of `docs/superpowers/specs/2026-05-21-
+waved-hid-control-interface-design.md`.
+
+Configfs setup lives in `scripts/patch-stock-usbgadget.sh`; reboot required
+for the new gadget config to come up.
+
+Stats: `/tmp/audio_stats.json` includes a `hid` block (`device_present`,
+`events_emitted`, `leds_received`, `call_*`, `write_errors`, `glue_drops`).
+
 ### Mac → Wave control gaps (kernel `f_uac2` 5.4 limitation)
 
 macOS's behaviour with the Wave's UAC2 gadget on this kernel:
