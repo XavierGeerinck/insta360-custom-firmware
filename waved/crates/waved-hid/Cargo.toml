@@ -9,7 +9,7 @@ simulate = []
 [dependencies]
 waved-state = { path = "../waved-state" }
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["sync", "io-util", "fs"] }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing.workspace = true
 thiserror.workspace = true
 

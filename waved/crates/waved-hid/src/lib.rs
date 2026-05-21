@@ -43,16 +43,23 @@ impl HidService {
     ) {
         info!("hid_srv started");
 
-        let mut dev: Option<std::fs::File> = match std::fs::OpenOptions::new()
-            .write(true)
-            .open(&cfg.device)
+        let device_path = cfg.device.clone();
+        let mut dev: Option<std::fs::File> = match tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new().write(true).open(&device_path)
+        })
+        .await
         {
-            Ok(f) => {
+            Ok(Ok(f)) => {
                 stats.device_present.store(true, std::sync::atomic::Ordering::Relaxed);
                 Some(f)
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!("hid: cannot open {}: {} — HID writes disabled", cfg.device, e);
+                stats.device_present.store(false, std::sync::atomic::Ordering::Relaxed);
+                None
+            }
+            Err(e) => {
+                warn!("hid: open task join failed: {} — HID writes disabled", e);
                 stats.device_present.store(false, std::sync::atomic::Ordering::Relaxed);
                 None
             }
@@ -66,7 +73,9 @@ impl HidService {
                     Ok(waved_state::DeviceEvent::ButtonPress(btn)) => {
                         let ev = button_to_event(btn);
                         if let Some(f) = dev.as_mut() {
-                            Self::write_event(f, ev, gap, &stats).await;
+                            if !Self::write_event(f, ev, gap, &stats).await {
+                                dev = None;
+                            }
                         } else {
                             stats.write_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
@@ -83,7 +92,9 @@ impl HidService {
                 ev = events_rx.recv() => match ev {
                     Some(ev) => {
                         if let Some(f) = dev.as_mut() {
-                            Self::write_event(f, ev, gap, &stats).await;
+                            if !Self::write_event(f, ev, gap, &stats).await {
+                                dev = None;
+                            }
                         } else {
                             stats.write_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         }
@@ -102,21 +113,23 @@ impl HidService {
         ev: events::HidEvent,
         gap: std::time::Duration,
         stats: &stats::HidStats,
-    ) {
+    ) -> bool {
         use std::io::Write;
         use std::sync::atomic::Ordering;
 
         let (press, release) = report::event_to_press_release(ev);
         if let Err(e) = f.write_all(&press) {
-            warn!("hid: write press failed: {}", e);
+            warn!("hid: write press failed: {} — disabling HID until restart", e);
             stats.write_errors.fetch_add(1, Ordering::Relaxed);
-            return;
+            stats.device_present.store(false, Ordering::Relaxed);
+            return false;
         }
         tokio::time::sleep(gap).await;
         if let Err(e) = f.write_all(&release) {
-            warn!("hid: write release failed: {}", e);
+            warn!("hid: write release failed: {} — disabling HID until restart", e);
             stats.write_errors.fetch_add(1, Ordering::Relaxed);
-            return;
+            stats.device_present.store(false, Ordering::Relaxed);
+            return false;
         }
         match ev {
             events::HidEvent::ConsumerVolumeStep { .. } => { stats.events_volume_step.fetch_add(1, Ordering::Relaxed); }
@@ -126,6 +139,7 @@ impl HidService {
             events::HidEvent::ConsumerPrev              => { stats.events_prev.fetch_add(1, Ordering::Relaxed); }
             events::HidEvent::TelephonyPhoneMute        => { stats.events_phone_mute.fetch_add(1, Ordering::Relaxed); }
         }
+        true
     }
 }
 
