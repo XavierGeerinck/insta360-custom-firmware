@@ -16,11 +16,13 @@ use crate::stats::HidStats;
 
 /// Subscribe to `audio_rx` and emit one `ConsumerVolumeStep` per integer
 /// step delta of `speaker_volume`. Rate-capped at `volume_step_rate_hz`
-/// events per second (excess paced via sleep, not dropped).
+/// events per second (paced via `tokio::time::sleep`, so a normal burst
+/// is slowed, not dropped). If the downstream mpsc is full, excess
+/// events ARE dropped and `stats.glue_drops` is incremented.
 ///
 /// Returns the spawned task handle for the caller to keep alive
-/// (dropping it has no effect because the task itself runs to channel
-/// closure; the handle is returned for symmetry with `spawn_mute_watch`).
+/// (dropping it has no effect; the task itself runs until the watch
+/// channel closes).
 pub fn spawn_volume_watch(
     mut audio_rx: watch::Receiver<AudioState>,
     events: mpsc::Sender<HidEvent>,
@@ -66,16 +68,21 @@ pub fn spawn_mute_watch(
     tokio::spawn(async move {
         let mut last = audio_rx.borrow().speaker_muted;
         while audio_rx.changed().await.is_ok() {
-            let snap = audio_rx.borrow().clone();
-            if snap.speaker_muted == last {
+            let (snap_muted, snap_off_hook) = {
+                let g = audio_rx.borrow();
+                (g.speaker_muted, g.call_off_hook)
+            };
+            if snap_muted == last {
                 continue;
             }
-            last = snap.speaker_muted;
+            last = snap_muted;
             if events.try_send(HidEvent::ConsumerMute).is_err() {
                 stats.glue_drops.fetch_add(1, Ordering::Relaxed);
+                warn!("hid: mute_watch dropped ConsumerMute (queue full)");
             }
-            if snap.call_off_hook && events.try_send(HidEvent::TelephonyPhoneMute).is_err() {
+            if snap_off_hook && events.try_send(HidEvent::TelephonyPhoneMute).is_err() {
                 stats.glue_drops.fetch_add(1, Ordering::Relaxed);
+                warn!("hid: mute_watch dropped TelephonyPhoneMute (queue full)");
             }
         }
     })
