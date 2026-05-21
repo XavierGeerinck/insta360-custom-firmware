@@ -30,6 +30,8 @@ pub struct AudioConfig {
     pub mic_geometry: Option<MicGeometry>,
     #[serde(default)]
     pub uac: Option<UacConfig>,
+    #[serde(default)]
+    pub hid: Option<HidConfig>,
 }
 
 fn default_mic_geometry() -> Option<MicGeometry> {
@@ -118,6 +120,34 @@ impl Default for UacConfig {
             buffer_periods: default_uac_periods(),
             mixer_card: default_uac_mixer_card(),
             host_mute_target: HostMuteTarget::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HidConfig {
+    #[serde(default = "default_hid_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_hid_device")]
+    pub device: String,
+    #[serde(default = "default_hid_press_release_gap_ms")]
+    pub press_release_gap_ms: u64,
+    #[serde(default = "default_hid_volume_step_rate_hz")]
+    pub volume_step_rate_hz: u32,
+}
+
+fn default_hid_enabled() -> bool { true }
+fn default_hid_device() -> String { "/dev/hidg0".to_string() }
+fn default_hid_press_release_gap_ms() -> u64 { 10 }
+fn default_hid_volume_step_rate_hz() -> u32 { 40 }
+
+impl Default for HidConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_hid_enabled(),
+            device: default_hid_device(),
+            press_release_gap_ms: default_hid_press_release_gap_ms(),
+            volume_step_rate_hz: default_hid_volume_step_rate_hz(),
         }
     }
 }
@@ -694,6 +724,54 @@ mod tests {
         }"#;
         let cfg = AudioConfig::from_json(json).expect("0 should validate");
         assert_eq!(cfg.capture.pdm_gain, 0);
+    }
+
+    #[test]
+    fn hid_config_default_when_absent() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,0",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S16_LE"
+            },
+            "period_frames": 512,
+            "buffer_periods": 4
+        }"#;
+        let cfg: AudioConfig = AudioConfig::from_json(json).unwrap();
+        let hid = cfg.hid.unwrap_or_default();
+        assert!(hid.enabled);
+        assert_eq!(hid.device, "/dev/hidg0");
+        assert_eq!(hid.press_release_gap_ms, 10);
+        assert_eq!(hid.volume_step_rate_hz, 40);
+    }
+
+    #[test]
+    fn hid_config_with_overrides_parses() {
+        let json = r#"{
+            "version": 4,
+            "capture": {
+                "mic_device": "hw:0,0",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S16_LE"
+            },
+            "period_frames": 512,
+            "buffer_periods": 4,
+            "hid": {
+                "enabled": false,
+                "device": "/dev/hidg1",
+                "press_release_gap_ms": 25,
+                "volume_step_rate_hz": 20
+            }
+        }"#;
+        let cfg: AudioConfig = AudioConfig::from_json(json).unwrap();
+        let hid = cfg.hid.unwrap();
+        assert!(!hid.enabled);
+        assert_eq!(hid.device, "/dev/hidg1");
+        assert_eq!(hid.press_release_gap_ms, 25);
+        assert_eq!(hid.volume_step_rate_hz, 20);
     }
 
     #[test]
