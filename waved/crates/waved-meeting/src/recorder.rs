@@ -339,4 +339,28 @@ mod tests {
         // Drain the buffer was used; prebuffer is empty.
         assert_eq!(pb.len(), 0);
     }
+
+    #[tokio::test]
+    async fn prebuffer_splice_when_not_yet_full_produces_short_prefix() {
+        // 2 s capacity, only 1 s pushed before recording starts.
+        let mut pb = PreBuffer::new(2, RECORDING_SAMPLE_RATE, 1);
+        pb.push(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize]); // 1 s
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+        rec.append_samples(&pb.drain_all());
+        rec.append_samples(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize]); // 1 s live
+        rec.finalize();
+
+        let mut reader = hound::WavReader::open(rec.audio_path()).unwrap();
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<_, _>>()
+            .expect("wav decode");
+
+        // 1 s prefix + 1 s live = 2 s total. No padding, no duplication.
+        assert_eq!(samples.len(), 2 * RECORDING_SAMPLE_RATE as usize);
+        // 0.5 * 32768 = 16384 = 0x4000
+        assert!(samples.iter().all(|&s| s == 0x4000));
+    }
 }
