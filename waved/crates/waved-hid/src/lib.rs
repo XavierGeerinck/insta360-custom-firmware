@@ -68,11 +68,24 @@ impl HidService {
         };
 
         let gap = std::time::Duration::from_millis(cfg.press_release_gap_ms);
+        // MCU sends button-down then button-up as separate frames; debounce
+        // mute buttons so an even number of frames doesn't cancel itself out.
+        let mute_debounce = std::time::Duration::from_millis(300);
+        let mut last_mute_btn: Option<std::time::Instant> = None;
 
         loop {
             tokio::select! {
                 bus = bus_rx.recv() => match bus {
                     Ok(waved_state::DeviceEvent::ButtonPress(btn)) => {
+                        let is_mute = matches!(btn, ButtonType::MuteToggle | ButtonType::MuteLongPress);
+                        if is_mute {
+                            let now = std::time::Instant::now();
+                            if last_mute_btn.map_or(false, |t| now.duration_since(t) < mute_debounce) {
+                                stats.glue_drops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                continue;
+                            }
+                            last_mute_btn = Some(now);
+                        }
                         let ev = button_to_event(btn);
                         if let Some(f) = dev.as_mut() {
                             if !Self::write_event(f, ev, gap, &stats).await {
