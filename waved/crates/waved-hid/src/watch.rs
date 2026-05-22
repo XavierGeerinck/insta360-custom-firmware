@@ -43,7 +43,11 @@ pub fn spawn_volume_watch(
                 continue;
             }
             let up = delta > 0;
-            for _ in 0..delta.unsigned_abs() {
+            // Mac's consumer volume scale is ~16 steps (6.25% each) over 0-100%.
+            // Without scaling a 50-unit Wave drag fires 50 HID steps → 312% Mac
+            // jump (capped at 100%). Scale: Wave 0-100 → Mac 0-16 steps, minimum 1.
+            let mac_steps = ((delta.unsigned_abs() as f32 * 16.0 / 100.0).round() as u32).max(1);
+            for _ in 0..mac_steps {
                 if events.try_send(HidEvent::ConsumerVolumeStep { up }).is_err() {
                     stats.glue_drops.fetch_add(1, Ordering::Relaxed);
                     warn!("hid: volume_watch dropped event (queue full)");
@@ -94,35 +98,54 @@ mod tests {
     use tokio::sync::{mpsc, watch};
 
     #[tokio::test(flavor = "current_thread")]
-    async fn volume_watch_emits_one_event_per_step_up() {
+    async fn volume_watch_emits_scaled_steps_up() {
+        // delta=50 → round(50*16/100)=8 HID steps (not 50).
+        let mut s = AudioState::default();
+        s.speaker_volume = 0;
+        let (tx, rx) = watch::channel(s);
+        let (ev_tx, mut ev_rx) = mpsc::channel(64);
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
+        tokio::task::yield_now().await;
+        tx.send_modify(|s| s.speaker_volume = 50);
+        let mut count = 0u32;
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await {
+            assert_eq!(ev, HidEvent::ConsumerVolumeStep { up: true });
+            count += 1;
+        }
+        assert_eq!(count, 8, "50 Wave units → 8 Mac HID steps");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn volume_watch_emits_one_step_for_small_delta() {
+        // delta=3 → round(3*16/100)=0 → clamped to 1 step.
         let mut s = AudioState::default();
         s.speaker_volume = 50;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
         let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
-        tokio::task::yield_now().await; // let the task reach .changed()
+        tokio::task::yield_now().await;
         tx.send_modify(|s| s.speaker_volume = 53);
-        let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
-        let b = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
-        let c = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
-        assert_eq!(a, HidEvent::ConsumerVolumeStep { up: true });
-        assert_eq!(b, HidEvent::ConsumerVolumeStep { up: true });
-        assert_eq!(c, HidEvent::ConsumerVolumeStep { up: true });
+        let ev = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
+        assert_eq!(ev, HidEvent::ConsumerVolumeStep { up: true });
+        // No second event within timeout.
+        assert!(tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await.is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn volume_watch_emits_down_events() {
+        // delta=-13 → round(13*16/100)=round(2.08)=2 steps down.
         let mut s = AudioState::default();
         s.speaker_volume = 50;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
         let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
-        tokio::task::yield_now().await; // let the task reach .changed()
-        tx.send_modify(|s| s.speaker_volume = 48);
+        tokio::task::yield_now().await;
+        tx.send_modify(|s| s.speaker_volume = 37);
         let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
         let b = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
         assert_eq!(a, HidEvent::ConsumerVolumeStep { up: false });
         assert_eq!(b, HidEvent::ConsumerVolumeStep { up: false });
+        assert!(tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await.is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]

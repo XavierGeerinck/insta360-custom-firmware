@@ -348,8 +348,12 @@ fw v1.1.6.6. The Rust implementation lives in `crates/waved-hid/`:
   `DeviceEvent::ButtonPress(ButtonType)` from `waved-mcu` and drains an
   `mpsc<HidEvent>` from state-driven sources. Writes press-release pairs.
 - `watch.rs` glue tasks — subscribe to `audio_tx`:
-  - `spawn_volume_watch` — one `ConsumerVolumeStep` per `speaker_volume`
-    step delta, rate-capped at `hid.volume_step_rate_hz` (default 40 Hz).
+  - `spawn_volume_watch` — fires `ConsumerVolumeStep` events when
+    `speaker_volume` changes. **Scaled to Mac's ~16-step range:**
+    `mac_steps = max(1, round(delta × 16/100))`. Without scaling a
+    50-unit slider drag would fire 50 HID steps → 312% Mac jump; with
+    scaling it fires 8 steps → proportional 50% change. Rate-capped at
+    `hid.volume_step_rate_hz` (default 40 Hz).
   - `spawn_mute_watch` — one `ConsumerMute` per `speaker_muted` edge;
     additionally one `TelephonyPhoneMute` when `call_off_hook == true`.
 - `reader.rs` — blocking std::thread reads `/dev/hidg0`, parses LED
@@ -378,7 +382,7 @@ macOS's behaviour with the Wave's UAC2 gadget on this kernel:
 | Plays audio (Music/Spotify) | Streams over UAC2 OUT terminal, hits `UacBridge` → DSP → speaker. Works. | data path is straightforward |
 | Sound prefs Input slider | Dispatches UAC2 SET_CUR(VOLUME) to capture FU. We see `host set mic volume → N` in the log. Wave's mic_volume in `AudioState` updates. | macOS dispatches Input gain via UAC2 regardless of advertised range |
 | F10 (mute key) | Dispatches UAC2 SET_CUR(MUTE) to **capture FU** (mic), not playback. macOS picks the headset semantic for any bidirectional UAC2 device. | confirmed in log: `host set mic mute → true/false` |
-| F11 / F12 (volume keys) | **Nothing.** Mac doesn't dispatch UAC2 SET_CUR(VOLUME) for either FU, even with the volume range widened to ‑64 dB. | kernel 5.4 `f_uac2` likely doesn't expose a Master channel control in the playback FU's `bmaControls`; macOS USBAudio.kext keys on Master to enable HW Output volume. Without it, neither HW (UAC2) nor SW (host attenuation) gets engaged |
+| F11 / F12 (volume keys) | **Nothing.** Mac doesn't dispatch UAC2 SET_CUR(VOLUME) for either FU, even with the volume range widened to ‑64 dB. | **Confirmed root cause:** `amixer -c 1 contents` on the device shows only `PCM Playback State`, `PCM Capture State`, and `PCM Capture Volume` — **no `PCM Playback Volume` control exists**. kernel 5.4 `f_uac2` doesn't create one; macOS USBAudio.kext requires a Master channel volume control in the playback FU's `bmaControls` to enable HW Output volume. Without it, neither HW (UAC2) nor SW (host attenuation) gets engaged |
 | Sound prefs Output slider drag | Same — slider is interactive but no UAC2 traffic and no audible level change. | same root cause |
 
 The mute case is mitigated in `UacControl` by redirecting capture-FU mute
