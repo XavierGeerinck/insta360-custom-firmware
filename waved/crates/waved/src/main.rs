@@ -337,6 +337,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     bus.commands.clone(),
                     bus.audio.subscribe(),
                     Arc::clone(&uac_stats),
+                    Arc::clone(&bus.host_pending_speaker_vol),
                 );
                 tracing::info!(
                     "uac: routing live (downstream={} upstream={} mixer={})",
@@ -404,8 +405,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                 ev_tx.clone(),
                 Arc::clone(&hid_stats),
                 hid_cfg.volume_step_rate_hz,
+                Arc::clone(&bus.host_pending_speaker_vol),
             );
             let _mh = waved_hid::watch::spawn_mute_watch(
+                bus.audio.subscribe(),
+                ev_tx.clone(),
+                Arc::clone(&hid_stats),
+            );
+            let _mmh = waved_hid::watch::spawn_mic_mute_watch(
                 bus.audio.subscribe(),
                 ev_tx,
                 Arc::clone(&hid_stats),

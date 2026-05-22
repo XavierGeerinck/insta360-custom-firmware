@@ -22,11 +22,13 @@ fi
 
 ALREADY_VOL=0
 ALREADY_HID=0
+ALREADY_CVOL=0
 grep -q "echo -16384 > functions/uac2.0/p_volume_min" "$INIT" && ALREADY_VOL=1
+grep -q "echo -10240 > functions/uac2.0/c_volume_min" "$INIT" && ALREADY_CVOL=1
 grep -q "mkdir -p functions/hid.0" "$INIT" && ALREADY_HID=1
 
-if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ]; then
-    echo "already patched (both volume range + hid.0)"
+if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ] && [ "$ALREADY_CVOL" = "1" ]; then
+    echo "already patched (p_volume + c_volume + hid.0)"
     exit 0
 fi
 
@@ -37,7 +39,21 @@ if [ "$ALREADY_VOL" = "0" ]; then
         -e 's|echo -100 > functions/uac2.0/p_volume_min|echo -16384 > functions/uac2.0/p_volume_min|' \
         -e 's|echo 1 > functions/uac2.0/p_volume_res|echo 256 > functions/uac2.0/p_volume_res|' \
         "$INIT"
-    echo "patched UAC2 volume range"
+    echo "patched UAC2 p_volume range (mic, gadget->host)"
+fi
+
+# c_volume = host->gadget = SPEAKER from Mac's perspective. The kernel's
+# f_uac2 takes these in 1/256 dB units (not dB), so the original "-100"
+# is -0.39 dB — useless range. Set to -10240 (=-40 dB) so macOS sees a
+# real volume control and pushes F11/F12 / system slider events into
+# PCM Capture Volume (which we then read in uac/control.rs as the
+# host-side speaker volume; see docs/AUDIO_HARDWARE.md).
+if [ "$ALREADY_CVOL" = "0" ]; then
+    sed -i \
+        -e 's|echo -100 > functions/uac2.0/c_volume_min|echo -10240 > functions/uac2.0/c_volume_min|' \
+        -e 's|echo 1 > functions/uac2.0/c_volume_res|echo 256 > functions/uac2.0/c_volume_res|' \
+        "$INIT"
+    echo "patched UAC2 c_volume range (speaker, host->gadget)"
 fi
 
 if [ "$ALREADY_HID" = "0" ]; then

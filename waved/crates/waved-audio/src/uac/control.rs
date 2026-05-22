@@ -1,10 +1,22 @@
 //! UAC2 control — bridge `hw:1` ALSA mixer events to `Command` and back.
 //!
 //! Direction 1 (host → device): the kernel's `f_uac2` driver translates UAC2
-//! SET_CUR class requests into ALSA mixer value events on card 1
-//! (`PCM Playback Volume`, `PCM Capture Volume`, the matching switches, and
-//! the read-only `*State` indicators). We poll for events at 50 ms cadence
-//! and dispatch `Command::Set*Volume` / `Command::Toggle*Mute` onto the bus.
+//! SET_CUR class requests into ALSA mixer value events on card 1. We poll
+//! for events at 50 ms cadence and dispatch `Command::Set*Volume` /
+//! `Command::Toggle*Mute` onto the bus.
+//!
+//! **Naming gotcha**: the kernel's `f_uac2` exposes controls from the
+//! *gadget's* perspective, which is inverted from the host's:
+//!
+//! | configfs           | ALSA control          | Direction       | Mac calls it |
+//! |--------------------|-----------------------|-----------------|--------------|
+//! | `c_volume_*`       | `PCM Capture Volume`  | host → gadget   | **speaker**  |
+//! | `p_volume_*`       | `PCM Playback Volume` | gadget → host   | **mic**      |
+//!
+//! So in this file `read_volume(..., capture=true)` returns the *speaker*
+//! volume that Mac set, NOT the mic volume. This matches what the stock
+//! firmware does (`handle_usb_msg_threadLoop` in `libins_entry.so` reads
+//! "PCM Capture Volume" and pushes it to `audio_server_spk_volume_policy`).
 //!
 //! Direction 2 (device → host): when `AudioState.speaker_volume` changes via
 //! the touch UI or `/tmp/waved-volume`, we write the new value into the same
@@ -13,7 +25,7 @@
 //! Both directions go through a shared `LastWrite` cell so a self-write
 //! event isn't re-dispatched as a host event.
 
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -61,11 +73,17 @@ impl UacControl {
     /// Spawn the mixer event poll task plus the state mirror task.
     /// Both live in the existing tokio runtime; the alsa::mixer calls are
     /// short-lived and do not block long enough to need a dedicated thread.
+    ///
+    /// `host_pending_speaker_vol` is the StateBus echo-suppress marker —
+    /// see `StateBus::host_pending_speaker_vol`. We stamp it before
+    /// dispatching `SetSpeakerVolume(v)` from host-side events so the HID
+    /// `volume_watch` doesn't echo the same value back to Mac.
     pub fn spawn(
         cfg: UacControlConfig,
         commands: broadcast::Sender<Command>,
         state_rx: watch::Receiver<AudioState>,
         stats: Arc<UacStats>,
+        host_pending_speaker_vol: Arc<AtomicI32>,
     ) -> Self {
         let last_write = Arc::new(LastWrite::default());
 
@@ -75,7 +93,7 @@ impl UacControl {
             let stats = Arc::clone(&stats);
             let last_write = Arc::clone(&last_write);
             async move {
-                if let Err(e) = run_mixer_poll(cfg, commands, stats, last_write).await {
+                if let Err(e) = run_mixer_poll(cfg, commands, stats, last_write, host_pending_speaker_vol).await {
                     warn!("uac-control mixer poll exited: {e}");
                 }
             }
@@ -102,15 +120,18 @@ async fn run_mixer_poll(
     commands: broadcast::Sender<Command>,
     stats: Arc<UacStats>,
     last_write: Arc<LastWrite>,
+    host_pending_speaker_vol: Arc<AtomicI32>,
 ) -> Result<(), alsa::Error> {
     info!("uac-control: opening mixer {}", cfg.mixer_card);
     let mixer = Mixer::new(&cfg.mixer_card, false)?;
 
-    // Cache the current values so we only emit on change.
-    let mut prev_speaker_vol = read_volume(&mixer, "PCM", false, SPEAKER_MAX_PCT).unwrap_or(0);
-    let mut prev_mic_vol = read_volume(&mixer, "PCM", true, MIC_MAX_PCT).unwrap_or(0);
-    let mut prev_speaker_muted = read_switch(&mixer, "PCM", false).unwrap_or(false);
-    let mut prev_mic_muted = read_switch(&mixer, "PCM", true).unwrap_or(false);
+    // Cache the current values so we only emit on change. Note the
+    // capture=true vs capture=false flip: see the gadget/host inversion
+    // table in the module docstring.
+    let mut prev_speaker_vol = read_volume(&mixer, "PCM", true, SPEAKER_MAX_PCT).unwrap_or(0);
+    let mut prev_mic_vol = read_volume(&mixer, "PCM", false, MIC_MAX_PCT).unwrap_or(0);
+    let mut prev_speaker_muted = read_switch(&mixer, "PCM", true).unwrap_or(false);
+    let mut prev_mic_muted = read_switch(&mixer, "PCM", false).unwrap_or(false);
 
     let mut tick = interval(Duration::from_millis(50));
     loop {
@@ -118,17 +139,31 @@ async fn run_mixer_poll(
         // Drain pending mixer events. `handle_events` is non-blocking.
         let _ = mixer.handle_events();
 
-        if let Some(v) = read_volume(&mixer, "PCM", false, SPEAKER_MAX_PCT) {
+        // Mac → speaker volume lives on `PCM Capture Volume` (host writes
+        // FU SET_CUR for its output stream; kernel exposes that as the
+        // gadget-side capture control).
+        if let Some(v) = read_volume(&mixer, "PCM", true, SPEAKER_MAX_PCT) {
             if v != prev_speaker_vol {
                 prev_speaker_vol = v;
                 if last_write.speaker_volume.load(Ordering::Relaxed) != v {
                     info!("uac-control: host set speaker volume → {v}");
+                    // Mark this value as "host-originated" so the HID
+                    // volume_watch task skips echoing it back as
+                    // ConsumerVolumeStep events (Mac F11 → us → Mac F11
+                    // feedback loop). Stamped *before* dispatch so the
+                    // marker is in place by the time AudioState changes.
+                    host_pending_speaker_vol.store(v as i32, Ordering::Release);
                     let _ = commands.send(Command::SetSpeakerVolume(v));
                     stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
-        if let Some(v) = read_volume(&mixer, "PCM", true, MIC_MAX_PCT) {
+        // Mac → mic gain on `PCM Playback Volume`. Kernel 5.4 `f_uac2`
+        // doesn't expose this on the current build (p_volume_* configfs
+        // sets it up but no ALSA control surfaces), so this branch is
+        // dormant — `read_volume` returns None and we never dispatch.
+        // Kept here for the eventual kernel patch that adds it.
+        if let Some(v) = read_volume(&mixer, "PCM", false, MIC_MAX_PCT) {
             if v != prev_mic_vol {
                 prev_mic_vol = v;
                 if last_write.mic_volume.load(Ordering::Relaxed) != v {
@@ -138,16 +173,16 @@ async fn run_mixer_poll(
                 }
             }
         }
-        // Host mute on the playback FU. macOS rarely dispatches here (it
-        // prefers the capture FU for system mute on bidirectional devices),
-        // but stock UAC2 hosts may, so mirror it onto whatever target the
-        // config selects. By default speaker → speaker (one-to-one), which
-        // is the natural meaning.
-        if let Some(muted) = read_switch(&mixer, "PCM", false) {
+        // Mac → speaker mute on `PCM Capture Switch`. This is what
+        // macOS F10 lands on for a UAC2 speakerphone. Redirect per
+        // `host_mute_target`: default "speaker" silences playback
+        // (music-listener UX), "mic" preserves the headset semantic,
+        // "both" toggles both at once.
+        if let Some(muted) = read_switch(&mixer, "PCM", true) {
             if muted != prev_speaker_muted {
                 prev_speaker_muted = muted;
                 if last_write.speaker_muted.load(Ordering::Relaxed) != muted {
-                    info!("uac-control: host set speaker mute → {muted}");
+                    info!("uac-control: host set speaker mute → {muted} (target={:?})", cfg.host_mute_target);
                     dispatch_host_mute(&commands, cfg.host_mute_target);
                     stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
                     // Track host's value so the next toggle is detected as
@@ -157,22 +192,15 @@ async fn run_mixer_poll(
                 }
             }
         }
-        // Host mute on the capture FU. This is what macOS F10 lands on for
-        // a UAC2 speakerphone. Redirect per `host_mute_target`: default
-        // "speaker" silences playback (music-listener UX), "mic" preserves
-        // the headset semantic, "both" toggles both at once.
-        if let Some(muted) = read_switch(&mixer, "PCM", true) {
+        // Mac → mic mute on `PCM Playback Switch`. Same kernel caveat
+        // as `PCM Playback Volume` above — not surfaced on this build.
+        if let Some(muted) = read_switch(&mixer, "PCM", false) {
             if muted != prev_mic_muted {
                 prev_mic_muted = muted;
                 if last_write.mic_muted.load(Ordering::Relaxed) != muted {
-                    info!(
-                        "uac-control: host set mic mute → {muted} (target={:?})",
-                        cfg.host_mute_target
-                    );
+                    info!("uac-control: host set mic mute → {muted}");
                     dispatch_host_mute(&commands, cfg.host_mute_target);
                     stats.host_set_volume_events.fetch_add(1, Ordering::Relaxed);
-                    // See speaker-mute branch above — sync last_write so a
-                    // subsequent host toggle isn't echo-suppressed.
                     last_write.mic_muted.store(muted, Ordering::Relaxed);
                 }
             }
@@ -214,11 +242,14 @@ async fn run_state_mirror(
     // run_mixer_poll won't have ticked yet on first spawn. Do not
     // restructure either task into a multi-threaded executor without
     // adding a Mutex around the mixer.
+    // Seed: speaker → capture side (host writes here, so the host's first
+    // GET_CUR returns the boot value); mic → playback side. See the
+    // gadget-vs-host direction table in the module docstring.
     if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-        let _ = write_volume(&mixer, "PCM", true, prev_mic_vol, MIC_MAX_PCT);
-        let _ = write_volume(&mixer, "PCM", false, prev_speaker_vol, SPEAKER_MAX_PCT);
-        last_write.mic_volume.store(prev_mic_vol, Ordering::Relaxed);
+        let _ = write_volume(&mixer, "PCM", true,  prev_speaker_vol, SPEAKER_MAX_PCT);
+        let _ = write_volume(&mixer, "PCM", false, prev_mic_vol,     MIC_MAX_PCT);
         last_write.speaker_volume.store(prev_speaker_vol, Ordering::Relaxed);
+        last_write.mic_volume.store(prev_mic_vol, Ordering::Relaxed);
     }
 
     while state_rx.changed().await.is_ok() {
@@ -229,7 +260,7 @@ async fn run_state_mirror(
             // Open the mixer fresh on each write — short-lived, avoids
             // holding state across await points.
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", false, s.speaker_volume, SPEAKER_MAX_PCT);
+                let _ = write_volume(&mixer, "PCM", true, s.speaker_volume, SPEAKER_MAX_PCT);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -237,7 +268,7 @@ async fn run_state_mirror(
             prev_mic_vol = s.mic_volume;
             last_write.mic_volume.store(s.mic_volume, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_volume(&mixer, "PCM", true, s.mic_volume, MIC_MAX_PCT);
+                let _ = write_volume(&mixer, "PCM", false, s.mic_volume, MIC_MAX_PCT);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -245,7 +276,7 @@ async fn run_state_mirror(
             prev_speaker_muted = s.speaker_muted;
             last_write.speaker_muted.store(s.speaker_muted, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_switch(&mixer, "PCM", false, s.speaker_muted);
+                let _ = write_switch(&mixer, "PCM", true, s.speaker_muted);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -253,7 +284,7 @@ async fn run_state_mirror(
             prev_mic_muted = s.mic_muted;
             last_write.mic_muted.store(s.mic_muted, Ordering::Relaxed);
             if let Ok(mixer) = Mixer::new(&cfg.mixer_card, false) {
-                let _ = write_switch(&mixer, "PCM", true, s.mic_muted);
+                let _ = write_switch(&mixer, "PCM", false, s.mic_muted);
                 stats.device_set_volume_events.fetch_add(1, Ordering::Relaxed);
             }
         }

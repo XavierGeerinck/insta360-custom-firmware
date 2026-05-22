@@ -1,7 +1,7 @@
 //! State-watcher glue tasks: subscribe to AudioState and emit HidEvents
 //! per integer-step delta of speaker_volume and per edge of speaker_muted.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,6 +20,14 @@ use crate::stats::HidStats;
 /// is slowed, not dropped). If the downstream mpsc is full, excess
 /// events ARE dropped and `stats.glue_drops` is incremented.
 ///
+/// `host_pending_speaker_vol` is the StateBus echo-suppress marker. When
+/// `uac/control.rs` dispatches a host-originated `SetSpeakerVolume(v)`,
+/// it stamps `v` here *before* the state mutation. If we wake up and the
+/// new state matches the marker, the change came from Mac itself — we
+/// just advance our cursor and skip emitting events, preventing the
+/// F11 → mixer → state → HID → Mac F11 feedback loop. Sentinel `-1`
+/// means "no pending host echo, treat as local".
+///
 /// Returns the spawned task handle for the caller to keep alive
 /// (dropping it has no effect; the task itself runs until the watch
 /// channel closes).
@@ -28,6 +36,7 @@ pub fn spawn_volume_watch(
     events: mpsc::Sender<HidEvent>,
     stats: Arc<HidStats>,
     volume_step_rate_hz: u32,
+    host_pending_speaker_vol: Arc<AtomicI32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last = audio_rx.borrow().speaker_volume as i32;
@@ -40,6 +49,16 @@ pub fn spawn_volume_watch(
             let now = audio_rx.borrow().speaker_volume as i32;
             let delta = now - last;
             if delta == 0 {
+                continue;
+            }
+            // Echo suppression: if the host stamped this exact value, the
+            // change originated from Mac (via uac/control.rs). Advance the
+            // cursor but don't emit HID — otherwise we ping-pong the value
+            // back to Mac, which decrements/increments again, and so on.
+            let pending = host_pending_speaker_vol.load(Ordering::Acquire);
+            if pending == now {
+                host_pending_speaker_vol.store(-1, Ordering::Release);
+                last = now;
                 continue;
             }
             let up = delta > 0;
@@ -92,6 +111,32 @@ pub fn spawn_mute_watch(
     })
 }
 
+/// Subscribe to `audio_rx` and emit `TelephonyPhoneMute` on each transition
+/// of `mic_muted`. This is what Teams/Zoom/Meet listen to for "user is muted"
+/// indicators on the conferencing UI. Fired unconditionally — the host
+/// app decides what to do with it (in-call apps act on it; non-call
+/// apps ignore it).
+pub fn spawn_mic_mute_watch(
+    mut audio_rx: watch::Receiver<AudioState>,
+    events: mpsc::Sender<HidEvent>,
+    stats: Arc<HidStats>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last = audio_rx.borrow().mic_muted;
+        while audio_rx.changed().await.is_ok() {
+            let snap = audio_rx.borrow().mic_muted;
+            if snap == last {
+                continue;
+            }
+            last = snap;
+            if events.try_send(HidEvent::TelephonyPhoneMute).is_err() {
+                stats.glue_drops.fetch_add(1, Ordering::Relaxed);
+                warn!("hid: mic_mute_watch dropped TelephonyPhoneMute (queue full)");
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,7 +149,7 @@ mod tests {
         s.speaker_volume = 0;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(64);
-        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000, Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await;
         tx.send_modify(|s| s.speaker_volume = 50);
         let mut count = 0u32;
@@ -122,7 +167,7 @@ mod tests {
         s.speaker_volume = 50;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000, Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await;
         tx.send_modify(|s| s.speaker_volume = 53);
         let ev = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
@@ -138,7 +183,7 @@ mod tests {
         s.speaker_volume = 50;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000, Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await;
         tx.send_modify(|s| s.speaker_volume = 37);
         let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
@@ -149,10 +194,38 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn volume_watch_suppresses_host_originated_change() {
+        // Simulates uac/control.rs stamping a host-set value before the
+        // state mutation. The task must advance its cursor but NOT emit
+        // any ConsumerVolumeStep — otherwise Mac F11 would loop back to
+        // itself.
+        let mut s = AudioState::default();
+        s.speaker_volume = 60;
+        let (tx, rx) = watch::channel(s);
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let pending = Arc::new(AtomicI32::new(-1));
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000, Arc::clone(&pending));
+        tokio::task::yield_now().await;
+        // Host stamps the marker, then updates state.
+        pending.store(40, Ordering::Release);
+        tx.send_modify(|s| s.speaker_volume = 40);
+        // No HID event should fire.
+        let t = tokio::time::timeout(Duration::from_millis(100), ev_rx.recv()).await;
+        assert!(t.is_err(), "host-originated change must not emit HID events");
+        // Marker must be consumed (reset to -1) so a subsequent local
+        // change isn't accidentally suppressed.
+        assert_eq!(pending.load(Ordering::Acquire), -1);
+        // A subsequent local change (no marker) emits normally.
+        tx.send_modify(|s| s.speaker_volume = 50);
+        let ev = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
+        assert_eq!(ev, HidEvent::ConsumerVolumeStep { up: true });
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn volume_watch_ignores_unrelated_state_change() {
         let (tx, rx) = watch::channel(AudioState::default());
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000);
+        let _h = spawn_volume_watch(rx, ev_tx, HidStats::new(), 1000, Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await; // let the task reach .changed()
         tx.send_modify(|s| s.mic_muted = !s.mic_muted);
         let t = tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await;
@@ -195,5 +268,43 @@ mod tests {
         tx.send_modify(|s| s.speaker_muted = false);
         let t = tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await;
         assert!(t.is_err(), "expected no event without an edge");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mic_mute_watch_emits_phone_mute_on_toggle() {
+        let (tx, rx) = watch::channel(AudioState::default());
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let _h = spawn_mic_mute_watch(rx, ev_tx, HidStats::new());
+        tokio::task::yield_now().await;
+        tx.send_modify(|s| s.mic_muted = true);
+        let ev = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
+        assert_eq!(ev, HidEvent::TelephonyPhoneMute);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mic_mute_watch_fires_regardless_of_off_hook() {
+        // Unlike spawn_mute_watch's PhoneMute branch, mic_mute fires
+        // unconditionally — Teams listens whether or not an off-hook
+        // LED report has arrived from the host yet.
+        let (tx, rx) = watch::channel(AudioState::default());
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let _h = spawn_mic_mute_watch(rx, ev_tx, HidStats::new());
+        tokio::task::yield_now().await;
+        tx.send_modify(|s| s.mic_muted = true);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap(),
+            HidEvent::TelephonyPhoneMute,
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mic_mute_watch_ignores_speaker_mute() {
+        let (tx, rx) = watch::channel(AudioState::default());
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let _h = spawn_mic_mute_watch(rx, ev_tx, HidStats::new());
+        tokio::task::yield_now().await;
+        tx.send_modify(|s| s.speaker_muted = !s.speaker_muted);
+        let t = tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await;
+        assert!(t.is_err(), "mic_mute_watch must not fire on speaker_muted toggle");
     }
 }

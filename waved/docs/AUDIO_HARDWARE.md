@@ -373,79 +373,87 @@ for the new gadget config to come up.
 Stats: `/tmp/audio_stats.json` includes a `hid` block (`device_present`,
 `events_emitted`, `leds_received`, `call_*`, `write_errors`, `glue_drops`).
 
-### Mac → Wave control gaps (kernel `f_uac2` 5.4 limitation)
+### Mac → Wave control (kernel `f_uac2` 5.4 nomenclature inversion)
 
-macOS's behaviour with the Wave's UAC2 gadget on this kernel:
+**The mapping is inverted compared to what the ALSA control names suggest.**
+`f_uac2` names its mixer controls from the *gadget's* perspective: an audio
+stream the host writes (= the gadget receives, = the device's *speaker*) is
+called "Capture" on the gadget side, while a stream the host reads (= the
+gadget produces, = the device's *mic*) is called "Playback". So:
+
+| configfs    | ALSA control          | Direction       | What Mac calls it |
+|-------------|-----------------------|-----------------|-------------------|
+| `c_volume_*`| `PCM Capture Volume`  | host → gadget   | **speaker**       |
+| `p_volume_*`| `PCM Playback Volume` | gadget → host   | **mic**           |
+
+This was verified by reading the stock firmware: `handle_usb_msg_threadLoop`
+in `libins_entry.so` subscribes to `snd_ctl_event_elem`, matches on
+`"PCM Capture Volume"`, and pushes the value into `audio_server_spk_volume_policy`
+(speaker policy). It then maps to `g_is_usb_spk_work` / `g_is_usb_mic_work`
+state — confirming "Capture" on this gadget IS the host→gadget speaker path.
+
+`UacControl` in `uac/control.rs` honours this — `read_volume("PCM", capture=true, …)`
+returns the speaker volume Mac sent, `capture=false` would be the mic gain
+(which kernel 5.4 doesn't actually expose, see below).
 
 | Mac action | What happens | Why |
 |------------|--------------|-----|
 | Plays audio (Music/Spotify) | Streams over UAC2 OUT terminal, hits `UacBridge` → DSP → speaker. Works. | data path is straightforward |
-| Sound prefs Input slider | Dispatches UAC2 SET_CUR(VOLUME) to capture FU. We see `host set mic volume → N` in the log. Wave's mic_volume in `AudioState` updates. | macOS dispatches Input gain via UAC2 regardless of advertised range |
-| F10 (mute key) | Dispatches UAC2 SET_CUR(MUTE) to **capture FU** (mic), not playback. macOS picks the headset semantic for any bidirectional UAC2 device. | confirmed in log: `host set mic mute → true/false` |
-| F11 / F12 (volume keys) | **Nothing.** Mac doesn't dispatch UAC2 SET_CUR(VOLUME) for either FU, even with the volume range widened to ‑64 dB. | **Confirmed root cause:** `amixer -c 1 contents` on the device shows only `PCM Playback State`, `PCM Capture State`, and `PCM Capture Volume` — **no `PCM Playback Volume` control exists**. kernel 5.4 `f_uac2` doesn't create one; macOS USBAudio.kext requires a Master channel volume control in the playback FU's `bmaControls` to enable HW Output volume. Without it, neither HW (UAC2) nor SW (host attenuation) gets engaged |
-| Sound prefs Output slider drag | Same — slider is interactive but no UAC2 traffic and no audible level change. | same root cause |
+| Sound prefs Output slider | Dispatches UAC2 SET_CUR(VOLUME) on the playback (speaker) FU → kernel writes `PCM Capture Volume`. We see `host set speaker volume → N` in the log. Wave's `speaker_volume` in `AudioState` updates and the OLED Volume screen reflects it. | works with patched `c_volume_min` (see below) |
+| F11 / F12 (volume keys) | Same as the slider — only **if** the gadget advertises a usable volume range (≥ several dB) on the playback FU. With stock `c_volume_min=-100` (1/256 dB = ‑0.39 dB), Mac silently falls back to its own digital scaling. With `c_volume_min=-10240` (=‑40 dB) Mac uses the FU. | see "`c_volume` range" below |
+| Sound prefs Input slider | Stock writes to `p_volume_*` (which would be the mic FU), but kernel 5.4 `f_uac2` doesn't surface `PCM Playback Volume` even when `p_volume_min/max/res` are configured. So no mic-gain control reaches userspace. | known kernel 5.4 limitation |
+| F10 (mute key) | Dispatches UAC2 SET_CUR(MUTE) to capture FU (= speaker side after the inversion). `UacControl` reads `PCM Capture Switch` and dispatches via `host_mute_target`. | see `uac.host_mute_target` below |
 
-The mute case is mitigated in `UacControl` by redirecting capture-FU mute
-events onto `Command::ToggleSpeakerMute` by default (configurable via
-`uac.host_mute_target` in `audio_config.json`: `"speaker"` (default,
-music-listener UX), `"mic"` (headset UX, original behaviour), or
-`"both"`). Mac F10 then silences the speaker — which is what most users
-want from a music-output speakerphone.
+The `uac.host_mute_target` config (in `audio_config.json`) routes Mac F10:
+`"speaker"` (default, music-listener UX), `"mic"` (headset UX, original
+behaviour), or `"both"`. Mac F10 then silences the speaker — which is
+what most users want from a music-output speakerphone.
 
-The volume-key case has no clean device-side workaround on this kernel.
-Practical paths in increasing engineering cost:
+**`c_volume` range — units are 1/256 dB, not dB.** Stock
+`/etc/init.d/S89usbgadget` writes `c_volume_min=-100, c_volume_max=0,
+c_volume_res=1`, which kernel interprets as ‑0.39 dB to 0 dB — a useless
+range. macOS sees this and silently bypasses the FU, using its own digital
+volume scaling for the system volume keys. The init.d patch in
+`scripts/patch-stock-usbgadget.sh` sets `c_volume_min=-10240` (=‑40 dB)
+and `c_volume_res=256` (=1 dB step), giving Mac a real range it will drive.
+The same gotcha applies to `p_volume_*` for the mic side (already patched
+to `-16384` / `256`).
 
-1. **Wave's touch UI for speaker volume** — works today via the SP#6
-   follow-up that reads `speaker_volume` in the playback loop and scales
-   the post-DSP buffer. Volume control just lives on the device, not
-   the Mac.
+**Feedback-loop suppression.** When Mac F11/F12 lowers `PCM Capture Volume`,
+`uac/control.rs` dispatches `Command::SetSpeakerVolume(v)`, which mutates
+`AudioState.speaker_volume`. The HID `volume_watch` task in `waved-hid`
+would normally then emit a `ConsumerVolumeStep` HID report back to Mac
+(its job is to mirror Wave's volume changes to Mac so the touch UI works) —
+which Mac interprets as another F11 press, dropping the FU value again,
+ad infinitum. `StateBus::host_pending_speaker_vol` is a shared `AtomicI32`
+echo-suppress marker: `uac/control.rs` stamps the host value before
+dispatching, and `volume_watch` checks it and skips emission for matching
+changes. Sentinel `-1` = no pending host echo.
 
-2. **`scripts/wave-volume-mac.lua` (Hammerspoon shim).** Catches Mac
-   F10/F11/F12 system media keys and translates each press into
-   `adb shell amixer -c 1 cset numid={1,2} ...`. UacControl picks up
-   the mixer change and the SP#6 gain code applies it. Per-Mac install
-   (Hammerspoon + Accessibility permission), runs only when Wave is the
-   active output device. See the script header for setup. This is the
-   recommended workaround until/unless the kernel patch lands.
+If/when the kernel exposes `PCM Playback Volume` (the mic-gain side), the
+same pattern can mirror that direction.
 
-3. **Stock-style `uac_hid` pattern** — write Consumer-page HID INPUT
-   reports (`VolumeUp` / `VolumeDown`) to `/dev/hidg0` from waved when
-   the touch-UI volume changes. Mac receives a media-key event, scales
-   its system Output volume host-side, and audio arrives pre-attenuated.
-   This is the reverse direction (Wave→Mac) and only useful if you
-   want Mac's slider to track Wave's touch-UI changes. Doesn't help
-   Mac F11/F12. Implemented by SP#7(d') — see "HID control surface (SP#7d)" above.
+We tried disabling `p_volume_present` / `p_mute_present` / `c_mute_present`
+to coax macOS into software-side attenuation. macOS silently no-ops
+instead — it does not fall back to SW attenuation for UAC2 devices the
+way it does for HDMI / built-in speakers. Don't disable those flags
+(also kills the F10 mute redirect).
 
-4. **Backport Master Volume control to `f_uac2`.** The right long-term
-   answer: ~10–20 lines of C in `drivers/usb/gadget/function/f_uac2.c`
-   to advertise a Master channel control in the playback FU's
-   `bmaControls`, which is what macOS USBAudio.kext keys on. Requires
-   the vendor's kernel source (likely available via the GPL but not
-   yet sourced) and a kernel-module deploy path.
-
-We tried disabling `p_volume_present` / `p_mute_present` /
-`c_mute_present` to coax macOS into software-side attenuation. macOS
-silently no-ops instead — it does not fall back to SW attenuation for
-UAC2 devices the way it does for HDMI / built-in speakers. Don't
-disable those flags (also kills the F10 mute redirect).
-
-### `f_uac2` configfs gotcha — playback volume range
+### `f_uac2` configfs gotcha — volume range units are 1/256 dB
 
 Stock `/etc/init.d/S89usbgadget` writes `p_volume_min=-100`,
-`p_volume_max=0`, `p_volume_res=1` (units of 1/256 dB) — so the device
-advertises only `~0.4 dB` of HW Output volume range. macOS treats that
-as "not a real HW Output volume", silently disables hardware Output
-volume control, and **does not** dispatch UAC2 SET_CUR for Mac volume /
-mute keys. Mac volume/mute then has no effect on the speakerphone (Mac
-also doesn't fall back to software-side attenuation for this case).
+`p_volume_max=0`, `p_volume_res=1`. These look like dB but the kernel
+interprets them as 1/256 dB units — so the device advertises only
+`~0.4 dB` of HW volume range. macOS treats that as "not a real HW
+volume", silently bypasses the FU, and does not dispatch UAC2 SET_CUR
+for system volume keys.
 
-The capture (Input) side is unaffected — macOS dispatches UAC2 SET_CUR
-for Input gain regardless of advertised range, since mic preamp gain is
-conventionally HW-controlled.
+**Fix:** advertise a useful range. `scripts/patch-stock-usbgadget.sh`
+patches the init script to:
+- `p_volume_min=-16384` / `p_volume_res=256` (= ‑64 dB to 0 dB in 1 dB steps) for the mic FU
+- `c_volume_min=-10240` / `c_volume_res=256` (= ‑40 dB to 0 dB in 1 dB steps) for the speaker FU
 
-**Fix:** advertise a useful playback range. `scripts/patch-stock-usbgadget.sh`
-patches the init script to `p_volume_min=-16384` / `p_volume_res=256`
-(= -64 dB to 0 dB in 1 dB steps), backs up the original to
+…backs up the original to
 `S89usbgadget.bak.<ts>`, and is idempotent. After patching, reboot —
 the gadget needs to come up fresh for macOS to re-read descriptors.
 

@@ -77,6 +77,7 @@ impl HidService {
             tokio::select! {
                 bus = bus_rx.recv() => match bus {
                     Ok(waved_state::DeviceEvent::ButtonPress(btn)) => {
+                        info!("hid: button {:?}", btn);
                         let is_mute = matches!(btn, ButtonType::MuteToggle | ButtonType::MuteLongPress);
                         if is_mute {
                             let now = std::time::Instant::now();

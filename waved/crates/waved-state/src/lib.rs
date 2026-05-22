@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -262,6 +263,14 @@ pub struct StateBus {
     pub puc: Arc<watch::Sender<PucState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
+    /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
+    /// changes `speaker_volume` (via UAC2 FU SET_CUR → `uac/control.rs`),
+    /// the dispatcher writes the new value here. `spawn_volume_watch`
+    /// then sees the `AudioState` change and consumes the marker — it
+    /// updates its `last` cursor but skips emitting `ConsumerVolumeStep`
+    /// HID events, breaking the feedback loop (Mac F11 → mixer → state →
+    /// HID → Mac F11 again). Sentinel `-1` = no pending host echo.
+    pub host_pending_speaker_vol: Arc<AtomicI32>,
 }
 
 impl StateBus {
@@ -286,6 +295,7 @@ impl StateBus {
             puc: Arc::new(puc_tx),
             events: events_tx,
             commands: commands_tx,
+            host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
         }
     }
 }
