@@ -30,11 +30,15 @@ audio_dump/
 
 # Large binary assets (kept local only)
 models/
-fw_v1.0.13.6/
-fw_v1.1.6.6/
 ghidra_projects/
 *.swu
 *.pkg
+# Firmware blobs (per vendor, multi-GB) + their extracted/decompiled outputs.
+# Keep the per-firmware CHANGELOG.md and the top-level firmwares/README.md
+# tracked so the analysis stays in git; everything heavy is local-only.
+firmwares/*/*.bin
+firmwares/*/extracted/
+firmwares/*/decompiled/
 
 # Brainstorming / visual companion session files
 .superpowers/
