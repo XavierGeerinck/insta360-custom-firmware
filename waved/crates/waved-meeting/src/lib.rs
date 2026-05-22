@@ -121,9 +121,8 @@ impl MeetingService {
                                             // Splice the pre-record prefix onto the front of the
                                             // new WAV before any live frames arrive.
                                             let prefix = prebuffer.drain_all();
-                                            if let Some(rec) = active.as_mut() {
-                                                rec.append_samples(&prefix);
-                                            }
+                                            // active was just set above; the unwrap is safe by construction.
+                                            active.as_mut().unwrap().append_samples(&prefix);
                                         }
                                         Err(e) => error!("failed to start recording: {e}"),
                                     }

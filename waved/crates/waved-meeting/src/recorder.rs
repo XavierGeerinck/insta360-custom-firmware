@@ -31,14 +31,17 @@ impl PreBuffer {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.samples.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.samples.clear();
     }
