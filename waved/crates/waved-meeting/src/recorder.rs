@@ -1,10 +1,48 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::info;
 use uuid::Uuid;
+
+/// Seconds of pre-record audio kept in [`PreBuffer`] during idle.
+/// Bumping this is a one-line change; see the design doc for the memory tradeoff.
+pub(crate) const PREBUFFER_SECONDS: u32 = 30;
+
+/// Ring buffer of post-DSP mono `f32` samples, capped at
+/// `seconds * sample_rate * channels`. When full, `push` evicts the oldest
+/// samples. Used by `MeetingService::run` to keep the last N seconds of
+/// audio available for splicing onto the front of a new recording.
+pub(crate) struct PreBuffer {
+    samples: VecDeque<f32>,
+    capacity: usize,
+}
+
+impl PreBuffer {
+    pub(crate) fn new(seconds: u32, sample_rate: u32, channels: u16) -> Self {
+        let capacity = (seconds as usize)
+            * (sample_rate as usize)
+            * (channels as usize);
+        Self {
+            samples: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.samples.clear();
+    }
+
+    pub(crate) fn push(&mut self, _samples: &[f32]) {
+        // Real impl in Task 2.
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct MeetingMetadata {
@@ -179,5 +217,21 @@ mod tests {
         assert_eq!(reader.spec().sample_rate, 48_000);
         assert_eq!(reader.spec().channels, 1);
         assert_eq!(reader.duration() as usize, n);
+    }
+
+    #[test]
+    fn prebuffer_new_is_empty() {
+        let pb = PreBuffer::new(2, 48_000, 1);
+        assert_eq!(pb.len(), 0);
+    }
+
+    #[test]
+    #[ignore = "push not yet implemented — completed in Task 2"]
+    fn prebuffer_clear_resets_len() {
+        let mut pb = PreBuffer::new(2, 48_000, 1);
+        pb.push(&[0.1_f32; 100]);
+        assert_eq!(pb.len(), 100);
+        pb.clear();
+        assert_eq!(pb.len(), 0);
     }
 }
