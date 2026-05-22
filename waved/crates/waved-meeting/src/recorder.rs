@@ -289,4 +289,54 @@ mod tests {
         assert!(drained.is_empty());
         assert_eq!(pb.len(), 0);
     }
+
+    #[tokio::test]
+    async fn prebuffer_splice_then_live_produces_correct_wav() {
+        // PreBuffer capacity of 2 s @ 48 kHz mono = 96_000 samples.
+        let mut pb = PreBuffer::new(2, RECORDING_SAMPLE_RATE, 1);
+
+        // Push 3 s of 0.25 — first 1 s should be evicted, last 2 s retained.
+        let three_seconds: Vec<f32> =
+            vec![0.25_f32; 3 * RECORDING_SAMPLE_RATE as usize];
+        pb.push(&three_seconds);
+        assert_eq!(pb.len(), 2 * RECORDING_SAMPLE_RATE as usize);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+
+        // Splice prebuffer prefix, then write 1 s of live audio at 0.75.
+        rec.append_samples(&pb.drain_all());
+        rec.append_samples(&vec![0.75_f32; RECORDING_SAMPLE_RATE as usize]);
+        rec.finalize();
+
+        let mut reader = hound::WavReader::open(rec.audio_path()).unwrap();
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<_, _>>()
+            .expect("wav decode");
+
+        let prefix_len = 2 * RECORDING_SAMPLE_RATE as usize; // 96_000
+        let live_len = RECORDING_SAMPLE_RATE as usize;       // 48_000
+        assert_eq!(samples.len(), prefix_len + live_len);
+
+        // 0.25 * 32768 = 8192 = 0x2000
+        assert!(
+            samples[..prefix_len].iter().all(|&s| s == 0x2000),
+            "expected all 0x2000 in prefix; first mismatch = {}",
+            samples[..prefix_len]
+                .iter()
+                .position(|&s| s != 0x2000)
+                .map(|i| format!("idx {i} = {}", samples[i]))
+                .unwrap_or_else(|| "none".into())
+        );
+
+        // 0.75 * 32768 = 24576 = 0x6000
+        assert!(
+            samples[prefix_len..].iter().all(|&s| s == 0x6000),
+            "expected all 0x6000 in live section"
+        );
+
+        // Drain the buffer was used; prebuffer is empty.
+        assert_eq!(pb.len(), 0);
+    }
 }
