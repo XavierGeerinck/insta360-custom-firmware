@@ -89,7 +89,23 @@ impl UartMux {
 
             match read_result {
                 Ok(1) => {
-                    if let Some(result) = parser.feed(buf[0]) {
+                    let byte = buf[0];
+                    // Physical buttons arrive as raw bytes (not 0xDC/0xCD framed).
+                    // 0x48 = MuteToggle, 0x49 = VolumeDown, 0x4A = VolumeUp (on-device measurement).
+                    // 0x4B is the MCU heartbeat; ignore it. Send a synthetic MCU frame so McuService
+                    // can use the same handle_frame path as the simulated button protocol.
+                    if matches!(byte, 0x48..=0x4A) {
+                        let frame = Frame {
+                            header: [0xDC, 0xCD],
+                            target: FrameTarget::Mcu,
+                            data: vec![byte],
+                        };
+                        if mcu_tx.send(frame).is_err() {
+                            debug!("mcu receiver dropped, stopping reader");
+                            return;
+                        }
+                    }
+                    if let Some(result) = parser.feed(byte) {
                         match result {
                             Ok(frame) => {
                                 trace!("parsed frame: {:?} target={:?}", frame.data, frame.target);

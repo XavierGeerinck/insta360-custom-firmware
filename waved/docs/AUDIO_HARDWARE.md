@@ -318,6 +318,25 @@ post-DSP buffer (mute → 0, otherwise `volume_pct/100`, linear). The AEC
 reference broadcast taps **after** the gain so the canceller sees what
 actually reaches the mics.
 
+### MCU physical button byte codes
+
+Physical buttons (Volume Up, Volume Down, Mute) communicate via **raw single
+bytes on `/dev/ttyS1` (115200 baud)**, NOT wrapped in the `0xDC 0xCD` frame
+protocol used for motor/battery commands. Measured on-device via strace:
+
+| Byte | Button | Note |
+|------|--------|------|
+| `0x4A` | Volume Up | press event |
+| `0x49` | Volume Down | press event |
+| `0x48` | Mute (toggle) | press event |
+| `0x4B` | — | MCU heartbeat; sent constantly, ignore |
+
+The `UartMux` reader intercepts bytes in `0x48..=0x4A` before the frame parser
+and injects synthetic MCU frames so `McuService::handle_frame` can dispatch
+them via the normal `DeviceEvent::ButtonPress` path.
+
+MuteLongPress byte code not yet measured; not currently mapped.
+
 ### HID control surface (SP#7d)
 
 The device exposes a `functions/hid.0` USB-gadget interface with a combined
