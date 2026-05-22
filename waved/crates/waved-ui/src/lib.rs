@@ -122,6 +122,11 @@ fn ui_thread_main(
     let mut prev_wifi:  bool = false;
     let mut prev_bt:    bool = false;
     let mut prev_muted: bool = false;
+    // Seeded on the first tick, then drives the transient volume toast.
+    // `None` means we haven't observed any value yet (suppress the first
+    // tick's "change" from default vs real boot state).
+    let mut prev_speaker_vol: Option<u16> = None;
+    let mut prev_speaker_muted: Option<bool> = None;
 
     loop {
         let elapsed_ms = last_tick.elapsed().as_millis() as u32;
@@ -148,6 +153,24 @@ fn ui_thread_main(
                 prev_bt    = new_bt;
                 prev_muted = new_muted;
             }
+
+            // Transient volume toast: fires on any change to speaker
+            // volume or mute, anywhere except when the user is already
+            // looking at the Volume screen (which renders its own bar).
+            let new_speaker_vol = audio.speaker_volume;
+            let new_speaker_muted = audio.speaker_muted;
+            let vol_changed = prev_speaker_vol.map_or(false, |p| p != new_speaker_vol);
+            let mute_changed = prev_speaker_muted.map_or(false, |p| p != new_speaker_muted);
+            if (vol_changed || mute_changed) && nav.current != UiScreen::Volume {
+                let msg = if new_speaker_muted || new_speaker_vol == 0 {
+                    "Volume: Off".to_string()
+                } else {
+                    format!("Volume: {}%", new_speaker_vol)
+                };
+                unsafe { toast.show(&msg, 1200); }
+            }
+            prev_speaker_vol = Some(new_speaker_vol);
+            prev_speaker_muted = Some(new_speaker_muted);
         }
 
         while let Ok(cmd) = cmd_rx.try_recv() {
