@@ -15,6 +15,7 @@ use uuid::Uuid;
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::WavedConfig;
 use waved_state::{Command, DeviceEvent, MeetingState, PendingDecision, WifiState};
+use crate::recorder::{PreBuffer, PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE};
 
 pub struct MeetingService {
     config: WavedConfig,
@@ -55,6 +56,10 @@ impl MeetingService {
         info!("meeting_srv started");
         let mut active: Option<recorder::ActiveRecording> = None;
 
+        // Post-DSP mono samples kept around for the pre-record splice.
+        // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
+        let mut prebuffer = PreBuffer::new(PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE, 1);
+
         // 1 Hz tick to publish elapsed-seconds onto MeetingState while
         // recording. The watch broadcasts to anyone holding a Receiver
         // (e.g. the UI thread); subscribers see the new value next time
@@ -68,9 +73,10 @@ impl MeetingService {
                 // Drain post-AEC mono frames into the active recording's WAV
                 // writer. Append is synchronous (BufWriter under the hood),
                 // a few hundred microseconds per ~21 ms ALSA period.
-                Some(frame) = self.audio_rx.recv(), if active.is_some() => {
-                    if let Some(rec) = active.as_mut() {
-                        rec.append_samples(&frame.mic_mono_f32);
+                Some(frame) = self.audio_rx.recv() => {
+                    match active.as_mut() {
+                        Some(rec) => rec.append_samples(&frame.mic_mono_f32),
+                        None => prebuffer.push(&frame.mic_mono_f32),
                     }
                 }
                 _ = tick.tick(), if active.is_some() => {
@@ -112,6 +118,12 @@ impl MeetingService {
                                                 s.duration_secs = 0;
                                             });
                                             active = Some(rec);
+                                            // Splice the pre-record prefix onto the front of the
+                                            // new WAV before any live frames arrive.
+                                            let prefix = prebuffer.drain_all();
+                                            if let Some(rec) = active.as_mut() {
+                                                rec.append_samples(&prefix);
+                                            }
                                         }
                                         Err(e) => error!("failed to start recording: {e}"),
                                     }
