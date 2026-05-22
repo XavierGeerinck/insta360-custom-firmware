@@ -35,12 +35,34 @@ impl PreBuffer {
         self.samples.len()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.samples.clear();
     }
 
-    pub(crate) fn push(&mut self, _samples: &[f32]) {
-        // Real impl in Task 2.
+    pub(crate) fn push(&mut self, samples: &[f32]) {
+        if self.capacity == 0 {
+            return;
+        }
+        // If the incoming slice itself exceeds capacity, only the last
+        // `capacity` samples can possibly survive — skip the front of the
+        // slice entirely instead of pushing-and-evicting one-by-one.
+        let start = samples.len().saturating_sub(self.capacity);
+        let useful = &samples[start..];
+
+        // Evict from the front to make room for `useful.len()` new samples.
+        let need = (self.samples.len() + useful.len()).saturating_sub(self.capacity);
+        if need > 0 {
+            self.samples.drain(..need);
+        }
+        self.samples.extend(useful.iter().copied());
+    }
+
+    pub(crate) fn drain_all(&mut self) -> Vec<f32> {
+        self.samples.drain(..).collect()
     }
 }
 
@@ -226,12 +248,45 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "push not yet implemented — completed in Task 2"]
     fn prebuffer_clear_resets_len() {
         let mut pb = PreBuffer::new(2, 48_000, 1);
         pb.push(&[0.1_f32; 100]);
         assert_eq!(pb.len(), 100);
         pb.clear();
+        assert_eq!(pb.len(), 0);
+    }
+
+    #[test]
+    fn prebuffer_push_then_drain_round_trips_under_capacity() {
+        let mut pb = PreBuffer::new(1, 100, 1); // capacity 100
+        pb.push(&[0.1, 0.2, 0.3, 0.4, 0.5]);
+        let drained = pb.drain_all();
+        assert_eq!(drained, vec![0.1, 0.2, 0.3, 0.4, 0.5]);
+        assert_eq!(pb.len(), 0, "drain_all should empty the buffer");
+    }
+
+    #[test]
+    fn prebuffer_evicts_oldest_when_overflowing() {
+        let mut pb = PreBuffer::new(1, 4, 1); // capacity 4
+        pb.push(&[1.0, 2.0, 3.0]);            // [1,2,3]
+        pb.push(&[4.0, 5.0, 6.0]);            // overflow → [3,4,5,6]
+        let drained = pb.drain_all();
+        assert_eq!(drained, vec![3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn prebuffer_push_slice_larger_than_capacity_keeps_tail() {
+        let mut pb = PreBuffer::new(1, 4, 1); // capacity 4
+        pb.push(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        let drained = pb.drain_all();
+        assert_eq!(drained, vec![6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn prebuffer_drain_all_on_empty_returns_empty_vec() {
+        let mut pb = PreBuffer::new(1, 100, 1);
+        let drained = pb.drain_all();
+        assert!(drained.is_empty());
         assert_eq!(pb.len(), 0);
     }
 }
