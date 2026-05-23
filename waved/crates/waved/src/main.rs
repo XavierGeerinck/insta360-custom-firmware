@@ -142,6 +142,15 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     // Simulate: SimAudioService writes silence ProcessedAudioFrames directly.
     let (meeting_tx, meeting_rx) = tokio::sync::mpsc::channel::<waved_audio::processed_frame::ProcessedAudioFrame>(32);
 
+    // DoA receiver for MeetingService. Initialised to a closed channel so
+    // the non-capture-alsa paths (simulate / bare) compile without a real
+    // AudioService. The capture-alsa block below overwrites it with the live
+    // receiver from AudioService.
+    let mut meeting_doa_rx = {
+        let (_, rx) = tokio::sync::broadcast::channel::<waved_audio::doa::DoaFrame>(1);
+        rx
+    };
+
     // Storage for the capture stop flag so the shutdown path can signal the ALSA thread.
     // The same cfg condition ensures this compiles away when capture-alsa is disabled.
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
@@ -195,6 +204,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();
         let mic_record_rx = audio_svc.subscribe_processed();
+        meeting_doa_rx = audio_svc.subscribe_doa();
 
         // Build the capture source. Three modes:
         //   1. Hardware loopback (cfg.reference_device): AlsaDualStreamSource.
@@ -543,6 +553,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         Arc::clone(&bus.meeting),
         bus.events.clone(),
         meeting_rx,
+        meeting_doa_rx,
     ).await {
         Ok(meeting_svc) => {
             let meeting_cmd_rx = bus.commands.subscribe();
