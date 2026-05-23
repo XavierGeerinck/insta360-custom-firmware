@@ -7,8 +7,17 @@
 //!
 //! See `docs/superpowers/specs/2026-05-23-waved-wakeup-probe-design.md`.
 
+use std::sync::Arc;
+use tokio::sync::{mpsc, watch};
+
 use clap::Parser;
 use serde::Serialize;
+
+use waved_audio::beam::geometry::MicGeometry;
+use waved_audio::callbacks::AudioFrame;
+use waved_audio::processed_frame::ProcessedAudioFrame;
+use waved_audio::AudioService;
+use waved_state::AudioState;
 
 #[derive(Parser, Debug)]
 #[command(about = "DSP wake-from-silence benchmark for waved")]
@@ -239,6 +248,99 @@ pub fn aggregate(label: &str, results: &[BurstResult]) -> Phase {
         edge_loss_median_ms: percentile(&loss, 0.5),
         edge_loss_p95_ms: percentile(&loss, 0.95),
         peak_db_median: percentile(&peak, 0.5),
+    }
+}
+
+/// Owns the receivers we must keep alive — `process_frame` calls
+/// `audio_tx.send_modify` which panics on a dead receiver list.
+struct ServiceHandle {
+    svc: AudioService,
+    _audio_rx: watch::Receiver<AudioState>,
+    _meeting_rx: mpsc::Receiver<ProcessedAudioFrame>,
+}
+
+fn build_service(frame_size: usize, sample_rate: u32) -> ServiceHandle {
+    let initial = AudioState::default();
+    let (audio_tx, audio_rx) = watch::channel(initial);
+    let audio_tx = Arc::new(audio_tx);
+    let (frame_tx, frame_rx) = mpsc::channel::<AudioFrame>(4);
+    let (meeting_tx, meeting_rx) = mpsc::channel::<ProcessedAudioFrame>(4);
+    let svc = AudioService::new(
+        audio_tx,
+        frame_tx,
+        frame_rx,
+        meeting_tx,
+        frame_size,
+        sample_rate,
+        MicGeometry::default(),
+    );
+    ServiceHandle { svc, _audio_rx: audio_rx, _meeting_rx: meeting_rx }
+}
+
+/// Drive one (silence + burst + 200 ms tail, frame-padded) cycle through
+/// the AudioService. Returns the measured BurstResult.
+///
+/// `silence_samples` may be 0 (warm phase — no silence between bursts).
+fn run_burst(
+    handle: &mut ServiceHandle,
+    silence_samples: usize,
+    burst: &[f32],
+    sample_rate: u32,
+    frame_size: usize,
+    mic_channels: u16,
+    min_score_ratio: f32,
+) -> BurstResult {
+    let tail_samples = (sample_rate as usize * 200) / 1000; // 200 ms tail
+    let total = silence_samples + burst.len() + tail_samples;
+    // Pad up to a frame boundary so chunks_exact aligns.
+    let total_padded = total.div_ceil(frame_size) * frame_size;
+
+    let mut input = Vec::with_capacity(total_padded);
+    input.extend(std::iter::repeat(0.0_f32).take(silence_samples));
+    input.extend_from_slice(burst);
+    input.extend(std::iter::repeat(0.0_f32).take(total_padded - silence_samples - burst.len()));
+
+    let mut output: Vec<f32> = Vec::with_capacity(input.len());
+    let mc = mic_channels as usize;
+    let mut interleaved: Vec<i16> = vec![0; frame_size * mc];
+    for chunk in input.chunks_exact(frame_size) {
+        // Duplicate mono float into 8-ch interleaved i16.
+        for (i, &s) in chunk.iter().enumerate() {
+            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+            for ch in 0..mc {
+                interleaved[i * mc + ch] = v;
+            }
+        }
+        let frame = AudioFrame::mic_only(
+            interleaved.clone(),
+            mic_channels,
+            sample_rate,
+            0,
+        );
+        let processed = handle.svc.process_frame(&frame);
+        output.extend_from_slice(&processed.mic_mono_f32);
+    }
+
+    let arrival = match find_burst_offset(&output, burst, min_score_ratio) {
+        Some(idx) => idx,
+        None => return BurstResult { latency_ms: None, edge_loss_ms: None, peak_db: None },
+    };
+    // arrival is relative to the start of `output` (which is aligned 1:1
+    // with `input`). Subtract silence_samples to get the burst-relative delay.
+    let lat_samples = arrival as i64 - silence_samples as i64;
+    let latency_ms = (lat_samples.max(0) as f32) * 1000.0 / sample_rate as f32;
+
+    let out_burst_end = (arrival + burst.len()).min(output.len());
+    let out_burst = &output[arrival..out_burst_end];
+    let edge_loss_ms = leading_edge_loss_ms(burst, out_burst, sample_rate);
+
+    let peak = out_burst.iter().map(|s| s.abs()).fold(0.0_f32, f32::max);
+    let peak_db = if peak > 0.0 { 20.0 * peak.log10() } else { -120.0 };
+
+    BurstResult {
+        latency_ms: Some(latency_ms),
+        edge_loss_ms: Some(edge_loss_ms),
+        peak_db: Some(peak_db),
     }
 }
 
