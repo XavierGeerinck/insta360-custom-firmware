@@ -7,11 +7,14 @@
 //!
 //! See `docs/superpowers/specs/2026-05-23-waved-wakeup-probe-design.md`.
 
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use clap::Parser;
 use serde::Serialize;
+
+use waved_audio::audio_config::AudioConfig;
 
 use waved_audio::beam::geometry::MicGeometry;
 use waved_audio::callbacks::AudioFrame;
@@ -251,6 +254,23 @@ pub fn aggregate(label: &str, results: &[BurstResult]) -> Phase {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Report {
+    pub config: ReportConfig,
+    pub warm: Phase,
+    pub cold: Phase,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportConfig {
+    pub silence_seconds: u32,
+    pub burst_ms: u32,
+    pub warmup_bursts: u32,
+    pub cold_runs: u32,
+    pub sample_rate: u32,
+    pub frame_size: usize,
+}
+
 /// Holds the watch + mpsc receivers for the lifetime of the run. Not
 /// strictly required for safety — `process_frame` only uses
 /// `audio_tx.send_modify` and `meeting_tx.try_send`, neither of which
@@ -353,11 +373,101 @@ fn run_burst(
     }
 }
 
+fn fmt_opt(v: Option<f32>, unit: &str) -> String {
+    match v {
+        Some(x) => format!("{x:7.2} {unit}"),
+        None => format!("{:>10}", "—"),
+    }
+}
+
+fn print_summary(report: &Report) {
+    let c = &report.config;
+    println!();
+    println!(
+        "waved-wakeup-probe — {} warm + {} cold runs ({}s silence, {}ms bursts)",
+        c.warmup_bursts, c.cold_runs, c.silence_seconds, c.burst_ms
+    );
+    println!();
+    let pp = |phase: &Phase, field_label: &str, median: Option<f32>, p95: Option<f32>| {
+        println!(
+            "{:<5} {:<22}  median {}   p95 {}",
+            phase.label, field_label,
+            fmt_opt(median, "ms"), fmt_opt(p95, "ms"),
+        );
+    };
+    pp(&report.warm, "latency:",            report.warm.latency_median_ms, report.warm.latency_p95_ms);
+    pp(&report.cold, "latency:",            report.cold.latency_median_ms, report.cold.latency_p95_ms);
+    pp(&report.cold, "leading-edge loss:",  report.cold.edge_loss_median_ms, report.cold.edge_loss_p95_ms);
+    println!(
+        "warm  peak: {}    cold peak: {}",
+        fmt_opt(report.warm.peak_db_median, "dBFS"),
+        fmt_opt(report.cold.peak_db_median, "dBFS"),
+    );
+    println!("missed: {} / {}", report.warm.missed + report.cold.missed, report.warm.total + report.cold.total);
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     let args = Args::parse();
-    eprintln!("waved-wakeup-probe: {args:?}");
+
+    // Load same audio config waved uses, so frame_size / sample_rate match.
+    let (cfg, _) = AudioConfig::load_or_default(Path::new("/etc/waved-audio-config.json"));
+    let sample_rate = cfg.capture.mic_sample_rate;
+    let frame_size = cfg.period_frames;
+    let mic_channels = cfg.capture.mic_channels as u16;
+
+    eprintln!(
+        "[setup] sample_rate={sample_rate} frame_size={frame_size} mic_channels={mic_channels}"
+    );
+
+    let mut handle = build_service(frame_size, sample_rate);
+    let burst = generate_burst(args.burst_ms, sample_rate, 0xDEAD_BEEF_CAFE_F00D);
+    let silence_samples = args.silence_seconds as usize * sample_rate as usize;
+    const MIN_SCORE_RATIO: f32 = 0.3;
+
+    // Warm phase: bursts back-to-back, no silence between.
+    eprintln!("[warm ] {} bursts back-to-back", args.warmup_bursts);
+    let mut warm = Vec::with_capacity(args.warmup_bursts as usize);
+    for i in 0..args.warmup_bursts {
+        let r = run_burst(&mut handle, 0, &burst, sample_rate, frame_size, mic_channels, MIN_SCORE_RATIO);
+        eprintln!("  warm[{i}] {:?}", r);
+        warm.push(r);
+    }
+
+    // Cold phase: silence + burst, repeated.
+    eprintln!("[cold ] {} bursts with {}s silence each", args.cold_runs, args.silence_seconds);
+    let mut cold = Vec::with_capacity(args.cold_runs as usize);
+    for i in 0..args.cold_runs {
+        let r = run_burst(&mut handle, silence_samples, &burst, sample_rate, frame_size, mic_channels, MIN_SCORE_RATIO);
+        eprintln!("  cold[{i}] {:?}", r);
+        cold.push(r);
+    }
+
+    let report = Report {
+        config: ReportConfig {
+            silence_seconds: args.silence_seconds,
+            burst_ms: args.burst_ms,
+            warmup_bursts: args.warmup_bursts,
+            cold_runs: args.cold_runs,
+            sample_rate,
+            frame_size,
+        },
+        warm: aggregate("warm", &warm),
+        cold: aggregate("cold", &cold),
+    };
+    print_summary(&report);
+
+    if let Some(path) = args.json.as_deref() {
+        let mut f = std::fs::File::create(path)?;
+        serde_json::to_writer_pretty(&mut f, &report)?;
+        eprintln!("[json] wrote {}", path);
+    }
+
+    // Exit non-zero if every cold run missed.
+    if !cold.is_empty() && report.cold.missed == report.cold.total {
+        return Err("DSP swallowed every cold burst — check NS aggression".into());
+    }
     Ok(())
 }
 
@@ -456,5 +566,24 @@ mod tests {
         assert_eq!(agg.missed, 2);
         assert_eq!(agg.latency_median_ms, None);
         assert_eq!(agg.latency_p95_ms, None);
+    }
+
+    #[test]
+    fn report_serializes_to_json() {
+        let report = Report {
+            config: ReportConfig {
+                silence_seconds: 60, burst_ms: 200, warmup_bursts: 5,
+                cold_runs: 10, sample_rate: 48_000, frame_size: 480,
+            },
+            warm: aggregate("warm", &[BurstResult {
+                latency_ms: Some(4.0), edge_loss_ms: Some(0.0), peak_db: Some(-12.0),
+            }]),
+            cold: aggregate("cold", &[BurstResult {
+                latency_ms: Some(80.0), edge_loss_ms: Some(40.0), peak_db: Some(-11.0),
+            }]),
+        };
+        let s = serde_json::to_string(&report).expect("serialize");
+        assert!(s.contains("\"silence_seconds\":60"));
+        assert!(s.contains("\"latency_median_ms\":4"));
     }
 }
