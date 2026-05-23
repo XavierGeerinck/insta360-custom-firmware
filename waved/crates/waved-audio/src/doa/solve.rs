@@ -81,13 +81,14 @@ pub const MIN_SHARPNESS_THRESHOLD: f32 = 1e-4;
 /// to the normal equations weighted by `weights[k]`:
 ///   A += w_k · (Δ Δ^T),   b += w_k · (τ c) Δ
 ///
-/// Use this from the DoA pipeline with `weights[k] = sharpness_k / Σ_k
-/// sharpness_k`.
-/// (Normalization is for caller convenience; mathematically only the
-/// relative magnitudes matter — the LS solution is scale-invariant.)
-/// The 270 deg azimuth residual (SP#3) is hypothesised to come
-/// from a single shadowed pair pulling the unweighted LS off direction —
-/// down-weighting it by its low sharpness should restore accuracy.
+/// Use this from the DoA pipeline with raw per-pair sharpness values
+/// (`weights[k] = sharpness_k`). The LS solution is scale-invariant in
+/// `weights`, so normalization is mathematically unnecessary AND
+/// numerically counterproductive — normalizing to Σ=1 with 4 pairs of
+/// large raw values shrinks the normal-matrix determinant by ~16-64×,
+/// risking collapse below the 1e-9 singularity guard on near-degenerate
+/// pair geometries. See `DoaEstimator::update` for the production
+/// callsite.
 ///
 /// Returns `None` if:
 /// - fewer than 3 observations

@@ -188,20 +188,12 @@ impl DoaEstimator {
             }
         }
 
-        // Weighted-LS: pass raw sharpness values directly as weights.
-        // DO NOT normalize to sum=1: the LS solution is weight-scale-invariant,
-        // but the solver's singularity threshold (det < 1e-9) was calibrated
-        // for per-observation weights of order 1. With this mic geometry, two
-        // pairs (0,4) and (2,6) are collinear Z-only pairs — the XY part of
-        // the normal matrix is rank-1 when pair (1,3) is near-zero weight.
-        // Normalising to sum=1 shrinks the determinant ~64× below the threshold.
-        // Passing raw sharpnesses (~10³ each) keeps det >> 1e-9 for all
-        // non-degenerate inputs. solve_direction_weighted still returns None
-        // when Σweights < MIN_SHARPNESS_THRESHOLD (1e-4), which guards against
-        // true silence that slips past VAD.
-        let weights: Vec<f32> = sharpnesses.to_vec();
-
-        match solve::solve_direction_weighted(&obs, &weights) {
+        // Pass raw sharpnesses unscaled. The LS solution in solve_direction_weighted
+        // is scale-invariant in `weights`, and raw values (~1e3 for clean broadband)
+        // avoid normal-matrix determinant collapse on near-singular pair geometries.
+        // MIN_SHARPNESS_THRESHOLD guard inside the solver still fires on Σ < 1e-4
+        // (essentially silence) → DoaUpdate { fresh: false } gets emitted in caller.
+        match solve::solve_direction_weighted(&obs, &sharpnesses) {
             Some(ang) => {
                 if self.primed {
                     self.smoothed_az =
@@ -399,24 +391,22 @@ mod tests {
         out
     }
 
-    /// Validates that the weighted-LS path correctly down-weights a single
-    /// corrupted pair when the rest of the array sees a clean source.
+    /// Smoke-test the weighted-LS wiring through DoaEstimator::update on a
+    /// recoverable scenario: az=270°, one mic on a pure-Z pair (alsa ch 1 →
+    /// physical 4, pair (0,4)) replaced by 80% noise. Verifies the new code
+    /// path produces a sensible output without panicking and recovers
+    /// azimuth within ±5° when the corrupted pair is azimuth-irrelevant.
     ///
-    /// This test SHADOWS only ONE pair (pure-Z pair (0,4) via ALSA ch 1 →
-    /// physical 4). With this pair degraded, the two XY-horizontal pairs and
-    /// the remaining pure-Z pair still see a clean signal — the down-weighting
-    /// preserves accuracy.
+    /// **This test does NOT prove weighted-LS helps:** pure-Z pair (0,4)'s
+    /// weight does not affect recovered azimuth (the pair only contributes
+    /// to A[2][2] and b[2]). The test would pass with weights [1,1,0,1] or
+    /// [1,1,1,1] identically. Weighted-LS *mechanism* correctness is verified
+    /// by `doa::solve::tests::weighted_ls_zero_weight_pair_ignored`.
     ///
-    /// **Scope limitation:** this does NOT validate the production 270° az
-    /// residual. In production, az=270° causes SIMULTANEOUS shadowing of
-    /// BOTH XY pairs (mics 0 and 1 are both on the +Y side, away from a -Y
-    /// source) — and weighted-LS can't exploit symmetric degradation
-    /// (no relative asymmetry → no weight differentiation). The real fix
-    /// for the production 270° case will need to come from SRP-PHAT
-    /// (Tasks 8-11). On-device validation is `scripts/test-doa-improvements.sh`
-    /// test 1 (Task 17).
+    /// **Production 270° fix:** see SRP-PHAT (Tasks 8-11) and on-device
+    /// `scripts/test-doa-improvements.sh` test 1 (Task 17).
     #[test]
-    fn weighted_ls_downweights_corrupted_pair_at_az_270() {
+    fn update_with_weighted_solver_recovers_az_on_recoverable_scenario() {
         // Shadow alsa ch 1 (physical 4, BOT 45°) — participates in Z-pair (0,4)
         // only. The two horizontal pairs remain clean, so azimuth is fully
         // constrained. The corrupted Z-pair is down-weighted by its low
@@ -429,7 +419,8 @@ mod tests {
         }
         let last = est.update(&synth_with_shadow(270.0, 0.0, 48000, 480, &geom, 1));
         assert!(last.fresh, "should solve");
-        let err = (last.azimuth_deg - 270.0).abs().min((360.0 - last.azimuth_deg + 270.0).abs());
+        let raw = (last.azimuth_deg - 270.0).abs();
+        let err = raw.min(360.0 - raw);
         assert!(
             err < 5.0,
             "weighted LS should resolve az=270 ±5°, got {:.1}° (err {:.1}°)",
