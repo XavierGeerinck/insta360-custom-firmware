@@ -1,4 +1,5 @@
 pub mod db;
+pub mod diarization;
 pub mod recorder;
 pub mod upload;
 
