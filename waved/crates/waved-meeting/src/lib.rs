@@ -401,6 +401,93 @@ impl MeetingService {
     }
 }
 
+#[cfg(test)]
+mod wiring_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::{broadcast, mpsc, watch};
+    use waved_audio::doa::{DoaBackend, DoaFrame};
+    use waved_config::WavedConfig;
+    use waved_state::{Command, DeviceEvent, MeetingState};
+
+    fn high(ms: u64, az: f32) -> DoaFrame {
+        DoaFrame {
+            frame_idx: 0,
+            timestamp_ms: ms,
+            azimuth_deg: az,
+            elevation_deg: 0.0,
+            confidence: 0.8,
+            vad: true,
+            backend: DoaBackend::GccPhat,
+        }
+    }
+
+    #[tokio::test]
+    async fn meeting_service_writes_diarization_segments_end_to_end() {
+        // Per-test SQLite tempdir.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("t.db");
+        let recordings_dir = tmp.path().join("rec");
+        std::fs::create_dir_all(&recordings_dir).unwrap();
+
+        // Channels.
+        let (meeting_tx_inner, _meeting_rx) = watch::channel(MeetingState::default());
+        let meeting_tx = Arc::new(meeting_tx_inner);
+        let (events_tx, _events_rx) = broadcast::channel::<DeviceEvent>(16);
+        let (audio_processed_tx, audio_processed_rx) = mpsc::channel(64);
+        let (doa_tx_handle, _) = broadcast::channel::<DoaFrame>(64);
+
+        // Construct service.
+        let config = WavedConfig::default();
+        let svc = MeetingService::new(
+            config,
+            db_path.to_str().unwrap(),
+            recordings_dir,
+            Arc::clone(&meeting_tx),
+            events_tx.clone(),
+            audio_processed_rx,
+            doa_tx_handle.subscribe(),
+        )
+        .await
+        .unwrap();
+
+        // Run the service in the background.
+        let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(16);
+        let (wifi_tx, wifi_rx) = watch::channel(waved_state::WifiState::default());
+        let _ = (audio_processed_tx, wifi_tx); // keep alive for the run loop
+        let _svc_handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
+
+        // Start recording.
+        cmd_tx.send(Command::StartRecording).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Push DoA frames: 500ms at az=45°, then 500ms at az=180°.
+        for i in 0..24u64 {
+            doa_tx_handle.send(high(i * 21, 45.0)).unwrap();
+        }
+        for i in 24..48u64 {
+            doa_tx_handle.send(high(i * 21, 180.0)).unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Stop recording → finalize diarizer.
+        cmd_tx.send(Command::StopRecording).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        // Query the db directly.
+        let pool = db::init_pool(db_path.to_str().unwrap()).await.unwrap();
+        let rows: Vec<(i64,)> = sqlx::query_as(
+            "SELECT speaker_id FROM diarization_segments ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(rows.len() >= 2, "expected ≥ 2 segments, got {}", rows.len());
+        assert_eq!(rows[0].0, 1, "first segment should be speaker_id=1");
+        assert_eq!(rows[1].0, 2, "second segment should be speaker_id=2");
+    }
+}
+
 async fn upload_with_retry_standalone(
     pool: &SqlitePool,
     endpoint: &str,
