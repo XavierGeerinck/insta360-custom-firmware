@@ -1,10 +1,12 @@
 //! Direction-of-arrival estimation.
 pub mod gcc_phat;
 pub mod solve;
+pub mod srp;
 pub mod stream;
 pub mod vad;
 
 pub use solve::{DoaAngles, PairObservation};
+pub use srp::SrpPhatEstimator;
 pub use stream::{DoaBackend, DoaFrame, DoaPublisher};
 
 use crate::beam::MicGeometry;
