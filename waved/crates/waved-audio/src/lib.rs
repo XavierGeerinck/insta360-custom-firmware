@@ -25,9 +25,108 @@ use waved_state::{AudioState, Command, NrLevel};
 use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
 use crate::beam::{Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
-use crate::doa::{DoaBackend, DoaFrame, DoaEstimator, DoaPublisher};
+use crate::doa::{DoaBackend, DoaEstimator, DoaFrame, DoaPublisher, SrpPhatEstimator};
 use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
 use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
+
+/// Backend dispatch — owns one impl, not a trait object (only two impls,
+/// no value in dyn). GccPhat is the existing DoaEstimator; SrpPhat wraps
+/// SrpPhatEstimator but adds EnergyVad + EWMA smoothing so both backends
+/// produce comparable smoothed angles + confidence.
+enum DoaBackendImpl {
+    GccPhat(DoaEstimator),
+    SrpPhat {
+        srp: SrpPhatEstimator,
+        vad: crate::doa::vad::EnergyVad,
+        smoothed_az: f32,
+        smoothed_el: f32,
+        primed: bool,
+        /// ch0 scratch buffer — pre-allocated at construction to avoid a
+        /// per-frame heap alloc in the SRP hot path.
+        ch0_scratch: Vec<f32>,
+        frame_size: usize,
+    },
+}
+
+impl DoaBackendImpl {
+    fn update(&mut self, interleaved: &[f32]) -> crate::doa::DoaUpdate {
+        match self {
+            DoaBackendImpl::GccPhat(est) => est.update(interleaved),
+            DoaBackendImpl::SrpPhat {
+                srp,
+                vad,
+                smoothed_az,
+                smoothed_el,
+                primed,
+                ch0_scratch,
+                frame_size,
+            } => {
+                use crate::doa::vad::Vad;
+
+                // Guard: wrong-sized input returns stale smoothed values.
+                if interleaved.len() != *frame_size * 8 {
+                    return crate::doa::DoaUpdate {
+                        azimuth_deg: *smoothed_az,
+                        elevation_deg: *smoothed_el,
+                        vad_active: false,
+                        fresh: false,
+                        confidence: 0.0,
+                    };
+                }
+
+                // VAD on ALSA ch 0 (matches GCC-PHAT path).
+                ch0_scratch.clear();
+                for i in 0..*frame_size {
+                    ch0_scratch.push(interleaved[i * 8]);
+                }
+                let vad_active = vad.is_speech(ch0_scratch);
+                if !vad_active {
+                    return crate::doa::DoaUpdate {
+                        azimuth_deg: *smoothed_az,
+                        elevation_deg: *smoothed_el,
+                        vad_active: false,
+                        fresh: false,
+                        confidence: 0.0,
+                    };
+                }
+
+                match srp.estimate(interleaved) {
+                    Some(r) => {
+                        if *primed {
+                            // Same EWMA-on-unit-vector as DoaEstimator.
+                            let alpha = 0.9f32;
+                            let p = (*smoothed_az).to_radians();
+                            let n = r.azimuth_deg.to_radians();
+                            let sx = alpha * p.cos() + (1.0 - alpha) * n.cos();
+                            let sy = alpha * p.sin() + (1.0 - alpha) * n.sin();
+                            let smoothed = sy.atan2(sx).to_degrees();
+                            *smoothed_az = if smoothed < 0.0 { smoothed + 360.0 } else { smoothed };
+                            *smoothed_el = alpha * *smoothed_el + (1.0 - alpha) * r.elevation_deg;
+                        } else {
+                            *smoothed_az = r.azimuth_deg;
+                            *smoothed_el = r.elevation_deg;
+                            *primed = true;
+                        }
+                        crate::doa::DoaUpdate {
+                            azimuth_deg: *smoothed_az,
+                            elevation_deg: *smoothed_el,
+                            vad_active: true,
+                            fresh: true,
+                            confidence: r.confidence,
+                        }
+                    }
+                    None => crate::doa::DoaUpdate {
+                        azimuth_deg: *smoothed_az,
+                        elevation_deg: *smoothed_el,
+                        vad_active: true,
+                        fresh: false,
+                        confidence: 0.0,
+                    },
+                }
+            }
+        }
+    }
+}
 
 /// Zero-fill PCM samples in place when `muted`. Used by the capture loop to
 /// implement mic mute in software. libInstaAudio's `setMicMute` does the same
@@ -169,7 +268,7 @@ pub struct AudioService {
     mic_mono_scratch: Vec<i16>,
     ref_mono_scratch: Vec<i16>,
     beamformer: Beamformer,
-    doa: DoaEstimator,
+    doa: DoaBackendImpl,
     /// When `Some((az, el))`, the beamformer steers to this fixed direction
     /// instead of tracking the live DOA. Settable via `Command::SetDoaOverride`.
     /// Used by the on-device FBR acceptance test.
@@ -219,9 +318,9 @@ impl AudioService {
             build_dsp_chain(frame_size, sample_rate, initial_nr);
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
         beamformer.set_mode(initial_mode);
-        let doa = DoaEstimator::new(geometry, sample_rate, frame_size);
+        let (doa, doa_backend, _fallback) =
+            build_doa_backend(DoaBackend::default(), geometry, sample_rate, frame_size);
         let doa_publisher = DoaPublisher::new();
-        let doa_backend = DoaBackend::default(); // Task 11 overrides via new_with_backend
         Self {
             audio_tx,
             _frame_tx: frame_tx,
@@ -288,6 +387,41 @@ impl AudioService {
     /// `PlaybackService` is constructed (since playback owns the Arc).
     pub fn set_dsp_metrics(&mut self, metrics: Arc<crate::playback::DspMetrics>) {
         self.dsp_metrics = Some(metrics);
+    }
+
+    /// Construct `AudioService` with a specific DoA backend. Falls back to
+    /// GCC-PHAT and sets `AudioState.doa_backend_fallback` when SRP-PHAT is
+    /// requested but cannot be initialised (e.g. `frame_size == 0`).
+    ///
+    /// Callers that don't need backend selection (sim, unit tests) can use
+    /// `new()` directly — it always builds GCC-PHAT.
+    pub fn new_with_backend(
+        audio_tx: Arc<watch::Sender<AudioState>>,
+        frame_tx: mpsc::Sender<AudioFrame>,
+        frame_rx: mpsc::Receiver<AudioFrame>,
+        meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
+        frame_size: usize,
+        sample_rate: u32,
+        geometry: MicGeometry,
+        doa_backend: DoaBackend,
+    ) -> Self {
+        let (doa, effective_backend, fallback) =
+            build_doa_backend(doa_backend, geometry.clone(), sample_rate, frame_size);
+        let mut svc = Self::new(
+            audio_tx.clone(),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            frame_size,
+            sample_rate,
+            geometry,
+        );
+        svc.doa = doa;
+        svc.doa_backend = effective_backend;
+        if fallback {
+            audio_tx.send_modify(|s| s.doa_backend_fallback = true);
+        }
+        svc
     }
 
     /// Run the DSP pipeline on a single `AudioFrame`. Separate method so the
@@ -495,6 +629,51 @@ impl AudioService {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Construct a `DoaBackendImpl` for the given `DoaBackend` preference.
+/// Returns `(impl, effective_backend, fallback_occurred)`.
+/// Fallback to GCC-PHAT occurs when SRP-PHAT is requested but `frame_size == 0`
+/// (which would cause a zero-length FFT panic in rustfft).
+fn build_doa_backend(
+    requested: DoaBackend,
+    geometry: MicGeometry,
+    sample_rate: u32,
+    frame_size: usize,
+) -> (DoaBackendImpl, DoaBackend, bool) {
+    match requested {
+        DoaBackend::GccPhat => (
+            DoaBackendImpl::GccPhat(DoaEstimator::new(geometry, sample_rate, frame_size)),
+            DoaBackend::GccPhat,
+            false,
+        ),
+        DoaBackend::SrpPhat => {
+            if frame_size == 0 {
+                tracing::warn!(
+                    "doa_backend=srp_phat requested but frame_size=0; falling back to gcc_phat"
+                );
+                return (
+                    DoaBackendImpl::GccPhat(DoaEstimator::new(geometry, sample_rate, frame_size)),
+                    DoaBackend::GccPhat,
+                    true,
+                );
+            }
+            let srp = SrpPhatEstimator::new(geometry, sample_rate, frame_size);
+            (
+                DoaBackendImpl::SrpPhat {
+                    srp,
+                    vad: crate::doa::vad::EnergyVad::default(),
+                    smoothed_az: 0.0,
+                    smoothed_el: 0.0,
+                    primed: false,
+                    ch0_scratch: Vec::with_capacity(frame_size),
+                    frame_size,
+                },
+                DoaBackend::SrpPhat,
+                false,
+            )
         }
     }
 }
@@ -945,6 +1124,37 @@ mod tests {
         assert!(
             reduction_x100 < 0,
             "expected negative reduction (limiter engaged), got {reduction_x100}"
+        );
+    }
+
+    #[tokio::test]
+    async fn srp_backend_with_zero_frame_size_falls_back_to_gcc_phat() {
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+        use std::sync::Arc;
+
+        let (audio_tx_inner, _audio_rx) = watch::channel(AudioState::default());
+        let audio_tx = Arc::new(audio_tx_inner);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let svc = AudioService::new_with_backend(
+            audio_tx.clone(),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            0,
+            48000,
+            crate::beam::MicGeometry::default(),
+            crate::doa::DoaBackend::SrpPhat,
+        );
+        assert_eq!(
+            svc.doa_backend,
+            crate::doa::DoaBackend::GccPhat,
+            "zero frame_size should fall back to gcc_phat"
+        );
+        assert!(
+            audio_tx.borrow().doa_backend_fallback,
+            "fallback flag must be set in AudioState"
         );
     }
 

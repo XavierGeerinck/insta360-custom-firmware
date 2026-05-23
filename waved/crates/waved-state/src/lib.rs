@@ -29,6 +29,11 @@ pub struct AudioState {
     /// arrow may still display a stale `doa_horizontal` on frames where
     /// the solver fails to converge — `doa_active` reflects VAD only.
     pub doa_active: bool,
+    /// Set true at startup when AudioConfig.doa_backend = SrpPhat but the SRP
+    /// estimator failed to initialise — service fell back to GCC-PHAT. The
+    /// stats collector mirrors this into /tmp/audio_stats.json so operators
+    /// see why their selected backend isn't active.
+    pub doa_backend_fallback: bool,
     pub vu_level: [f32; 8],
     pub incoming_vu_level: [f32; 8],
     /// Magnitude spectrum of the mic signal binned into log-spaced
@@ -65,6 +70,7 @@ impl Default for AudioState {
             doa_horizontal: 0.0,
             doa_pitch: 0.0,
             doa_active: false,
+            doa_backend_fallback: false,
             vu_level: [0.0; 8],
             incoming_vu_level: [0.0; 8],
             vu_freq_bands: [0.0; FREQ_BAND_COUNT],

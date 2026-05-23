@@ -182,7 +182,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         capture_stop_flag = Arc::clone(&capture_stop);
 
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
-        let mut audio_svc = waved_audio::AudioService::new(
+        let mut audio_svc = waved_audio::AudioService::new_with_backend(
             Arc::clone(&bus.audio),
             frame_tx.clone(),
             frame_rx,
@@ -190,6 +190,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             cfg.period_frames,
             cfg.capture.mic_sample_rate,
             cfg.mic_geometry.clone().unwrap_or_default(),
+            cfg.doa_backend,
         );
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();
