@@ -184,6 +184,60 @@ fn rms(samples: &[f32]) -> f32 {
     (sumsq / samples.len() as f32).sqrt()
 }
 
+use serde::Serialize;
+
+/// One burst's measurements. All-`None` means MISSED (xcorr score too low).
+#[derive(Debug, Clone, Serialize)]
+pub struct BurstResult {
+    pub latency_ms: Option<f32>,
+    pub edge_loss_ms: Option<f32>,
+    pub peak_db: Option<f32>,
+}
+
+/// Aggregate stats for one phase (warm or cold). Medians/p95 are computed
+/// over the non-MISSED subset; `missed` counts the exclusions.
+#[derive(Debug, Clone, Serialize)]
+pub struct Phase {
+    pub label: String,
+    pub total: usize,
+    pub missed: usize,
+    pub latency_median_ms: Option<f32>,
+    pub latency_p95_ms: Option<f32>,
+    pub edge_loss_median_ms: Option<f32>,
+    pub edge_loss_p95_ms: Option<f32>,
+    pub peak_db_median: Option<f32>,
+}
+
+fn percentile(sorted: &[f32], p: f32) -> Option<f32> {
+    if sorted.is_empty() { return None; }
+    // Nearest-rank percentile (no interpolation — fine for our N≤30).
+    let idx = ((p * sorted.len() as f32).ceil() as usize).saturating_sub(1);
+    Some(sorted[idx.min(sorted.len() - 1)])
+}
+
+pub fn aggregate(label: &str, results: &[BurstResult]) -> Phase {
+    let total = results.len();
+    let missed = results.iter().filter(|r| r.latency_ms.is_none()).count();
+
+    let mut lat: Vec<f32> = results.iter().filter_map(|r| r.latency_ms).collect();
+    let mut loss: Vec<f32> = results.iter().filter_map(|r| r.edge_loss_ms).collect();
+    let mut peak: Vec<f32> = results.iter().filter_map(|r| r.peak_db).collect();
+    lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    loss.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    peak.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    Phase {
+        label: label.to_string(),
+        total,
+        missed,
+        latency_median_ms: percentile(&lat, 0.5),
+        latency_p95_ms: percentile(&lat, 0.95),
+        edge_loss_median_ms: percentile(&loss, 0.5),
+        edge_loss_p95_ms: percentile(&loss, 0.95),
+        peak_db_median: percentile(&peak, 0.5),
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
@@ -259,5 +313,33 @@ mod tests {
         let loss = leading_edge_loss_ms(&burst, &out, 48_000);
         // Expect approximately 50 ms loss (within one window of slack).
         assert!((40.0..=60.0).contains(&loss), "expected ≈50 ms, got {loss}");
+    }
+
+    #[test]
+    fn aggregate_excludes_missed_from_medians() {
+        let results = vec![
+            BurstResult { latency_ms: Some(10.0), edge_loss_ms: Some(5.0), peak_db: Some(-12.0) },
+            BurstResult { latency_ms: None,        edge_loss_ms: None,       peak_db: None },
+            BurstResult { latency_ms: Some(20.0), edge_loss_ms: Some(15.0), peak_db: Some(-14.0) },
+            BurstResult { latency_ms: Some(30.0), edge_loss_ms: Some(25.0), peak_db: Some(-13.0) },
+        ];
+        let agg = aggregate("test", &results);
+        assert_eq!(agg.missed, 1);
+        assert_eq!(agg.total, 4);
+        assert_eq!(agg.latency_median_ms, Some(20.0));
+        assert_eq!(agg.edge_loss_median_ms, Some(15.0));
+        assert_eq!(agg.peak_db_median, Some(-13.0));
+    }
+
+    #[test]
+    fn aggregate_all_missed_returns_none_stats() {
+        let results = vec![
+            BurstResult { latency_ms: None, edge_loss_ms: None, peak_db: None },
+            BurstResult { latency_ms: None, edge_loss_ms: None, peak_db: None },
+        ];
+        let agg = aggregate("test", &results);
+        assert_eq!(agg.missed, 2);
+        assert_eq!(agg.latency_median_ms, None);
+        assert_eq!(agg.latency_p95_ms, None);
     }
 }
