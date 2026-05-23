@@ -110,6 +110,12 @@ impl Diarizer {
         self.close_active(0)
     }
 
+    /// Public wrapper for on_silent_frame, used by MeetingService to
+    /// synthesize a silence frame when the DoA broadcast Receiver lags.
+    pub fn on_silent_frame_for_lag(&mut self, rel_ms: u32) -> Option<DiarizationSegment> {
+        self.on_silent_frame(rel_ms)
+    }
+
     pub(crate) fn on_confident_frame(
         &mut self,
         speaker_id: u32,

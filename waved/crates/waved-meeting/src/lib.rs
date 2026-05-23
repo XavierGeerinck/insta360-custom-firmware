@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+use waved_audio::doa::DoaFrame;
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::WavedConfig;
 use waved_state::{Command, DeviceEvent, MeetingState, PendingDecision, WifiState};
@@ -27,6 +28,9 @@ pub struct MeetingService {
     /// Post-AEC, post-NS mono frames for recording. Raw 8-ch mic is carried
     /// as a sidecar on each `ProcessedAudioFrame` for diagnostic replay.
     audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
+    /// Per-frame DoA stream from F2's AudioService::subscribe_doa(). Drained
+    /// only when a meeting is active; otherwise frames are discarded.
+    doa_rx: broadcast::Receiver<DoaFrame>,
 }
 
 impl MeetingService {
@@ -37,6 +41,7 @@ impl MeetingService {
         meeting_tx: Arc<watch::Sender<MeetingState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
         audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
+        doa_rx: broadcast::Receiver<DoaFrame>,
     ) -> Result<Self, sqlx::Error> {
         let pool = db::init_pool(db_path).await?;
         Ok(Self {
@@ -46,6 +51,7 @@ impl MeetingService {
             meeting_tx,
             events_tx,
             audio_rx,
+            doa_rx,
         })
     }
 
@@ -56,6 +62,7 @@ impl MeetingService {
     ) {
         info!("meeting_srv started");
         let mut active: Option<recorder::ActiveRecording> = None;
+        let mut diarizer: Option<crate::diarization::Diarizer> = None;
 
         // Post-DSP mono samples kept around for the pre-record splice.
         // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
@@ -78,6 +85,43 @@ impl MeetingService {
                     match active.as_mut() {
                         Some(rec) => rec.append_samples(&frame.mic_mono_f32),
                         None => prebuffer.push(&frame.mic_mono_f32),
+                    }
+                }
+                // Drain DoA frames into the active diarizer. Frames arriving
+                // outside a recording are silently dropped (diarizer is None).
+                doa_recv = self.doa_rx.recv() => {
+                    match doa_recv {
+                        Ok(frame) => {
+                            if let Some(diar) = diarizer.as_mut() {
+                                if let Some(seg) = diar.on_doa_frame(&frame) {
+                                    if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
+                                        warn!("failed to insert diarization segment: {e}");
+                                    }
+                                }
+                            }
+                            // No active meeting → drop the frame silently.
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("diarization receiver lagged {n} frames");
+                            // Synthesize a silence frame at advanced timestamp so any
+                            // open segment can close cleanly. u32::MAX forces the
+                            // saturating_sub in on_silent_frame to produce a huge gap.
+                            if let Some(diar) = diarizer.as_mut() {
+                                if let Some(seg) = diar.on_silent_frame_for_lag(u32::MAX) {
+                                    let _ = db::insert_diarization_segment(&self.pool, &seg).await;
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            // DoA stream gone — finalize any open segment, leave the
+                            // diarizer state for the next StartRecording reset.
+                            if let Some(diar) = diarizer.as_mut() {
+                                if let Some(seg) = diar.finalize() {
+                                    let _ = db::insert_diarization_segment(&self.pool, &seg).await;
+                                }
+                            }
+                            warn!("DoA stream closed; diarization paused");
+                        }
                     }
                 }
                 _ = tick.tick(), if active.is_some() => {
@@ -119,6 +163,7 @@ impl MeetingService {
                                                 s.duration_secs = 0;
                                             });
                                             active = Some(rec);
+                                            diarizer = Some(crate::diarization::Diarizer::new(id));
                                             // Splice the pre-record prefix onto the front of the
                                             // new WAV before any live frames arrive.
                                             let prefix = prebuffer.drain_all();
@@ -130,6 +175,13 @@ impl MeetingService {
                                 }
                                 Command::StopRecording => {
                                     if let Some(rec) = active.take() {
+                                        if let Some(mut d) = diarizer.take() {
+                                            if let Some(seg) = d.finalize() {
+                                                if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
+                                                    warn!("failed to insert final diarization segment: {e}");
+                                                }
+                                            }
+                                        }
                                         self.stop_recording(rec).await;
                                     }
                                 }
@@ -152,6 +204,13 @@ impl MeetingService {
                                 Command::Shutdown => {
                                     if let Some(rec) = active.take() {
                                         info!("shutdown: stopping active recording first");
+                                        if let Some(mut d) = diarizer.take() {
+                                            if let Some(seg) = d.finalize() {
+                                                if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
+                                                    warn!("failed to insert final diarization segment on shutdown: {e}");
+                                                }
+                                            }
+                                        }
                                         self.stop_recording(rec).await;
                                     }
                                     // If a decision is still pending at shutdown,
