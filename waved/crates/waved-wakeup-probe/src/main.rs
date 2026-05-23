@@ -593,4 +593,26 @@ mod tests {
         assert!(s.contains("\"silence_seconds\":60"));
         assert!(s.contains("\"latency_median_ms\":4.0"));
     }
+
+    #[test]
+    #[ignore = "needs real device — run with `cargo test -- --ignored` on Wave"]
+    fn integration_warm_less_than_or_equal_cold() {
+        let sample_rate: u32 = 48_000;
+        let frame_size: usize = 480;
+        let mic_channels: u16 = 8;
+        let mut handle = build_service(frame_size, sample_rate);
+        let burst = generate_burst(200, sample_rate, 0xCAFE_BABE_u64);
+
+        let warm = run_burst(&mut handle, 0, &burst, sample_rate, frame_size, mic_channels, 0.3);
+        let cold_silence = sample_rate as usize; // 1 s
+        let cold = run_burst(&mut handle, cold_silence, &burst, sample_rate, frame_size, mic_channels, 0.3);
+
+        eprintln!("warm={warm:?}");
+        eprintln!("cold={cold:?}");
+        let w = warm.latency_ms.expect("warm must detect");
+        let c = cold.latency_ms.expect("cold must detect");
+        // Generous bound — we're confirming the loop runs end-to-end and the
+        // cold-vs-warm relationship holds. Tight bounds would be flaky.
+        assert!(w <= c + 5.0, "warm ({w} ms) should be ≤ cold ({c} ms) + 5 ms slack");
+    }
 }
