@@ -89,39 +89,8 @@ impl UartMux {
 
             match read_result {
                 Ok(1) => {
-                    let byte = buf[0];
-                    // Physical buttons arrive as raw bytes (not 0xDC/0xCD framed).
-                    // 0x48 = MuteToggle, 0x49 = VolumeDown, 0x4A = VolumeUp (on-device measurement).
-                    // 0x4B is the MCU heartbeat; ignore it. Send a synthetic MCU frame so McuService
-                    // can use the same handle_frame path as the simulated button protocol.
-                    if matches!(byte, 0x48..=0x4A) {
-                        let frame = Frame {
-                            header: [0xDC, 0xCD],
-                            target: FrameTarget::Mcu,
-                            data: vec![byte],
-                        };
-                        if mcu_tx.send(frame).is_err() {
-                            debug!("mcu receiver dropped, stopping reader");
-                            return;
-                        }
-                    }
-                    if let Some(result) = parser.feed(byte) {
-                        match result {
-                            Ok(frame) => {
-                                trace!("parsed frame: {:?} target={:?}", frame.data, frame.target);
-                                let tx = match frame.target {
-                                    FrameTarget::Bluetooth => &bt_tx,
-                                    FrameTarget::Mcu => &mcu_tx,
-                                };
-                                if tx.send(frame).is_err() {
-                                    debug!("receiver dropped, stopping reader");
-                                    return;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("frame parse error: {e}");
-                            }
-                        }
+                    if handle_byte(buf[0], &mut parser, &bt_tx, &mcu_tx).is_err() {
+                        return;
                     }
                 }
                 Ok(_) => {}
@@ -151,5 +120,147 @@ impl UartMux {
                 error!("UART flush error: {e}");
             }
         }
+    }
+}
+
+/// Process one byte from the serial port: optionally inject a synthetic MCU
+/// button frame, then feed the byte into the frame parser and dispatch any
+/// completed frame to the appropriate receiver. Returns `Err(())` if a
+/// receiver has been dropped (caller should stop the reader).
+///
+/// The button-byte interception is gated on `parser.is_idle()` because
+/// `0x48..=0x4A` are also valid payload bytes of framed messages. A battery
+/// frame carrying voltage 3658 mV (= `0x0E4A` little-endian) would otherwise
+/// inject a phantom VolumeUp every time a battery report fell in that range,
+/// producing the "ghost volume bumps" symptom on the Mac.
+fn handle_byte(
+    byte: u8,
+    parser: &mut FrameParser,
+    bt_tx: &Sender<Frame>,
+    mcu_tx: &Sender<Frame>,
+) -> Result<(), ()> {
+    // Physical buttons arrive as raw bytes (not 0xDC/0xCD framed).
+    // 0x48 = MuteToggle, 0x49 = VolumeDown, 0x4A = VolumeUp (on-device).
+    // 0x4B is the MCU heartbeat; ignore it.
+    if parser.is_idle() && matches!(byte, 0x48..=0x4A) {
+        let frame = Frame {
+            header: [0xDC, 0xCD],
+            target: FrameTarget::Mcu,
+            data: vec![byte],
+        };
+        if mcu_tx.send(frame).is_err() {
+            debug!("mcu receiver dropped, stopping reader");
+            return Err(());
+        }
+    }
+    if let Some(result) = parser.feed(byte) {
+        match result {
+            Ok(frame) => {
+                trace!("parsed frame: {:?} target={:?}", frame.data, frame.target);
+                let tx = match frame.target {
+                    FrameTarget::Bluetooth => bt_tx,
+                    FrameTarget::Mcu => mcu_tx,
+                };
+                if tx.send(frame).is_err() {
+                    debug!("receiver dropped, stopping reader");
+                    return Err(());
+                }
+            }
+            Err(e) => {
+                warn!("frame parse error: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn channels() -> (Sender<Frame>, Receiver<Frame>, Sender<Frame>, Receiver<Frame>) {
+        let (bt_tx, bt_rx) = bounded::<Frame>(16);
+        let (mcu_tx, mcu_rx) = bounded::<Frame>(16);
+        (bt_tx, bt_rx, mcu_tx, mcu_rx)
+    }
+
+    #[test]
+    fn standalone_button_byte_emits_synthetic_mcu_frame() {
+        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+        let mut parser = FrameParser::new();
+        handle_byte(0x4A, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        let frame = mcu_rx.try_recv().expect("expected synthetic button frame");
+        assert_eq!(frame.target, FrameTarget::Mcu);
+        assert_eq!(frame.data, vec![0x4A]);
+        assert!(mcu_rx.try_recv().is_err(), "exactly one frame expected");
+    }
+
+    #[test]
+    fn battery_frame_with_button_byte_in_payload_does_not_emit_phantom_button() {
+        // Regression: voltage 3658 mV serialises as low byte 0x4A, high byte 0x0E.
+        // Pre-fix, the reader intercepted 0x4A mid-frame and injected a synthetic
+        // VolumeUp button press, which propagated as a HID Consumer Volume Up to
+        // the host Mac on every matching battery report.
+        let payload = [0x10, 85, 0x4A, 0x0E, 25, 1];
+        let raw = Frame::build([0xDC, 0xCD], &payload).unwrap();
+
+        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+        let mut parser = FrameParser::new();
+        for &b in &raw {
+            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        }
+
+        let frame = mcu_rx.try_recv().expect("expected the real battery frame");
+        assert_eq!(frame.data, payload.to_vec());
+        assert!(
+            mcu_rx.try_recv().is_err(),
+            "no second (synthetic) frame should be emitted from a mid-frame payload byte",
+        );
+    }
+
+    #[test]
+    fn all_three_button_bytes_in_payload_are_ignored() {
+        // Construct a frame whose payload contains every interceptable button byte.
+        let payload = [0x10, 0x48, 0x49, 0x4A, 0x00, 0x00];
+        let raw = Frame::build([0xDC, 0xCD], &payload).unwrap();
+
+        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+        let mut parser = FrameParser::new();
+        for &b in &raw {
+            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        }
+
+        let frame = mcu_rx.try_recv().expect("expected the real frame");
+        assert_eq!(frame.data, payload.to_vec());
+        assert!(mcu_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn heartbeat_byte_does_not_emit_anything() {
+        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+        let mut parser = FrameParser::new();
+        handle_byte(0x4B, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        assert!(mcu_rx.try_recv().is_err());
+        assert!(parser.is_idle(), "heartbeat must not advance the parser");
+    }
+
+    #[test]
+    fn button_press_between_real_frames_still_works() {
+        // After a complete frame, parser returns to idle; a button byte that
+        // immediately follows must still be intercepted.
+        let payload = [0x10, 85, 0x20, 0x0F, 25, 1];
+        let raw = Frame::build([0xDC, 0xCD], &payload).unwrap();
+
+        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+        let mut parser = FrameParser::new();
+        for &b in &raw {
+            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        }
+        handle_byte(0x4A, &mut parser, &bt_tx, &mcu_tx).unwrap();
+
+        let first = mcu_rx.try_recv().expect("battery frame");
+        assert_eq!(first.data, payload.to_vec());
+        let second = mcu_rx.try_recv().expect("synthetic button frame");
+        assert_eq!(second.data, vec![0x4A]);
     }
 }

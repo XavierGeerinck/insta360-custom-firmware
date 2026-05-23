@@ -464,9 +464,15 @@ protocol used for motor/battery commands. Measured on-device via strace:
 | `0x48` | Mute (toggle) | press event |
 | `0x4B` | — | MCU heartbeat; sent constantly, ignore |
 
-The `UartMux` reader intercepts bytes in `0x48..=0x4A` before the frame parser
-and injects synthetic MCU frames so `McuService::handle_frame` can dispatch
-them via the normal `DeviceEvent::ButtonPress` path.
+The `UartMux` reader intercepts bytes in `0x48..=0x4A` **only when the frame
+parser is at its idle state** (no partial frame in flight) and injects
+synthetic MCU frames so `McuService::handle_frame` can dispatch them via the
+normal `DeviceEvent::ButtonPress` path. The idle-state gate is load-bearing:
+those byte values are also valid payload bytes of every framed message on the
+same wire (e.g. battery voltage 3658 mV serialises as `0x4A 0x0E` little-
+endian). Without the gate, every matching battery report injected a phantom
+VolumeUp that propagated as a HID Consumer Volume Up to the Mac — observed
+as "ghost volume bumps" on the host.
 
 MuteLongPress byte code not yet measured; not currently mapped.
 
