@@ -82,11 +82,27 @@ impl Diarizer {
     }
 
     /// Feed one DoA frame; returns `Some(segment)` when a segment closes
-    /// AND its voice-frame duration >= MIN_SEGMENT_DURATION_MS. Filled in
-    /// by Tasks 2-4.
-    pub fn on_doa_frame(&mut self, _frame: &DoaFrame) -> Option<DiarizationSegment> {
-        // Implementation lands in Task 4.
-        None
+    /// AND its voice-frame duration ≥ MIN_SEGMENT_DURATION_MS.
+    pub fn on_doa_frame(&mut self, frame: &DoaFrame) -> Option<DiarizationSegment> {
+        if !self.primed {
+            self.meeting_start_ms = frame.timestamp_ms as u32;
+            self.primed = true;
+        }
+        let rel_ms = (frame.timestamp_ms as u32).saturating_sub(self.meeting_start_ms);
+
+        // Spec §3: confident = VAD on AND confidence above threshold AND
+        // azimuth is finite (F2 emits NaN angles when the solver failed
+        // mid-speech, even with VAD on).
+        let confident = frame.vad
+            && frame.confidence > CONFIDENCE_THRESHOLD
+            && !frame.azimuth_deg.is_nan();
+
+        if confident {
+            let speaker_id = self.assign_cluster(frame.azimuth_deg);
+            self.on_confident_frame(speaker_id, frame.azimuth_deg, rel_ms)
+        } else {
+            self.on_silent_frame(rel_ms)
+        }
     }
 
     /// Flush any open segment. Called from MeetingService on StopRecording.
@@ -328,6 +344,10 @@ mod tests {
         }
     }
 
+    fn silent(ms: u64) -> DoaFrame {
+        DoaFrame::silent(0, ms, waved_audio::doa::DoaBackend::GccPhat)
+    }
+
     #[test]
     fn close_active_returns_none_when_no_active() {
         let mut d = Diarizer::new(uuid::Uuid::new_v4());
@@ -449,5 +469,158 @@ mod tests {
         }
         let seg = d.finalize().expect("should flush");
         assert_eq!(seg.speaker_id, 1);
+    }
+
+    // ── Task 4: end-to-end tests ──────────────────────────────────────────
+
+    #[test]
+    fn single_speaker_one_segment() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        // 50 frames * 21ms = 1050ms at az=45°.
+        for i in 0..50 {
+            let out = d.on_doa_frame(&high(i * 21, 45.0));
+            assert!(out.is_none(), "no segment should close mid-speech");
+        }
+        let seg = d.finalize().expect("finalize emits");
+        assert_eq!(seg.speaker_id, 1);
+        assert!((seg.azimuth_deg - 45.0).abs() < 5.0);
+        assert_eq!(seg.start_ms, 0);
+        assert!(seg.end_ms >= 800 && seg.end_ms <= 1100,
+            "end_ms ≈ 1029 (49 * 21), got {}", seg.end_ms);
+    }
+
+    #[test]
+    fn speaker_change_emits_segment() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        // 500ms at az=45°.
+        for i in 0..24 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        // Switch to az=180°. The change-frame returns the closed speaker-1
+        // segment.
+        let closed = d.on_doa_frame(&high(24 * 21, 180.0));
+        let seg1 = closed.expect("speaker-change emits");
+        assert_eq!(seg1.speaker_id, 1);
+        // Continue 500ms at 180°, then finalize for speaker 2.
+        for i in 25..49 {
+            d.on_doa_frame(&high(i * 21, 180.0));
+        }
+        let seg2 = d.finalize().expect("finalize speaker-2 segment");
+        assert_eq!(seg2.speaker_id, 2);
+    }
+
+    #[test]
+    fn silence_under_500ms_keeps_segment_open() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        // 5 frames voice (105ms), 14 frames silence (~294ms), 5 frames voice.
+        for i in 0..5 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        for i in 5..19 {
+            let out = d.on_doa_frame(&silent(i * 21));
+            assert!(out.is_none(), "silence under 500ms shouldn't close");
+        }
+        for i in 19..24 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        let seg = d.finalize().expect("one segment after finalize");
+        assert!(seg.end_ms >= 23 * 21 - 10);
+    }
+
+    #[test]
+    fn silence_over_500ms_closes_segment() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        for i in 0..12 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        // 30 frames silence ≈ 630ms (> 500ms threshold).
+        let mut closed = None;
+        for i in 12..42 {
+            if let Some(s) = d.on_doa_frame(&silent(i * 21)) {
+                closed = Some(s);
+            }
+        }
+        let s = closed.expect("silence over 500ms should close");
+        assert_eq!(s.speaker_id, 1);
+        assert_eq!(s.end_ms, 11 * 21, "end_ms is last voice frame's ms");
+    }
+
+    #[test]
+    fn segment_under_200ms_dropped() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        // 5 frames * 21ms = 105ms, below 200ms minimum.
+        for i in 0..5 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        assert!(d.finalize().is_none(), "short segment should be dropped");
+    }
+
+    #[test]
+    fn low_confidence_frame_treated_as_silence() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        for i in 0..12 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        // Frames with vad=true but confidence below threshold.
+        let mut closed = None;
+        for i in 12..42 {
+            let low = DoaFrame {
+                frame_idx: 0, timestamp_ms: i * 21,
+                azimuth_deg: 45.0, elevation_deg: 0.0,
+                confidence: 0.1, vad: true,
+                backend: waved_audio::doa::DoaBackend::GccPhat,
+            };
+            if let Some(s) = d.on_doa_frame(&low) {
+                closed = Some(s);
+            }
+        }
+        assert!(closed.is_some(), "low-confidence frames should be silence");
+    }
+
+    #[test]
+    fn nan_azimuth_treated_as_silence() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        for i in 0..12 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        // VAD on, confidence high, but az is NaN (F2 emits this when the
+        // solver fails mid-speech).
+        let mut closed = None;
+        for i in 12..42 {
+            let nan = DoaFrame {
+                frame_idx: 0, timestamp_ms: i * 21,
+                azimuth_deg: f32::NAN, elevation_deg: f32::NAN,
+                confidence: 0.8, vad: true,
+                backend: waved_audio::doa::DoaBackend::GccPhat,
+            };
+            if let Some(s) = d.on_doa_frame(&nan) {
+                closed = Some(s);
+            }
+        }
+        assert!(closed.is_some(), "NaN azimuth must be treated as silence");
+    }
+
+    #[test]
+    fn first_frame_primes_meeting_start_ms() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        d.on_doa_frame(&high(1_000, 45.0)); // timestamp 1000ms
+        assert!(d.primed);
+        assert_eq!(d.meeting_start_ms, 1000);
+        // Subsequent frames use rel_ms = timestamp - 1000.
+        d.on_doa_frame(&high(1_021, 45.0));
+        let active = d.active.as_ref().unwrap();
+        assert_eq!(active.last_voice_ms, 21, "rel_ms = 1021 - 1000 = 21");
+    }
+
+    #[test]
+    fn lagged_synthesizes_gap() {
+        let mut d = Diarizer::new(uuid::Uuid::new_v4());
+        for i in 0..12 {
+            d.on_doa_frame(&high(i * 21, 45.0));
+        }
+        // Simulate 1000ms of dropped frames by calling on_silent_frame
+        // directly with an advanced timestamp.
+        let closed = d.on_silent_frame(12 * 21 + 1_000);
+        assert!(closed.is_some(), "lag-synthesized gap should close segment");
     }
 }
