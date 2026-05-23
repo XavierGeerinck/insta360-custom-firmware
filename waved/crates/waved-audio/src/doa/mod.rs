@@ -399,27 +399,24 @@ mod tests {
         out
     }
 
-    /// Regression test: az=270° with body-shadow on the bottom-45° mic.
+    /// Validates that the weighted-LS path correctly down-weights a single
+    /// corrupted pair when the rest of the array sees a clean source.
     ///
-    /// At az=270° the source is on the -Y side. Physical mic 4 (bottom 45°,
-    /// ALSA ch 1) participates in pure-Z pair (0,4). A corrupted Z-pair
-    /// only affects the elevation solve; azimuth is determined by the two
-    /// horizontal pairs (0,2) and (1,3), both of which are clean. The
-    /// weighted path should still recover az=270° within ±5° since the
-    /// corrupted pair's low sharpness causes it to be down-weighted in the
-    /// LS normal equations without creating azimuth singularity.
+    /// This test SHADOWS only ONE pair (pure-Z pair (0,4) via ALSA ch 1 →
+    /// physical 4). With this pair degraded, the two XY-horizontal pairs and
+    /// the remaining pure-Z pair still see a clean signal — the down-weighting
+    /// preserves accuracy.
     ///
-    /// Note: Shadowing the HORIZONTAL pair mic (physical 1, ALSA ch 4) at
-    /// az=270° cannot be fixed by sharpness weighting alone because:
-    ///  (a) two collinear Z-only pairs mean azimuth needs both horizontal
-    ///      pairs; removing (1,3) makes the XY normal matrix rank-deficient;
-    ///  (b) with broadband noise (80/20 model), the GCC-PHAT surface for
-    ///      the noisy channel peaks at a spurious lag with similar sharpness
-    ///      to the clean pairs — insufficient discrimination.
-    /// The on-device acceptance test (Task 17) validates the full pipeline
-    /// with real speech and SRP-PHAT (Tasks 8-11) as the longer-term fix.
+    /// **Scope limitation:** this does NOT validate the production 270° az
+    /// residual. In production, az=270° causes SIMULTANEOUS shadowing of
+    /// BOTH XY pairs (mics 0 and 1 are both on the +Y side, away from a -Y
+    /// source) — and weighted-LS can't exploit symmetric degradation
+    /// (no relative asymmetry → no weight differentiation). The real fix
+    /// for the production 270° case will need to come from SRP-PHAT
+    /// (Tasks 8-11). On-device validation is `scripts/test-doa-improvements.sh`
+    /// test 1 (Task 17).
     #[test]
-    fn weighted_ls_270_az_regression() {
+    fn weighted_ls_downweights_corrupted_pair_at_az_270() {
         // Shadow alsa ch 1 (physical 4, BOT 45°) — participates in Z-pair (0,4)
         // only. The two horizontal pairs remain clean, so azimuth is fully
         // constrained. The corrupted Z-pair is down-weighted by its low
