@@ -25,7 +25,7 @@ use waved_state::{AudioState, Command, NrLevel};
 use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
 use crate::beam::{Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
-use crate::doa::DoaEstimator;
+use crate::doa::{DoaBackend, DoaFrame, DoaEstimator, DoaPublisher};
 use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
 use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
 
@@ -194,6 +194,9 @@ pub struct AudioService {
     /// present, `apply_gain` writes the recording limiter's reduction into
     /// it after each frame; the stats collector reads from the same Arc.
     dsp_metrics: Option<Arc<crate::playback::DspMetrics>>,
+    doa_publisher: DoaPublisher,
+    doa_backend: DoaBackend,
+    doa_frame_counter: u64,
 }
 
 impl AudioService {
@@ -217,6 +220,8 @@ impl AudioService {
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
         beamformer.set_mode(initial_mode);
         let doa = DoaEstimator::new(geometry, sample_rate, frame_size);
+        let doa_publisher = DoaPublisher::new();
+        let doa_backend = DoaBackend::default(); // Task 11 overrides via new_with_backend
         Self {
             audio_tx,
             _frame_tx: frame_tx,
@@ -244,6 +249,9 @@ impl AudioService {
                 LimiterParams::DEFAULT, 2, sample_rate as f32,
             ),
             dsp_metrics: None,
+            doa_publisher,
+            doa_backend,
+            doa_frame_counter: 0,
         }
     }
 
@@ -265,6 +273,15 @@ impl AudioService {
     /// and by any downstream uplink path beyond meeting recording.
     pub fn subscribe_processed(&self) -> broadcast::Receiver<ProcessedAudioFrame> {
         self.processed_tx.subscribe()
+    }
+
+    /// Subscribe to the per-frame DoA stream. One DoaFrame is emitted per
+    /// process_frame() call (≈ one per ALSA period). Capacity 64; slow
+    /// consumers get RecvError::Lagged, not errors. F3 (diarization) is the
+    /// primary consumer; the steered-beam controller (Task 14) and any UI
+    /// arrow can also subscribe.
+    pub fn subscribe_doa(&self) -> broadcast::Receiver<DoaFrame> {
+        self.doa_publisher.subscribe()
     }
 
     /// Wire the shared DSP metrics handle. Call once at startup, after
@@ -312,6 +329,18 @@ impl AudioService {
                 s.doa_pitch = doa.elevation_deg;
                 s.doa_active = doa.vad_active;
             });
+            let frame_idx = self.doa_frame_counter;
+            self.doa_frame_counter = self.doa_frame_counter.wrapping_add(1);
+            let doa_frame = DoaFrame {
+                frame_idx,
+                timestamp_ms: frame.timestamp_ms,
+                azimuth_deg: if doa.vad_active && doa.fresh { doa.azimuth_deg } else { f32::NAN },
+                elevation_deg: if doa.vad_active && doa.fresh { doa.elevation_deg } else { f32::NAN },
+                confidence: doa.confidence,
+                vad: doa.vad_active,
+                backend: self.doa_backend,
+            };
+            self.doa_publisher.emit(doa_frame);
             let (steer_az, steer_el) = self
                 .doa_override
                 .unwrap_or((doa.azimuth_deg, doa.elevation_deg));
@@ -917,6 +946,37 @@ mod tests {
             reduction_x100 < 0,
             "expected negative reduction (limiter engaged), got {reduction_x100}"
         );
+    }
+
+    #[tokio::test]
+    async fn audio_service_emits_one_doa_frame_per_process_call() {
+        use crate::AudioFrame;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::AudioState;
+        use std::sync::Arc;
+
+        let (audio_tx_inner, _audio_rx) = watch::channel(AudioState::default());
+        let audio_tx = Arc::new(audio_tx_inner);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            audio_tx, frame_tx, frame_rx, meeting_tx, 480, 48000,
+            crate::beam::MicGeometry::default(),
+        );
+        let mut rx = svc.subscribe_doa();
+        let frame = AudioFrame {
+            data: vec![0i16; 480 * 8], channels: 8,
+            reference: None, reference_channels: 0,
+            sample_rate: 48000,
+            timestamp_ms: 1_000,
+        };
+        svc.process_frame(&frame);
+        let got = rx.try_recv().expect("one doa frame per process");
+        assert_eq!(got.frame_idx, 0);
+        assert!(!got.vad, "silence frame should be vad=false");
+        svc.process_frame(&frame);
+        let got2 = rx.try_recv().expect("second frame");
+        assert_eq!(got2.frame_idx, 1);
     }
 
     #[test]

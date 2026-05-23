@@ -48,6 +48,9 @@ pub struct DoaUpdate {
     pub vad_active: bool,
     /// False when solver couldn't recover a direction (degenerate input / no speech).
     pub fresh: bool,
+    /// Normalised peak-sharpness aggregate, [0.0, 1.0]. 0 when !vad_active or
+    /// solver returned None. Used by DoaPublisher to populate DoaFrame.confidence.
+    pub confidence: f32,
 }
 
 pub struct DoaEstimator {
@@ -70,6 +73,10 @@ pub struct DoaEstimator {
     /// `WAVED_DOA_DEBUG=<N>` at startup (0/unset = off). See lib.rs wiring.
     debug_every_n: Option<u32>,
     debug_frame_counter: u32,
+    /// One-pole envelope follower over Σ pair sharpnesses. Tracks the max
+    /// observed level so confidence stays meaningful as noise floor drifts.
+    /// Time constant ~10 s at 21 ms period (alpha ≈ 0.998).
+    max_sharpness_envelope: f32,
 }
 
 impl DoaEstimator {
@@ -109,6 +116,7 @@ impl DoaEstimator {
             pair_deltas_m,
             debug_every_n,
             debug_frame_counter: 0,
+            max_sharpness_envelope: 1.0, // seed > 0 so first-frame division is sane
         }
     }
 
@@ -136,6 +144,7 @@ impl DoaEstimator {
                 elevation_deg: self.smoothed_el,
                 vad_active: false,
                 fresh: false,
+                confidence: 0.0,
             };
         }
 
@@ -190,6 +199,15 @@ impl DoaEstimator {
             }
         }
 
+        // Confidence envelope: track a slow-decay max so the [0, 1] ratio stays
+        // meaningful as room noise floor drifts. Decay-to-floor (10% of peak)
+        // prevents the envelope from sticking high on transient peaks.
+        let sum_sharp: f32 = sharpnesses.iter().sum();
+        const ENVELOPE_ALPHA: f32 = 0.998; // ~10s time constant at 21ms cadence
+        self.max_sharpness_envelope = ENVELOPE_ALPHA * self.max_sharpness_envelope
+            + (1.0 - ENVELOPE_ALPHA) * sum_sharp.max(self.max_sharpness_envelope * 0.1);
+        let confidence = (sum_sharp / self.max_sharpness_envelope.max(1e-9)).clamp(0.0, 1.0);
+
         // Pass raw sharpnesses unscaled. The LS solution in solve_direction_weighted
         // is scale-invariant in `weights`, and raw values (~1e3 for clean broadband)
         // avoid normal-matrix determinant collapse on near-singular pair geometries.
@@ -212,6 +230,7 @@ impl DoaEstimator {
                     elevation_deg: self.smoothed_el,
                     vad_active: true,
                     fresh: true,
+                    confidence,
                 }
             }
             None => DoaUpdate {
@@ -219,6 +238,7 @@ impl DoaEstimator {
                 elevation_deg: self.smoothed_el,
                 vad_active: true,
                 fresh: false,
+                confidence: 0.0,
             },
         }
     }
