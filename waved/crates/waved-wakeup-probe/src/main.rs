@@ -597,6 +597,11 @@ mod tests {
     #[test]
     #[ignore = "needs real device — run with `cargo test -- --ignored` on Wave"]
     fn integration_warm_less_than_or_equal_cold() {
+        // Hardcoded test parameters — deliberately do NOT load AudioConfig so
+        // the test stays reproducible regardless of /etc/waved-audio-config.json.
+        // 480-sample frame ≈ 10 ms at 48 kHz; differs from the device default
+        // (period_frames=1024) but the asserted invariant (warm ≤ cold) holds
+        // at any frame size.
         let sample_rate: u32 = 48_000;
         let frame_size: usize = 480;
         let mic_channels: u16 = 8;
