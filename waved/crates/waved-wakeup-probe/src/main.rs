@@ -376,7 +376,10 @@ fn run_burst(
 fn fmt_opt(v: Option<f32>, unit: &str) -> String {
     match v {
         Some(x) => format!("{x:7.2} {unit}"),
-        None => format!("{:>10}", "—"),
+        None => {
+            let width = unit.len() + 8; // matches `{:7.2} {unit}` = 7 + 1 + unit.len()
+            format!("{:>width$}", "—", width = width)
+        }
     }
 }
 
@@ -433,6 +436,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let r = run_burst(&mut handle, 0, &burst, sample_rate, frame_size, mic_channels, MIN_SCORE_RATIO);
         eprintln!("  warm[{i}] {:?}", r);
         warm.push(r);
+    }
+
+    if !warm.is_empty() && warm.iter().all(|r| r.latency_ms.is_none()) {
+        eprintln!("[WARN] all warm bursts missed — DSP may be broken before silence phase. Continuing.");
     }
 
     // Cold phase: silence + burst, repeated.
@@ -584,6 +591,6 @@ mod tests {
         };
         let s = serde_json::to_string(&report).expect("serialize");
         assert!(s.contains("\"silence_seconds\":60"));
-        assert!(s.contains("\"latency_median_ms\":4"));
+        assert!(s.contains("\"latency_median_ms\":4.0"));
     }
 }
