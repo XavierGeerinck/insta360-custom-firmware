@@ -25,9 +25,12 @@ impl GccPhat {
     }
 
     /// Estimate TDOA (in samples, fractional) such that x2[n] ≈ x1[n - τ].
-    /// `max_lag_samples` bounds the search window (set from geometry: max
-    /// physical separation / c / T_s).
-    pub fn estimate_tdoa(&self, x1: &[f32], x2: &[f32], max_lag_samples: usize) -> f32 {
+    /// Returns `(tau_samples, sharpness)` where `sharpness = -denom` from the
+    /// parabolic peak fit. Sharpness is strictly > 0 for concave (real) peaks,
+    /// near 0 for flat/lumpy noise. Used by the weighted-LS DoA solver to
+    /// down-weight pairs whose cross-correlation has no clear peak (e.g.
+    /// body-shadowed pairs at certain azimuths — see SP#3 270° residual).
+    pub fn estimate_tdoa(&self, x1: &[f32], x2: &[f32], max_lag_samples: usize) -> (f32, f32) {
         assert_eq!(x1.len(), x2.len());
         let n = self.fft_len;
 
@@ -102,7 +105,8 @@ impl GccPhat {
             0.0
         };
 
-        center as f32 + frac
+        let sharpness = -denom; // > 0 on concave peaks, ~0 on flat surfaces
+        (center as f32 + frac, sharpness)
     }
 }
 
@@ -120,7 +124,7 @@ mod tests {
         let gcc = GccPhat::new(480);
         let x1 = tone(1000.0, 48000, 480, 0.0);
         let x2 = x1.clone();
-        let tau = gcc.estimate_tdoa(&x1, &x2, 16);
+        let (tau, _) = gcc.estimate_tdoa(&x1, &x2, 16);
         assert!(tau.abs() < 0.5, "expected τ~0, got {tau}");
     }
 
@@ -130,7 +134,7 @@ mod tests {
         // x2 lags x1 by 5 samples. So x2[n] = x1[n-5]. τ in our convention = +5.
         let x1 = tone(1000.0, 48000, 480, 0.0);
         let x2 = tone(1000.0, 48000, 480, 5.0);
-        let tau = gcc.estimate_tdoa(&x1, &x2, 16);
+        let (tau, _) = gcc.estimate_tdoa(&x1, &x2, 16);
         assert!((tau - 5.0).abs() < 0.5, "expected τ≈5, got {tau}");
     }
 
@@ -139,7 +143,7 @@ mod tests {
         let gcc = GccPhat::new(480);
         let x1 = tone(1000.0, 48000, 480, 3.0);
         let x2 = tone(1000.0, 48000, 480, 0.0);
-        let tau = gcc.estimate_tdoa(&x1, &x2, 16);
+        let (tau, _) = gcc.estimate_tdoa(&x1, &x2, 16);
         assert!((tau + 3.0).abs() < 0.5, "expected τ≈-3, got {tau}");
     }
 
@@ -148,7 +152,7 @@ mod tests {
         let gcc = GccPhat::new(480);
         let x1 = tone(2000.0, 48000, 480, 0.0);
         let x2 = tone(2000.0, 48000, 480, 2.5);
-        let tau = gcc.estimate_tdoa(&x1, &x2, 16);
+        let (tau, _) = gcc.estimate_tdoa(&x1, &x2, 16);
         assert!((tau - 2.5).abs() < 0.3, "expected τ≈2.5, got {tau}");
     }
 
@@ -169,10 +173,40 @@ mod tests {
         let x1: Vec<f32> = (0..480).map(|_| rnd()).collect();
         let x2: Vec<f32> = (0..480).map(|_| rnd()).collect();
         let max_lag = 20usize;
-        let tau = gcc.estimate_tdoa(&x1, &x2, max_lag);
+        let (tau, _) = gcc.estimate_tdoa(&x1, &x2, max_lag);
         assert!(
             tau.abs() <= max_lag as f32 + 0.5,
             "noise pair must stay bounded, got τ={tau}"
         );
+    }
+
+    #[test]
+    fn peak_sharpness_is_positive_for_concave_peak() {
+        let gcc = GccPhat::new(480);
+        let x1 = tone(1000.0, 48000, 480, 0.0);
+        let x2 = tone(1000.0, 48000, 480, 5.0);
+        let (_tau, sharpness) = gcc.estimate_tdoa(&x1, &x2, 16);
+        assert!(sharpness > 0.0, "concave peak should have positive sharpness, got {sharpness}");
+    }
+
+    #[test]
+    fn peak_sharpness_is_finite_and_non_negative_for_noise() {
+        // GCC-PHAT normalises each frequency bin to unit magnitude, so even
+        // uncorrelated noise produces a peaked IFFT (sharpness can be large).
+        // This test verifies the returned sharpness is a valid finite f32 and
+        // non-negative (denom < 0 on concave peak → sharpness = -denom ≥ 0).
+        let gcc = GccPhat::new(480);
+        let mut state = 0x9E3779B1u32;
+        let mut rnd = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as f32 / u32::MAX as f32) - 0.5
+        };
+        let x1: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let x2: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let (_tau, sharpness) = gcc.estimate_tdoa(&x1, &x2, 20);
+        assert!(sharpness.is_finite(), "sharpness must be finite, got {sharpness}");
+        assert!(sharpness >= 0.0, "sharpness must be non-negative, got {sharpness}");
     }
 }

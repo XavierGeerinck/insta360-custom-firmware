@@ -141,10 +141,11 @@ impl DoaEstimator {
         let mut obs = Vec::with_capacity(4);
         let mut raw_tau_samples = [0.0f32; 4];
         for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
-            let tau_samples = self
+            let (tau_samples, _sharpness) = self
                 .gcc
                 .estimate_tdoa(&per_ch[i], &per_ch[j], self.max_lag_samples);
             raw_tau_samples[k] = tau_samples;
+            // (sharpness wired into solve in Task 3)
             let (dx, dy, dz) = self.pair_deltas_m[k];
             obs.push(PairObservation {
                 delta_m: crate::beam::Position3D::new(dx, dy, dz),
