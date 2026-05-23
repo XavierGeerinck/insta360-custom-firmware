@@ -105,7 +105,7 @@ impl GccPhat {
             0.0
         };
 
-        let sharpness = -denom; // > 0 on concave peaks, ~0 on flat surfaces
+        let sharpness = (-denom).max(0.0); // 0 on flat/convex; > 0 on concave peaks
         (center as f32 + frac, sharpness)
     }
 }
@@ -191,6 +191,11 @@ mod tests {
 
     #[test]
     fn peak_sharpness_discriminates_broadband_signal_from_noise() {
+        // Replaces the plan's `peak_sharpness_near_zero_for_noise` (with `< 1.0`
+        // bound). That bound was incorrect: PHAT-normalised noise produces sharp
+        // IFFT peaks (~186 in practice). The discrimination ratio below is what
+        // the weighted-LS approach actually depends on — see plan §3.1.
+        //
         // The weighted-LS DoA solver (SP#3 270° fix) weights each mic pair by
         // sharpness so that body-shadowed pairs (flat correlation surface) are
         // down-weighted relative to clean pairs (sharp concave peak).  For that
