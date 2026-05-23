@@ -63,6 +63,7 @@ impl MeetingService {
         info!("meeting_srv started");
         let mut active: Option<recorder::ActiveRecording> = None;
         let mut diarizer: Option<crate::diarization::Diarizer> = None;
+        let mut doa_closed = false;
 
         // Post-DSP mono samples kept around for the pre-record splice.
         // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
@@ -89,7 +90,7 @@ impl MeetingService {
                 }
                 // Drain DoA frames into the active diarizer. Frames arriving
                 // outside a recording are silently dropped (diarizer is None).
-                doa_recv = self.doa_rx.recv() => {
+                doa_recv = self.doa_rx.recv(), if !doa_closed => {
                     match doa_recv {
                         Ok(frame) => {
                             if let Some(diar) = diarizer.as_mut() {
@@ -121,6 +122,7 @@ impl MeetingService {
                                 }
                             }
                             warn!("DoA stream closed; diarization paused");
+                            doa_closed = true;
                         }
                     }
                 }
