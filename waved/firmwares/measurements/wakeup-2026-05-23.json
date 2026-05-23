@@ -1,0 +1,30 @@
+{
+  "config": {
+    "silence_seconds": 60,
+    "burst_ms": 200,
+    "warmup_bursts": 5,
+    "cold_runs": 10,
+    "sample_rate": 48000,
+    "frame_size": 1024
+  },
+  "warm": {
+    "label": "warm",
+    "total": 5,
+    "missed": 0,
+    "latency_median_ms": 1.9791666,
+    "latency_p95_ms": 1.9791666,
+    "edge_loss_median_ms": 0.0,
+    "edge_loss_p95_ms": 0.0,
+    "peak_db_median": -20.38979
+  },
+  "cold": {
+    "label": "cold",
+    "total": 10,
+    "missed": 0,
+    "latency_median_ms": 1.9791666,
+    "latency_p95_ms": 1.9791666,
+    "edge_loss_median_ms": 0.0,
+    "edge_loss_p95_ms": 0.0,
+    "peak_db_median": -20.38979
+  }
+}
