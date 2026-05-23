@@ -156,6 +156,34 @@ pub fn find_burst_offset(output: &[f32], burst: &[f32], min_score_ratio: f32) ->
     if ratio >= min_score_ratio { Some(best_offset) } else { None }
 }
 
+/// Returns the length (ms) of the leading-edge run in `output_burst` where
+/// rolling 10 ms RMS is below 50 % of the corresponding window in
+/// `input_burst`. Both slices are assumed time-aligned (output already
+/// shifted to start at the burst arrival sample).
+pub fn leading_edge_loss_ms(input_burst: &[f32], output_burst: &[f32], sample_rate: u32) -> f32 {
+    let window = (sample_rate as usize * 10) / 1000; // 10 ms
+    let n_windows = input_burst.len().min(output_burst.len()) / window;
+    let mut leading = 0_usize;
+    for w in 0..n_windows {
+        let lo = w * window;
+        let hi = lo + window;
+        let in_rms = rms(&input_burst[lo..hi]);
+        let out_rms = rms(&output_burst[lo..hi]);
+        if out_rms < 0.5 * in_rms {
+            leading = w + 1;
+        } else {
+            break;
+        }
+    }
+    (leading * window) as f32 * 1000.0 / sample_rate as f32
+}
+
+fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() { return 0.0; }
+    let sumsq: f32 = samples.iter().map(|s| s * s).sum();
+    (sumsq / samples.len() as f32).sqrt()
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
@@ -213,5 +241,23 @@ mod tests {
         let burst = generate_burst(50, 48_000, 11);
         let output = vec![0.0_f32; 10_000]; // pure silence
         assert!(find_burst_offset(&output, &burst, 0.3).is_none());
+    }
+
+    #[test]
+    fn leading_edge_loss_zero_when_output_is_input() {
+        let burst = generate_burst(200, 48_000, 99);
+        let loss = leading_edge_loss_ms(&burst, &burst, 48_000);
+        assert!(loss < 1.0, "passthrough should have ≈0 loss, got {loss} ms");
+    }
+
+    #[test]
+    fn leading_edge_loss_detects_suppressed_prefix() {
+        let burst = generate_burst(200, 48_000, 99);
+        // Zero out the first 50 ms = 2400 samples.
+        let mut out = burst.clone();
+        for s in out.iter_mut().take(2400) { *s = 0.0; }
+        let loss = leading_edge_loss_ms(&burst, &out, 48_000);
+        // Expect approximately 50 ms loss (within one window of slack).
+        assert!((40.0..=60.0).contains(&loss), "expected ≈50 ms, got {loss}");
     }
 }
