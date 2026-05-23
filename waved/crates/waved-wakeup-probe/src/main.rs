@@ -122,6 +122,36 @@ pub fn generate_burst(burst_ms: u32, sample_rate: u32, seed: u64) -> Vec<f32> {
     samples
 }
 
+/// Find the sample offset in `output` where `burst` best aligns via
+/// brute-force cross-correlation. Returns `None` if the peak normalized
+/// score is below `min_score_ratio` × the burst's auto-correlation peak
+/// (= sum of squares).
+///
+/// O(len(output) * len(burst)). For our sizes (≤ ~3M × 9600), this runs
+/// in well under a second on the device. No need for FFT.
+pub fn find_burst_offset(output: &[f32], burst: &[f32], min_score_ratio: f32) -> Option<usize> {
+    if burst.is_empty() || output.len() < burst.len() {
+        return None;
+    }
+    let auto: f32 = burst.iter().map(|s| s * s).sum();
+    if auto <= 0.0 {
+        return None;
+    }
+    let mut best_score = f32::MIN;
+    let mut best_offset = 0_usize;
+    let last = output.len() - burst.len();
+    for off in 0..=last {
+        let win = &output[off..off + burst.len()];
+        let score: f32 = win.iter().zip(burst.iter()).map(|(a, b)| a * b).sum();
+        if score > best_score {
+            best_score = score;
+            best_offset = off;
+        }
+    }
+    let ratio = best_score / auto;
+    if ratio >= min_score_ratio { Some(best_offset) } else { None }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
@@ -160,5 +190,24 @@ mod tests {
         // Envelope on the edges can attenuate the very-edge peaks slightly
         // below 0.1; the bulk of the burst should still hit ≈ 0.1.
         assert!(peak > 0.05 && peak < 0.11, "peak should be ≈0.1 (≈-20 dBFS), got {peak}");
+    }
+
+    #[test]
+    fn xcorr_finds_known_offset() {
+        let burst = generate_burst(50, 48_000, 7);
+        let known_offset = 5000_usize;
+        let mut output = vec![0.0_f32; known_offset + burst.len() + 1000];
+        output[known_offset..known_offset + burst.len()].copy_from_slice(&burst);
+        let offset = find_burst_offset(&output, &burst, 0.3).expect("burst must be found");
+        // Allow ±1 sample slop for argmax ties.
+        let delta = (offset as i64 - known_offset as i64).abs();
+        assert!(delta <= 1, "expected offset ≈{known_offset}, got {offset} (delta {delta})");
+    }
+
+    #[test]
+    fn xcorr_returns_none_when_burst_absent() {
+        let burst = generate_burst(50, 48_000, 11);
+        let output = vec![0.0_f32; 10_000]; // pure silence
+        assert!(find_burst_offset(&output, &burst, 0.3).is_none());
     }
 }
