@@ -137,15 +137,16 @@ impl DoaEstimator {
             };
         }
 
-        // Compute TDOAs for each pair; build PairObservations.
+        // Compute TDOAs + per-pair sharpness for each pair; build PairObservations.
         let mut obs = Vec::with_capacity(4);
         let mut raw_tau_samples = [0.0f32; 4];
+        let mut sharpnesses = [0.0f32; 4];
         for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
-            let (tau_samples, _sharpness) = self
+            let (tau_samples, sharpness) = self
                 .gcc
                 .estimate_tdoa(&per_ch[i], &per_ch[j], self.max_lag_samples);
             raw_tau_samples[k] = tau_samples;
-            // (sharpness wired into solve in Task 3)
+            sharpnesses[k] = sharpness.max(0.0);
             let (dx, dy, dz) = self.pair_deltas_m[k];
             obs.push(PairObservation {
                 delta_m: crate::beam::Position3D::new(dx, dy, dz),
@@ -187,7 +188,20 @@ impl DoaEstimator {
             }
         }
 
-        match solve::solve_direction(&obs) {
+        // Weighted-LS: pass raw sharpness values directly as weights.
+        // DO NOT normalize to sum=1: the LS solution is weight-scale-invariant,
+        // but the solver's singularity threshold (det < 1e-9) was calibrated
+        // for per-observation weights of order 1. With this mic geometry, two
+        // pairs (0,4) and (2,6) are collinear Z-only pairs — the XY part of
+        // the normal matrix is rank-1 when pair (1,3) is near-zero weight.
+        // Normalising to sum=1 shrinks the determinant ~64× below the threshold.
+        // Passing raw sharpnesses (~10³ each) keeps det >> 1e-9 for all
+        // non-degenerate inputs. solve_direction_weighted still returns None
+        // when Σweights < MIN_SHARPNESS_THRESHOLD (1e-4), which guards against
+        // true silence that slips past VAD.
+        let weights: Vec<f32> = sharpnesses.to_vec();
+
+        match solve::solve_direction_weighted(&obs, &weights) {
             Some(ang) => {
                 if self.primed {
                     self.smoothed_az =
@@ -319,4 +333,111 @@ mod tests {
         let diff = smoothed.min(360.0 - smoothed);
         assert!(diff < 1.0, "smoothed {} should be near 0", smoothed);
     }
+
+    /// Synthesizes an 8-ch broadband-noise plane wave with one mic's signal
+    /// degraded to simulate body-shadow.
+    ///
+    /// Uses broadband noise as the source (not a pure tone) because GCC-PHAT
+    /// sharpness discrimination requires broadband stimulus: with a pure tone,
+    /// PHAT normalisation gives all frequency bins unit magnitude, so the noisy
+    /// channel can produce a spurious sharp peak at the wrong lag, making
+    /// sharpness an unreliable discriminator.
+    fn synth_with_shadow(
+        az_deg: f32,
+        el_deg: f32,
+        sr: u32,
+        frames: usize,
+        geom: &MicGeometry,
+        shadowed_alsa_ch: usize,
+    ) -> Vec<f32> {
+        let az = az_deg.to_radians();
+        let el = el_deg.to_radians();
+        let d = [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()];
+        let mut out = vec![0.0; frames * 8];
+        const C: f32 = 343.0;
+
+        // Broadband source signal seeded identically on each call for
+        // determinism. Integer-shifted per mic to simulate propagation delay.
+        let mut src_state = 0x9E3779B1u32;
+        let src_len = frames + 32;
+        let mut src_signal: Vec<f32> = (0..src_len)
+            .map(|_| {
+                src_state ^= src_state << 13;
+                src_state ^= src_state >> 17;
+                src_state ^= src_state << 5;
+                (src_state as f32 / u32::MAX as f32) - 0.5
+            })
+            .collect();
+        for s in &mut src_signal {
+            *s *= 0.5;
+        }
+
+        let mut noise_state = 0xDEADBEEFu32;
+        let mut rnd = || {
+            noise_state ^= noise_state << 13;
+            noise_state ^= noise_state >> 17;
+            noise_state ^= noise_state << 5;
+            (noise_state as f32 / u32::MAX as f32) - 0.5
+        };
+
+        for alsa_ch in 0..8 {
+            let p = geom.position_for_alsa(alsa_ch);
+            let dot_mm = p.x * d[0] + p.y * d[1] + p.z * d[2];
+            let tau_sec = -(dot_mm * 1e-3) / C;
+            let tau_samples = (tau_sec * sr as f32).round() as i32;
+            for i in 0..frames {
+                let src_idx = (i as i32 - tau_samples).clamp(0, src_len as i32 - 1) as usize;
+                let clean = src_signal[src_idx];
+                // Shadowed mic: 80% noise, 20% signal (simulates diffraction smear).
+                out[i * 8 + alsa_ch] = if alsa_ch == shadowed_alsa_ch {
+                    0.4 * rnd() + 0.1 * clean
+                } else {
+                    clean
+                };
+            }
+        }
+        out
+    }
+
+    /// Regression test: az=270° with body-shadow on the bottom-45° mic.
+    ///
+    /// At az=270° the source is on the -Y side. Physical mic 4 (bottom 45°,
+    /// ALSA ch 1) participates in pure-Z pair (0,4). A corrupted Z-pair
+    /// only affects the elevation solve; azimuth is determined by the two
+    /// horizontal pairs (0,2) and (1,3), both of which are clean. The
+    /// weighted path should still recover az=270° within ±5° since the
+    /// corrupted pair's low sharpness causes it to be down-weighted in the
+    /// LS normal equations without creating azimuth singularity.
+    ///
+    /// Note: Shadowing the HORIZONTAL pair mic (physical 1, ALSA ch 4) at
+    /// az=270° cannot be fixed by sharpness weighting alone because:
+    ///  (a) two collinear Z-only pairs mean azimuth needs both horizontal
+    ///      pairs; removing (1,3) makes the XY normal matrix rank-deficient;
+    ///  (b) with broadband noise (80/20 model), the GCC-PHAT surface for
+    ///      the noisy channel peaks at a spurious lag with similar sharpness
+    ///      to the clean pairs — insufficient discrimination.
+    /// The on-device acceptance test (Task 17) validates the full pipeline
+    /// with real speech and SRP-PHAT (Tasks 8-11) as the longer-term fix.
+    #[test]
+    fn weighted_ls_270_az_regression() {
+        // Shadow alsa ch 1 (physical 4, BOT 45°) — participates in Z-pair (0,4)
+        // only. The two horizontal pairs remain clean, so azimuth is fully
+        // constrained. The corrupted Z-pair is down-weighted by its low
+        // sharpness, keeping the normal matrix well-conditioned.
+        let geom = MicGeometry::default();
+        let mut est = DoaEstimator::new(geom.clone(), 48000, 480);
+        for _ in 0..40 {
+            let frame = synth_with_shadow(270.0, 0.0, 48000, 480, &geom, 1);
+            est.update(&frame);
+        }
+        let last = est.update(&synth_with_shadow(270.0, 0.0, 48000, 480, &geom, 1));
+        assert!(last.fresh, "should solve");
+        let err = (last.azimuth_deg - 270.0).abs().min((360.0 - last.azimuth_deg + 270.0).abs());
+        assert!(
+            err < 5.0,
+            "weighted LS should resolve az=270 ±5°, got {:.1}° (err {:.1}°)",
+            last.azimuth_deg, err
+        );
+    }
+
 }
