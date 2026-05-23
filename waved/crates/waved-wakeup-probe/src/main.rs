@@ -157,7 +157,7 @@ pub fn find_burst_offset(output: &[f32], burst: &[f32], min_score_ratio: f32) ->
 }
 
 /// Returns the length (ms) of the leading-edge run in `output_burst` where
-/// rolling 10 ms RMS is below 50 % of the corresponding window in
+/// non-overlapping 10 ms RMS is below 50 % of the corresponding window in
 /// `input_burst`. Both slices are assumed time-aligned (output already
 /// shifted to start at the burst arrival sample).
 pub fn leading_edge_loss_ms(input_burst: &[f32], output_burst: &[f32], sample_rate: u32) -> f32 {
