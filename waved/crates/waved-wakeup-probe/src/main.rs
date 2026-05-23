@@ -8,6 +8,7 @@
 //! See `docs/superpowers/specs/2026-05-23-waved-wakeup-probe-design.md`.
 
 use clap::Parser;
+use serde::Serialize;
 
 #[derive(Parser, Debug)]
 #[command(about = "DSP wake-from-silence benchmark for waved")]
@@ -184,9 +185,12 @@ fn rms(samples: &[f32]) -> f32 {
     (sumsq / samples.len() as f32).sqrt()
 }
 
-use serde::Serialize;
-
-/// One burst's measurements. All-`None` means MISSED (xcorr score too low).
+/// One burst's measurements. By convention, all fields are either populated
+/// together (successful detection) or all `None` (MISSED — xcorr score below
+/// threshold). `aggregate()` uses `latency_ms.is_none()` as the MISSED
+/// indicator and filters each metric independently — so a partially-populated
+/// BurstResult would silently desync the `missed` counter from per-metric
+/// sample counts. Don't construct one.
 #[derive(Debug, Clone, Serialize)]
 pub struct BurstResult {
     pub latency_ms: Option<f32>,
@@ -222,9 +226,9 @@ pub fn aggregate(label: &str, results: &[BurstResult]) -> Phase {
     let mut lat: Vec<f32> = results.iter().filter_map(|r| r.latency_ms).collect();
     let mut loss: Vec<f32> = results.iter().filter_map(|r| r.edge_loss_ms).collect();
     let mut peak: Vec<f32> = results.iter().filter_map(|r| r.peak_db).collect();
-    lat.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    loss.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    peak.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    lat.sort_by(|a, b| a.total_cmp(b));
+    loss.sort_by(|a, b| a.total_cmp(b));
+    peak.sort_by(|a, b| a.total_cmp(b));
 
     Phase {
         label: label.to_string(),
