@@ -1,0 +1,11 @@
+[package]
+name = "waved-doa-tap"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+waved-audio = { path = "../waved-audio" }
+waved-state = { path = "../waved-state" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
