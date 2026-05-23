@@ -183,9 +183,13 @@ JSON (when `--json` given):
 **Handled inline:**
 
 - **Watch / mpsc receivers.** `AudioService::process_frame` calls
-  `audio_tx.send_modify(...)` on every 8-ch frame, which panics if there are
-  no live receivers. The probe holds the `watch::Receiver` and an unused
-  `mpsc::Receiver<ProcessedAudioFrame>` for the lifetime of the run.
+  `audio_tx.send_modify(...)` on every 8-ch frame. `send_modify` does NOT
+  fail when there are no receivers (unlike `send`), so holding them is not
+  strictly required for safety — but the probe keeps the `watch::Receiver`
+  and the `mpsc::Receiver<ProcessedAudioFrame>` alive for the run anyway so
+  the AudioService's view of the world stays consistent and to avoid a
+  channel-close hazard if a future refactor switches to `send` or
+  `try_send`.
 - **DFN3 model load.** Constructed once before warmup; not counted in any
   latency number.
 - **Frame size mismatch.** The `input` vector is right-padded with zeros so

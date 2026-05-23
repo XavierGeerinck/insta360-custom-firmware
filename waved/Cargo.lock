@@ -3634,6 +3634,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-doa-tap"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "tokio",
+ "waved-audio",
+ "waved-state",
+]
+
+[[package]]
 name = "waved-hid"
 version = "0.1.0"
 dependencies = [
@@ -3720,6 +3731,7 @@ name = "waved-state"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "tokio",
  "uuid",
 ]
@@ -3748,6 +3760,20 @@ dependencies = [
  "tracing",
  "uuid",
  "waved-config",
+ "waved-state",
+]
+
+[[package]]
+name = "waved-wakeup-probe"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "waved-audio",
  "waved-state",
 ]
 
