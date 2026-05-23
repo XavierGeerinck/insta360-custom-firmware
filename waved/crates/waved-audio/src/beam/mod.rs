@@ -174,7 +174,7 @@ impl Beamformer {
 
 fn back_delay_scale(mode: AudioMode) -> f32 {
     match mode {
-        AudioMode::Cardioid | AudioMode::Stereo => 1.0,
+        AudioMode::Cardioid | AudioMode::Stereo | AudioMode::Steered { .. } => 1.0,
         AudioMode::Supercardioid => 0.577,
         AudioMode::Figure8 => 0.0,
         AudioMode::Omni => 0.0,

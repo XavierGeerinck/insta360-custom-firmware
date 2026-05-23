@@ -92,7 +92,8 @@ pub(crate) fn nearest_index_to_midline(centres: &[i32], midline: i32) -> usize {
 fn mode_to_idx(mode: &AudioMode) -> usize {
     match mode {
         AudioMode::Omni          => 0,
-        AudioMode::Cardioid      => 1,
+        AudioMode::Cardioid
+        | AudioMode::Steered { .. } => 1,
         AudioMode::Supercardioid => 2,
         AudioMode::Figure8       => 3,
         AudioMode::Stereo        => 4,

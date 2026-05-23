@@ -93,6 +93,11 @@ pub enum AudioMode {
     Supercardioid,
     Figure8,
     Stereo,
+    /// DoA-tracking cardioid. The beam direction follows the live DoA
+    /// estimate, smoothed via EWMA on the unit-vector (see beam/steered.rs).
+    /// `initial_az_deg` is where the beam points before the first
+    /// high-confidence DoA frame arrives (default 0 = forward).
+    Steered { initial_az_deg: f32 },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -414,5 +419,22 @@ mod tests {
         assert!(!s.call_off_hook);
         assert!(!s.call_ringing);
         assert!(!s.call_host_muted);
+    }
+
+    #[test]
+    fn audio_mode_serializes_steered_variant() {
+        use serde_json;
+        let m = AudioMode::Steered { initial_az_deg: 90.0 };
+        let s = serde_json::to_string(&m).expect("serializes");
+        assert!(s.contains("steered"), "json: {s}");
+        assert!(s.contains("initial_az_deg"), "json: {s}");
+        let back: AudioMode = serde_json::from_str(&s).expect("round-trips");
+        assert!(matches!(back, AudioMode::Steered { initial_az_deg } if (initial_az_deg - 90.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn audio_mode_default_remains_omni() {
+        // Steered must not displace Omni as the default.
+        assert!(matches!(AudioMode::default(), AudioMode::Omni));
     }
 }
