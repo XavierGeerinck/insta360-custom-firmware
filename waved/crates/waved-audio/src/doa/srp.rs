@@ -10,6 +10,7 @@
 //! the F2 spec — gate: SRP CPU delta < 5%).
 
 use crate::beam::MicGeometry;
+use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 use std::sync::Arc;
 
@@ -37,19 +38,13 @@ pub struct GridDirection {
 }
 
 pub struct SrpPhatEstimator {
-    #[allow(dead_code)]
     geom: MicGeometry,
-    #[allow(dead_code)]
     sample_rate: u32,
-    #[allow(dead_code)]
     frame_size: usize,
-    #[allow(dead_code)]
     fft_len: usize,
-    #[allow(dead_code)]
     planner_fwd: Arc<dyn rustfft::Fft<f32>>,
     grid: Vec<GridDirection>,
     /// Per-pair position delta in meters; matches gcc_phat's pair_deltas_m.
-    #[allow(dead_code)]
     pair_deltas_m: [(f32, f32, f32); 4],
     /// Min/max FFT bin to include in PHAT accumulation, voice-band masked.
     bin_lo: usize,
@@ -97,6 +92,107 @@ impl SrpPhatEstimator {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SrpResult {
+    pub azimuth_deg: f32,
+    pub elevation_deg: f32,
+    pub confidence: f32,
+}
+
+impl SrpPhatEstimator {
+    /// Estimate source direction from one ALSA-interleaved 8-channel frame.
+    /// Returns None only when the input is wrong-sized; on silence or noise
+    /// it returns Some with low `confidence`.
+    pub fn estimate(&mut self, interleaved: &[f32]) -> Option<SrpResult> {
+        if interleaved.len() != self.frame_size * 8 {
+            return None;
+        }
+
+        // Demultiplex 8 ALSA channels into 8 per-physical-mic buffers, then
+        // forward-FFT each. Use a fresh local Vec per channel — the previous
+        // grid result has no carry-over state.
+        let mut per_ch_fft: [Vec<Complex<f32>>; 8] = std::array::from_fn(|_| {
+            vec![Complex::new(0.0, 0.0); self.fft_len]
+        });
+        for i in 0..self.frame_size {
+            for alsa_ch in 0..8 {
+                let physical = self.geom.alsa_to_physical[alsa_ch] as usize;
+                per_ch_fft[physical][i] =
+                    Complex::new(interleaved[i * 8 + alsa_ch], 0.0);
+            }
+        }
+        for ch in 0..8 {
+            self.planner_fwd.process(&mut per_ch_fft[ch]);
+        }
+
+        // For each pair, precompute PHAT-normalized cross-spectrum C_ij(f) =
+        // X_i(f)·conj(X_j(f)) / |X_i(f)·conj(X_j(f))|. Zero out-of-band bins.
+        let mut cross_per_pair: [Vec<Complex<f32>>; 4] = std::array::from_fn(|_| {
+            vec![Complex::new(0.0, 0.0); self.bin_hi - self.bin_lo]
+        });
+        for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
+            for (idx, bin) in (self.bin_lo..self.bin_hi).enumerate() {
+                let xi = per_ch_fft[i][bin];
+                let xj_conj = per_ch_fft[j][bin].conj();
+                let num = xi * xj_conj;
+                let mag = num.norm();
+                cross_per_pair[k][idx] = if mag > 1e-10 {
+                    num / mag
+                } else {
+                    Complex::new(0.0, 0.0)
+                };
+            }
+        }
+
+        // Steered response: sum over pairs of sum over bins of Re[C_ij(f) ·
+        // exp(j·2π·f·τ_ij(d̂))]. τ_ij(d̂) = (p_i - p_j) · d̂ / c, in seconds.
+        let bin_hz = self.sample_rate as f32 / self.fft_len as f32;
+        let two_pi = 2.0 * std::f32::consts::PI;
+        let mut best_idx = 0usize;
+        let mut best_power = f32::NEG_INFINITY;
+        let mut power_sum = 0.0f32;
+        for (g_idx, g) in self.grid.iter().enumerate() {
+            let mut total = 0.0f32;
+            for (k, &(_i, _j)) in PAIR_INDICES.iter().enumerate() {
+                let (dx, dy, dz) = self.pair_deltas_m[k];
+                let proj = dx * g.dhat[0] + dy * g.dhat[1] + dz * g.dhat[2];
+                // Negative sign: wave from d̂ arrives at mic i before mic j
+                // when (p_i - p_j)·d̂ > 0, so τ_ij = -(p_i - p_j)·d̂ / c.
+                let tau_sec = -proj / SPEED_OF_SOUND_M_S;
+                for (idx, bin) in (self.bin_lo..self.bin_hi).enumerate() {
+                    let f_hz = bin as f32 * bin_hz;
+                    let phase = two_pi * f_hz * tau_sec;
+                    let (sp, cp) = phase.sin_cos();
+                    let exp_jp = Complex::new(cp, sp);
+                    let c = cross_per_pair[k][idx];
+                    total += (c * exp_jp).re;
+                }
+            }
+            power_sum += total;
+            if total > best_power {
+                best_power = total;
+                best_idx = g_idx;
+            }
+        }
+
+        let best = &self.grid[best_idx];
+        let _mean_power = power_sum / self.grid.len() as f32;
+        // Maximum possible steered response: all PHAT bins coherent across all
+        // pairs (magnitude 1 each bin, n_pairs pairs, n_bins bins).
+        let max_possible = PAIR_INDICES.len() as f32 * (self.bin_hi - self.bin_lo) as f32;
+        // Confidence: normalised peak height. On a clean plane wave all bins
+        // phase-align ⇒ power_peak ≈ max_possible. On noise, random phases
+        // cancel and the peak is O(√n_bins) ≪ max_possible.
+        let confidence = (best_power / max_possible).clamp(0.0, 1.0);
+
+        Some(SrpResult {
+            azimuth_deg: best.azimuth_deg,
+            elevation_deg: best.elevation_deg,
+            confidence,
+        })
+    }
+}
+
 fn build_grid() -> Vec<GridDirection> {
     let mut grid = Vec::new();
     let n_az = (360.0 / AZ_STEP_DEG) as i32; // 72
@@ -121,6 +217,69 @@ fn build_grid() -> Vec<GridDirection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synth_plane_wave_srp(
+        az_deg: f32, el_deg: f32, sr: u32, frames: usize, geom: &MicGeometry,
+    ) -> Vec<f32> {
+        let az = az_deg.to_radians();
+        let el = el_deg.to_radians();
+        let d = [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()];
+        let freq = 1500.0f32; // voice-band
+        let omega = 2.0 * std::f32::consts::PI * freq / sr as f32;
+        let mut out = vec![0.0; frames * 8];
+        const C: f32 = 343.0;
+        for alsa_ch in 0..8 {
+            let p = geom.position_for_alsa(alsa_ch);
+            let dot_mm = p.x * d[0] + p.y * d[1] + p.z * d[2];
+            let tau_samples = (-(dot_mm * 1e-3) / C) * sr as f32;
+            for i in 0..frames {
+                out[i * 8 + alsa_ch] = ((i as f32 - tau_samples) * omega).sin() * 0.5;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn srp_locates_plane_wave_within_grid_cell() {
+        let geom = MicGeometry::default();
+        let mut est = SrpPhatEstimator::new(geom.clone(), 48000, 480);
+        let frame = synth_plane_wave_srp(45.0, 0.0, 48000, 480, &geom);
+        let result = est.estimate(&frame).expect("plane wave should localise");
+        let az_err = (result.azimuth_deg - 45.0).abs();
+        eprintln!("srp az={:.1}° el={:.1}° confidence={:.3}", result.azimuth_deg, result.elevation_deg, result.confidence);
+        assert!(az_err < AZ_STEP_DEG, "SRP az {} not within ±{}°", result.azimuth_deg, AZ_STEP_DEG);
+        assert!(result.elevation_deg.abs() < EL_STEP_DEG);
+        assert!(result.confidence > 0.05, "should have decent confidence on clean source, got {}", result.confidence);
+    }
+
+    #[test]
+    fn srp_low_confidence_on_uniform_noise() {
+        let geom = MicGeometry::default();
+        let mut est = SrpPhatEstimator::new(geom.clone(), 48000, 480);
+        let mut state = 0xC0FFEEu32;
+        let mut rnd = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state as f32 / u32::MAX as f32) - 0.5
+        };
+        // Independent noise per channel — no shared direction.
+        let frame: Vec<f32> = (0..480 * 8).map(|_| rnd() * 0.5).collect();
+        let result = est.estimate(&frame).expect("noise still returns Some");
+        eprintln!("noise confidence={:.3}", result.confidence);
+        assert!(result.confidence < 0.3, "noise should give low confidence, got {}", result.confidence);
+    }
+
+    #[test]
+    fn srp_locates_az_270_within_grid() {
+        let geom = MicGeometry::default();
+        let mut est = SrpPhatEstimator::new(geom.clone(), 48000, 480);
+        let frame = synth_plane_wave_srp(270.0, 0.0, 48000, 480, &geom);
+        let result = est.estimate(&frame).expect("should localise");
+        let az_err = ((result.azimuth_deg - 270.0).abs()).min(360.0 - (result.azimuth_deg - 270.0).abs());
+        eprintln!("srp az270: az={:.1}° el={:.1}° confidence={:.3}", result.azimuth_deg, result.elevation_deg, result.confidence);
+        assert!(az_err < AZ_STEP_DEG, "SRP az {} not within ±{}° of 270", result.azimuth_deg, AZ_STEP_DEG);
+    }
 
     #[test]
     fn srp_grid_has_expected_cardinality() {
