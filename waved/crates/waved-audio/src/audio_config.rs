@@ -28,6 +28,12 @@ pub struct AudioConfig {
     /// from `MicGeometry::default()` via serde.
     #[serde(default = "default_mic_geometry")]
     pub mic_geometry: Option<MicGeometry>,
+    /// DoA backend selected at AudioService construction. "gcc_phat" (default)
+    /// is the legacy pairwise + LS path; "srp_phat" is the grid-search
+    /// alternative from F2 (see docs/AUDIO_HARDWARE.md SRP-PHAT section).
+    /// Static — runtime switching is not supported.
+    #[serde(default)]
+    pub doa_backend: crate::doa::DoaBackend,
     #[serde(default)]
     pub uac: Option<UacConfig>,
     #[serde(default)]
@@ -799,6 +805,31 @@ mod tests {
         assert_eq!(hid.device, "/dev/hidg0");
         assert_eq!(hid.press_release_gap_ms, 10);
         assert_eq!(hid.volume_step_rate_hz, 40);
+    }
+
+    #[test]
+    fn doa_backend_defaults_to_gcc_phat_when_absent() {
+        let json = r#"{
+            "version": 4,
+            "capture": {"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames": 1024,
+            "buffer_periods": 8
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v4 should parse");
+        assert_eq!(cfg.doa_backend, crate::doa::DoaBackend::GccPhat);
+    }
+
+    #[test]
+    fn doa_backend_explicit_srp_phat_parses() {
+        let json = r#"{
+            "version": 4,
+            "capture": {"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames": 1024,
+            "buffer_periods": 8,
+            "doa_backend": "srp_phat"
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v4 should parse");
+        assert_eq!(cfg.doa_backend, crate::doa::DoaBackend::SrpPhat);
     }
 
     #[test]
