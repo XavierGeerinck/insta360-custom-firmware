@@ -39,6 +39,9 @@ pub struct Beamformer {
     back_delay_r: f32,
     is_stereo: bool,
     is_omni: bool,
+    /// In [0, 1]. 0 = pure pattern (cardioid/super/fig8/stereo), 1 = pure
+    /// omni-mix output. Only used for Steered mode; other modes ignore.
+    omni_mix: f32,
 }
 
 pub struct BeamOutput {
@@ -64,6 +67,7 @@ impl Beamformer {
             back_delay_r: 0.0,
             is_stereo: false,
             is_omni: true,
+            omni_mix: 0.0,
         };
         s.recompute();
         s
@@ -82,6 +86,10 @@ impl Beamformer {
             self.doa_el_deg = el_deg;
             self.recompute();
         }
+    }
+
+    pub fn set_omni_mix(&mut self, mix: f32) {
+        self.omni_mix = mix.clamp(0.0, 1.0);
     }
 
     fn recompute(&mut self) {
@@ -150,13 +158,27 @@ impl Beamformer {
             }
             let y_l = front_l - back_l;
 
+            // Compute omni sample (mean of all 8 mics' current values) if mixed.
+            let omni_sample = if self.omni_mix > 1e-3 {
+                let mut sum = 0.0f32;
+                for alsa_ch in 0..8 {
+                    sum += self.delays[alsa_ch].read(0.0);
+                }
+                sum / 8.0
+            } else {
+                0.0
+            };
+
+            let y_l_mixed = (1.0 - self.omni_mix) * y_l + self.omni_mix * omni_sample;
+
             if self.is_stereo {
                 let y_r = front_r - back_r;
-                mono.push(0.5 * (y_l + y_r));
-                stereo_l.push(y_l);
-                stereo_r.push(y_r);
+                let y_r_mixed = (1.0 - self.omni_mix) * y_r + self.omni_mix * omni_sample;
+                mono.push(0.5 * (y_l_mixed + y_r_mixed));
+                stereo_l.push(y_l_mixed);
+                stereo_r.push(y_r_mixed);
             } else {
-                mono.push(y_l);
+                mono.push(y_l_mixed);
             }
         }
 

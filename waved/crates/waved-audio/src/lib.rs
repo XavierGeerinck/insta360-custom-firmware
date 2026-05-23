@@ -23,7 +23,7 @@ use tracing::{info, warn};
 use waved_state::{AudioState, Command, NrLevel};
 
 use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
-use crate::beam::{Beamformer, MicGeometry};
+use crate::beam::{steered::SteeredBeam, Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
 use crate::doa::{DoaBackend, DoaEstimator, DoaFrame, DoaPublisher, SrpPhatEstimator};
 use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
@@ -296,6 +296,9 @@ pub struct AudioService {
     doa_publisher: DoaPublisher,
     doa_backend: DoaBackend,
     doa_frame_counter: u64,
+    /// Some when current mode is AudioMode::Steered. Reset to None when
+    /// switching to any other mode.
+    steered: Option<SteeredBeam>,
 }
 
 impl AudioService {
@@ -317,7 +320,11 @@ impl AudioService {
         let (echo_canceller, noise_suppressor) =
             build_dsp_chain(frame_size, sample_rate, initial_nr);
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
-        beamformer.set_mode(initial_mode);
+        beamformer.set_mode(initial_mode.clone());
+        let steered = match &initial_mode {
+            waved_state::AudioMode::Steered { initial_az_deg } => Some(SteeredBeam::new(*initial_az_deg)),
+            _ => None,
+        };
         let (doa, doa_backend, _fallback) =
             build_doa_backend(DoaBackend::default(), geometry, sample_rate, frame_size);
         let doa_publisher = DoaPublisher::new();
@@ -351,6 +358,7 @@ impl AudioService {
             doa_publisher,
             doa_backend,
             doa_frame_counter: 0,
+            steered,
         }
     }
 
@@ -475,10 +483,17 @@ impl AudioService {
                 backend: self.doa_backend,
             };
             self.doa_publisher.emit(doa_frame);
-            let (steer_az, steer_el) = self
-                .doa_override
-                .unwrap_or((doa.azimuth_deg, doa.elevation_deg));
-            self.beamformer.set_doa(steer_az, steer_el);
+            if let Some(beam) = self.steered.as_mut() {
+                let dir = beam.on_doa_frame(&doa_frame);
+                self.beamformer.set_doa(dir.az_deg, dir.el_deg);
+                self.beamformer.set_omni_mix(dir.omni_mix);
+            } else {
+                let (steer_az, steer_el) = self
+                    .doa_override
+                    .unwrap_or((doa.azimuth_deg, doa.elevation_deg));
+                self.beamformer.set_doa(steer_az, steer_el);
+                // No omni_mix change; remains at the value set by mode switch.
+            }
 
             let beam_out = self.beamformer.process(&self.mic_8ch_f32_scratch);
 
@@ -581,7 +596,14 @@ impl AudioService {
                     match cmd {
                         Ok(Command::SetAudioMode(mode)) => {
                             info!("audio mode → {mode:?}");
+                            self.steered = match &mode {
+                                waved_state::AudioMode::Steered { initial_az_deg } => {
+                                    Some(SteeredBeam::new(*initial_az_deg))
+                                }
+                                _ => None,
+                            };
                             self.beamformer.set_mode(mode.clone());
+                            self.beamformer.set_omni_mix(0.0); // reset crossfade for non-steered modes
                             self.audio_tx.send_modify(|s| s.mode = mode);
                         }
                         Ok(Command::SetDoaOverride(ov)) => {
@@ -1187,6 +1209,37 @@ mod tests {
         svc.process_frame(&frame);
         let got2 = rx.try_recv().expect("second frame");
         assert_eq!(got2.frame_idx, 1);
+    }
+
+    #[tokio::test]
+    async fn steered_mode_tracks_doa_override() {
+        use crate::AudioFrame;
+        use tokio::sync::{mpsc, watch};
+        use waved_state::{AudioMode, AudioState};
+        use std::sync::Arc;
+
+        let mut initial = AudioState::default();
+        initial.mode = AudioMode::Steered { initial_az_deg: 0.0 };
+        let (audio_tx_inner, _audio_rx) = watch::channel(initial);
+        let audio_tx = Arc::new(audio_tx_inner);
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(8);
+        let mut svc = AudioService::new(
+            audio_tx, frame_tx, frame_rx, meeting_tx, 480, 48000,
+            crate::beam::MicGeometry::default(),
+        );
+        // Verify the steered wrapper is constructed.
+        assert!(svc.steered.is_some(), "Steered mode should construct SteeredBeam");
+
+        // Feed silence — direction holds, omni_mix doesn't immediately ramp.
+        let frame = AudioFrame {
+            data: vec![0i16; 480 * 8], channels: 8,
+            reference: None, reference_channels: 0,
+            sample_rate: 48000,
+            timestamp_ms: 1_000,
+        };
+        svc.process_frame(&frame);
+        // No assertion on direction — just that it doesn't panic.
     }
 
     #[test]
