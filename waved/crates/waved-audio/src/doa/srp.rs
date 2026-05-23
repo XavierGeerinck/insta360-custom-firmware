@@ -151,6 +151,7 @@ impl SrpPhatEstimator {
         let mut best_idx = 0usize;
         let mut best_power = f32::NEG_INFINITY;
         let mut power_sum = 0.0f32;
+        let mut powers: Vec<f32> = Vec::with_capacity(self.grid.len());
         for (g_idx, g) in self.grid.iter().enumerate() {
             let mut total = 0.0f32;
             for (k, &(_i, _j)) in PAIR_INDICES.iter().enumerate() {
@@ -168,6 +169,7 @@ impl SrpPhatEstimator {
                     total += (c * exp_jp).re;
                 }
             }
+            powers.push(total);
             power_sum += total;
             if total > best_power {
                 best_power = total;
@@ -185,9 +187,48 @@ impl SrpPhatEstimator {
         // cancel and the peak is O(√n_bins) ≪ max_possible.
         let confidence = (best_power / max_possible).clamp(0.0, 1.0);
 
+        // Sub-sample parabolic refinement in az and el. Grid is stored
+        // elevation-major (n_az_cells azimuths per elevation row), so:
+        //   az neighbor:  same el row, az±1 (wrap on row)
+        //   el neighbor:  same az col, el±1 (clamp at ±90°; no wrap)
+        let n_az = (360.0 / AZ_STEP_DEG) as usize;
+        let n_el = ((180.0 / EL_STEP_DEG) as usize) + 1;
+        let ei = best_idx / n_az;
+        let ai = best_idx % n_az;
+
+        let p_c = powers[best_idx];
+        let ai_l = (ai + n_az - 1) % n_az;
+        let ai_r = (ai + 1) % n_az;
+        let p_az_l = powers[ei * n_az + ai_l];
+        let p_az_r = powers[ei * n_az + ai_r];
+        let az_denom = p_az_l - 2.0 * p_c + p_az_r;
+        let az_frac = if az_denom < -1e-9 {
+            (0.5 * (p_az_l - p_az_r) / az_denom).clamp(-0.5, 0.5)
+        } else {
+            0.0
+        };
+
+        let el_frac = if ei == 0 || ei == n_el - 1 {
+            0.0 // polar boundary; no neighbor on one side
+        } else {
+            let p_el_l = powers[(ei - 1) * n_az + ai];
+            let p_el_r = powers[(ei + 1) * n_az + ai];
+            let el_denom = p_el_l - 2.0 * p_c + p_el_r;
+            if el_denom < -1e-9 {
+                (0.5 * (p_el_l - p_el_r) / el_denom).clamp(-0.5, 0.5)
+            } else {
+                0.0
+            }
+        };
+
+        let mut refined_az = best.azimuth_deg + az_frac * AZ_STEP_DEG;
+        if refined_az < 0.0 { refined_az += 360.0; }
+        if refined_az >= 360.0 { refined_az -= 360.0; }
+        let refined_el = (best.elevation_deg + el_frac * EL_STEP_DEG).clamp(-90.0, 90.0);
+
         Some(SrpResult {
-            azimuth_deg: best.azimuth_deg,
-            elevation_deg: best.elevation_deg,
+            azimuth_deg: refined_az,
+            elevation_deg: refined_el,
             confidence,
         })
     }
@@ -310,5 +351,34 @@ mod tests {
                 "grid missing az={target}"
             );
         }
+    }
+
+    #[test]
+    fn srp_refines_to_sub_grid_accuracy() {
+        // Source at az=47.5° (between grid cells 45° and 50°). Without
+        // refinement the result would snap to 45° or 50°; with parabolic
+        // interp it should land closer to truth.
+        let geom = MicGeometry::default();
+        let mut est = SrpPhatEstimator::new(geom.clone(), 48000, 480);
+        let frame = synth_plane_wave_srp(47.5, 0.0, 48000, 480, &geom);
+        let result = est.estimate(&frame).expect("should localise");
+        let az_err = (result.azimuth_deg - 47.5).abs();
+        assert!(az_err < 2.0,
+            "refined az {} should be within ±2° of 47.5", result.azimuth_deg);
+    }
+
+    #[test]
+    fn srp_az_boundary_wraps_correctly() {
+        // Source at az=185°. Grid cells are at 180° and 185°; the parabolic-interp
+        // right-neighbor of 185° is at 190°, which is still in range. To
+        // genuinely exercise the wrap, use a source at az=357.5° where the
+        // parabolic right-neighbor of grid cell 355° lands at 360° → wraps to 0°.
+        let geom = MicGeometry::default();
+        let mut est = SrpPhatEstimator::new(geom.clone(), 48000, 480);
+        let frame = synth_plane_wave_srp(357.5, 0.0, 48000, 480, &geom);
+        let result = est.estimate(&frame).expect("should localise");
+        let az_err = ((result.azimuth_deg - 357.5).abs()).min((360.0 - (result.azimuth_deg - 357.5).abs()));
+        assert!(az_err < AZ_STEP_DEG,
+            "wrap-around az {} not within ±{}° of 357.5", result.azimuth_deg, AZ_STEP_DEG);
     }
 }
