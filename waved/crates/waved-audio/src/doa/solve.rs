@@ -82,7 +82,10 @@ pub const MIN_SHARPNESS_THRESHOLD: f32 = 1e-4;
 ///   A += w_k · (Δ Δ^T),   b += w_k · (τ c) Δ
 ///
 /// Use this from the DoA pipeline with `weights[k] = sharpness_k / Σ_k
-/// sharpness_k`. The 270 deg azimuth residual (SP#3) is hypothesised to come
+/// sharpness_k`.
+/// (Normalization is for caller convenience; mathematically only the
+/// relative magnitudes matter — the LS solution is scale-invariant.)
+/// The 270 deg azimuth residual (SP#3) is hypothesised to come
 /// from a single shadowed pair pulling the unweighted LS off direction —
 /// down-weighting it by its low sharpness should restore accuracy.
 ///
@@ -97,7 +100,9 @@ pub fn solve_direction_weighted(
     if obs.len() < 3 {
         return None;
     }
-    assert_eq!(obs.len(), weights.len(), "weights length must match obs");
+    if obs.len() != weights.len() {
+        return None;
+    }
 
     let weight_sum: f32 = weights.iter().sum();
     if weight_sum < MIN_SHARPNESS_THRESHOLD {
