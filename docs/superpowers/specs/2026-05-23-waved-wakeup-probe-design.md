@@ -182,10 +182,10 @@ JSON (when `--json` given):
 
 **Handled inline:**
 
-- **Mute state.** Probe explicitly drives `AudioState.mute = false` via the
-  `watch::Sender` before running. If `AudioService` later observes muted, the
-  bursts go to zero and we'd report MISSED across the board; the explicit
-  pre-set prevents this.
+- **Watch / mpsc receivers.** `AudioService::process_frame` calls
+  `audio_tx.send_modify(...)` on every 8-ch frame, which panics if there are
+  no live receivers. The probe holds the `watch::Receiver` and an unused
+  `mpsc::Receiver<ProcessedAudioFrame>` for the lifetime of the run.
 - **DFN3 model load.** Constructed once before warmup; not counted in any
   latency number.
 - **Frame size mismatch.** The `input` vector is right-padded with zeros so
@@ -198,9 +198,10 @@ transient to mask.
 
 **Not handled (intentional):**
 
-- **Host runs.** The probe needs real `waved-audio` Processor state. Build
-  target is `aarch64-unknown-linux-musl`, deployed via the existing flash
-  script.
+- **Host runs.** The probe needs the real `waved-audio` Processor (with
+  DFN3 model and AEC state machine), so build target is
+  `aarch64-unknown-linux-gnu` (same as `waved`), deployed via `adb push`
+  per `waved/CLAUDE.md`.
 - **Concurrent `waved` running.** Not detected. If `waved` is up at the
   same time, ALSA contention is on the operator to avoid — same constraint
   as `waved-latency-probe`. Documented in `--help`, not enforced.
