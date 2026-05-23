@@ -16,6 +16,7 @@
 
 pub mod geometry;
 pub mod delays;
+pub mod steered;
 pub mod weights;
 
 pub use geometry::{MicGeometry, Position3D};
