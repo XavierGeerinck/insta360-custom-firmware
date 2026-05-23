@@ -102,6 +102,44 @@ diagonals) — acceptable because τ_max at the edge of elevation is still
 This is a device-intrinsic property, not a per-unit manufacturing
 issue. Every Wave has the same body geometry.
 
+### Elevation bias measurement (F2)
+
+**Diagnostic instrumentation:** `WAVED_DOA_DEBUG=N` now emits per-pair
+sharpness (`sh=`) and per-pair implied elevation (`el_p=`) for each
+of the 4 pairs in the regular debug line. Pure-Z pairs (0,4)/(2,6)
+emit a real `el_p`; XY-horizontal pairs (0,2)/(1,3) emit NaN
+(elevation is not meaningfully isolable from these geometries).
+
+Example log line (production format):
+
+```
+doa_debug az=178.2 el=3.1 rms0=0.00012 |
+  (0,2)raw=-0.03 exp=-0.05 sh=1834.2 el_p=+nan
+  (1,3)raw=+0.44 exp=+0.42 sh=1721.9 el_p=+nan
+  (0,4)raw=-1.21 exp=-1.30 sh=1532.6 el_p=+12.4
+  (2,6)raw=-0.18 exp=-0.25 sh=1488.1 el_p=+8.7
+```
+
+**Measurement sweep:** `scripts/test-doa-elevation.sh` walks an
+operator-positioned loudspeaker through 4 azimuths × 4 elevations
+(-30°, 0°, +30°, +60° relative to top-ring plane). Output CSV:
+`elevation-measurements-YYYYMMDD.csv` with columns
+`truth_az, truth_el, measured_az, measured_el, sharp_0_2, sharp_1_3,
+sharp_0_4, sharp_2_6`.
+
+**Outcome decision (per F2 spec §3.4):**
+- If bias is **consistent across azimuth** and matches a simple
+  geometric offset → document as test-rig artifact, NO code fix.
+- If bias **varies wildly per azimuth** → root cause is algorithmic;
+  queue an F2b fix.
+
+**Current state:** **Pending measurement** — operator must run
+`scripts/test-doa-elevation.sh` to populate the bias table. The SP#3
+note `Elevation bias +3° to +18° after pure-Z pair swap` in this
+file's earlier section is from the original SP#3 acceptance and is
+the prior data point; F2 will revisit with the diagnostic line above
+to determine whether the bias is geometric or algorithmic.
+
 ### Sign Conventions (read carefully)
 
 - **GCC-PHAT** (`gcc_phat.rs`): `estimate_tdoa(x1, x2, ..)` returns τ (samples,
@@ -138,6 +176,72 @@ don't lower it below 0.0001.
 `max_lag_samples = 20` at 48 kHz. Physical: max pairwise distance is the
 top-to-bottom diagonal ≈ 90 mm → τ_max = 90 mm / 343 m/s ≈ 12.6 samples.
 20 gives ~60% headroom for numerical noise and peak-search-window symmetry.
+
+### Per-pair confidence-weighted LS (F2)
+
+The LS solver in `solve.rs` weights each pair's row by its GCC-PHAT
+peak sharpness (`solve_direction_weighted`). Sharpness =
+`-(y_l - 2*y_c + y_r)` from the parabolic fit, clamped to ≥ 0;
+positive for concave (real) peaks, ~0 for flat/lumpy noise surfaces.
+
+Empirical signal/noise discrimination measured in
+`gcc_phat::tests::peak_sharpness_discriminates_broadband_signal_from_noise`:
+broadband signal sharpness ≈ 1900, broadband noise sharpness ≈ 185
+→ 10× ratio (well above the 5× gate for the weighting to be useful).
+
+**Wiring in `DoaEstimator::update`:** raw sharpness values are passed
+to `solve_direction_weighted` unscaled. The LS solution is
+scale-invariant in weights, and raw values avoid normal-matrix
+determinant collapse on near-singular pair geometries — normalizing
+4 raw sharpnesses to Σ=1 shrinks the determinant by ~16-64× and
+risks tripping the 1e-9 singularity guard.
+
+`MIN_SHARPNESS_THRESHOLD = 1e-4` — when Σ pair sharpnesses falls
+below this (silence-on-VAD-edge), the solver returns `None` and the
+caller emits a `DoaFrame { vad: false, NaN angles, confidence: 0.0 }`.
+
+**Scope note on the 270° azimuth residual:** the original SP#3 270°
+bug is caused by SIMULTANEOUS shadowing of BOTH XY-horizontal pairs
+(both top-ring mics on the +Y side are blocked from a -Y source).
+Weighted-LS cannot exploit symmetric degradation. Validation that
+weighted-LS at least preserves accuracy when ONE pair is corrupted
+is in `doa::tests::update_with_weighted_solver_recovers_az_on_recoverable_scenario`.
+The actual 270° production fix comes from SRP-PHAT (below).
+
+**On-device measurement:** **Pending measurement** — run
+`scripts/test-doa-improvements.sh` test 1 to capture the post-fix
+azimuth error at 270° with the loudspeaker physically placed.
+
+### SRP-PHAT alternative backend (F2)
+
+Selected via `AudioConfig.doa_backend = "srp_phat"`. Grid search over
+72 azimuths × 19 elevations = 1368 directions, accumulating
+PHAT-weighted cross-spectrum across the same 4 pairs as GCC-PHAT
+((0,2), (1,3), (0,4), (2,6)). Voice-band masked (200–4000 Hz).
+Sub-grid refinement via parabolic interp in az/el (~0.5° accuracy).
+
+Confidence = `peak_power / (n_pairs × n_bins)` (theoretical-ceiling
+ratio), clamped [0, 1]. Plane wave at the right grid cell gives
+confidence ≈ 0.95; uniform per-channel noise gives ≈ 0.16. Same
+normalised shape as GCC-PHAT path — F3 can threshold on a single
+value regardless of backend.
+
+**Selection at startup (static — runtime switching not supported):**
+
+```json
+{ "doa_backend": "srp_phat" }
+```
+
+**Fallback:** if SRP construction fails (currently only when
+`frame_size = 0` — `rustfft` panics otherwise), AudioService falls
+back to GCC-PHAT and sets `AudioState.doa_backend_fallback = true`,
+surfaced in `/tmp/audio_stats.json`.
+
+**CPU:** **Pending measurement.** Grid loop is ~440k complex ops per
+frame (4 pairs × 1368 dirs × 80 voice-band bins × ~1 mul). Run
+`scripts/test-doa-improvements.sh` test 5 to capture GCC-PHAT vs
+SRP-PHAT CPU delta. F2 spec gate: delta < 5%. If SRP-PHAT exceeds
+the budget, it does NOT ship as an available backend.
 
 ## Diagnostic: `WAVED_DOA_DEBUG`
 
@@ -199,6 +303,35 @@ Per-thread breakdown at Omni (15 s, silence):
 | audio-capture     | ~1.3% |
 | audio-playback    | ~0.3% |
 | ui-lvgl           | ~0.2% |
+
+### Steered cardioid (F2)
+
+`AudioMode::Steered { initial_az_deg }`. Cardioid pattern with
+direction tracking driven by the per-frame DoA stream from
+`AudioService::subscribe_doa()`. Direction smoothed via slerp on
+unit-vectors, α=0.15 (~140 ms time constant at 21 ms ALSA period).
+
+State machine (`crates/waved-audio/src/beam/steered.rs`):
+
+- **High-confidence DoA frame** (`vad && confidence > 0.30`):
+  direction EWMA's toward the new target. Hard-tracks rapid speaker
+  movement with bounded smoothing.
+- **Low-confidence / silence frame**: direction held. After 240
+  consecutive frames (~5 s), `omni_mix` ramps 0→1 over 50 frames
+  (~1 s) cosine fade.
+- **Next high-confidence frame**: `omni_mix` ramps back to 0 with
+  the same 50-frame step.
+
+Mix is a linear crossfade in `Beamformer::process`:
+`(1 - mix) · cardioid + mix · omni`. Both halves are unity-DC-gain
+so the crossfade is click-free.
+
+Thresholds (`CONFIDENCE_THRESHOLD = 0.30`, `REVERT_SILENCE_FRAMES =
+240`, `OMNI_RAMP_FRAMES = 50`) are hardcoded in `steered.rs`;
+promotion to `AudioConfig` only if tuning evidence demands.
+
+**On-device test:** test 6 of `scripts/test-doa-improvements.sh`
+(subjective — operator listens to moving-source recording).
 
 ## Playback DSP Chain (SP#5)
 
