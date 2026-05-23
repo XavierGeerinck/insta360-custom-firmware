@@ -71,6 +71,77 @@ pub fn solve_direction(obs: &[PairObservation]) -> Option<DoaAngles> {
     })
 }
 
+/// Threshold below which the sum-of-pair-sharpnesses indicates the GCC-PHAT
+/// surfaces had no real peak (e.g. silence-on-VAD-edge, all pairs shadowed).
+/// Returning `None` lets the caller emit a vad=false / NaN-angles DoaFrame
+/// instead of pretending to know.
+pub const MIN_SHARPNESS_THRESHOLD: f32 = 1e-4;
+
+/// Per-pair-weighted variant of `solve_direction`. Each observation contributes
+/// to the normal equations weighted by `weights[k]`:
+///   A += w_k · (Δ Δ^T),   b += w_k · (τ c) Δ
+///
+/// Use this from the DoA pipeline with `weights[k] = sharpness_k / Σ_k
+/// sharpness_k`. The 270 deg azimuth residual (SP#3) is hypothesised to come
+/// from a single shadowed pair pulling the unweighted LS off direction —
+/// down-weighting it by its low sharpness should restore accuracy.
+///
+/// Returns `None` if:
+/// - fewer than 3 observations
+/// - `Σ weights < MIN_SHARPNESS_THRESHOLD` (degenerate / no real peaks)
+/// - the weighted 3x3 normal matrix is singular (`|det| < 1e-9`)
+pub fn solve_direction_weighted(
+    obs: &[PairObservation],
+    weights: &[f32],
+) -> Option<DoaAngles> {
+    if obs.len() < 3 {
+        return None;
+    }
+    assert_eq!(obs.len(), weights.len(), "weights length must match obs");
+
+    let weight_sum: f32 = weights.iter().sum();
+    if weight_sum < MIN_SHARPNESS_THRESHOLD {
+        return None;
+    }
+
+    let mut a = [[0.0f32; 3]; 3];
+    let mut b_vec = [0.0f32; 3];
+    for (o, &w) in obs.iter().zip(weights.iter()) {
+        let d = [o.delta_m.x, o.delta_m.y, o.delta_m.z];
+        let tc = o.tdoa_sec * SPEED_OF_SOUND_M_S;
+        for i in 0..3 {
+            b_vec[i] += w * tc * d[i];
+            for j in 0..3 {
+                a[i][j] += w * d[i] * d[j];
+            }
+        }
+    }
+
+    let det_a = det3(&a);
+    if det_a.abs() < 1e-9 {
+        return None;
+    }
+
+    let a_x = replace_col(&a, 0, &b_vec);
+    let a_y = replace_col(&a, 1, &b_vec);
+    let a_z = replace_col(&a, 2, &b_vec);
+    let dx = det3(&a_x) / det_a;
+    let dy = det3(&a_y) / det_a;
+    let dz = det3(&a_z) / det_a;
+
+    let norm = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-9);
+    let dhat = (dx / norm, dy / norm, dz / norm);
+
+    let az = dhat.1.atan2(dhat.0).to_degrees();
+    let el = dhat.2.clamp(-1.0, 1.0).asin().to_degrees();
+    let az = if az < 0.0 { az + 360.0 } else { az };
+
+    Some(DoaAngles {
+        azimuth_deg: az,
+        elevation_deg: el,
+    })
+}
+
 fn det3(m: &[[f32; 3]; 3]) -> f32 {
     m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
@@ -180,5 +251,49 @@ mod tests {
             },
         ];
         assert!(solve_direction(&obs).is_none());
+    }
+
+    #[test]
+    fn weighted_ls_equals_unweighted_with_equal_weights() {
+        let pairs = vec![
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(-25.5, 0.0, 0.0)),
+            (Position3D::new(0.0, 25.5, 0.0), Position3D::new(0.0, -25.5, 0.0)),
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(0.0, 0.0, -78.2)),
+        ];
+        let obs = make_obs(&pairs, 45.0, 15.0);
+        let weights = vec![1.0; obs.len()];
+        let a = solve_direction(&obs).unwrap();
+        let b = solve_direction_weighted(&obs, &weights).unwrap();
+        assert!((a.azimuth_deg - b.azimuth_deg).abs() < 0.01);
+        assert!((a.elevation_deg - b.elevation_deg).abs() < 0.01);
+    }
+
+    #[test]
+    fn weighted_ls_zero_weight_pair_ignored() {
+        let pairs = vec![
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(-25.5, 0.0, 0.0)),
+            (Position3D::new(0.0, 25.5, 0.0), Position3D::new(0.0, -25.5, 0.0)),
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(0.0, 0.0, -78.2)),
+            // Bogus 4th pair, completely wrong direction
+            (Position3D::new(10.0, 10.0, 10.0), Position3D::new(-10.0, -10.0, -10.0)),
+        ];
+        let mut obs = make_obs(&pairs, 45.0, 0.0);
+        // Corrupt the 4th observation's tdoa to simulate a noisy pair
+        obs[3].tdoa_sec = 5e-4; // very wrong
+        let weights = vec![1.0, 1.0, 1.0, 0.0]; // ignore the bad one
+        let ang = solve_direction_weighted(&obs, &weights).unwrap();
+        assert!((ang.azimuth_deg - 45.0).abs() < 2.0, "az {} not ≈45 with bad pair zeroed", ang.azimuth_deg);
+    }
+
+    #[test]
+    fn weighted_ls_returns_none_when_all_weights_below_threshold() {
+        let pairs = vec![
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(-25.5, 0.0, 0.0)),
+            (Position3D::new(0.0, 25.5, 0.0), Position3D::new(0.0, -25.5, 0.0)),
+            (Position3D::new(25.5, 0.0, 0.0), Position3D::new(0.0, 0.0, -78.2)),
+        ];
+        let obs = make_obs(&pairs, 30.0, 0.0);
+        let weights = vec![1e-6, 1e-6, 1e-6]; // all sub-threshold
+        assert!(solve_direction_weighted(&obs, &weights).is_none());
     }
 }
