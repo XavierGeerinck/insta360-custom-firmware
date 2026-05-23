@@ -47,10 +47,58 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - [x] `Command::SetAudioMode` wired to beamforming presets (Task 11).
 - [x] DOA consumer exposed via `doa_horizontal` in `/tmp/audio_stats.json` (Task 11 / stats_collector).
 
-### SP#3 known residuals (not blockers, not scheduled)
-- Elevation bias +3° to +18° after pure-Z pair swap — may be partly real speaker-above-ring. Investigate only if a downstream feature needs elevation (current consumer is 2D arrow).
-- Azimuth error at 270° is ~19° post-pair-swap (vs ~7° before). Candidate fix: per-pair GCC-PHAT peak-sharpness confidence weighting in the LS solve.
-- Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003). Preamp / gain staging belongs in SP#5.
+### SP#3 known residuals — F2 status
+
+- ~~Azimuth error at 270° is ~19° post-pair-swap (vs ~7° before).
+  Candidate fix: per-pair GCC-PHAT peak-sharpness confidence weighting
+  in the LS solve.~~ **F2 status:** weighted-LS shipped
+  (`solve_direction_weighted` + `MIN_SHARPNESS_THRESHOLD` guard) but
+  the 270° case turns out to simultaneously shadow BOTH XY pairs —
+  weighted-LS cannot exploit symmetric degradation. SRP-PHAT
+  alternative backend (`AudioConfig.doa_backend = "srp_phat"`) ships
+  as the intended fix; on-device validation pending via
+  `scripts/test-doa-improvements.sh` test 1. See
+  `docs/AUDIO_HARDWARE.md` "Per-pair confidence-weighted LS" and
+  "SRP-PHAT alternative backend" sections.
+
+- Elevation bias +3° to +18° after pure-Z pair swap. **F2 status:**
+  diagnostic instrumented (`WAVED_DOA_DEBUG` now emits per-pair
+  sharpness + per-pair implied elevation). Operator measurement
+  sweep script: `scripts/test-doa-elevation.sh`. Outcome decision
+  pending — geometric artifact → document only; algorithmic →
+  queue F2b fix.
+
+- Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003).
+  Preamp / gain staging belongs in SP#5. (Unchanged.)
+
+### F2 follow-ups (not blockers; F2b candidates)
+
+- **SRP-PHAT default switch.** F2 ships SRP-PHAT as opt-in
+  (`doa_backend = "srp_phat"`). Default remains GCC-PHAT pending more
+  data. Trigger to promote: F3 acceptance shows SRP gives materially
+  better speaker separation in real meetings, AND test 5 of
+  `test-doa-improvements.sh` confirms < 5% CPU delta.
+- **Vendor `libmodel_infer.so` FFI binding.** Explicitly deferred per
+  F2 spec §6. Trigger: F3 surfaces "two close speakers get merged"
+  pattern that improved Rust DoA can't handle.
+- **Multi-source DoA.** Current single-source assumption is fine for
+  F3's clustering. Trigger: simultaneous speakers scenario.
+- **Steered cardioid → steered supercardioid / hypercardioid /
+  figure-8.** Pattern shape is orthogonal to direction; YAGNI until
+  requested.
+- **Runtime DoA backend switch.** F2 reads `doa_backend` once at
+  startup. Trigger: A/B comparison need on the same device run.
+- **Per-AudioConfig SRP grid resolution.** 5° az × 10° el hardcoded.
+  Promote to config if tuning evidence demands.
+- **Elevation bias root-cause fix.** Pending the diagnostic sweep
+  from `test-doa-elevation.sh`. If azimuth-varying bias is seen,
+  needs an algorithmic fix candidate (possibly the same pair-shadow
+  weighting applied to elevation pairs).
+- **Hot-path allocations in SrpPhatEstimator::estimate().** ~12
+  per-call Vec allocations (8 per_ch_fft + 4 cross_per_pair).
+  Pre-allocating as fields on `SrpPhatEstimator` would eliminate.
+  Not currently a bottleneck — the 440k complex-ops grid loop
+  dominates SRP cost. Promote when the grid loop is optimised.
 
 ### SP#4 (Neural NS + dereverb) — done
 - DeepFilterNet 3 v0.5.6 integrated on CPU via `tract`; bundled low-latency model. See `crates/waved-npu/`, `crates/waved-audio/src/aec/deep_filter.rs`, `scripts/test-neural-ns.sh`.
