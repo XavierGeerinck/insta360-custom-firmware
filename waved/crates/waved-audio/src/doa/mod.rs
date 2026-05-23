@@ -186,9 +186,25 @@ impl DoaEstimator {
                     let expected_tau_sec =
                         (dx * dhat[0] + dy * dhat[1] + dz * dhat[2]) / SPEED_OF_SOUND_M_S;
                     let expected_tau_samples = expected_tau_sec * sr;
+                    // Per-pair implied elevation: if this pair carried 100% of the
+                    // direction, what el would it imply assuming our smoothed az?
+                    // For pure-Z pairs (dz != 0, dx ≈ dy ≈ 0) this isolates the
+                    // elevation contribution; for XY-diagonal pairs it's noisy but
+                    // still useful for spotting outliers.
+                    let baseline_len = (dx*dx + dy*dy + dz*dz).sqrt().max(1e-9);
+                    let tau_meters = raw_tau_samples[k] / sr * SPEED_OF_SOUND_M_S;
+                    let cos_angle_to_baseline = (tau_meters / baseline_len).clamp(-1.0, 1.0);
+                    let el_implied_deg = if dz.abs() > 0.5 * baseline_len {
+                        // Pure-Z-ish pair: cos_angle_to_baseline ≈ sin(el) (signed)
+                        cos_angle_to_baseline.asin().to_degrees()
+                    } else {
+                        // XY-ish pair: no clean elevation; report NaN sentinel.
+                        f32::NAN
+                    };
                     line.push_str(&format!(
-                        "({},{})raw={:+.2} exp={:+.2}  ",
+                        "({},{})raw={:+.2} exp={:+.2} sh={:.2} el_p={:+.1}  ",
                         i, j, raw_tau_samples[k], expected_tau_samples,
+                        sharpnesses[k], el_implied_deg,
                     ));
                 }
                 tracing::info!(
