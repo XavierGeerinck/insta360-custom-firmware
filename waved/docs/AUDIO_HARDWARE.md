@@ -47,7 +47,7 @@ the mapping directly — never assume ALSA index = physical index.
 ALSA 8ch interleaved f32
    ↓ permute to per-physical-channel buffers
    ↓ Energy VAD on physical channel 0 (RMS > 0.0003)
-   ↓ GCC-PHAT for 4 pairs: (0,2), (1,3), (0,6), (1,7)
+   ↓ GCC-PHAT for 4 pairs: (0,2), (1,3), (0,4), (2,6)
    ↓ least-squares 3D solve (τ·c = (p_i − p_j) · d̂)
    ↓ EWMA smoothing on unit-vector az, linear on el
    → azimuth_deg ∈ [−180, 180], elevation_deg
@@ -255,7 +255,7 @@ Unset or `=0` → off (production default). Log target
 `waved_audio::doa::debug`, info level. Example line:
 
 ```
-doa_debug az=178.2 el=3.1 rms0=0.00012 | (0,2)raw=-0.03 exp=-0.05  (1,3)raw=+0.44 exp=+0.42  (0,6)raw=-1.21 exp=-1.30  (1,7)raw=-0.18 exp=-0.25
+doa_debug az=178.2 el=3.1 rms0=0.00012 | (0,2)raw=-0.03 exp=-0.05 sh=1834.2 el_p=+nan  (1,3)raw=+0.44 exp=+0.42 sh=1721.9 el_p=+nan  (0,4)raw=-1.21 exp=-1.30 sh=1532.6 el_p=+12.4  (2,6)raw=-0.18 exp=-0.25 sh=1488.1 el_p=+8.7
 ```
 
 `raw` = GCC-PHAT output, `exp` = τ predicted from the current smoothed
