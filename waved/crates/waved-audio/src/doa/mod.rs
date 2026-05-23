@@ -1,9 +1,11 @@
 //! Direction-of-arrival estimation.
 pub mod gcc_phat;
 pub mod solve;
+pub mod stream;
 pub mod vad;
 
 pub use solve::{DoaAngles, PairObservation};
+pub use stream::{DoaBackend, DoaFrame, DoaPublisher};
 
 use crate::beam::MicGeometry;
 use gcc_phat::GccPhat;
