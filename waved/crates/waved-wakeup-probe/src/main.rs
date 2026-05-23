@@ -127,8 +127,12 @@ pub fn generate_burst(burst_ms: u32, sample_rate: u32, seed: u64) -> Vec<f32> {
 /// score is below `min_score_ratio` × the burst's auto-correlation peak
 /// (= sum of squares).
 ///
-/// O(len(output) * len(burst)). For our sizes (≤ ~3M × 9600), this runs
-/// in well under a second on the device. No need for FFT.
+/// O(len(output) * len(burst)). At default cold-run sizing
+/// (`output ≈ 2.9 M`, `burst ≈ 9 600`) this is ~28 G mul-adds per call —
+/// expect roughly 10–20 s per burst on the Wave's Cortex-A53. Acceptable
+/// for a one-shot benchmark; if Task 6 finds it intolerable, window the
+/// search (the burst arrival is known to be near `silence_samples`) or
+/// switch to an FFT-based xcorr.
 pub fn find_burst_offset(output: &[f32], burst: &[f32], min_score_ratio: f32) -> Option<usize> {
     if burst.is_empty() || output.len() < burst.len() {
         return None;
