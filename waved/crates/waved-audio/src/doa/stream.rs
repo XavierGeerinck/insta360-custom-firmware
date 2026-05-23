@@ -31,7 +31,7 @@ impl Default for DoaBackend {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct DoaFrame {
     pub frame_idx: u64,
-    pub timestamp_ns: u64,
+    pub timestamp_ms: u64,
     pub azimuth_deg: f32,
     pub elevation_deg: f32,
     pub confidence: f32,
@@ -41,10 +41,10 @@ pub struct DoaFrame {
 
 impl DoaFrame {
     /// Construct a "no speech / no direction" frame for a given frame index.
-    pub fn silent(frame_idx: u64, timestamp_ns: u64, backend: DoaBackend) -> Self {
+    pub fn silent(frame_idx: u64, timestamp_ms: u64, backend: DoaBackend) -> Self {
         Self {
             frame_idx,
-            timestamp_ns,
+            timestamp_ms,
             azimuth_deg: f32::NAN,
             elevation_deg: f32::NAN,
             confidence: 0.0,
@@ -99,7 +99,7 @@ mod tests {
     fn doa_frame_round_trips_to_json() {
         let f = DoaFrame {
             frame_idx: 7,
-            timestamp_ns: 12_345_678,
+            timestamp_ms: 12_345,
             azimuth_deg: 45.5,
             elevation_deg: -3.2,
             confidence: 0.71,
