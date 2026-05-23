@@ -251,8 +251,12 @@ pub fn aggregate(label: &str, results: &[BurstResult]) -> Phase {
     }
 }
 
-/// Owns the receivers we must keep alive — `process_frame` calls
-/// `audio_tx.send_modify` which panics on a dead receiver list.
+/// Holds the watch + mpsc receivers for the lifetime of the run. Not
+/// strictly required for safety — `process_frame` only uses
+/// `audio_tx.send_modify` and `meeting_tx.try_send`, neither of which
+/// fails when receivers are dropped. Keeping them around preserves the
+/// AudioService's view of the world and avoids a channel-close hazard
+/// if a future refactor switches to `send` / `send`.
 struct ServiceHandle {
     svc: AudioService,
     _audio_rx: watch::Receiver<AudioState>,
@@ -306,7 +310,7 @@ fn run_burst(
     for chunk in input.chunks_exact(frame_size) {
         // Duplicate mono float into 8-ch interleaved i16.
         for (i, &s) in chunk.iter().enumerate() {
-            let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+            let v = (s.clamp(-1.0, 1.0) * 32768.0) as i16;
             for ch in 0..mc {
                 interleaved[i * mc + ch] = v;
             }
@@ -328,7 +332,12 @@ fn run_burst(
     // arrival is relative to the start of `output` (which is aligned 1:1
     // with `input`). Subtract silence_samples to get the burst-relative delay.
     let lat_samples = arrival as i64 - silence_samples as i64;
-    let latency_ms = (lat_samples.max(0) as f32) * 1000.0 / sample_rate as f32;
+    if lat_samples < 0 {
+        // xcorr argmax landed inside the silence region — that's a spurious peak,
+        // not a real detection. Treat as MISSED rather than reporting 0 ms.
+        return BurstResult { latency_ms: None, edge_loss_ms: None, peak_db: None };
+    }
+    let latency_ms = lat_samples as f32 * 1000.0 / sample_rate as f32;
 
     let out_burst_end = (arrival + burst.len()).min(output.len());
     let out_burst = &output[arrival..out_burst_end];
