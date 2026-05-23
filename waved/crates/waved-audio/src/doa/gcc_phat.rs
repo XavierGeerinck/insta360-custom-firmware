@@ -190,11 +190,19 @@ mod tests {
     }
 
     #[test]
-    fn peak_sharpness_is_finite_and_non_negative_for_noise() {
-        // GCC-PHAT normalises each frequency bin to unit magnitude, so even
-        // uncorrelated noise produces a peaked IFFT (sharpness can be large).
-        // This test verifies the returned sharpness is a valid finite f32 and
-        // non-negative (denom < 0 on concave peak → sharpness = -denom ≥ 0).
+    fn peak_sharpness_discriminates_broadband_signal_from_noise() {
+        // The weighted-LS DoA solver (SP#3 270° fix) weights each mic pair by
+        // sharpness so that body-shadowed pairs (flat correlation surface) are
+        // down-weighted relative to clean pairs (sharp concave peak).  For that
+        // weighting to be meaningful, signal sharpness must be substantially
+        // larger than noise sharpness — a ratio < 5× would make the weights
+        // degenerate and the weighted-LS approach unsound.
+        //
+        // SIGNAL: same broadband noise on both channels, delayed by τ=5 samples.
+        // This is the closest analog to a real plane-wave hitting two mics: same
+        // source content, different arrival time. PHAT-normalised cross-spectrum
+        // becomes exp(j·2π·f·τ) on every bin → IFFT = delta at lag τ, high
+        // sharpness.
         let gcc = GccPhat::new(480);
         let mut state = 0x9E3779B1u32;
         let mut rnd = || {
@@ -203,10 +211,33 @@ mod tests {
             state ^= state << 5;
             (state as f32 / u32::MAX as f32) - 0.5
         };
-        let x1: Vec<f32> = (0..480).map(|_| rnd()).collect();
-        let x2: Vec<f32> = (0..480).map(|_| rnd()).collect();
-        let (_tau, sharpness) = gcc.estimate_tdoa(&x1, &x2, 20);
-        assert!(sharpness.is_finite(), "sharpness must be finite, got {sharpness}");
-        assert!(sharpness >= 0.0, "sharpness must be non-negative, got {sharpness}");
+
+        let src: Vec<f32> = (0..480 + 16).map(|_| rnd()).collect();
+        let x1_sig: Vec<f32> = src[5..485].to_vec();
+        let x2_sig: Vec<f32> = src[0..480].to_vec(); // x2 lags x1 by 5 → τ=+5
+        let (sig_tau, sig_sharpness) = gcc.estimate_tdoa(&x1_sig, &x2_sig, 20);
+
+        // NOISE: independent broadband noise per channel. No correlation.
+        // PHAT normalisation gives random per-bin phase → IFFT is a random walk
+        // with peaks of order sqrt(n) and broad curvature → low sharpness.
+        let x1_noise: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let x2_noise: Vec<f32> = (0..480).map(|_| rnd()).collect();
+        let (_noise_tau, noise_sharpness) = gcc.estimate_tdoa(&x1_noise, &x2_noise, 20);
+
+        eprintln!(
+            "broadband: sig_tau={sig_tau:.2} (expected ≈ 5), sig_sharpness={sig_sharpness:.2}, \
+             noise_sharpness={noise_sharpness:.2}, ratio={:.2}",
+            sig_sharpness / noise_sharpness.max(1e-9)
+        );
+
+        // Sanity: signal tau must be recovered.
+        assert!((sig_tau - 5.0).abs() < 0.5, "signal τ {sig_tau} should be ≈ 5");
+        // Discrimination: signal sharpness must dominate noise sharpness by ≥ 5×
+        // for the weighted-LS approach to be sound.
+        assert!(
+            sig_sharpness > 5.0 * noise_sharpness,
+            "weighted-LS unsound: sig_sharpness {sig_sharpness} vs noise_sharpness {noise_sharpness} (ratio {:.2}× < 5×)",
+            sig_sharpness / noise_sharpness.max(1e-9)
+        );
     }
 }
