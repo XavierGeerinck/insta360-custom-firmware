@@ -13,10 +13,18 @@ adb_run() { adb -s "$DEVICE" shell "$@"; }
 CSV=/tmp/elevation-measurements.csv
 adb_run "echo 'truth_az,truth_el,measured_az,measured_el,sharp_0_2,sharp_1_3,sharp_0_4,sharp_2_6' > $CSV"
 
+# The debug bursts below start their OWN short-lived waved. Stop the watchdog
+# and the running daemon FIRST, otherwise the burst can't acquire the mic
+# device (hw:0) / ttyS1 — they're held under an exclusive lock by the live
+# daemon and the burst silently falls back to host-dev mode (no DoA).
+echo "Stopping watchdog + daemon so debug bursts own the mic device..."
+adb_run "kill \$(ps | grep -iE 'S60waved|/data/waved/waved' | grep -v grep | grep -v doa-tap | awk '{print \$1}') 2>/dev/null; sleep 2" || true
+
 for az in 0 90 180 270; do
     for el in -30 0 30 60; do
         echo
         echo "Position loudspeaker at az=${az}°, el=${el}° relative to top-ring plane."
+        echo "Play BROADBAND noise (pink/white — NOT a pure tone; tones are pathological for PHAT)."
         read -r -p "press ENTER when ready: " _
         # 5 s WAVED_DOA_DEBUG burst → grep latest line, extract numbers.
         adb_run "WAVED_DOA_DEBUG=100 timeout 5 /data/waved/waved 2>&1 | grep doa_debug | tail -5"
@@ -29,5 +37,8 @@ for az in 0 90 180 270; do
 done
 
 adb pull "$CSV" ./elevation-measurements-$(date +%Y%m%d).csv
+echo
+echo "Restarting the supervised daemon (setsid so it survives adb session close)..."
+adb_run "(setsid sh /etc/init.d/S60waved start >/dev/null 2>&1 </dev/null &); sleep 4" || true
 echo
 echo "Done. Analyse the CSV; update AUDIO_HARDWARE.md with findings (Task 19)."

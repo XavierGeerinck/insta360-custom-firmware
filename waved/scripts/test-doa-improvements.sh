@@ -27,16 +27,20 @@ prompt() {
 }
 
 read_az() {
-    # Reads doa_horizontal from /tmp/audio_stats.json (4s average).
+    # Reads doa_horizontal from /tmp/audio_stats.json over ~4s and returns the
+    # CIRCULAR mean (atan2 of summed sin/cos). A linear mean is wrong across the
+    # 0°/360° wrap — e.g. averaging 359° and 1° linearly yields 180°, not 0°.
     adb_run "for i in 1 2 3 4 5 6 7 8; do cat /tmp/audio_stats.json 2>/dev/null | \
-        grep -o 'doa_horizontal\":[^,]*' | head -1; sleep 0.5; done" \
-        | grep -oE '[0-9]+\.[0-9]+' \
-        | awk '{s+=$1; n++} END {if (n>0) print s/n}'
+        grep -oE '\"doa_horizontal\": *[0-9.-]+'; sleep 0.5; done" \
+        | grep -oE '[0-9.-]+$' | tr -d '\r' \
+        | awk 'function torad(d){return d*3.14159265/180}
+               {c+=cos(torad($1)); s+=sin(torad($1)); n++}
+               END {if (n>0) {m=atan2(s/n,c/n)*180/3.14159265; if(m<0)m+=360; printf "%.2f\n", m}}'
 }
 
 run_test_270_az() {
     echo "=== Test 1: 270° azimuth fix regression ==="
-    prompt "place loudspeaker at az=270° (device's right side), play 1 kHz tone"
+    prompt "place loudspeaker at az=270° (device's right side), play BROADBAND noise (pink/white — NOT a pure tone; tones are pathological for PHAT)"
     az=$(read_az)
     echo "measured az: ${az}°"
     err=$(echo "$az" | awk '{d=270-$1; if (d<0) d=-d; if (d>180) d=360-d; print d}')
@@ -52,7 +56,7 @@ run_test_270_az() {
 run_test_other_az_regression() {
     echo "=== Test 2: 4-quadrant az regression (no SP#3 regression) ==="
     for target in 0 90 180; do
-        prompt "place loudspeaker at az=${target}°, play 1 kHz tone"
+        prompt "place loudspeaker at az=${target}°, play BROADBAND noise (NOT a pure tone)"
         az=$(read_az)
         err=$(echo "$az $target" | awk '{d=$2-$1; if (d<0) d=-d; if (d>180) d=360-d; print d}')
         echo "az=${target}° measured ${az}° → error ${err}°"
@@ -74,7 +78,7 @@ run_test_srp_backend() {
     adb_run "cp /tmp/waved-audio-config.json /etc/waved-audio-config.json"
     adb_start_waved
     # Re-run test 1 with the new backend.
-    prompt "(SRP-PHAT active) place loudspeaker at az=270°"
+    prompt "(SRP-PHAT active) place loudspeaker at az=270°, play BROADBAND noise"
     az=$(read_az)
     err=$(echo "$az" | awk '{d=270-$1; if (d<0) d=-d; if (d>180) d=360-d; print d}')
     echo "SRP-PHAT az=${az}°, err=${err}°"
@@ -114,16 +118,28 @@ run_test_steered_beam_pickup() {
 }
 
 run_test_f3_consumer_smoke() {
-    echo "=== Test 7: F3 consumer smoke via waved-doa-tap ==="
-    adb_kill_waved
-    # Run tap directly — produces frames itself by owning the AudioService.
-    out=$(adb_run "$TAP_BIN --duration-secs 5 2>&1" | head -20)
-    echo "$out"
-    n_lines=$(echo "$out" | grep -c '^{' || true)
-    if [ "$n_lines" -gt 50 ]; then
-        echo "PASS: ${n_lines} DoaFrame JSONs in 5 s (expected ~240 at 21ms cadence)"
+    echo "=== Test 7: DoA pipeline liveness (consumer cadence) ==="
+    # NOTE: waved-doa-tap is currently a NON-FUNCTIONAL stub — it constructs a
+    # private AudioService whose frame_rx mpsc is never fed (no capture source is
+    # wired in), so it emits zero DoaFrames regardless of whether waved runs.
+    # Until the tap is fixed to own a capture source, validate the DoA consumer
+    # path against the running daemon instead: confirm /tmp/audio_stats.json's
+    # doa fields advance (the real subscribe_doa() consumer, MeetingService, is
+    # exercised end-to-end by scripts/test-diarization.sh).
+    prompt "play BROADBAND noise near the device"
+    changed=0
+    prev=""
+    for _ in $(seq 1 8); do
+        cur=$(adb_run "cat /tmp/audio_stats.json 2>/dev/null | grep -oE '\"doa_horizontal\": *[0-9.-]+'" | tr -d '\r')
+        [ -n "$cur" ] && [ "$cur" != "$prev" ] && changed=$((changed+1))
+        prev="$cur"
+        sleep 0.5
+    done
+    echo "doa_horizontal changed in ${changed}/8 stats samples"
+    if [ "$changed" -ge 4 ]; then
+        echo "PASS: DoA pipeline is live and producing direction estimates"
     else
-        echo "FAIL: only ${n_lines} frames"
+        echo "FAIL: DoA output not advancing — is capture running?"
         return 1
     fi
 }

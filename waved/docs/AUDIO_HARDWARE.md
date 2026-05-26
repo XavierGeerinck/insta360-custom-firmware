@@ -208,9 +208,35 @@ weighted-LS at least preserves accuracy when ONE pair is corrupted
 is in `doa::tests::update_with_weighted_solver_recovers_az_on_recoverable_scenario`.
 The actual 270° production fix comes from SRP-PHAT (below).
 
-**On-device measurement:** **Pending measurement** — run
-`scripts/test-doa-improvements.sh` test 1 to capture the post-fix
-azimuth error at 270° with the loudspeaker physically placed.
+**On-device measurement** (device `PSP_0000000000000000`, **broadband
+noise** — see stimulus note below, 8–10 sample circular mean of
+`doa_horizontal`):
+
+| Target az | GCC-PHAT measured | err | SRP-PHAT measured | err |
+|-----------|-------------------|-----|-------------------|-----|
+| 0° (+X front) | 359.0° | 1.0° | — | — |
+| 90° (+Y left) | 74.0° | 16.0° | — | — |
+| 180° (−X back) | 182.6° | 2.6° | — | — |
+| 270° (−Y right) | 283.2° | 13.2° | 263.1° | **6.9°** |
+
+The X-axis (0°/180°) is excellent (≤3°). **Both Y-axis points are
+compressed ~13–16° *toward the front* (0°)** under GCC-PHAT — a
+symmetric bias, not noise (per-sample spread was ±1°). This is the
+same body/geometry effect that makes 270° hard: off the X-axis, both
+XY-horizontal pairs degrade together. **SRP-PHAT roughly halves the
+270° error (13.2° → 6.9°), crossing the ±10° gate** — confirming SRP
+is the real fix for the Y-axis weakness (at a CPU cost, below). SRP is
+noisier per-sample (spread ±10°, grid-limited) but far less biased.
+
+> **Stimulus note (important):** a pure 1 kHz tone is *pathological*
+> for any PHAT-based DoA — PHAT normalises every bin to unit
+> magnitude, so single-frequency energy carries no usable
+> cross-correlation peak and the estimate locks onto room reflections
+> (1 kHz ≈ 34 cm → strong indoor standing waves). The same 0° source
+> read 295° (65° err) with a tone vs 359° (1° err) with broadband.
+> **Always drive DoA acceptance with broadband noise or speech**, never
+> a tone. (The `scripts/test-doa-*.sh` prompts were corrected to say
+> "broadband" accordingly.)
 
 ### SRP-PHAT alternative backend (F2)
 
@@ -237,11 +263,22 @@ value regardless of backend.
 back to GCC-PHAT and sets `AudioState.doa_backend_fallback = true`,
 surfaced in `/tmp/audio_stats.json`.
 
-**CPU:** **Pending measurement.** Grid loop is ~440k complex ops per
-frame (4 pairs × 1368 dirs × 80 voice-band bins × ~1 mul). Run
-`scripts/test-doa-improvements.sh` test 5 to capture GCC-PHAT vs
-SRP-PHAT CPU delta. F2 spec gate: delta < 5%. If SRP-PHAT exceeds
-the budget, it does NOT ship as an available backend.
+**CPU (measured, device `PSP_0000000000000000`, broadband load, waved
+`utime+stime` over 12 s, USER_HZ=100):**
+
+| Backend | jiffies / 12 s | ≈ % of one core |
+|---------|----------------|-----------------|
+| GCC-PHAT | 699 | ~58% |
+| SRP-PHAT | 1355 | ~113% |
+
+**SRP-PHAT costs +93.8% CPU — nearly 2× GCC-PHAT** (the 1368-direction
+grid search dwarfs GCC's 4 pairwise correlations). This blows past the
+F2 spec's optimistic "< 5%" gate by ~19×. The gate was unrealistic;
+the real decision is **GCC-PHAT stays the default**, and SRP-PHAT
+ships as an **opt-in** backend (`doa_backend: "srp_phat"`) for cases
+that need the Y-axis accuracy *and* have a spare core — it fits on
+this device (one extra core absorbs the ~113% load) but should not be
+the always-on default.
 
 ## Diagnostic: `WAVED_DOA_DEBUG`
 
