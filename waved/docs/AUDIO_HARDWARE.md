@@ -451,30 +451,41 @@ post-DSP buffer (mute → 0, otherwise `volume_pct/100`, linear). The AEC
 reference broadcast taps **after** the gain so the canceller sees what
 actually reaches the mics.
 
-### MCU physical button byte codes
+### MCU heartbeat on `/dev/ttyS1` — and the "button code" myth
 
-Physical buttons (Volume Up, Volume Down, Mute) communicate via **raw single
-bytes on `/dev/ttyS1` (115200 baud)**, NOT wrapped in the `0xDC 0xCD` frame
-protocol used for motor/battery commands. Measured on-device via strace:
+The MCU emits a **single heartbeat byte `0x4B` roughly every 0.5 s** on
+`/dev/ttyS1` (115200 baud), outside the `0xDC 0xCD` frame protocol used for
+motor/battery commands. That is the *only* unframed traffic on the wire.
 
-| Byte | Button | Note |
-|------|--------|------|
-| `0x4A` | Volume Up | press event |
-| `0x49` | Volume Down | press event |
-| `0x48` | Mute (toggle) | press event |
-| `0x4B` | — | MCU heartbeat; sent constantly, ignore |
+⚠️ **There is no MCU raw-byte button protocol.** An earlier revision documented
+`0x4A`/`0x49`/`0x48` as Volume Up / Volume Down / Mute "press events measured
+on-device via strace", and `UartMux` injected synthetic button frames for any
+standalone byte in `0x48..=0x4A`. On-device capture (strace of the `ttyS1`
+reader, correlated with `waved.log` and `uac::control`) disproved this:
 
-The `UartMux` reader intercepts bytes in `0x48..=0x4A` **only when the frame
-parser is at its idle state** (no partial frame in flight) and injects
-synthetic MCU frames so `McuService::handle_frame` can dispatch them via the
-normal `DeviceEvent::ButtonPress` path. The idle-state gate is load-bearing:
-those byte values are also valid payload bytes of every framed message on the
-same wire (e.g. battery voltage 3658 mV serialises as `0x4A 0x0E` little-
-endian). Without the gate, every matching battery report injected a phantom
-VolumeUp that propagated as a HID Consumer Volume Up to the Mac — observed
-as "ghost volume bumps" on the host.
+- The heartbeat byte gets **individual-bit corruption with low bits cleared**.
+  Captured variants of `0x4B` (`0100 1011`) included `0x4A` (`…1010`),
+  `0x49` (`…1001`), `0x09` (`0000 1001`) and `0x08` (`0000 1000`). The `0x08`/
+  `0x09` values — outside any "button" range — prove these are line corruption,
+  not intentional messages.
+- All anomalies stay locked to the **0.5 s heartbeat grid**; none are
+  human-timed. Pressing and holding the physical Volume Up button **five times
+  produced zero `0x4A` bytes** and the Mac volume only drifted *down* (from
+  `0x49` corruptions) — i.e. physical buttons do **not** reach `waved` over
+  `ttyS1` at all.
+- Neither input device advertises volume keys: `vad_keypad` (`event0`) reports
+  only `KEY_POWER`; `ILITEK_TDDI` (`event1`) reports only touch codes.
 
-MuteLongPress byte code not yet measured; not currently mapped.
+Because the button codes `0x48..=0x4A` sit one or two cleared bits away from the
+constant `0x4B` heartbeat, every corrupted heartbeat that landed on `0x49`/`0x4A`
+was forwarded to the Mac as a HID Consumer Volume key — the **"ghost volume"**
+bug. The raw-byte interception in `UartMux` has been removed; unframed bytes
+(heartbeat and its corruptions) are now discarded by the frame parser. The
+framed-button slot (`McuService::handle_frame`, cmd `0x40..=0x4F`) remains for
+the simulation/legacy protocol but carries no traffic on real hardware.
+
+If genuine device-side volume buttons are wanted, the real hardware input path
+must be identified first (it is **not** `ttyS1`, `event0`, or `event1`).
 
 ### HID control surface (SP#7d)
 

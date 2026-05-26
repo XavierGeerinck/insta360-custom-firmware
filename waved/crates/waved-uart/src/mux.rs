@@ -123,36 +123,24 @@ impl UartMux {
     }
 }
 
-/// Process one byte from the serial port: optionally inject a synthetic MCU
-/// button frame, then feed the byte into the frame parser and dispatch any
-/// completed frame to the appropriate receiver. Returns `Err(())` if a
-/// receiver has been dropped (caller should stop the reader).
+/// Process one byte from the serial port: feed it into the frame parser and
+/// dispatch any completed frame to the appropriate receiver. Returns `Err(())`
+/// if a receiver has been dropped (caller should stop the reader).
 ///
-/// The button-byte interception is gated on `parser.is_idle()` because
-/// `0x48..=0x4A` are also valid payload bytes of framed messages. A battery
-/// frame carrying voltage 3658 mV (= `0x0E4A` little-endian) would otherwise
-/// inject a phantom VolumeUp every time a battery report fell in that range,
-/// producing the "ghost volume bumps" symptom on the Mac.
+/// Note: raw single bytes that are NOT part of a `0xDC/0xCD` or `0x75/..` frame
+/// are discarded by the parser. In particular the MCU's `0x4B` heartbeat — and
+/// its low-bit-corrupted variants `0x48`/`0x49`/`0x4A` — are intentionally
+/// ignored here. An earlier revision treated those variants as physical
+/// Mute/VolumeDown/VolumeUp presses, but on-device capture proved they are
+/// heartbeat corruption, not button input (physical buttons do not reach waved
+/// over ttyS1). Forwarding them produced the "ghost volume" bug on the Mac.
+/// See `docs/AUDIO_HARDWARE.md`.
 fn handle_byte(
     byte: u8,
     parser: &mut FrameParser,
     bt_tx: &Sender<Frame>,
     mcu_tx: &Sender<Frame>,
 ) -> Result<(), ()> {
-    // Physical buttons arrive as raw bytes (not 0xDC/0xCD framed).
-    // 0x48 = MuteToggle, 0x49 = VolumeDown, 0x4A = VolumeUp (on-device).
-    // 0x4B is the MCU heartbeat; ignore it.
-    if parser.is_idle() && matches!(byte, 0x48..=0x4A) {
-        let frame = Frame {
-            header: [0xDC, 0xCD],
-            target: FrameTarget::Mcu,
-            data: vec![byte],
-        };
-        if mcu_tx.send(frame).is_err() {
-            debug!("mcu receiver dropped, stopping reader");
-            return Err(());
-        }
-    }
     if let Some(result) = parser.feed(byte) {
         match result {
             Ok(frame) => {
@@ -185,14 +173,23 @@ mod tests {
     }
 
     #[test]
-    fn standalone_button_byte_emits_synthetic_mcu_frame() {
-        let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
-        let mut parser = FrameParser::new();
-        handle_byte(0x4A, &mut parser, &bt_tx, &mcu_tx).unwrap();
-        let frame = mcu_rx.try_recv().expect("expected synthetic button frame");
-        assert_eq!(frame.target, FrameTarget::Mcu);
-        assert_eq!(frame.data, vec![0x4A]);
-        assert!(mcu_rx.try_recv().is_err(), "exactly one frame expected");
+    fn standalone_button_bytes_are_ignored_as_heartbeat_corruption() {
+        // On-device measurement (see AUDIO_HARDWARE.md): the MCU emits a 0x4B
+        // heartbeat byte ~every 0.5 s and individual bytes get corrupted with
+        // low bits cleared (0x4B -> 0x4A/0x49/0x48, also 0x09/0x08). These are
+        // NOT button presses — physical buttons do not reach waved over ttyS1
+        // at all. A standalone byte in 0x48..=0x4A must therefore produce no
+        // event; otherwise it propagates to the Mac as a phantom volume/mute
+        // HID key (the "ghost volume" bug).
+        for byte in [0x48u8, 0x49, 0x4A] {
+            let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
+            let mut parser = FrameParser::new();
+            handle_byte(byte, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            assert!(
+                mcu_rx.try_recv().is_err(),
+                "standalone {byte:#04x} must not emit a frame",
+            );
+        }
     }
 
     #[test]
@@ -241,13 +238,12 @@ mod tests {
         let mut parser = FrameParser::new();
         handle_byte(0x4B, &mut parser, &bt_tx, &mcu_tx).unwrap();
         assert!(mcu_rx.try_recv().is_err());
-        assert!(parser.is_idle(), "heartbeat must not advance the parser");
     }
 
     #[test]
-    fn button_press_between_real_frames_still_works() {
-        // After a complete frame, parser returns to idle; a button byte that
-        // immediately follows must still be intercepted.
+    fn standalone_button_byte_after_frame_is_ignored() {
+        // A complete frame is delivered, but a standalone button-range byte
+        // that follows it (heartbeat corruption) must NOT emit a second frame.
         let payload = [0x10, 85, 0x20, 0x0F, 25, 1];
         let raw = Frame::build([0xDC, 0xCD], &payload).unwrap();
 
@@ -260,7 +256,9 @@ mod tests {
 
         let first = mcu_rx.try_recv().expect("battery frame");
         assert_eq!(first.data, payload.to_vec());
-        let second = mcu_rx.try_recv().expect("synthetic button frame");
-        assert_eq!(second.data, vec![0x4A]);
+        assert!(
+            mcu_rx.try_recv().is_err(),
+            "standalone 0x4A after a frame must not emit a synthetic button frame",
+        );
     }
 }

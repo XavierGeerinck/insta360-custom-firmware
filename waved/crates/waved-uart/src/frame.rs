@@ -77,15 +77,6 @@ impl FrameParser {
         }
     }
 
-    /// True when the parser is at its initial state — no bytes of a partial
-    /// frame have been consumed. Used by the UART reader to decide whether a
-    /// raw byte in `0x48..=0x4A` can be interpreted as a standalone MCU button
-    /// press, or whether it's a payload byte of an in-flight frame (e.g.
-    /// battery voltage 3658 mV = 0x0E4A) that must not be misclassified.
-    pub fn is_idle(&self) -> bool {
-        self.state == ParseState::Header0
-    }
-
     pub fn feed(&mut self, byte: u8) -> Option<Result<Frame, FrameError>> {
         match self.state {
             ParseState::Header0 => {
@@ -255,27 +246,6 @@ mod tests {
             }
         }
         assert!(result.unwrap().is_err());
-    }
-
-    #[test]
-    fn is_idle_returns_true_only_between_frames() {
-        let mut p = FrameParser::new();
-        assert!(p.is_idle(), "fresh parser is idle");
-        // A non-header byte is discarded; parser stays idle.
-        p.feed(0x4A);
-        assert!(p.is_idle());
-        // Once a real header byte arrives, parser advances out of idle.
-        p.feed(0xDC);
-        assert!(!p.is_idle());
-        p.feed(0xCD);
-        assert!(!p.is_idle());
-        // A complete frame returns the parser to idle.
-        let raw = Frame::build([0xDC, 0xCD], &[]).unwrap();
-        let mut p2 = FrameParser::new();
-        for &b in &raw {
-            p2.feed(b);
-        }
-        assert!(p2.is_idle(), "parser returns to idle after a complete frame");
     }
 
     #[test]

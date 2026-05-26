@@ -4,12 +4,12 @@ pub fn parse_button_frame(data: &[u8]) -> Option<ButtonType> {
     if data.is_empty() {
         return None;
     }
+    // NOTE: 0x48/0x49/0x4A were previously mapped here as physical
+    // Mute/VolumeDown/VolumeUp presses, "measured on-device via strace". That
+    // was a reverse-engineering error: those values are low-bit-corrupted
+    // copies of the 0x4B heartbeat, not button input (see AUDIO_HARDWARE.md).
+    // Only the framed simulation/legacy codes below are mapped.
     match data[0] {
-        // Real hardware byte codes (measured on-device via strace of ttyS1):
-        0x48 => Some(ButtonType::MuteToggle),
-        0x49 => Some(ButtonType::VolumeDown),
-        0x4A => Some(ButtonType::VolumeUp),
-        // Simulation / legacy byte codes (used by waved-mcu/src/simulate.rs):
         0x40 => Some(ButtonType::MuteToggle),
         0x41 => Some(ButtonType::VolumeUp),
         0x42 => Some(ButtonType::VolumeDown),
