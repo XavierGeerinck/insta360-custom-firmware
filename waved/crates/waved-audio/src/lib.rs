@@ -4,6 +4,7 @@ pub mod beam;
 pub mod callbacks;
 pub mod doa;
 pub mod capture;
+pub mod mic_check;
 pub mod playback;
 pub mod processed_frame;
 pub mod stats_collector;
@@ -749,6 +750,22 @@ mod tests {
         let samples = vec![0i16; 512];
         let vu = compute_vu(&samples, 8);
         assert!(vu.iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn nr_level_maps_to_distinct_increasing_atten() {
+        // SP#4 follow-up / stock parity: NrLevel must drive *distinct* DFN3
+        // attenuation caps, not collapse Low/Med/High to one value.
+        let off = nr_to_atten_lim_db(&NrLevel::Off);
+        let low = nr_to_atten_lim_db(&NrLevel::Low);
+        let med = nr_to_atten_lim_db(&NrLevel::Med);
+        let high = nr_to_atten_lim_db(&NrLevel::High);
+        assert!(
+            off < low && low < med && med < high,
+            "expected strictly increasing atten Off<Low<Med<High, got {off}/{low}/{med}/{high}"
+        );
+        // The three active levels must be mutually distinct (the bug we guard against).
+        assert!(low != med && med != high && low != high);
     }
 
     #[test]

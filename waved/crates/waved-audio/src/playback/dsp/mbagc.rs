@@ -251,6 +251,44 @@ mod tests {
     }
 
     #[test]
+    fn soft_knee_quadratic_transition() {
+        // Isolate the knee math via band_gain_linear directly. Band 0: target
+        // -20 dBFS, max gain 20 dB, knee 6 dB → half = 3 dB. Feeding a constant
+        // peak sets env = peak after one call (env starts at 0, peak > 0).
+        let mut params = MbagcParams::PASSTHROUGH;
+        params.enabled = true;
+        params.target_dbfs = [-20.0, 0.0, 0.0, 0.0];
+        params.max_gain_db = [20.0, 0.0, 0.0, 0.0];
+        params.knee_db = [6.0, 0.0, 0.0, 0.0];
+        let mut m = MultibandAgc::new(params, 48_000.0);
+
+        // env_dbfs → linear gain via band_gain_linear (reset envelope each time).
+        let mut gain_at = |env_dbfs: f32| {
+            m.reset();
+            m.band_gain_linear(0, 10.0_f32.powf(env_dbfs / 20.0))
+        };
+        let g_db = |g: f32| 20.0 * g.log10();
+
+        // Below the knee (raw = +6 > half) → hard region, lifted = raw = 6 dB.
+        assert!((g_db(gain_at(-26.0)) - 6.0).abs() < 0.05, "raw=+6 → 6 dB");
+        // Upper knee corner (raw = +half = 3) → meets hard curve: 3 dB.
+        assert!((g_db(gain_at(-23.0)) - 3.0).abs() < 0.05, "raw=+half → 3 dB");
+        // Knee centre (raw = 0, env at target) → (half)^2/(2·knee) = 9/12 = 0.75 dB.
+        assert!((g_db(gain_at(-20.0)) - 0.75).abs() < 0.05, "raw=0 → 0.75 dB");
+        // Lower knee corner (raw = -half) and beyond → no lift, 0 dB (gain 1.0).
+        assert!((gain_at(-17.0) - 1.0).abs() < 1e-4, "raw=-half → unity");
+        assert!((gain_at(-14.0) - 1.0).abs() < 1e-4, "raw<-half → unity");
+
+        // Contrast: with knee = 0, raw = 0 gives a hard max(0,0) = unity, so the
+        // knee genuinely lifts at the target (proves it isn't dead code).
+        params.knee_db = [0.0, 0.0, 0.0, 0.0];
+        let mut m0 = MultibandAgc::new(params, 48_000.0);
+        m0.reset();
+        let hard = m0.band_gain_linear(0, 10.0_f32.powf(-20.0 / 20.0));
+        assert!((hard - 1.0).abs() < 1e-4, "knee=0 at target → unity");
+    }
+
+    #[test]
     fn hot_input_attenuated_below_max_gain() {
         // 0 dBFS input — gain calculation says we should attenuate (gain < 0),
         // but the gain is floored at 0.0 (only lift, never cut). Output stays ≈ 0 dBFS.

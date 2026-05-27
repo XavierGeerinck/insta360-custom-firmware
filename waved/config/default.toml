@@ -6,6 +6,9 @@ language = "en"
 mode = "omni"
 speaker_volume = 150
 mic_volume = 200
+# Recording capture quality: "standard" (16-bit WAV) or "hd" (24-bit WAV).
+# Same 48 kHz mono source; "hd" keeps more dynamic range at ~1.5x file size.
+recording_quality = "standard"
 
 [api]
 endpoint = "https://localhost:8080/meetings/upload"

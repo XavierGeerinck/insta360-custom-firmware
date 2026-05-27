@@ -204,6 +204,102 @@ v1.1.6.6 consumer path.
 - **`ins_lic_tool` / QR activation.** The whole point of open firmware
   is no per-device licensing barrier.
 
+## Update (2026-05-27): `libInstaAudio` binary-diff verification
+
+A focused re-read of `diff_libInstaAudio.so_fw_v1.1.6.6_to_fw_v3.0.0.1.diff`
+(symbol/call-site level) corrects and extends the "Adopt-for-`waved/`"
+section above. Rootfs audio configs (`asound.conf`, `audio_config.json`,
+`dynamic_eq_config{,_2}.json`, `eq_drc_params.ini`, `S45asound`) are
+**byte-identical** v1.1.6.6 → v1.2.0.6, so all DSP change is in the binary.
+
+### Correction: the FFT-EQ vs IIR-EQ split does **not** exist
+
+The "worth porting" item #2 above was wrong. v3 uses the **same single
+`aspDynamicEqInitApi`/`aspDynamicEqProcessApi` engine** as v1.1.6.6. The
+`insta360_asp_param_eq.iir_eq_switch` flag already existed in v1.1.6.6 and is
+passed *into* the closed ASP library as config — it is **not** a C++-level
+branch between two EQ engines, and there is no `aspFFTEQ`/`aspIIREQ` symbol.
+Our SP#5 single-IIR EQ is architecturally correct; no FFT-EQ work is needed.
+
+### New finding the file-level diff missed: per-band MBAGC knee
+
+v3 adds three **per-band** MBAGC fields to `insta360_asp_param_eq` that were
+absent in v1.1.6.6:
+
+- `mbagc_max_gain[N]`
+- `mbagc_gain_knee[N]`   ← **the knee is real and now per-band**
+- `mbagc_release_time[N]`
+
+This directly bears on the SP#5 follow-up "**`MbagcParams.knee_db` is dead**"
+([[project_sp5_status]]): the latest stock genuinely uses a per-band gain
+knee, so implementing the deferred soft-knee makes our voice preset match
+stock behaviour rather than diverging at the knee. Highest-value in-scope
+takeaway from the diff.
+
+### Confirmed: HD recording mode internals
+
+The vendor "HD recording" note maps to two new flags in
+`insta_asr_pre_record_param_t`: `is_hd_voice_en` (spawns a parallel
+`mPlayHdAudioFile` HD-quality output stream alongside the normal file) and
+`is_high_rate_encode_en` (passed to `Insta360_Mp3_FileOutDevice` for
+higher-bitrate MP3). Pipeline sample rates unchanged (48 k playback / 16 k
+capture); no 96/192 kHz path. `waved` has neither flag.
+
+### Other new classic-DSP surface (mostly niche)
+
+- **BF mode + 2D DoA at the C++ level** — new wrappers `mic_sigp_bf_set_mode`,
+  `mic_sigp_doa_set_enable`, `mic_sigp_get_cur_doa_ang` (returns
+  `{horizon, pitch}` snapped to a **5° grid**). This is the *closed* sigp
+  library's own DoA; `waved` computes its own (GCC-PHAT/SRP), so it's a
+  consistency data-point, not something to port. Stock DoA being 5°-quantised
+  2D matches our azimuth+coarse-elevation model.
+- **`mic_sigp_set_cascad_mode` / `setCascadeEnable`** — two Waves daisy-chained.
+  Genuinely new; niche; `waved` has no equivalent.
+- **`Insta360_MicCheckAlgo(duration_ms)`** — mic health/fault detection. New;
+  low-priority diagnostic.
+- **NS strength** now driven from `setWorkMode()` via `mic_sigp_ans_set_strength`
+  (mode 1/omni → 0, modes 2–6/BF → 1). Relates to the SP#4 follow-up
+  "NrLevel Low/Med/High currently identical".
+- **Richer pre-record state machine** (`createPreRecordProccess`,
+  `preRecordPause/Resume`, `preRecordSwitchToFileRecord(path, slice_ms)`)
+  around the same `Insta360_AudioRingBuffer`. `waved` already has the core
+  pre-record buffer (`waved-meeting::PreBuffer`); theirs adds an atomic
+  ring→file handoff. Enhancement, not a gap.
+- **AEC**: no C++ tuning surface — fully inside `mic_sigp_proc_psp()`. N/A.
+
+### Net adopt list after verification
+
+| Item | Status | Action |
+|---|---|---|
+| Pre-record ring buffer | ✅ already in `waved` (`PreBuffer`, 30 s) | — |
+| FFT-EQ vs IIR-EQ split | ❌ does not exist (myth) | none |
+| MBAGC per-band soft knee | gap — stock confirms it's real | implement SP#5 soft-knee follow-up |
+| HD recording mode | gap | add `is_hd_voice_en` + high-rate encode to `waved-config` |
+| NS strength ↔ mode wiring | minor gap | fold into SP#4 NrLevel follow-up |
+| Cascade mode / mic-check | new, niche | document; defer |
+
+### Implementation status (2026-05-27)
+
+Acting on the list surfaced that two "gaps" were **already shipped** in
+`cd82180` (after the older TODO/memory notes were written):
+
+- **MBAGC per-band soft knee** — *already implemented* (`mbagc.rs`
+  `band_gain_linear` quadratic knee; `preset.rs` maps stock per-band
+  `mbagc_gain_knee`). Added a focused `soft_knee_quadratic_transition` test.
+- **NS strength ↔ NrLevel** — *already implemented* (`nr_to_atten_lim_db`:
+  Low/Med/High → 12/24/100 dB DFN3 caps, not collapsed). Added a
+  distinct-mapping test.
+
+Built this session:
+
+- **HD recording mode** — `RecordingQuality {Standard=16-bit, Hd=24-bit}` in
+  `waved-config` (serde-default `Standard`, so old configs load), wired through
+  `ActiveRecording::start_with_quality` → 24-bit WAV path + codec string.
+- **Mic health check** — new `waved-audio::mic_check` module (median-relative
+  Dead/Low/Ok per channel, inconclusive on silence).
+- **Pre-record pause/resume** — `PreBuffer::pause/resume`, frozen for the
+  duration of a take so a take's audio can't bleed into the next pre-roll.
+
 ## Reproducing this report
 
 ```bash

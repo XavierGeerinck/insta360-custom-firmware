@@ -147,9 +147,10 @@ impl MeetingService {
                                         warn!("ignoring StartRecording: previous take awaits decision");
                                         continue;
                                     }
-                                    match recorder::ActiveRecording::start(
+                                    match recorder::ActiveRecording::start_with_quality(
                                         &self.recordings_dir,
                                         &format!("{:?}", self.config.audio.mode),
+                                        self.config.audio.recording_quality,
                                     ).await {
                                         Ok(rec) => {
                                             let id = rec.id;
@@ -171,6 +172,9 @@ impl MeetingService {
                                             let prefix = prebuffer.drain_all();
                                             // active was just set above; the unwrap is safe by construction.
                                             active.as_mut().unwrap().append_samples(&prefix);
+                                            // Freeze the pre-roll for the duration of the take — the
+                                            // recording's own writer owns the audio now. Resumed on stop.
+                                            prebuffer.pause();
                                         }
                                         Err(e) => error!("failed to start recording: {e}"),
                                     }
@@ -185,6 +189,8 @@ impl MeetingService {
                                             }
                                         }
                                         self.stop_recording(rec).await;
+                                        // Re-arm the pre-roll now that the take is closed.
+                                        prebuffer.resume();
                                     }
                                 }
                                 Command::AddBookmark => {
