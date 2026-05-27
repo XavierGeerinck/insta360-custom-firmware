@@ -133,12 +133,87 @@ sharp_0_4, sharp_2_6`.
 - If bias **varies wildly per azimuth** → root cause is algorithmic;
   queue an F2b fix.
 
-**Current state:** **Pending measurement** — operator must run
-`scripts/test-doa-elevation.sh` to populate the bias table. The SP#3
-note `Elevation bias +3° to +18° after pure-Z pair swap` in this
-file's earlier section is from the original SP#3 acceptance and is
-the prior data point; F2 will revisit with the diagnostic line above
-to determine whether the bias is geometric or algorithmic.
+**Measured (F2, 2026-05-27, device PSP_0000000000000000, GCC-PHAT,
+broadband stimulus).** Single-azimuth sweep at az=0° (front), 4
+elevations. **Truth elevations were eyeballed, not goniometer-set —
+treat as ±several degrees**, so the numbers below characterise the
+*shape* of the response, not a calibration:
+
+| truth el | measured el | measured az |
+|----------|-------------|-------------|
+| −30°     | ≈ −15°      | ≈ 357°      |
+| 0°       | ≈ +7°       | ≈ 355°      |
+| +30°     | ≈ +45°      | ≈ 351°      |
+| +60°     | ≈ +52°      | ≈ 352°      |
+
+Conclusions robust to the eyeball uncertainty:
+
+1. **Sign and ordering are always correct** — the estimate is
+   monotonic in truth elevation (below → negative, level → ~0, above →
+   positive). Elevation *is* observable.
+2. **It saturates at steep angles.** Local slope falls from ~1.3 in
+   the 0→+30° band to ~0.23 in the +30→+60° band; +60° barely reads
+   higher than +30°. The negative side compresses similarly
+   (−30°→−15°). The (0,4) pure-Z pair's `el_p` sticks at ~+33–37° for
+   *both* +30° and +60° truth — the vertical aperture runs out of τ.
+3. **Absolute accuracy is poor (10–15°+), azimuth is unaffected** —
+   az stayed ~351–357° (front) across the whole elevation sweep.
+
+**Outcome decision (§3.4): GEOMETRIC — document as coarse, no code
+fix.** The dominant effect (saturation + the per-pair `el_p` ceiling
+~+35°) is a vertical-aperture limit of the cross-ring Z-pairs
+(0,4)/(2,6), which have small `dz`; τ saturates at steep elevation and
+observability collapses. This is not fixable in software. Treat
+`elevation_deg` as a **coarse, low-confidence band** (below / level /
+above), never a calibrated angle. The small near-level offset (~+7°,
+consistent with the SP#3 note `+3° to +18°`) plus the noisier (2,6)
+pair's overshoot *could* be partially calibrated, but (a) truth here
+was eyeballed so no curve is fittable, and (b) only one azimuth was
+sampled, so §3.4's "consistent across azimuth" test was not fully
+exercised. A real algorithmic-vs-geometric verdict on the residual
+offset would need a goniometric rig and the full 4-azimuth sweep
+before any F2b is queued.
+
+> **Caveat on this run:** truth elevations eyeballed; single azimuth
+> (az=0°) only; `rms0 ≈ 0.002` (moderate level, stable estimates).
+> Raw bursts in `/tmp/doa_e{0,30,60,en30}.log` on-device at capture time.
+
+### F3 diarization acceptance (DoA-based, measured 2026-05-27)
+
+Diarization is **purely DoA-clustered** — `waved-meeting/src/diarization.rs`
+buckets confident DoA frames into azimuth clusters
+(`CLUSTER_TOLERANCE_DEG = 30`, nearest-centroid within tolerance) and
+emits a numeric `speaker_id` per cluster. **No names, no embedding/NPU
+rescore** — see the project diarization-scope decision. Gating:
+`CONFIDENCE_THRESHOLD = 0.30`, `MIN_SEGMENT_DURATION_MS = 200`,
+`MAX_SEGMENT_SILENCE_MS = 500` (a >0.5 s talk gap closes a segment).
+
+**On-device walkthrough** (`scripts/test-diarization.sh`, single operator
+talking at distinct azimuths with pauses while moving). Result, meeting
+`160608fa` (17 s, Omni): **4 segments, 2 distinct speakers, sequence
+`1 1 2 1` → PASS** (spec wants ≥ 2). Segments:
+
+| speaker | start–end ms | az |
+|---------|--------------|------|
+| 1 | 3392–4608   | 343°   |
+| 1 | 8555–9750   | 2.6°   |
+| 2 | 14848–15467 | 307.8° |
+| 1 | 15488–16214 | 330°   |
+
+The DoA→cluster→`speaker_id`→SQLite (`diarization_segments`) path is
+proven end-to-end. Two caveats for the next run:
+
+- The "behind" talk registered at **~307° (rear-right), not 180°** — the
+  front/right hemisphere captured everything. A controlled loudspeaker at
+  180° read accurately in the F2 azimuth sweep (2.6° error), so this is
+  most likely operator placement (walked behind-and-beside, not dead
+  centre). **Front/back separation was not cleanly stress-tested** here;
+  redo with marked floor positions if it matters.
+- **Select "latest meeting" by `rowid`, not `created_at`.** The device
+  clock sits at the 1970 epoch, so `meetings.created_at`
+  (`DEFAULT datetime('now')`) is non-monotonic and `ORDER BY created_at`
+  can return a stale meeting (this bit the first query — a 2 s
+  `NoiseReduction` ghost — before switching to `rowid`).
 
 ### Sign Conventions (read carefully)
 

@@ -26,8 +26,13 @@ for az in 0 90 180 270; do
         echo "Position loudspeaker at az=${az}°, el=${el}° relative to top-ring plane."
         echo "Play BROADBAND noise (pink/white — NOT a pure tone; tones are pathological for PHAT)."
         read -r -p "press ENTER when ready: " _
-        # 5 s WAVED_DOA_DEBUG burst → grep latest line, extract numbers.
-        adb_run "WAVED_DOA_DEBUG=100 timeout 5 /data/waved/waved 2>&1 | grep doa_debug | tail -5"
+        # WAVED_DOA_DEBUG burst → grep latest lines, extract numbers.
+        # NOTE: this device's busybox has NO `timeout` applet, and piping the
+        # burst straight to grep loses block-buffered stdout when the process is
+        # killed. So: background-launch → redirect to a file → sleep → kill →
+        # grep the file. ~13 s lets the EWMA-smoothed el converge; N=20 (~0.42 s
+        # cadence) gives plenty of lines to average the last ~8.
+        adb_run "WAVED_DOA_DEBUG=20 /data/waved/waved >/tmp/doa_burst.log 2>&1 & P=\$!; sleep 13; kill \$P 2>/dev/null; sleep 1; kill -9 \$P 2>/dev/null; grep -a doa_debug /tmp/doa_burst.log | tail -8"
         # Manually transcribe into CSV — easier than parsing the log format.
         read -r -p "measured az: " m_az
         read -r -p "measured el: " m_el

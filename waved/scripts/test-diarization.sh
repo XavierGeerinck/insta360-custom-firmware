@@ -45,17 +45,21 @@ main() {
     adb pull "$DB_PATH" "$LOCAL_DB"
 
     echo
+    # "Latest meeting" is selected by rowid (insertion order), NOT created_at:
+    # the device clock sits at the 1970 epoch, so meetings.created_at
+    # (DEFAULT datetime('now')) is non-monotonic and "ORDER BY created_at" can
+    # return a stale meeting. rowid is monotonic with INSERT order.
     echo "=== Diarization rows from latest meeting ==="
     sqlite3 "$LOCAL_DB" \
         "SELECT meeting_id, speaker_id, start_ms, end_ms, ROUND(azimuth_deg,1) \
          FROM diarization_segments \
-         WHERE meeting_id = (SELECT id FROM meetings ORDER BY created_at DESC LIMIT 1) \
+         WHERE meeting_id = (SELECT id FROM meetings ORDER BY rowid DESC LIMIT 1) \
          ORDER BY start_ms"
 
     # Sanity check: at least 2 distinct speaker_ids in this meeting.
     DISTINCT=$(sqlite3 "$LOCAL_DB" \
         "SELECT COUNT(DISTINCT speaker_id) FROM diarization_segments \
-         WHERE meeting_id = (SELECT id FROM meetings ORDER BY created_at DESC LIMIT 1)")
+         WHERE meeting_id = (SELECT id FROM meetings ORDER BY rowid DESC LIMIT 1)")
     if [ "$DISTINCT" -ge 2 ]; then
         echo "PASS: $DISTINCT distinct speakers detected (expected ≥ 2)"
     else
@@ -66,7 +70,7 @@ main() {
     # Inspect the speaker_id sequence — expect [1, 2, 1] or similar pattern.
     SEQ=$(sqlite3 "$LOCAL_DB" \
         "SELECT speaker_id FROM diarization_segments \
-         WHERE meeting_id = (SELECT id FROM meetings ORDER BY created_at DESC LIMIT 1) \
+         WHERE meeting_id = (SELECT id FROM meetings ORDER BY rowid DESC LIMIT 1) \
          ORDER BY start_ms")
     echo "Speaker sequence: $(echo $SEQ | tr '\n' ' ')"
     echo "(Expected: pattern like 1 2 1 for the az=0→180→0 walk.)"
