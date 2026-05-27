@@ -292,13 +292,23 @@ Acting on the list surfaced that two "gaps" were **already shipped** in
 
 Built this session:
 
-- **HD recording mode** — `RecordingQuality {Standard=16-bit, Hd=24-bit}` in
-  `waved-config` (serde-default `Standard`, so old configs load), wired through
-  `ActiveRecording::start_with_quality` → 24-bit WAV path + codec string.
 - **Mic health check** — new `waved-audio::mic_check` module (median-relative
   Dead/Low/Ok per channel, inconclusive on silence).
 - **Pre-record pause/resume** — `PreBuffer::pause/resume`, frozen for the
   duration of a take so a take's audio can't bleed into the next pre-roll.
+
+Investigated and **dropped** (HD recording):
+
+- A 24-bit WAV `RecordingQuality` tier was prototyped, deployed, and verified
+  on-device — then removed. The raw PDM ADC is genuine ~24-bit, but the capture
+  layer downconverts S32→i16 at ingest (`(s >> 16) as i16`) and the speexdsp
+  AEC is i16-only, so the 24-bit container held promoted-16-bit content (low
+  byte 100 % zero on a real recording). **Stock made the same choice** —
+  `libInstaAudio` is 32-bit-in / 16-bit-out → LAME MP3, and stock "HD" is an
+  MP3 *bitrate* knob, not bit depth. Our Standard 16-bit lossless WAV already
+  beats stock's HD lossy MP3, so the 24-bit tier added bytes without fidelity.
+  Full analysis + the "check the low byte" verification method in
+  `docs/AUDIO_HARDWARE.md` → "Recording bit depth".
 
 ## Reproducing this report
 

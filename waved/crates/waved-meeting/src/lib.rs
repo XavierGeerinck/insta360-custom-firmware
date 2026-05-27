@@ -147,10 +147,9 @@ impl MeetingService {
                                         warn!("ignoring StartRecording: previous take awaits decision");
                                         continue;
                                     }
-                                    match recorder::ActiveRecording::start_with_quality(
+                                    match recorder::ActiveRecording::start(
                                         &self.recordings_dir,
                                         &format!("{:?}", self.config.audio.mode),
-                                        self.config.audio.recording_quality,
                                     ).await {
                                         Ok(rec) => {
                                             let id = rec.id;

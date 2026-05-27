@@ -33,35 +33,6 @@ pub struct AudioConfig {
     pub mode: AudioMode,
     pub speaker_volume: u16,
     pub mic_volume: u16,
-    /// Recording capture quality. Stock 1.2.0.6 added an "HD recording mode"
-    /// (`is_hd_voice_en`); our analogue selects WAV bit depth — `Standard`
-    /// keeps the legacy 16-bit file, `Hd` records 24-bit for more dynamic
-    /// range off the same 48 kHz mono source. `#[serde(default)]` so configs
-    /// written before this field still load (→ `Standard`).
-    #[serde(default)]
-    pub recording_quality: RecordingQuality,
-}
-
-/// Capture quality for meeting recordings. The source is always 48 kHz mono;
-/// this picks the WAV sample width.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RecordingQuality {
-    /// 16-bit PCM (legacy default, smallest files).
-    #[default]
-    Standard,
-    /// 24-bit PCM (HD — more dynamic range).
-    Hd,
-}
-
-impl RecordingQuality {
-    /// WAV bits-per-sample for this quality.
-    pub fn bits_per_sample(self) -> u16 {
-        match self {
-            RecordingQuality::Standard => 16,
-            RecordingQuality::Hd => 24,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,27 +102,6 @@ mod tests {
         assert_eq!(config.audio.mode, AudioMode::Omni);
         assert_eq!(config.audio.speaker_volume, 150);
         assert_eq!(config.ntp.servers.len(), 2);
-    }
-
-    #[test]
-    fn recording_quality_defaults_to_standard_when_missing() {
-        // The embedded default.toml predates the field → must still parse and
-        // default to Standard (16-bit), preserving legacy recording behaviour.
-        let config = WavedConfig::default();
-        assert_eq!(config.audio.recording_quality, RecordingQuality::Standard);
-        assert_eq!(config.audio.recording_quality.bits_per_sample(), 16);
-    }
-
-    #[test]
-    fn recording_quality_hd_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut config = WavedConfig::default();
-        config.audio.recording_quality = RecordingQuality::Hd;
-        config.save(&path).unwrap();
-        let loaded = WavedConfig::load(&path).unwrap();
-        assert_eq!(loaded.audio.recording_quality, RecordingQuality::Hd);
-        assert_eq!(loaded.audio.recording_quality.bits_per_sample(), 24);
     }
 
     #[test]

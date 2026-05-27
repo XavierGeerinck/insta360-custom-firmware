@@ -874,6 +874,40 @@ every tap, while still letting the user scroll-preview without committing.
 These are device- and room-dependent — values above are an order-of-magnitude
 reference for picking thresholds, not a calibration target.
 
+## Recording bit depth — why there is no "HD" (24-bit) tier
+
+Investigated 2026-05-27 after the stock 1.2.0.6 diff surfaced an "HD recording
+mode". Conclusion: **meeting recordings are 16-bit lossless WAV and that is the
+right ceiling on this pipeline.** Evidence:
+
+- **The PDM ADC is genuine ~24-bit.** A raw `arecord -D hw:0,2 -f S32_LE -c 8`
+  capture reaches **bit 27** in magnitude, the low byte is populated **99.6 %**
+  of samples, and levels exceed 16-bit full-scale by ~6380×. The hardware has
+  the resolution.
+- **The firmware throws it away at ingest.** The capture layer downconverts
+  S32 → i16 by keeping only the top 16 bits — `(s >> 16) as i16` in
+  `capture/single_stream.rs`, `capture/alsa_dual_stream.rs`,
+  `capture/mic_software_ref.rs`. `AudioFrame.data` is `Vec<i16>`, so everything
+  downstream (beamform, the **i16-only speexdsp AEC**, the recorder) is 16-bit.
+  A second hard quantization is `lib.rs` `(src * 32768.0) as i16` feeding the AEC.
+- **Stock made the identical choice.** In `libInstaAudio.so` the algorithm
+  bases carry `mInBitWidth = 0x20` (32-bit in) and `mOutBitWidth = 0x10`
+  (16-bit out); the record path is an `Insta360_Mp3_FileOutDevice` at
+  `mBitWidth = 0x10` driving a **LAME MP3** encoder. Stock's "HD"
+  (`is_high_rate_encode_en`) is a higher **MP3 bitrate**, not more PCM bits —
+  stock never carries 24-bit to a recording either.
+
+So our **Standard 16-bit lossless WAV already beats stock's HD lossy MP3** on
+fidelity. A 24-bit WAV tier was prototyped and dropped: on this i16 pipeline the
+low 8 bits are always zero (verified — the container is 24-bit but the content
+is promoted 16-bit), so it adds ~50 % file size with no resolution. Real 24-bit
+would require an end-to-end f32 pipeline including an f32-domain AEC (speexdsp is
+i16-only) — a larger effort with **no stock precedent**, deferred.
+
+**Proper check for any future HD work:** don't trust the WAV header alone —
+read the 24-bit samples and confirm the **low byte is populated** (`!= 0` for a
+large fraction). All-zero low bytes mean promoted 16-bit, not genuine 24-bit.
+
 ## Field-Testing Gotcha: init.d Watchdog
 
 `/etc/init.d/S60waved` respawns `waved` without environment variables.

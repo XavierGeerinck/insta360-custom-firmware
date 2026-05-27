@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use waved_config::RecordingQuality;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
@@ -109,9 +108,6 @@ pub struct ActiveRecording {
     pub id: Uuid,
     pub dir: PathBuf,
     pub start: std::time::Instant,
-    /// WAV bit depth (16 = Standard, 24 = HD). Drives `append_samples`'
-    /// sample conversion and the spec/codec written at `start`.
-    bits_per_sample: u16,
     /// Open WAV writer. `Some` while recording, `None` once finalized.
     /// We keep the writer hot so each `ProcessedAudioFrame` appends with
     /// no per-frame open/seek overhead.
@@ -119,22 +115,11 @@ pub struct ActiveRecording {
 }
 
 impl ActiveRecording {
-    /// Start a recording at `RecordingQuality::Standard` (16-bit). Convenience
-    /// wrapper preserved for callers/tests that don't care about HD.
     pub async fn start(base_dir: &Path, audio_mode: &str) -> std::io::Result<Self> {
-        Self::start_with_quality(base_dir, audio_mode, RecordingQuality::Standard).await
-    }
-
-    pub async fn start_with_quality(
-        base_dir: &Path,
-        audio_mode: &str,
-        quality: RecordingQuality,
-    ) -> std::io::Result<Self> {
         let id = Uuid::new_v4();
         let dir = base_dir.join(id.to_string());
         fs::create_dir_all(&dir).await?;
 
-        let bits_per_sample = quality.bits_per_sample();
         let metadata = MeetingMetadata {
             id: id.to_string(),
             start_time: chrono::Utc::now().to_rfc3339(),
@@ -143,7 +128,7 @@ impl ActiveRecording {
             device_id: String::new(),
             sample_rate: RECORDING_SAMPLE_RATE,
             channels: 1,
-            codec: format!("wav_s{bits_per_sample}le"),
+            codec: "wav_s16le".to_string(),
         };
 
         let meta_json = serde_json::to_string_pretty(&metadata).unwrap();
@@ -151,28 +136,24 @@ impl ActiveRecording {
 
         // Create the WAV file synchronously — `hound::WavWriter` is sync, and
         // open is cheap (one ~44-byte header write). The hot path is
-        // `append_samples`, also sync.
+        // `append_samples`, also sync. 16-bit PCM: the capture/AEC pipeline is
+        // 16-bit (see docs/AUDIO_HARDWARE.md "Recording bit depth"), so a wider
+        // sample format would carry no extra resolution.
         let wav_path = dir.join("audio.wav");
         let spec = hound::WavSpec {
             channels: 1,
             sample_rate: RECORDING_SAMPLE_RATE,
-            bits_per_sample,
+            bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
         let writer = hound::WavWriter::create(&wav_path, spec)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
-        info!(
-            "recording started: {} at {} ({}-bit)",
-            id,
-            dir.display(),
-            bits_per_sample
-        );
+        info!("recording started: {} at {}", id, dir.display());
         Ok(Self {
             id,
             dir,
             start: std::time::Instant::now(),
-            bits_per_sample,
             writer: Some(writer),
         })
     }
@@ -185,33 +166,18 @@ impl ActiveRecording {
         self.dir.join("audio.wav")
     }
 
-    /// Append a block of f32 mono samples in [-1.0, 1.0]. Saturating clamp to
-    /// the configured bit depth (S16 for Standard, S24 for HD — written as i32
-    /// low-24-bits, which is what `hound` expects for a 24-bit spec). Errors
-    /// are logged but don't tear down the recording — a bad frame mid-meeting
-    /// is better than losing the whole take.
+    /// Append a block of f32 mono samples in [-1.0, 1.0]. Saturating
+    /// clamp to S16. Errors are logged but don't tear down the recording —
+    /// a bad frame mid-meeting is better than losing the whole take.
     pub fn append_samples(&mut self, samples: &[f32]) {
         let Some(writer) = self.writer.as_mut() else {
             return;
         };
-        if self.bits_per_sample == 24 {
-            // 24-bit: full-scale = 2^23. Clamp to the signed 24-bit range.
-            const MAX24: f32 = 8_388_607.0; // 2^23 - 1
-            const MIN24: f32 = -8_388_608.0; // -2^23
-            for &s in samples {
-                let clamped = (s * 8_388_608.0).clamp(MIN24, MAX24);
-                if let Err(e) = writer.write_sample(clamped as i32) {
-                    tracing::warn!("wav write error: {e}");
-                    return;
-                }
-            }
-        } else {
-            for &s in samples {
-                let clamped = (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32);
-                if let Err(e) = writer.write_sample(clamped as i16) {
-                    tracing::warn!("wav write error: {e}");
-                    return;
-                }
+        for &s in samples {
+            let clamped = (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32);
+            if let Err(e) = writer.write_sample(clamped as i16) {
+                tracing::warn!("wav write error: {e}");
+                return;
             }
         }
     }
@@ -298,36 +264,8 @@ mod tests {
         let reader = hound::WavReader::open(rec.audio_path()).unwrap();
         assert_eq!(reader.spec().sample_rate, 48_000);
         assert_eq!(reader.spec().channels, 1);
-        assert_eq!(reader.spec().bits_per_sample, 16); // Standard default
+        assert_eq!(reader.spec().bits_per_sample, 16);
         assert_eq!(reader.duration() as usize, n);
-    }
-
-    #[tokio::test]
-    async fn hd_quality_records_24bit_wav() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut rec =
-            ActiveRecording::start_with_quality(dir.path(), "Omni", RecordingQuality::Hd)
-                .await
-                .unwrap();
-        // A half-scale sample must survive the 24-bit conversion and read back
-        // near 2^22 (half of 2^23 full-scale).
-        let n = (RECORDING_SAMPLE_RATE / 10) as usize;
-        rec.append_samples(&vec![0.5_f32; n]);
-        rec.finalize();
-
-        let mut reader = hound::WavReader::open(rec.audio_path()).unwrap();
-        assert_eq!(reader.spec().bits_per_sample, 24);
-        assert_eq!(reader.spec().sample_format, hound::SampleFormat::Int);
-        assert_eq!(reader.duration() as usize, n);
-        let first: i32 = reader.samples::<i32>().next().unwrap().unwrap();
-        assert!(
-            (first - 4_194_304).abs() < 16,
-            "0.5 f32 → ~2^22 in 24-bit, got {first}"
-        );
-        // Metadata codec string reflects the bit depth.
-        let meta_json =
-            std::fs::read_to_string(rec.dir.join("metadata.json")).unwrap();
-        assert!(meta_json.contains("wav_s24le"), "codec should be wav_s24le");
     }
 
     #[test]
