@@ -1,15 +1,64 @@
 use std::process::Output;
+use std::time::Duration;
+use thiserror::Error;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-async fn wpa_cli(args: &[&str]) -> Result<String, std::io::Error> {
-    let output: Output = Command::new("wpa_cli")
-        .args(args)
-        .output()
-        .await?;
+const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Error)]
+pub enum WifiError {
+    #[error("wpa_cli reported FAIL")]
+    CommandFailed,
+    #[error("wpa_cli exited with status {0}")]
+    BadExit(i32),
+    #[error("command timed out")]
+    Timeout,
+    #[error("invalid network id from add_network: {0:?}")]
+    BadNetworkId(String),
+    #[error("invalid credential: {0}")]
+    InvalidCredential(&'static str),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Classify wpa_cli stdout. `FAIL` → error; everything else (incl. `OK`,
+/// status dumps, numeric ids) passes through unchanged.
+pub fn check_wpa_ok(stdout: &str) -> Result<String, WifiError> {
+    if stdout.trim() == "FAIL" {
+        return Err(WifiError::CommandFailed);
+    }
+    Ok(stdout.to_string())
+}
+
+/// Mask the value following a `psk` arg so passphrases never reach the log.
+fn redact_psk(args: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(args.len());
+    let mut mask_next = false;
+    for &a in args {
+        if mask_next {
+            out.push("****".to_string());
+            mask_next = false;
+        } else {
+            out.push(a.to_string());
+            mask_next = a == "psk";
+        }
+    }
+    out
+}
+
+async fn wpa_cli(args: &[&str]) -> Result<String, WifiError> {
+    let fut = Command::new("wpa_cli").args(args).output();
+    let output: Output = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
+        Ok(res) => res?,
+        Err(_) => return Err(WifiError::Timeout),
+    };
+    if !output.status.success() {
+        return Err(WifiError::BadExit(output.status.code().unwrap_or(-1)));
+    }
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    debug!("wpa_cli {:?} → {}", args, stdout.trim());
-    Ok(stdout)
+    debug!("wpa_cli {:?} → {}", redact_psk(args), stdout.trim());
+    check_wpa_ok(&stdout)
 }
 
 pub fn parse_scan_results(output: &str) -> Vec<String> {
@@ -106,5 +155,21 @@ mod tests {
     fn parse_scan_results_empty() {
         let output = "bssid / frequency / signal level / flags / ssid\n";
         assert!(parse_scan_results(output).is_empty());
+    }
+
+    #[test]
+    fn classify_ok_token() {
+        assert!(check_wpa_ok("OK\n").is_ok());
+    }
+
+    #[test]
+    fn classify_fail_token() {
+        assert!(matches!(check_wpa_ok("FAIL\n"), Err(WifiError::CommandFailed)));
+    }
+
+    #[test]
+    fn classify_passthrough_value() {
+        // Non OK/FAIL stdout (e.g. status output, a network id) passes through.
+        assert_eq!(check_wpa_ok("3\n").unwrap(), "3\n");
     }
 }
