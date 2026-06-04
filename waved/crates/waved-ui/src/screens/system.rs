@@ -35,6 +35,7 @@ enum RowAction {
     OpenAudioMode,
     PowerOff,
     Bookmark, // placeholder for rows whose feature isn't implemented
+    OpenWifiProvisioning,
 }
 
 const ROWS: &[(&str, RowAction)] = &[
@@ -42,7 +43,7 @@ const ROWS: &[(&str, RowAction)] = &[
     ("Noise Reduction", RowAction::Bookmark),
     ("Mic",             RowAction::Bookmark),
     ("Bluetooth",       RowAction::Bookmark),
-    ("Wi-Fi",           RowAction::Bookmark),
+    ("Wi-Fi",           RowAction::OpenWifiProvisioning),
     ("USB Mode",        RowAction::Bookmark),
     ("Language",        RowAction::Bookmark),
     ("Auto Sleep",      RowAction::Bookmark),
@@ -66,9 +67,10 @@ unsafe extern "C" fn row_btn_cb(e: *mut lv_event_t) {
     if data.is_null() { return; }
     let (tx, action) = &*data;
     let cmd = match action {
-        RowAction::OpenAudioMode => Command::OpenAudioMode,
-        RowAction::PowerOff      => Command::Shutdown,
-        RowAction::Bookmark      => Command::AddBookmark,
+        RowAction::OpenAudioMode        => Command::OpenAudioMode,
+        RowAction::PowerOff             => Command::Shutdown,
+        RowAction::Bookmark             => Command::AddBookmark,
+        RowAction::OpenWifiProvisioning => Command::OpenWifiProvisioning,
     };
     let _ = tx.send(cmd);
 }

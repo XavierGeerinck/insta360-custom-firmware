@@ -105,6 +105,7 @@ fn ui_thread_main(
     let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
     let mut noise_red  = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
     let mut system     = screens::system::SystemScreen::new(Arc::clone(&bus));
+    let mut wifi_prov  = screens::wifi_provisioning::WifiProvisioningScreen::new(Arc::clone(&bus));
     let mut volume     = screens::volume::VolumeScreen::new(Arc::clone(&bus));
     let mut confirmation = screens::confirmation::ConfirmationScreen::new(Arc::clone(&bus));
 
@@ -147,6 +148,8 @@ fn ui_thread_main(
             if new_batt != prev_batt || new_wifi != prev_wifi
                 || new_bt != prev_bt || new_muted != prev_muted
             {
+                // wifi.signal_strength now carries real RSSI (see waved-wifi); icon
+                // tiering by strength is a follow-up UI-asset task.
                 unsafe { status_bar.update(new_batt, new_wifi, new_bt, new_muted); }
                 prev_batt  = new_batt;
                 prev_wifi  = new_wifi;
@@ -185,6 +188,7 @@ fn ui_thread_main(
                 &mut audio_mode,
                 &mut noise_red,
                 &mut system,
+                &mut wifi_prov,
                 &mut volume,
                 &mut return_to_recording,
                 &mut prev_recording,
@@ -265,7 +269,10 @@ fn ui_thread_main(
                 let meeting = meeting_rx.borrow().clone();
                 unsafe { confirmation.update_state(&meeting); }
             }
-            UiScreen::WifiProvisioning => {}
+            UiScreen::WifiProvisioning => {
+                let prov = bus.provisioning.borrow().clone();
+                unsafe { wifi_prov.update_state(&prov); }
+            }
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -284,6 +291,7 @@ fn handle_command(
     audio_mode: &mut screens::audio_mode::AudioModeScreen,
     noise_red: &mut screens::noise_reduction::NoiseReductionScreen,
     system: &mut screens::system::SystemScreen,
+    wifi_prov: &mut screens::wifi_provisioning::WifiProvisioningScreen,
     volume: &mut screens::volume::VolumeScreen,
     return_to_recording: &mut bool,
     prev_recording: &mut bool,
@@ -331,6 +339,12 @@ fn handle_command(
             let root = system.create();
             unsafe { lv_screen_load(root); }
             nav.navigate_to(UiScreen::System);
+            nav.set_root(root);
+        }
+        Command::OpenWifiProvisioning => {
+            let root = wifi_prov.create();
+            unsafe { lv_screen_load(root); }
+            nav.navigate_to(UiScreen::WifiProvisioning);
             nav.set_root(root);
         }
         Command::OpenVolume => {
