@@ -76,9 +76,15 @@ impl WifiService {
     }
 
     async fn handle_command(&self, cmd: Command) {
-        // Task 6 adds Command::WifiConnect { ssid, password }; until then this
-        // is a no-op catch-all. Replaced in Task 6.
-        let _ = cmd;
+        match cmd {
+            Command::WifiConnect { ssid, password } => {
+                match wpa::connect(&ssid, &password).await {
+                    Ok(()) => info!("wifi connect requested for {ssid}"),
+                    Err(e) => warn!("wifi connect failed: {e}"),
+                }
+            }
+            _ => {}
+        }
     }
 
     async fn sync_ntp(&self) {

@@ -142,6 +142,23 @@ pub struct WifiState {
     pub signal_strength: i8,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum ProvisioningState {
+    /// Not provisioning — normal STA operation.
+    #[default]
+    Idle,
+    /// Scanning for networks before bringing up the AP.
+    Scanning,
+    /// AP is up; user should join `ssid` and browse to `url`.
+    ApActive { ssid: String, passphrase: String, url: String },
+    /// Credentials received; reconnecting as STA to `ssid`.
+    Connecting { ssid: String },
+    /// Provisioning finished — connected to `ssid`.
+    Connected { ssid: String },
+    /// Provisioning failed; `reason` is user-facing.
+    Failed { reason: String },
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MeetingState {
     pub recording: bool,
@@ -259,6 +276,12 @@ pub enum Command {
     /// User chose Discard on the confirmation screen — hard-delete the
     /// recording dir, the meeting row, and any bookmarks for it.
     DiscardRecording(Uuid),
+    /// UI-only: enter WiFi provisioning (scan → AP → web form).
+    OpenWifiProvisioning,
+    /// Provisioning web form / WifiService: join this network.
+    WifiConnect { ssid: String, password: String },
+    /// UI-only: abort provisioning and revert to STA.
+    CancelWifiProvisioning,
 }
 
 // --- State Bus ---
@@ -269,6 +292,7 @@ pub struct StateBus {
     pub battery: Arc<watch::Sender<BatteryState>>,
     pub bt: Arc<watch::Sender<BluetoothState>>,
     pub wifi: Arc<watch::Sender<WifiState>>,
+    pub provisioning: Arc<watch::Sender<ProvisioningState>>,
     pub meeting: Arc<watch::Sender<MeetingState>>,
     pub mcu: Arc<watch::Sender<McuState>>,
     pub puc: Arc<watch::Sender<PucState>>,
@@ -290,6 +314,7 @@ impl StateBus {
         let (battery_tx, _) = watch::channel(BatteryState::default());
         let (bt_tx, _) = watch::channel(BluetoothState::default());
         let (wifi_tx, _) = watch::channel(WifiState::default());
+        let (provisioning_tx, _) = watch::channel(ProvisioningState::default());
         let (meeting_tx, _) = watch::channel(MeetingState::default());
         let (mcu_tx, _) = watch::channel(McuState::default());
         let (puc_tx, _) = watch::channel(PucState::default());
@@ -301,6 +326,7 @@ impl StateBus {
             battery: Arc::new(battery_tx),
             bt: Arc::new(bt_tx),
             wifi: Arc::new(wifi_tx),
+            provisioning: Arc::new(provisioning_tx),
             meeting: Arc::new(meeting_tx),
             mcu: Arc::new(mcu_tx),
             puc: Arc::new(puc_tx),
@@ -436,5 +462,12 @@ mod tests {
     fn audio_mode_default_remains_omni() {
         // Steered must not displace Omni as the default.
         assert!(matches!(AudioMode::default(), AudioMode::Omni));
+    }
+
+    #[test]
+    fn provisioning_channel_defaults_idle() {
+        let bus = StateBus::new();
+        let rx = bus.provisioning.subscribe();
+        assert_eq!(*rx.borrow(), ProvisioningState::Idle);
     }
 }
