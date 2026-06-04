@@ -6,7 +6,14 @@ pub mod simulate;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use waved_config::WavedConfig;
-use waved_state::{DeviceEvent, WifiState};
+use waved_state::{Command, DeviceEvent, WifiState};
+
+/// True when the connected SSID differs from the last observed one
+/// (or this is the first connect). Drives disconnect+reconnect events
+/// on roam without a full drop.
+pub fn ssid_changed(last: Option<&str>, current: &str) -> bool {
+    last != Some(current)
+}
 
 pub struct WifiService {
     wifi_tx: std::sync::Arc<tokio::sync::watch::Sender<WifiState>>,
@@ -27,40 +34,51 @@ impl WifiService {
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, mut commands: broadcast::Receiver<Command>) {
         info!("wifi_srv started");
-        let mut was_connected = false;
+        let mut last_ssid: Option<String> = None;
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
 
         loop {
-            let state = match wpa::status().await {
-                Some((ssid, ip, signal)) => {
-                    if !was_connected {
-                        info!("wifi connected: {ssid} ({ip})");
-                        let _ = self.events_tx.send(DeviceEvent::WifiConnected(ssid.clone()));
-                        was_connected = true;
-                        // Errata #6: NTP sync on WiFi connect
-                        self.sync_ntp().await;
-                    }
-                    WifiState {
-                        connected: true,
-                        ssid,
-                        ip_addr: ip,
-                        signal_strength: signal,
-                    }
+            tokio::select! {
+                _ = tick.tick() => self.poll(&mut last_ssid).await,
+                cmd = commands.recv() => {
+                    if let Ok(cmd) = cmd { self.handle_command(cmd).await; }
                 }
-                None => {
-                    if was_connected {
-                        info!("wifi disconnected");
-                        let _ = self.events_tx.send(DeviceEvent::WifiDisconnected);
-                        was_connected = false;
-                    }
-                    WifiState::default()
-                }
-            };
-            let _ = self.wifi_tx.send(state);
-
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            }
         }
+    }
+
+    async fn poll(&self, last_ssid: &mut Option<String>) {
+        let state = match wpa::status().await {
+            Some((ssid, ip, signal)) => {
+                if ssid_changed(last_ssid.as_deref(), &ssid) {
+                    if last_ssid.is_some() {
+                        let _ = self.events_tx.send(DeviceEvent::WifiDisconnected);
+                    }
+                    info!("wifi connected: {ssid} ({ip})");
+                    let _ = self.events_tx.send(DeviceEvent::WifiConnected(ssid.clone()));
+                    *last_ssid = Some(ssid.clone());
+                    self.sync_ntp().await;
+                }
+                WifiState { connected: true, ssid, ip_addr: ip, signal_strength: signal }
+            }
+            None => {
+                if last_ssid.is_some() {
+                    info!("wifi disconnected");
+                    let _ = self.events_tx.send(DeviceEvent::WifiDisconnected);
+                    *last_ssid = None;
+                }
+                WifiState::default()
+            }
+        };
+        let _ = self.wifi_tx.send(state);
+    }
+
+    async fn handle_command(&self, cmd: Command) {
+        // Task 6 adds Command::WifiConnect { ssid, password }; until then this
+        // is a no-op catch-all. Replaced in Task 6.
+        let _ = cmd;
     }
 
     async fn sync_ntp(&self) {

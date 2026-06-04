@@ -15,7 +15,7 @@ impl SimWifiService {
         Self { wifi_tx, events_tx }
     }
 
-    pub async fn run(self) {
+    pub async fn run(self, _commands: tokio::sync::broadcast::Receiver<waved_state::Command>) {
         info!("[SIM] wifi_srv started");
         let state = WifiState {
             connected: true, ssid: "SimNetwork".to_string(),
