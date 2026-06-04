@@ -529,12 +529,22 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     // WiFi service
     #[cfg(not(feature = "simulate"))]
     {
+        let wifi_cmds = bus.commands.subscribe();
         let wifi_svc = waved_wifi::WifiService::new(
             Arc::clone(&bus.wifi),
             bus.events.clone(),
             &config,
         );
-        tokio::spawn(async move { wifi_svc.run().await });
+        tokio::spawn(async move { wifi_svc.run(wifi_cmds).await });
+
+        // WiFi MAC drives the provisioning AP SSID/passphrase. Read it from the
+        // interface; fall back to a constant if unavailable (see docs/WIFI.md).
+        let mac = std::fs::read_to_string("/sys/class/net/wlan0/address")
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "00:00:00:00:00:00".to_string());
+        let prov_cmds = bus.commands.subscribe();
+        let prov_svc = waved_provision::ProvisioningService::new(Arc::clone(&bus), mac);
+        tokio::spawn(async move { prov_svc.run(prov_cmds).await });
     }
     #[cfg(feature = "simulate")]
     {
@@ -542,7 +552,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             Arc::clone(&bus.wifi),
             bus.events.clone(),
         );
-        tokio::spawn(async move { sim_wifi.run().await });
+        let sim_cmds = bus.commands.subscribe();
+        tokio::spawn(async move { sim_wifi.run(sim_cmds).await });
     }
 
     // Meeting service

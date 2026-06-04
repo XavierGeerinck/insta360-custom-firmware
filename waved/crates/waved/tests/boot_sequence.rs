@@ -55,7 +55,8 @@ mod tests {
         // Subscribe before spawning to avoid missing the send.
         let wifi_rx = bus.wifi.subscribe();
 
-        tokio::spawn(async move { sim_wifi.run().await });
+        let sim_cmds = bus.commands.subscribe();
+        tokio::spawn(async move { sim_wifi.run(sim_cmds).await });
 
         // Yield to allow the spawned task to execute its initial send.
         for _ in 0..10 {
