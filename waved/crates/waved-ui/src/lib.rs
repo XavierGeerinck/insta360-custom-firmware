@@ -265,6 +265,7 @@ fn ui_thread_main(
                 let meeting = meeting_rx.borrow().clone();
                 unsafe { confirmation.update_state(&meeting); }
             }
+            UiScreen::WifiProvisioning => {}
         }
 
         std::thread::sleep(std::time::Duration::from_millis(10));

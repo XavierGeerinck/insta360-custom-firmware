@@ -17,6 +17,8 @@ pub enum UiScreen {
     System,
     /// Speaker volume control — pspapp page 0xd / `ui_volume_screen`.
     Volume,
+    /// WiFi provisioning flow — scan → AP info → connecting → result.
+    WifiProvisioning,
 }
 
 impl Default for UiScreen {

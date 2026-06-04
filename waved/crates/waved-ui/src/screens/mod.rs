@@ -6,6 +6,7 @@ pub mod recording;
 pub mod settings;
 pub mod system;
 pub mod volume;
+pub mod wifi_provisioning;
 
 use crate::bindings::lv_obj_t;
 
