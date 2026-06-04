@@ -371,6 +371,13 @@ fn handle_command(
                     nav.navigate_to(UiScreen::Settings);
                     nav.set_root(root);
                 }
+                UiScreen::WifiProvisioning => {
+                    // Wi-Fi provisioning → back to System settings (entered from there).
+                    let root = system.create();
+                    unsafe { lv_screen_load(root); }
+                    nav.navigate_to(UiScreen::System);
+                    nav.set_root(root);
+                }
                 UiScreen::NoiseReduction => {
                     // NR → back to Home or Recording (entered from Home shortcut).
                     let _ = noise_red;

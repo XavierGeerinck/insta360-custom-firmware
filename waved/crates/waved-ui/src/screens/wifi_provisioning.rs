@@ -50,10 +50,17 @@ impl WifiProvisioningScreen {
         }
     }
 
+    /// CString from the (user-controlled) state text. An SSID may legally
+    /// contain a NUL byte; fall back rather than panic the UI thread.
+    fn state_cstring(state: &ProvisioningState) -> CString {
+        CString::new(Self::state_text(state))
+            .unwrap_or_else(|_| CString::new("(invalid)").unwrap())
+    }
+
     /// Refresh the body label from the latest ProvisioningState.
     pub unsafe fn update_state(&mut self, state: &ProvisioningState) {
         if self.body.is_null() { return; }
-        let s = CString::new(Self::state_text(state)).unwrap();
+        let s = Self::state_cstring(state);
         lv_label_set_text(self.body, s.as_ptr());
     }
 }
@@ -96,8 +103,7 @@ impl super::Screen for WifiProvisioningScreen {
             lv_obj_set_style_text_color(body, rgb(CLR_WHITE), 0);
             lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
             lv_obj_align(body, lv_align_t_LV_ALIGN_CENTER, 0, 10);
-            let init = Self::state_text(&self.bus.provisioning.borrow());
-            let s = CString::new(init).unwrap();
+            let s = Self::state_cstring(&self.bus.provisioning.borrow());
             lv_label_set_text(body, s.as_ptr());
             self.body = body;
 

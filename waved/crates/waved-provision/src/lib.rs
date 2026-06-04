@@ -52,6 +52,12 @@ impl ProvisioningService {
     }
 
     async fn provision(&self) {
+        // Subscribe to the command bus BEFORE the long scan/AP-bringup phase: a
+        // broadcast receiver only sees messages sent after it subscribes, so a
+        // Cancel pressed during Scanning/start() would otherwise be lost and the
+        // radio could stay in AP mode until the 5-min timeout.
+        let mut cancel_rx = self.bus.commands.subscribe();
+
         // 1. Scan as STA.
         self.set(ProvisioningState::Scanning);
         let ssids = waved_wifi::wpa::scan().await.unwrap_or_default();
@@ -75,7 +81,7 @@ impl ProvisioningService {
         let creds = tokio::select! {
             c = self.serve(&ssids) => c,
             _ = tokio::time::sleep(PROV_TIMEOUT) => None,
-            _ = self.wait_cancel() => None,
+            _ = wait_for_cancel(&mut cancel_rx) => None,
         };
 
         // 4. Tear down AP, restore STA.
@@ -130,15 +136,17 @@ impl ProvisioningService {
         }
     }
 
-    async fn wait_cancel(&self) {
-        let mut rx = self.bus.commands.subscribe();
-        loop {
-            match rx.recv().await {
-                Ok(Command::CancelWifiProvisioning) => return,
-                Ok(_) => continue,
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return,
-            }
+}
+
+/// Resolve when a `CancelWifiProvisioning` command arrives on `rx` (or the
+/// channel closes). Takes a pre-subscribed receiver so a cancel sent during the
+/// scan/AP-bringup phase isn't missed.
+async fn wait_for_cancel(rx: &mut broadcast::Receiver<Command>) {
+    loop {
+        match rx.recv().await {
+            Ok(Command::CancelWifiProvisioning) => return,
+            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => return,
         }
     }
 }
