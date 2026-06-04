@@ -103,20 +103,64 @@ pub async fn scan() -> Vec<String> {
     }
 }
 
-pub async fn connect(ssid: &str, password: &str) -> bool {
-    let id = match wpa_cli(&["add_network"]).await {
-        Ok(s) => s.trim().to_string(),
-        Err(_) => return false,
-    };
-    let _ = wpa_cli(&["set_network", &id, "ssid", &format!("\"{}\"", ssid)]).await;
-    let _ = wpa_cli(&["set_network", &id, "psk", &format!("\"{}\"", password)]).await;
-    let _ = wpa_cli(&["enable_network", &id]).await;
-    let _ = wpa_cli(&["save_config"]).await;
-    true
+/// `add_network` returns a bare network index on success.
+pub fn parse_network_id(stdout: &str) -> Result<String, WifiError> {
+    let id = stdout.trim();
+    if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+        Ok(id.to_string())
+    } else {
+        Err(WifiError::BadNetworkId(id.to_string()))
+    }
 }
 
-pub async fn disconnect() -> bool {
-    wpa_cli(&["disconnect"]).await.is_ok()
+/// WPA2-PSK passphrases are 8..=63 chars; empty means an open network.
+pub fn check_psk_len(psk: &str) -> Result<(), WifiError> {
+    if psk.is_empty() || (8..=63).contains(&psk.chars().count()) {
+        Ok(())
+    } else {
+        Err(WifiError::InvalidCredential("psk must be 8..=63 chars"))
+    }
+}
+
+async fn wpa_passphrase(ssid: &str, psk: &str) -> Result<String, WifiError> {
+    let fut = Command::new("wpa_passphrase").arg(ssid).arg(psk).output();
+    let output = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
+        Ok(res) => res?,
+        Err(_) => return Err(WifiError::Timeout),
+    };
+    if !output.status.success() {
+        return Err(WifiError::BadExit(output.status.code().unwrap_or(-1)));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_wpa_passphrase_psk(&text)
+        .ok_or(WifiError::InvalidCredential("wpa_passphrase produced no psk"))
+}
+
+pub async fn connect(ssid: &str, password: &str) -> Result<(), WifiError> {
+    if ssid.is_empty() {
+        return Err(WifiError::InvalidCredential("empty ssid"));
+    }
+    check_psk_len(password)?;
+
+    let id = parse_network_id(&wpa_cli(&["add_network"]).await?)?;
+    let ssid_hex = ssid_to_hex(ssid);
+    wpa_cli(&["set_network", &id, "ssid", &ssid_hex]).await?;
+
+    if password.is_empty() {
+        wpa_cli(&["set_network", &id, "key_mgmt", "NONE"]).await?;
+    } else {
+        let psk_hex = wpa_passphrase(ssid, password).await?;
+        wpa_cli(&["set_network", &id, "psk", &psk_hex]).await?;
+    }
+
+    wpa_cli(&["select_network", &id]).await?;
+    wpa_cli(&["enable_network", &id]).await?;
+    wpa_cli(&["save_config"]).await?;
+    Ok(())
+}
+
+pub async fn disconnect() -> Result<(), WifiError> {
+    wpa_cli(&["disconnect"]).await.map(|_| ())
 }
 
 pub fn parse_wpa_status(output: &str) -> Option<(String, String)> {
@@ -215,5 +259,22 @@ mod tests {
     fn parse_passphrase_ignores_commented_line() {
         let out = "\t#psk=\"plaintext\"\n";
         assert!(parse_wpa_passphrase_psk(out).is_none());
+    }
+
+    #[test]
+    fn validate_network_id_numeric() {
+        assert_eq!(parse_network_id("3\n").unwrap(), "3");
+    }
+
+    #[test]
+    fn validate_network_id_rejects_fail() {
+        assert!(matches!(parse_network_id("FAIL\n"), Err(WifiError::BadNetworkId(_))));
+    }
+
+    #[test]
+    fn validate_psk_length() {
+        assert!(matches!(check_psk_len("short"), Err(WifiError::InvalidCredential(_))));
+        assert!(check_psk_len("12345678").is_ok());
+        assert!(check_psk_len("").is_ok()); // empty == open network
     }
 }
