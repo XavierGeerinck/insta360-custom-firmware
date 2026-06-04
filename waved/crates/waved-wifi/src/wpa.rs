@@ -61,6 +61,27 @@ async fn wpa_cli(args: &[&str]) -> Result<String, WifiError> {
     check_wpa_ok(&stdout)
 }
 
+/// Encode an SSID as the lowercase-hex form wpa_supplicant accepts unquoted
+/// (`set_network N ssid <hex>`), sidestepping all quoting/escaping issues.
+pub fn ssid_to_hex(ssid: &str) -> String {
+    ssid.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Extract the derived `psk=<hex>` line from `wpa_passphrase` output,
+/// skipping the commented `#psk="..."` plaintext echo.
+pub fn parse_wpa_passphrase_psk(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let t = line.trim();
+        if t.starts_with('#') {
+            continue;
+        }
+        if let Some(hex) = t.strip_prefix("psk=") {
+            return Some(hex.to_string());
+        }
+    }
+    None
+}
+
 pub fn parse_scan_results(output: &str) -> Vec<String> {
     output
         .lines()
@@ -171,5 +192,28 @@ mod tests {
     fn classify_passthrough_value() {
         // Non OK/FAIL stdout (e.g. status output, a network id) passes through.
         assert_eq!(check_wpa_ok("3\n").unwrap(), "3\n");
+    }
+
+    #[test]
+    fn ssid_hex_basic() {
+        assert_eq!(ssid_to_hex("net"), "6e6574");
+    }
+
+    #[test]
+    fn ssid_hex_quotes_and_spaces() {
+        // A double-quote (0x22) and space (0x20) — would break quoting.
+        assert_eq!(ssid_to_hex("a \"b"), "61202262");
+    }
+
+    #[test]
+    fn parse_passphrase_extracts_psk_hex() {
+        let out = "network={\n\tssid=\"x\"\n\t#psk=\"secret\"\n\tpsk=0123abcd\n}\n";
+        assert_eq!(parse_wpa_passphrase_psk(out).unwrap(), "0123abcd");
+    }
+
+    #[test]
+    fn parse_passphrase_ignores_commented_line() {
+        let out = "\t#psk=\"plaintext\"\n";
+        assert!(parse_wpa_passphrase_psk(out).is_none());
     }
 }
