@@ -76,14 +76,11 @@ impl WifiService {
     }
 
     async fn handle_command(&self, cmd: Command) {
-        match cmd {
-            Command::WifiConnect { ssid, password } => {
-                match wpa::connect(&ssid, &password).await {
-                    Ok(()) => info!("wifi connect requested for {ssid}"),
-                    Err(e) => warn!("wifi connect failed: {e}"),
-                }
+        if let Command::WifiConnect { ssid, password } = cmd {
+            match wpa::connect(&ssid, &password).await {
+                Ok(()) => info!("wifi connect requested for {ssid}"),
+                Err(e) => warn!("wifi connect failed: {e}"),
             }
-            _ => {}
         }
     }
 
