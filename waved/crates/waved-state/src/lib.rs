@@ -308,6 +308,12 @@ pub struct StateBus {
     pub host_pending_speaker_vol: Arc<AtomicI32>,
 }
 
+impl Default for StateBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateBus {
     pub fn new() -> Self {
         let (audio_tx, _) = watch::channel(AudioState::default());
