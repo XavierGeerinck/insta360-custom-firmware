@@ -17,6 +17,7 @@ from on-device measurement and are hard to rederive.
 | UI assets         | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md)               |
 | UI coordinates    | [`docs/ui/COORDINATE_SYSTEM.md`](docs/ui/COORDINATE_SYSTEM.md) |
 | Home screen       | [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md)     |
+| Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
