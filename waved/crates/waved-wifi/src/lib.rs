@@ -33,7 +33,7 @@ impl WifiService {
 
         loop {
             let state = match wpa::status().await {
-                Some((ssid, ip)) => {
+                Some((ssid, ip, signal)) => {
                     if !was_connected {
                         info!("wifi connected: {ssid} ({ip})");
                         let _ = self.events_tx.send(DeviceEvent::WifiConnected(ssid.clone()));
@@ -45,7 +45,7 @@ impl WifiService {
                         connected: true,
                         ssid,
                         ip_addr: ip,
-                        signal_strength: 0,
+                        signal_strength: signal,
                     }
                 }
                 None => {

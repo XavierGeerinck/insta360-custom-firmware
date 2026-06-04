@@ -2,7 +2,7 @@ use std::process::Output;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -91,16 +91,11 @@ pub fn parse_scan_results(output: &str) -> Vec<String> {
         .collect()
 }
 
-pub async fn scan() -> Vec<String> {
-    if let Err(e) = wpa_cli(&["scan"]).await {
-        warn!("wifi scan trigger failed: {e}");
-        return vec![];
-    }
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    match wpa_cli(&["scan_results"]).await {
-        Ok(output) => parse_scan_results(&output),
-        Err(_) => vec![],
-    }
+pub async fn scan() -> Result<Vec<String>, WifiError> {
+    wpa_cli(&["scan"]).await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let output = wpa_cli(&["scan_results"]).await?;
+    Ok(parse_scan_results(&output))
 }
 
 /// `add_network` returns a bare network index on success.
@@ -180,9 +175,22 @@ pub fn parse_wpa_status(output: &str) -> Option<(String, String)> {
     }
 }
 
-pub async fn status() -> Option<(String, String)> {
+/// Parse the `RSSI=<dbm>` line from `wpa_cli signal_poll`.
+pub fn parse_signal(output: &str) -> Option<i8> {
+    output
+        .lines()
+        .find_map(|l| l.strip_prefix("RSSI="))
+        .and_then(|v| v.trim().parse::<i8>().ok())
+}
+
+pub async fn status() -> Option<(String, String, i8)> {
     let output = wpa_cli(&["status"]).await.ok()?;
-    parse_wpa_status(&output)
+    let (ssid, ip) = parse_wpa_status(&output)?;
+    let signal = match wpa_cli(&["signal_poll"]).await {
+        Ok(s) => parse_signal(&s).unwrap_or(0),
+        Err(_) => 0,
+    };
+    Some((ssid, ip, signal))
 }
 
 #[cfg(test)]
@@ -276,5 +284,16 @@ mod tests {
         assert!(matches!(check_psk_len("short"), Err(WifiError::InvalidCredential(_))));
         assert!(check_psk_len("12345678").is_ok());
         assert!(check_psk_len("").is_ok()); // empty == open network
+    }
+
+    #[test]
+    fn parse_signal_rssi() {
+        let out = "RSSI=-57\nLINKSPEED=72\nNOISE=-92\n";
+        assert_eq!(parse_signal(out), Some(-57));
+    }
+
+    #[test]
+    fn parse_signal_missing() {
+        assert_eq!(parse_signal("LINKSPEED=72\n"), None);
     }
 }
