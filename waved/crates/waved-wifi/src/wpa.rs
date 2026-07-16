@@ -138,7 +138,16 @@ async fn stop_process(name: &str) -> Result<(), WifiError> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while process_running(name).await? {
         if tokio::time::Instant::now() >= deadline {
-            return Err(WifiError::ProcessDidNotExit(name.to_string()));
+            debug!("{name} ignored SIGTERM; forcing exit before radio handoff");
+            command_output("killall", &["-KILL", name]).await?;
+            let kill_deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while process_running(name).await? {
+                if tokio::time::Instant::now() >= kill_deadline {
+                    return Err(WifiError::ProcessDidNotExit(name.to_string()));
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
