@@ -28,6 +28,8 @@ pub enum WifiError {
     InvalidCredential(&'static str),
     #[error("timed out waiting for Wi-Fi connection")]
     ConnectionTimeout,
+    #[error("process did not exit: {0}")]
+    ProcessDidNotExit(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -94,6 +96,29 @@ async fn process_running(name: &str) -> Result<bool, WifiError> {
     }
 }
 
+async fn stop_process(name: &str) -> Result<(), WifiError> {
+    if !process_running(name).await? {
+        return Ok(());
+    }
+    if let Err(error) = command_output("killall", &["-TERM", name]).await {
+        // A process can exit between pidof and killall. Only preserve the
+        // command error if it is still present afterward.
+        if process_running(name).await? {
+            return Err(error);
+        }
+        return Ok(());
+    }
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while process_running(name).await? {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(WifiError::ProcessDidNotExit(name.to_string()));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 /// Start the station supplicant when normal STA ownership is active.
 /// Idempotent so the Wi-Fi poll loop can use it as its recovery primitive.
 pub async fn ensure_station() -> Result<(), WifiError> {
@@ -115,12 +140,8 @@ pub async fn ensure_station() -> Result<(), WifiError> {
 /// them while the single radio is owned by the provisioning AP.
 pub async fn stop_station() -> Result<(), WifiError> {
     STATION_SUSPENDED.store(true, Ordering::SeqCst);
-    if process_running("udhcpc").await? {
-        command_output("killall", &["-TERM", "udhcpc"]).await?;
-    }
-    if process_running("wpa_supplicant").await? {
-        command_output("killall", &["-TERM", "wpa_supplicant"]).await?;
-    }
+    stop_process("udhcpc").await?;
+    stop_process("wpa_supplicant").await?;
     Ok(())
 }
 

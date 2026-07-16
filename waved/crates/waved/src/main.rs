@@ -511,8 +511,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         );
         tokio::spawn(async move { wifi_svc.run(wifi_cmds).await });
 
-        // WiFi MAC drives the provisioning AP SSID/passphrase. Read it from the
-        // interface; fall back to a constant if unavailable (see docs/WIFI.md).
+        // WiFi MAC drives the provisioning AP SSID. Read it from the interface;
+        // fall back to a constant if unavailable (see docs/WIFI.md).
         let mac = std::fs::read_to_string("/sys/class/net/wlan0/address")
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "00:00:00:00:00:00".to_string());

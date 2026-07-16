@@ -72,6 +72,20 @@ async fn process_running(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+async fn wait_for_process_exit(name: &str) -> Result<(), ApError> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while process_running(name).await {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(ApError::CommandFailed {
+                program: format!("stop {name}"),
+                status: -1,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 fn write_hostapd_config(contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
@@ -124,6 +138,9 @@ impl ApController {
         if process_running("hostapd").await {
             if let Err(error) = run("killall", &["-TERM", "hostapd"]).await {
                 warn!("hostapd stop failed: {error}");
+            }
+            if let Err(error) = wait_for_process_exit("hostapd").await {
+                warn!("hostapd exit wait failed: {error}");
             }
         }
         if let Err(error) = run("ip", &["addr", "flush", "dev", IFACE]).await {
