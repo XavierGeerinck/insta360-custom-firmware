@@ -76,6 +76,7 @@
 #define LV_USE_BAR        1
 #define LV_USE_BUTTON     1
 #define LV_USE_BUTTONMATRIX 1
+#define LV_USE_CANVAS     1
 #define LV_USE_IMAGE      1
 #define LV_USE_LABEL      1
 #define LV_USE_SLIDER     1
@@ -89,6 +90,7 @@
  *===================*/
 
 #define LV_USE_LODEPNG 1  /* built-in PNG decoder */
+#define LV_USE_QRCODE  1  /* built-in Wi-Fi provisioning QR encoder */
 
 /* POSIX file system driver — maps drive letter 'A' to the root filesystem.
  * Image paths: "A:/etc/pspapp/lvgl/icon/msc/bg_main.png" → /etc/pspapp/... */
