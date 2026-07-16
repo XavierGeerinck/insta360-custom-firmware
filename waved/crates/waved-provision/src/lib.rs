@@ -101,6 +101,7 @@ impl ProvisioningService {
             passphrase,
             url: format!("http://{}", ap::AP_IP),
         });
+        info!(ssid = %ap.ssid, url = %format!("http://{}", ap::AP_IP), "provisioning AP ready");
 
         // 3. Serve the form until creds arrive, timeout, or cancel.
         enum Outcome {
