@@ -7,41 +7,38 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio::sync::watch;
 use tracing::{info, warn};
 use waved_state::{Command, ProvisioningState, StateBus};
 
 const PROV_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
 
-/// Derive a stable 8-hex-char provisioning passphrase from a seed (the MAC's
-/// numeric form). Deterministic so the on-screen value matches across restarts
-/// within a session; not a secret beyond the provisioning window.
-pub fn gen_passphrase(seed: u32) -> String {
-    format!("{seed:08x}")
+/// Generate a new WPA2-compatible eight-hex passphrase for each AP session.
+pub fn gen_passphrase() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }
 
 pub struct ProvisioningService {
     bus: Arc<StateBus>,
     mac: String,
-    mac_seed: u32,
 }
 
 impl ProvisioningService {
     pub fn new(bus: Arc<StateBus>, mac: String) -> Self {
-        let mac_seed = mac
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .collect::<String>()
-            .get(0..8)
-            .and_then(|h| u32::from_str_radix(h, 16).ok())
-            .unwrap_or(0);
-        Self { bus, mac, mac_seed }
+        Self { bus, mac }
     }
 
     pub async fn run(self, mut commands: broadcast::Receiver<Command>) {
         info!("provision_srv started");
         loop {
             match commands.recv().await {
-                Ok(Command::OpenWifiProvisioning) => self.provision().await,
+                Ok(Command::OpenWifiProvisioning) => {
+                    self.provision().await;
+                    // The primary receiver queues commands while provision()
+                    // owns the service. Drop duplicate Open/Cancel messages so
+                    // a tap during the active session cannot start another AP.
+                    while commands.try_recv().is_ok() {}
+                }
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
             }
@@ -61,17 +58,43 @@ impl ProvisioningService {
 
         // 1. Scan as STA.
         self.set(ProvisioningState::Scanning);
-        let ssids = waved_wifi::wpa::scan().await.unwrap_or_default();
+        if let Err(error) = waved_wifi::wpa::ensure_station().await {
+            warn!("station preparation failed: {error}");
+        }
+        let mut ssids = waved_wifi::wpa::scan().await.unwrap_or_default();
+        ssids.sort();
+        ssids.dedup();
+
+        if matches!(cancel_rx.try_recv(), Ok(Command::CancelWifiProvisioning)) {
+            self.set(ProvisioningState::Idle);
+            return;
+        }
 
         // 2. Bring up AP.
-        let passphrase = gen_passphrase(self.mac_seed);
+        let passphrase = gen_passphrase();
         let ap = ap::ApController::new(&self.mac, passphrase.clone());
         if let Err(e) = ap.start().await {
             warn!("AP start failed: {e}");
-            self.set(ProvisioningState::Failed { reason: "AP start failed".into() });
+            self.set(ProvisioningState::Failed {
+                reason: "AP start failed".into(),
+            });
             let _ = ap.stop().await;
             return;
         }
+
+        let dhcp = match dhcp::Server::bind() {
+            Ok(server) => server,
+            Err(error) => {
+                warn!("DHCP bind failed: {error}");
+                let _ = ap.stop().await;
+                self.set(ProvisioningState::Failed {
+                    reason: "DHCP start failed".into(),
+                });
+                return;
+            }
+        };
+        let (dhcp_shutdown, dhcp_rx) = watch::channel(false);
+        let mut dhcp_task = tokio::spawn(dhcp.serve(dhcp_rx));
         self.set(ProvisioningState::ApActive {
             ssid: ap.ssid.clone(),
             passphrase,
@@ -79,27 +102,70 @@ impl ProvisioningService {
         });
 
         // 3. Serve the form until creds arrive, timeout, or cancel.
-        let creds = tokio::select! {
-            c = self.serve(&ssids) => c,
-            _ = tokio::time::sleep(PROV_TIMEOUT) => None,
-            _ = wait_for_cancel(&mut cancel_rx) => None,
+        enum Outcome {
+            Credentials(String, String),
+            Cancelled,
+            Failed(String),
+        }
+        let outcome = tokio::select! {
+            credentials = self.serve(&ssids) => match credentials {
+                Some((ssid, psk)) => Outcome::Credentials(ssid, psk),
+                None => Outcome::Failed("setup page stopped".into()),
+            },
+            _ = tokio::time::sleep(PROV_TIMEOUT) => Outcome::Cancelled,
+            _ = wait_for_cancel(&mut cancel_rx) => Outcome::Cancelled,
+            result = &mut dhcp_task => {
+                let reason = match result {
+                    Ok(Ok(())) => "DHCP server stopped".to_string(),
+                    Ok(Err(error)) => format!("DHCP server failed: {error}"),
+                    Err(error) => format!("DHCP task failed: {error}"),
+                };
+                Outcome::Failed(reason)
+            },
         };
 
         // 4. Tear down AP, restore STA.
-        let _ = ap.stop().await;
+        let _ = dhcp_shutdown.send(true);
+        if !dhcp_task.is_finished() {
+            match dhcp_task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!("DHCP shutdown failed: {error}"),
+                Err(error) => warn!("DHCP task join failed: {error}"),
+            }
+        }
+        if let Err(error) = ap.stop().await {
+            warn!("AP cleanup/STA restore failed: {error}");
+        }
 
         // 5. Connect (or report idle/failure).
-        match creds {
-            Some((ssid, psk)) => {
+        match outcome {
+            Outcome::Credentials(ssid, psk) => {
                 self.set(ProvisioningState::Connecting { ssid: ssid.clone() });
                 match waved_wifi::wpa::connect(&ssid, &psk).await {
-                    Ok(()) => self.set(ProvisioningState::Connected { ssid }),
+                    Ok(()) => {
+                        match waved_wifi::wpa::wait_for_connection(&ssid, Duration::from_secs(45))
+                            .await
+                        {
+                            Ok(_) => self.set(ProvisioningState::Connected { ssid }),
+                            Err(error) => self.set(ProvisioningState::Failed {
+                                reason: format!("connection timed out: {error}"),
+                            }),
+                        }
+                    }
                     Err(e) => {
-                        self.set(ProvisioningState::Failed { reason: format!("connect failed: {e}") });
+                        self.set(ProvisioningState::Failed {
+                            reason: format!("connect failed: {e}"),
+                        });
                     }
                 }
             }
-            None => self.set(ProvisioningState::Idle),
+            Outcome::Cancelled => self.set(ProvisioningState::Idle),
+            Outcome::Failed(reason) => {
+                warn!("provisioning session failed: {reason}");
+                self.set(ProvisioningState::Failed {
+                    reason: "provisioning service failed".into(),
+                });
+            }
         }
     }
 
@@ -136,7 +202,6 @@ impl ProvisioningService {
             }
         }
     }
-
 }
 
 /// Resolve when a `CancelWifiProvisioning` command arrives on `rx` (or the
@@ -158,7 +223,7 @@ mod tests {
 
     #[test]
     fn passphrase_is_8_chars_hex() {
-        let p = gen_passphrase(0xA1B2C3D4);
+        let p = gen_passphrase();
         assert_eq!(p.len(), 8);
         assert!(p.chars().all(|c| c.is_ascii_hexdigit()));
     }

@@ -1,20 +1,41 @@
-//! Brings wlan0 up as a WPA2 AP via on-device hostapd + dnsmasq, and always
+//! Brings wlan0 up as a WPA2 AP via the on-device hostapd, and always
 //! tears back down to STA. Single radio → AP and STA are mutually exclusive.
 
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::time::Duration;
+use thiserror::Error;
 use tokio::process::Command;
 use tracing::{info, warn};
 
 pub const AP_IP: &str = "192.168.2.1";
 const HOSTAPD_CONF: &str = "/tmp/waved-hostapd.conf";
-const DNSMASQ_CONF: &str = "/tmp/waved-dnsmasq.conf";
 const IFACE: &str = "wlan0";
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Error)]
+pub enum ApError {
+    #[error("Wi-Fi station transition failed: {0}")]
+    Wifi(#[from] waved_wifi::wpa::WifiError),
+    #[error("{program} timed out")]
+    Timeout { program: String },
+    #[error("{program} exited with status {status}")]
+    CommandFailed { program: String, status: i32 },
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
 
 /// `Wave-XXXX` from the last 4 hex digits of the MAC (colons stripped, upper).
 pub fn ap_ssid(mac: &str) -> String {
     let hex: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    let suffix: String = hex.chars().rev().take(4).collect::<Vec<_>>()
-        .into_iter().rev().collect::<String>().to_uppercase();
+    let suffix: String = hex
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>()
+        .to_uppercase();
     format!("Wave-{suffix}")
 }
 
@@ -25,19 +46,42 @@ auth_algs=1\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase={pas
     )
 }
 
-pub fn dnsmasq_conf() -> String {
-    format!(
-        "interface={IFACE}\nbind-interfaces\ndhcp-range=192.168.2.50,192.168.2.200,12h\n\
-dhcp-option=3,{AP_IP}\nno-resolv\n"
-    )
+async fn run(program: &str, args: &[&str]) -> Result<(), ApError> {
+    let future = Command::new(program).args(args).status();
+    let status = tokio::time::timeout(COMMAND_TIMEOUT, future)
+        .await
+        .map_err(|_| ApError::Timeout {
+            program: program.to_string(),
+        })??;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(ApError::CommandFailed {
+            program: program.to_string(),
+            status: status.code().unwrap_or(-1),
+        })
+    }
 }
 
-async fn run(cmd: &str, args: &[&str]) -> std::io::Result<()> {
-    let status = Command::new(cmd).args(args).status().await?;
-    if !status.success() {
-        warn!("{cmd} {args:?} exited with {status}");
-    }
-    Ok(())
+async fn process_running(name: &str) -> bool {
+    tokio::time::timeout(COMMAND_TIMEOUT, Command::new("pidof").arg(name).status())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn write_hostapd_config(contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(HOSTAPD_CONF)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    file.write_all(contents.as_bytes())
 }
 
 /// Controller for the provisioning AP. `start` brings the AP up; `stop` always
@@ -49,40 +93,48 @@ pub struct ApController {
 
 impl ApController {
     pub fn new(mac: &str, passphrase: String) -> Self {
-        Self { ssid: ap_ssid(mac), passphrase }
+        Self {
+            ssid: ap_ssid(mac),
+            passphrase,
+        }
     }
 
-    /// Tear down STA, write configs, start hostapd + dnsmasq, assign AP_IP.
-    pub async fn start(&self) -> std::io::Result<()> {
+    /// Tear down STA, write the config, start hostapd, and assign AP_IP.
+    pub async fn start(&self) -> Result<(), ApError> {
         info!("provisioning AP up: {}", self.ssid);
-        // Release wpa_supplicant's hold on the iface (STA mode).
-        let _ = run("wpa_cli", &["disconnect"]).await;
-        let _ = run("killall", &["-q", "wpa_supplicant"]).await;
-        tokio::fs::write(HOSTAPD_CONF, hostapd_conf(&self.ssid, &self.passphrase)).await?;
-        tokio::fs::write(DNSMASQ_CONF, dnsmasq_conf()).await?;
+        waved_wifi::wpa::stop_station().await?;
+        write_hostapd_config(&hostapd_conf(&self.ssid, &self.passphrase))?;
         run("ip", &["addr", "flush", "dev", IFACE]).await?;
         run("ip", &["link", "set", IFACE, "up"]).await?;
         run("ip", &["addr", "add", &format!("{AP_IP}/24"), "dev", IFACE]).await?;
         run("hostapd", &["-B", HOSTAPD_CONF]).await?;
         tokio::time::sleep(Duration::from_secs(1)).await;
-        run("dnsmasq", &["-C", DNSMASQ_CONF]).await?;
+        if !process_running("hostapd").await {
+            return Err(ApError::CommandFailed {
+                program: "hostapd".to_string(),
+                status: -1,
+            });
+        }
         Ok(())
     }
 
     /// Stop AP daemons and hand the radio back to wpa_supplicant (STA).
-    pub async fn stop(&self) -> std::io::Result<()> {
+    pub async fn stop(&self) -> Result<(), ApError> {
         info!("provisioning AP down → restoring STA");
-        let _ = run("killall", &["-q", "dnsmasq"]).await;
-        let _ = run("killall", &["-q", "hostapd"]).await;
-        run("ip", &["addr", "flush", "dev", IFACE]).await?;
-        // Restart STA the same way the stock init does (see docs/WIFI.md, Task 13,
-        // for the exact reconciled command).
-        let _ = run(
-            "wpa_supplicant",
-            &["-B", "-Dnl80211", "-iwlan0", "-c", "/tmp/wpa_supplicant.conf"],
-        )
-        .await;
-        let _ = run("udhcpc", &["-i", IFACE, "-b"]).await;
+        if process_running("hostapd").await {
+            if let Err(error) = run("killall", &["-TERM", "hostapd"]).await {
+                warn!("hostapd stop failed: {error}");
+            }
+        }
+        if let Err(error) = run("ip", &["addr", "flush", "dev", IFACE]).await {
+            warn!("AP address cleanup failed: {error}");
+        }
+        if let Err(error) = std::fs::remove_file(HOSTAPD_CONF) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                warn!("hostapd config cleanup failed: {error}");
+            }
+        }
+        waved_wifi::wpa::restore_station().await?;
         Ok(())
     }
 }
@@ -97,13 +149,6 @@ mod tests {
         assert!(c.contains("ssid=Wave-1A2B"));
         assert!(c.contains("wpa=2"));
         assert!(c.contains("wpa_passphrase=pass1234"));
-        assert!(c.contains("interface=wlan0"));
-    }
-
-    #[test]
-    fn dnsmasq_conf_has_dhcp_range() {
-        let c = dnsmasq_conf();
-        assert!(c.contains("192.168.2.50,192.168.2.200"));
         assert!(c.contains("interface=wlan0"));
     }
 

@@ -250,37 +250,49 @@ fn bind_to_device(_socket: &StdUdpSocket, _interface: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub async fn serve(mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
-    let socket = StdUdpSocket::bind((Ipv4Addr::UNSPECIFIED, 67))?;
-    socket.set_broadcast(true)?;
-    socket.set_nonblocking(true)?;
-    bind_to_device(&socket, IFACE)?;
-    let socket = UdpSocket::from_std(socket)?;
-    let mut leases = LeasePool::default();
-    let mut packet = vec![0u8; 1500];
+pub struct Server {
+    socket: UdpSocket,
+}
 
-    loop {
-        tokio::select! {
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return Ok(());
+impl Server {
+    /// Bind synchronously so AP startup can fail before publishing `ApActive`.
+    pub fn bind() -> io::Result<Self> {
+        let socket = StdUdpSocket::bind((Ipv4Addr::UNSPECIFIED, 67))?;
+        socket.set_broadcast(true)?;
+        socket.set_nonblocking(true)?;
+        bind_to_device(&socket, IFACE)?;
+        Ok(Self {
+            socket: UdpSocket::from_std(socket)?,
+        })
+    }
+
+    pub async fn serve(self, mut shutdown: watch::Receiver<bool>) -> io::Result<()> {
+        let mut leases = LeasePool::default();
+        let mut packet = vec![0u8; 1500];
+
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(());
+                    }
                 }
-            }
-            received = socket.recv_from(&mut packet) => {
-                let (length, peer) = received?;
-                let Some(request) = parse_request(&packet[..length]) else {
-                    debug!("ignored malformed DHCP packet from {peer}");
-                    continue;
-                };
-                let Some(reply) = leases.respond(&request) else {
-                    continue;
-                };
-                let response = build_reply(&request, reply);
-                if let Err(error) = socket
-                    .send_to(&response, (Ipv4Addr::BROADCAST, 68))
-                    .await
-                {
-                    warn!("DHCP reply to {peer} failed: {error}");
+                received = self.socket.recv_from(&mut packet) => {
+                    let (length, peer) = received?;
+                    let Some(request) = parse_request(&packet[..length]) else {
+                        debug!("ignored malformed DHCP packet from {peer}");
+                        continue;
+                    };
+                    let Some(reply) = leases.respond(&request) else {
+                        continue;
+                    };
+                    let response = build_reply(&request, reply);
+                    if let Err(error) = self.socket
+                        .send_to(&response, (Ipv4Addr::BROADCAST, 68))
+                        .await
+                    {
+                        warn!("DHCP reply to {peer} failed: {error}");
+                    }
                 }
             }
         }

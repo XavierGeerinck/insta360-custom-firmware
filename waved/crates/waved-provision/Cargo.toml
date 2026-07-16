@@ -10,3 +10,4 @@ tokio = { workspace = true, features = ["sync", "process", "time", "net", "io-ut
 tracing.workspace = true
 thiserror.workspace = true
 libc = "0.2"
+uuid.workspace = true
