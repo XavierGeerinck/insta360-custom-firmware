@@ -3536,6 +3536,7 @@ dependencies = [
  "waved-hid",
  "waved-mcu",
  "waved-meeting",
+ "waved-provision",
  "waved-state",
  "waved-uart",
  "waved-ui",
@@ -3730,9 +3731,11 @@ dependencies = [
 name = "waved-provision"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
  "waved-state",
  "waved-wifi",
 ]
@@ -3792,6 +3795,8 @@ dependencies = [
 name = "waved-wifi"
 version = "0.1.0"
 dependencies = [
+ "hmac",
+ "sha1",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
