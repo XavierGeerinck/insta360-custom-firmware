@@ -34,13 +34,29 @@ pub enum WifiError {
     Io(#[from] std::io::Error),
 }
 
-/// Classify wpa_cli stdout. `FAIL` → error; everything else (incl. `OK`,
-/// status dumps, numeric ids) passes through unchanged.
+fn final_nonempty_line(stdout: &str) -> Option<&str> {
+    stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+}
+
+/// Classify wpa_cli stdout. A final `FAIL` line is an error; everything else
+/// (including informational prefixes, `OK`, status dumps, and numeric ids)
+/// passes through unchanged.
 pub fn check_wpa_ok(stdout: &str) -> Result<String, WifiError> {
-    if stdout.trim() == "FAIL" {
+    if final_nonempty_line(stdout) == Some("FAIL") {
         return Err(WifiError::CommandFailed);
     }
     Ok(stdout.to_string())
+}
+
+fn wpa_cli_args<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut command_args = Vec::with_capacity(args.len() + 2);
+    command_args.extend(["-i", IFACE]);
+    command_args.extend_from_slice(args);
+    command_args
 }
 
 /// Mask the value following a `psk` arg so passphrases never reach the log.
@@ -60,7 +76,8 @@ fn redact_psk(args: &[&str]) -> Vec<String> {
 }
 
 async fn wpa_cli(args: &[&str]) -> Result<String, WifiError> {
-    let fut = Command::new("wpa_cli").args(args).output();
+    let command_args = wpa_cli_args(args);
+    let fut = Command::new("wpa_cli").args(&command_args).output();
     let output: Output = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
         Ok(res) => res?,
         Err(_) => return Err(WifiError::Timeout),
@@ -69,7 +86,11 @@ async fn wpa_cli(args: &[&str]) -> Result<String, WifiError> {
         return Err(WifiError::BadExit(output.status.code().unwrap_or(-1)));
     }
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    debug!("wpa_cli {:?} → {}", redact_psk(args), stdout.trim());
+    debug!(
+        "wpa_cli {:?} → {}",
+        redact_psk(&command_args),
+        stdout.trim()
+    );
     check_wpa_ok(&stdout)
 }
 
@@ -227,13 +248,14 @@ pub async fn scan() -> Result<Vec<String>, WifiError> {
     Ok(parse_scan_results(&output))
 }
 
-/// `add_network` returns a bare network index on success.
+/// `add_network` ends with a network index on success. Some firmware builds
+/// prefix it with an informational interface-selection line.
 pub fn parse_network_id(stdout: &str) -> Result<String, WifiError> {
-    let id = stdout.trim();
-    if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+    let id = final_nonempty_line(stdout).unwrap_or_default();
+    if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) {
         Ok(id.to_string())
     } else {
-        Err(WifiError::BadNetworkId(id.to_string()))
+        Err(WifiError::BadNetworkId(stdout.trim().to_string()))
     }
 }
 
@@ -409,15 +431,13 @@ mod tests {
 
     #[test]
     fn connection_requires_requested_ssid_and_real_ipv4() {
-        let complete = parse_station_status(
-            "ssid=Home\nip_address=192.168.1.42\nwpa_state=COMPLETED\n",
-        );
+        let complete =
+            parse_station_status("ssid=Home\nip_address=192.168.1.42\nwpa_state=COMPLETED\n");
         assert!(connection_complete(&complete, "Home"));
         assert!(!connection_complete(&complete, "Other"));
 
-        let unspecified = parse_station_status(
-            "ssid=Home\nip_address=0.0.0.0\nwpa_state=COMPLETED\n",
-        );
+        let unspecified =
+            parse_station_status("ssid=Home\nip_address=0.0.0.0\nwpa_state=COMPLETED\n");
         assert!(!connection_complete(&unspecified, "Home"));
     }
 
@@ -441,7 +461,14 @@ mod tests {
 
     #[test]
     fn classify_fail_token() {
-        assert!(matches!(check_wpa_ok("FAIL\n"), Err(WifiError::CommandFailed)));
+        assert!(matches!(
+            check_wpa_ok("FAIL\n"),
+            Err(WifiError::CommandFailed)
+        ));
+        assert!(matches!(
+            check_wpa_ok("Selected interface 'wlan0'\nFAIL\n"),
+            Err(WifiError::CommandFailed)
+        ));
     }
 
     #[test]
@@ -482,16 +509,37 @@ mod tests {
     #[test]
     fn validate_network_id_numeric() {
         assert_eq!(parse_network_id("3\n").unwrap(), "3");
+        assert_eq!(
+            parse_network_id("Selected interface 'wlan0'\n1\n").unwrap(),
+            "1"
+        );
+        assert_eq!(parse_network_id("banner\n\n42\n\n").unwrap(), "42");
     }
 
     #[test]
-    fn validate_network_id_rejects_fail() {
-        assert!(matches!(parse_network_id("FAIL\n"), Err(WifiError::BadNetworkId(_))));
+    fn validate_network_id_rejects_malformed_output() {
+        for output in ["", "\n\n", "FAIL\n", "banner only\n", "network 1\n"] {
+            assert!(matches!(
+                parse_network_id(output),
+                Err(WifiError::BadNetworkId(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn all_wpa_cli_calls_select_wlan0_explicitly() {
+        assert_eq!(
+            wpa_cli_args(&["set_network", "1", "ssid", "486f6d65"]),
+            ["-i", "wlan0", "set_network", "1", "ssid", "486f6d65"]
+        );
     }
 
     #[test]
     fn validate_psk_length() {
-        assert!(matches!(check_psk_len("short"), Err(WifiError::InvalidCredential(_))));
+        assert!(matches!(
+            check_psk_len("short"),
+            Err(WifiError::InvalidCredential(_))
+        ));
         assert!(check_psk_len("12345678").is_ok());
         assert!(check_psk_len("").is_ok()); // empty == open network
     }
