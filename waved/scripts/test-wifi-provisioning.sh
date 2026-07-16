@@ -26,7 +26,7 @@ device_shell 'for tool in hostapd wpa_supplicant wpa_cli udhcpc curl; do command
 device_shell 'iw list 2>/dev/null | grep -q "AP/VLAN"' || fail "radio does not advertise AP mode"
 device_shell 'pidof waved >/dev/null' || fail "waved is not running"
 
-echo "[2/7] open System → Wi-Fi on the Wave now"
+echo "[2/7] open System → Wi-Fi, verify the live status, then tap Connect to another network"
 for _ in $(seq 1 30); do
   if device_shell 'ip -4 addr show wlan0 2>/dev/null | grep -q "192.168.2.1/24"'; then
     break
@@ -86,6 +86,14 @@ printf '  connected: %s (%s)\n' "$ACTUAL_SSID" "$IP"
 echo "[6/7] cleanup and secret checks"
 device_shell 'if pidof hostapd >/dev/null; then exit 1; fi'
 device_shell 'test ! -e /tmp/waved-hostapd.conf'
+CONFIG_MODE=$(device_shell 'stat -c %a /etc/wpa_supplicant.conf' | tr -d '\r')
+[[ "$CONFIG_MODE" == 600 ]] || fail "wpa_supplicant.conf mode is $CONFIG_MODE, expected 600"
+NETWORKS=$(device_shell 'wpa_cli -i wlan0 list_networks' | tr -d '\r')
+TARGET_ROWS=$(printf '%s\n' "$NETWORKS" | awk -F '\t' -v ssid="$SSID" '$2 == ssid')
+TARGET_COUNT=$(printf '%s\n' "$TARGET_ROWS" | awk 'NF { count++ } END { print count + 0 }')
+[[ "$TARGET_COUNT" == 1 ]] || fail "expected exactly one saved profile for requested SSID, found $TARGET_COUNT"
+[[ "$TARGET_ROWS" != *"[DISABLED]"* ]] || fail "requested saved profile is disabled"
+unset CONFIG_MODE NETWORKS TARGET_ROWS TARGET_COUNT
 if [[ -n "$PSK" ]]; then
   REMOTE_TEXT=$("${ADB[@]}" exec-out sh -c \
     'cat /data/waved/waved.log /etc/wpa_supplicant.conf 2>/dev/null')

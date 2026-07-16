@@ -5,6 +5,8 @@ phone/web provisioning. Design spec:
 [`docs/superpowers/specs/2026-06-04-wifi-provisioning-design.md`](superpowers/specs/2026-06-04-wifi-provisioning-design.md).
 The one-scan QR/captive extension is specified in
 [`docs/superpowers/specs/2026-07-16-wifi-qr-captive-portal-design.md`](superpowers/specs/2026-07-16-wifi-qr-captive-portal-design.md).
+The status menu and saved-network selection behavior are specified in
+[`docs/superpowers/specs/2026-07-16-wifi-status-auto-connect-design.md`](superpowers/specs/2026-07-16-wifi-status-auto-connect-design.md).
 
 ## Hardware / stack
 
@@ -49,11 +51,46 @@ The one-scan QR/captive extension is specified in
   `wpa_supplicant` with `/etc/wpa_supplicant.conf`, starts `udhcpc` only after
   association, and retries recovery from the normal ten-second poll loop.
 
+### Saved networks and automatic selection
+
+`wpa_supplicant` is the automatic selector; `waved` does not run a competing
+scan/retry loop. At boot and after link loss, the supplicant chooses among
+enabled, previously saved profiles. Unknown networks, including unknown open
+networks, are never joined automatically.
+
+When the user provisions credentials, `waved`:
+
+1. reuses a profile with the same SSID, or adds one if it is new;
+2. assigns it a priority above the current saved maximum;
+3. enables that selected profile without enabling or disabling unrelated
+   profiles;
+4. saves the configuration, tightens `/etc/wpa_supplicant.conf` to mode `0600`,
+   and requests reassociation.
+
+The implementation intentionally does not use `select_network`, because that
+command disables every other profile and breaks automatic fallback. A profile
+that was already disabled remains disabled unless the user explicitly
+re-provisions that same SSID. A healthy current connection is not replaced
+merely because a higher-priority saved network appears; selection happens at
+boot, after disconnect, or after an explicit Connect action.
+
+## Wi-Fi menu
+
+Settings → Wi-Fi opens a non-disruptive management screen. It shows the live
+connection status, SSID, signal quality/RSSI, and IPv4 address. Opening this
+screen does not stop station mode or start the provisioning AP.
+
+`Connect to another network` immediately starts QR/captive provisioning; there
+is no confirmation dialog. During provisioning the screen shows Scanning, the
+QR/manual fallback, Connecting, or a failure with a retry action. On success it
+returns to the live management view.
+
 ## Provisioning (`waved-provision`)
 
 `ProvisioningService` owns the flow and publishes `ProvisioningState` to the bus
-so the UI can render it. Triggered by `Command::OpenWifiProvisioning` (the Wi-Fi
-row in System settings).
+so the UI can render it. Triggered by `Command::OpenWifiProvisioning` from the
+management screen's Connect button. The System settings Wi-Fi row emits the
+UI-only `Command::OpenWifiSettings` instead.
 
 ### State machine
 
@@ -126,6 +163,7 @@ ATBM6031 driver only. `waved` therefore owns the userspace station processes.
 - **No PSK in logs** at any level.
 - **PSK hashed at rest** via native PBKDF2 (no submitted plaintext passphrase
   written to `wpa_supplicant.conf`).
+- The persisted station configuration is mode `0600` after credential updates.
 
 ## Measured prerequisite probe (2026-07-16)
 
@@ -141,10 +179,12 @@ The persistent station config is `/etc/wpa_supplicant.conf`.
 
 ## Acceptance
 
-`scripts/test-wifi-provisioning.sh <ssid> <psk>` — triggers provisioning,
+`scripts/test-wifi-provisioning.sh <ssid> <psk>` — opens the management screen,
+then starts provisioning with its Connect button,
 asserts AP/DHCP/DNS/HTTP readiness, checks a captive-probe redirect, pauses for
 the operator to scan the QR and observe the captive setup sheet/prompt, POSTs
-credentials, and asserts STA reconnect.
+credentials, and asserts STA reconnect, saved-profile reuse, enabled state, and
+secure config permissions.
 
 ## Not implemented (YAGNI for v1)
 
