@@ -320,8 +320,8 @@ impl super::Screen for WifiProvisioningScreen {
             lv_obj_remove_flag(status_panel, lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
 
             let status_label = lv_label_create(status_panel);
-            lv_label_set_long_mode(status_label, lv_label_long_mode_t_LV_LABEL_LONG_DOT);
-            lv_obj_set_width(status_label, 242);
+            lv_label_set_long_mode(status_label, lv_label_long_mode_t_LV_LABEL_LONG_CLIP);
+            lv_obj_set_size(status_label, 242, 80);
             lv_obj_set_style_text_align(status_label, lv_text_align_t_LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_set_style_text_color(status_label, rgb(CLR_WHITE), 0);
             lv_obj_set_style_text_font(status_label, &lv_font_montserrat_14, 0);
