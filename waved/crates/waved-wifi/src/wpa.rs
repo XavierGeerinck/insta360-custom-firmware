@@ -12,6 +12,7 @@ use tracing::debug;
 const CMD_TIMEOUT: Duration = Duration::from_secs(10);
 const IFACE: &str = "wlan0";
 const SUPPLICANT_CONF: &str = "/etc/wpa_supplicant.conf";
+const MAX_NETWORK_PRIORITY: i32 = i32::MAX;
 static STATION_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
@@ -24,6 +25,10 @@ pub enum WifiError {
     Timeout,
     #[error("invalid network id from add_network: {0:?}")]
     BadNetworkId(String),
+    #[error("invalid saved network list: {0:?}")]
+    BadSavedNetworks(String),
+    #[error("invalid network priority: {0:?}")]
+    BadPriority(String),
     #[error("invalid credential: {0}")]
     InvalidCredential(&'static str),
     #[error("timed out waiting for Wi-Fi connection")]
@@ -252,10 +257,128 @@ pub async fn scan() -> Result<Vec<String>, WifiError> {
 /// prefix it with an informational interface-selection line.
 pub fn parse_network_id(stdout: &str) -> Result<String, WifiError> {
     let id = final_nonempty_line(stdout).unwrap_or_default();
-    if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()) {
-        Ok(id.to_string())
+    id.parse::<u32>()
+        .map(|id| id.to_string())
+        .map_err(|_| WifiError::BadNetworkId(stdout.trim().to_string()))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SavedNetwork {
+    pub id: u32,
+    pub ssid: String,
+    pub disabled: bool,
+    pub current: bool,
+}
+
+/// Parse the tab-separated `wpa_cli list_networks` table. Firmware may prefix
+/// the table with an interface-selection banner, so parsing begins only at the
+/// exact header. Rows after that header are required to have all four fields.
+pub fn parse_saved_networks(output: &str) -> Result<Vec<SavedNetwork>, WifiError> {
+    const HEADER: &str = "network id / ssid / bssid / flags";
+
+    let mut found_header = false;
+    let mut networks = Vec::new();
+    for line in output.lines() {
+        if !found_header {
+            found_header = line.trim() == HEADER;
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 4 || fields[1].is_empty() {
+            return Err(WifiError::BadSavedNetworks(line.to_string()));
+        }
+        let id = fields[0]
+            .parse::<u32>()
+            .map_err(|_| WifiError::BadSavedNetworks(line.to_string()))?;
+        let flags = fields[3];
+        networks.push(SavedNetwork {
+            id,
+            ssid: fields[1].to_string(),
+            disabled: flags.contains("[DISABLED]"),
+            current: flags.contains("[CURRENT]"),
+        });
+    }
+
+    if !found_header {
+        return Err(WifiError::BadSavedNetworks(output.trim().to_string()));
+    }
+    Ok(networks)
+}
+
+pub fn parse_priority(output: &str) -> Result<i32, WifiError> {
+    let value = final_nonempty_line(output).unwrap_or_default();
+    value
+        .parse::<i32>()
+        .map_err(|_| WifiError::BadPriority(output.trim().to_string()))
+}
+
+pub fn next_network_priority(priorities: &[i32]) -> i32 {
+    priorities
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .max(0)
+        .checked_add(1)
+        .unwrap_or(MAX_NETWORK_PRIORITY)
+}
+
+fn matching_network<'a>(networks: &'a [SavedNetwork], ssid: &str) -> Option<&'a SavedNetwork> {
+    networks
+        .iter()
+        .filter(|network| network.ssid == ssid)
+        .max_by_key(|network| network.current)
+}
+
+async fn saved_networks() -> Result<Vec<SavedNetwork>, WifiError> {
+    let output = wpa_cli(&["list_networks"]).await?;
+    parse_saved_networks(&output)
+}
+
+async fn saved_priorities(networks: &[SavedNetwork]) -> Result<Vec<i32>, WifiError> {
+    let mut priorities = Vec::with_capacity(networks.len());
+    for network in networks {
+        let id = network.id.to_string();
+        let output = wpa_cli(&["get_network", &id, "priority"]).await?;
+        priorities.push(parse_priority(&output)?);
+    }
+    Ok(priorities)
+}
+
+async fn persist_network(
+    id: &str,
+    ssid: &str,
+    password: &str,
+    priority: i32,
+) -> Result<(), WifiError> {
+    let ssid_hex = ssid_to_hex(ssid);
+    wpa_cli(&["set_network", id, "ssid", &ssid_hex]).await?;
+
+    if password.is_empty() {
+        wpa_cli(&["set_network", id, "key_mgmt", "NONE"]).await?;
     } else {
-        Err(WifiError::BadNetworkId(stdout.trim().to_string()))
+        let psk_hex = derive_wpa2_psk(ssid, password);
+        wpa_cli(&["set_network", id, "key_mgmt", "WPA-PSK"]).await?;
+        wpa_cli(&["set_network", id, "psk", &psk_hex]).await?;
+    }
+
+    let priority = priority.to_string();
+    wpa_cli(&["set_network", id, "priority", &priority]).await?;
+    wpa_cli(&["enable_network", id]).await?;
+    wpa_cli(&["save_config"]).await?;
+    command_output("chmod", &["600", SUPPLICANT_CONF]).await?;
+    wpa_cli(&["reassociate"]).await?;
+    Ok(())
+}
+
+async fn remove_incomplete_network(id: &str) {
+    if wpa_cli(&["remove_network", id]).await.is_ok() {
+        let _ = wpa_cli(&["save_config"]).await;
+        let _ = command_output("chmod", &["600", SUPPLICANT_CONF]).await;
     }
 }
 
@@ -275,21 +398,20 @@ pub async fn connect(ssid: &str, password: &str) -> Result<(), WifiError> {
     check_psk_len(password)?;
     ensure_station().await?;
 
-    let id = parse_network_id(&wpa_cli(&["add_network"]).await?)?;
-    let ssid_hex = ssid_to_hex(ssid);
-    wpa_cli(&["set_network", &id, "ssid", &ssid_hex]).await?;
+    let networks = saved_networks().await?;
+    let priorities = saved_priorities(&networks).await?;
+    let priority = next_network_priority(&priorities);
+    let existing = matching_network(&networks, ssid);
+    let (id, created) = match existing {
+        Some(network) => (network.id.to_string(), false),
+        None => (parse_network_id(&wpa_cli(&["add_network"]).await?)?, true),
+    };
 
-    if password.is_empty() {
-        wpa_cli(&["set_network", &id, "key_mgmt", "NONE"]).await?;
-    } else {
-        let psk_hex = derive_wpa2_psk(ssid, password);
-        wpa_cli(&["set_network", &id, "psk", &psk_hex]).await?;
+    let result = persist_network(&id, ssid, password, priority).await;
+    if result.is_err() && created {
+        remove_incomplete_network(&id).await;
     }
-
-    wpa_cli(&["select_network", &id]).await?;
-    wpa_cli(&["enable_network", &id]).await?;
-    wpa_cli(&["save_config"]).await?;
-    Ok(())
+    result
 }
 
 pub async fn disconnect() -> Result<(), WifiError> {
@@ -518,10 +640,107 @@ mod tests {
 
     #[test]
     fn validate_network_id_rejects_malformed_output() {
-        for output in ["", "\n\n", "FAIL\n", "banner only\n", "network 1\n"] {
+        for output in [
+            "",
+            "\n\n",
+            "FAIL\n",
+            "banner only\n",
+            "network 1\n",
+            "999999999999999999999\n",
+        ] {
             assert!(matches!(
                 parse_network_id(output),
                 Err(WifiError::BadNetworkId(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn parse_saved_networks_with_banner_flags_and_spaces() {
+        let output = "Selected interface 'wlan0'\n\
+network id / ssid / bssid / flags\n\
+0\tGuest network\tany\t[DISABLED]\n\
+7\tOffice 5G\taa:bb:cc:dd:ee:01\t[CURRENT]\n";
+        assert_eq!(
+            parse_saved_networks(output).unwrap(),
+            vec![
+                SavedNetwork {
+                    id: 0,
+                    ssid: "Guest network".to_string(),
+                    disabled: true,
+                    current: false,
+                },
+                SavedNetwork {
+                    id: 7,
+                    ssid: "Office 5G".to_string(),
+                    disabled: false,
+                    current: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_saved_networks_accepts_empty_table() {
+        let output = "network id / ssid / bssid / flags\n";
+        assert!(parse_saved_networks(output).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_saved_networks_rejects_missing_header_and_malformed_rows() {
+        for output in [
+            "Selected interface 'wlan0'\n",
+            "network id / ssid / bssid / flags\nnot-a-number\tHome\tany\t\n",
+            "network id / ssid / bssid / flags\n1\tHome\tany\n",
+            "network id / ssid / bssid / flags\n1\t\tany\t\n",
+        ] {
+            assert!(matches!(
+                parse_saved_networks(output),
+                Err(WifiError::BadSavedNetworks(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn matching_network_prefers_current_duplicate() {
+        let networks = vec![
+            SavedNetwork {
+                id: 2,
+                ssid: "Office".to_string(),
+                disabled: false,
+                current: false,
+            },
+            SavedNetwork {
+                id: 8,
+                ssid: "Office".to_string(),
+                disabled: false,
+                current: true,
+            },
+        ];
+        assert_eq!(matching_network(&networks, "Office").unwrap().id, 8);
+        assert!(matching_network(&networks, "Other").is_none());
+    }
+
+    #[test]
+    fn parse_and_increment_network_priorities() {
+        assert_eq!(
+            parse_priority("Selected interface 'wlan0'\n42\n").unwrap(),
+            42
+        );
+        assert_eq!(next_network_priority(&[]), 1);
+        assert_eq!(next_network_priority(&[-5, 0, 9]), 10);
+        assert_eq!(
+            next_network_priority(&[MAX_NETWORK_PRIORITY]),
+            MAX_NETWORK_PRIORITY
+        );
+    }
+
+    #[test]
+    fn malformed_priority_is_rejected() {
+        for output in ["", "FAIL\n", "priority=7\n", "2147483648\n"] {
+            assert!(matches!(
+                parse_priority(output),
+                Err(WifiError::BadPriority(_))
             ));
         }
     }
