@@ -1,6 +1,14 @@
 [target.aarch64-unknown-linux-gnu]
-image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
-pre-build = [
-    "dpkg --add-architecture $CROSS_DEB_ARCH",
-    "apt-get update && apt-get install --assume-yes libasound2-dev:$CROSS_DEB_ARCH",
+# The custom image pins a device-compatible libc and supplies target ALSA plus
+# a recent-enough libclang for bindgen. Its Dockerfile uses separate cacheable
+# layers so rebuilding remains practical on ARM-hosted Docker.
+dockerfile = "Dockerfile.cross-aarch64"
+
+[build.env]
+passthrough = [
+    "CFLAGS_aarch64_unknown_linux_gnu=-D__ARM_ARCH=8 -std=gnu11",
+    "LIBCLANG_PATH=/opt/rh/llvm-toolset-7.0/root/usr/lib64",
+    "LD_LIBRARY_PATH=/opt/rh/llvm-toolset-7.0/root/usr/lib64",
+    "PKG_CONFIG_ALLOW_CROSS=1",
+    "PKG_CONFIG_LIBDIR=/opt/alsa/lib/pkgconfig",
 ]

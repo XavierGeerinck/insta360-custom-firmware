@@ -1,0 +1,22 @@
+FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main-centos@sha256:59a28167cffea49e71e1951bcaf9105d6a31dcf130c95197e2faff8fbf032508
+
+# The Wave runs glibc 2.31, so keep the CentOS 7 target libc (2.17). LLVM 7
+# supplies the libclang API required by bindgen without raising that floor.
+RUN ulimit -n 1024000 && yum install -y bzip2 centos-release-scl-rh
+RUN sed -i 's|^mirrorlist=|#mirrorlist=|' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo \
+    && sed -i 's|^#baseurl=http://mirror.centos.org/centos/7/sclo/$basearch/rh/|baseurl=https://vault.centos.org/7.9.2009/sclo/$basearch/rh/|' /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
+RUN ulimit -n 1024000 \
+    && yum install -y llvm-toolset-7.0-clang-libs \
+    && yum clean all
+
+# Build the target ALSA library from a pinned, checksummed source release.
+RUN curl -fsSLo /tmp/alsa-lib.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.11.tar.bz2 \
+    && echo '9f3f2f69b995f9ad37359072fbc69a3a88bfba081fc83e9be30e14662795bb4d  /tmp/alsa-lib.tar.bz2' | sha256sum -c - \
+    && cd /tmp \
+    && tar -xjf alsa-lib.tar.bz2
+RUN cd /tmp/alsa-lib-1.2.11 \
+    && CPPFLAGS=-DPATH_MAX=4096 ./configure --host=aarch64-linux-gnu --prefix=/opt/alsa --disable-python --disable-ucm --disable-topology
+RUN cd /tmp/alsa-lib-1.2.11 && make -j$(nproc)
+RUN cd /tmp/alsa-lib-1.2.11 \
+    && make install \
+    && rm -rf /tmp/alsa-lib-1.2.11 /tmp/alsa-lib.tar.bz2
