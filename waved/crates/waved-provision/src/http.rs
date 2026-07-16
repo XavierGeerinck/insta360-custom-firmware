@@ -236,30 +236,86 @@ pub fn render_captive_redirect(head_only: bool) -> String {
     )
 }
 
+const PAGE_STYLE: &str = r#"
+:root{color-scheme:light;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#f5f7fa;color:#17222b}
+*{box-sizing:border-box}
+body{min-height:100vh;margin:0;padding:max(24px,env(safe-area-inset-top)) 18px max(24px,env(safe-area-inset-bottom));display:grid;place-items:center;background:linear-gradient(145deg,#f8fafc 0%,#edf3f2 100%)}
+.card{width:min(100%,420px);padding:30px 26px 26px;background:#fff;border:1px solid #e1e7e9;border-radius:24px;box-shadow:0 18px 55px rgba(20,42,48,.12)}
+.brand{display:flex;align-items:center;gap:10px;color:#52636a;font-size:12px;font-weight:750;letter-spacing:.15em;text-transform:uppercase}
+.mark{width:30px;height:30px;display:grid;place-items:center;border:2px solid #087f73;border-radius:50%;color:#087f73;font-size:12px;letter-spacing:0}
+.eyebrow{margin:28px 0 8px;color:#087f73;font-size:12px;font-weight:750;letter-spacing:.09em;text-transform:uppercase}
+h1{margin:26px 0 9px;font-size:clamp(27px,7vw,34px);line-height:1.12;letter-spacing:-.035em}
+.eyebrow+h1{margin-top:0}
+.intro{margin:0 0 26px;color:#617078;font-size:15px;line-height:1.55}
+.field{margin-top:18px}
+label{display:block;margin-bottom:8px;color:#34464e;font-size:13px;font-weight:700}
+input{width:100%;height:52px;padding:0 15px;border:1px solid #cfd9dc;border-radius:13px;background:#fff;color:#17222b;font:inherit;font-size:16px;outline:none;transition:border-color .15s,box-shadow .15s}
+input:focus-visible,.toggle:focus-visible,.primary:focus-visible{outline:none;border-color:#087f73;box-shadow:0 0 0 4px rgba(8,127,115,.14)}
+.password{position:relative}
+.password input{padding-right:76px}
+.toggle{position:absolute;top:7px;right:7px;height:38px;padding:0 11px;border:0;border-radius:9px;background:#eef5f4;color:#087f73;font:inherit;font-size:13px;font-weight:750;cursor:pointer}
+.primary{width:100%;height:52px;margin-top:24px;border:0;border-radius:14px;background:#087f73;color:#fff;font:inherit;font-size:16px;font-weight:750;cursor:pointer;box-shadow:0 10px 24px rgba(8,127,115,.2);transition:background .15s,transform .15s,box-shadow .15s}
+.primary:hover{background:#066e64;transform:translateY(-1px);box-shadow:0 12px 27px rgba(8,127,115,.24)}
+.primary:disabled{background:#81aaa5;cursor:wait;transform:none;box-shadow:none}
+.security{display:flex;align-items:flex-start;gap:9px;margin:18px 2px 0;color:#718087;font-size:12px;line-height:1.45}
+.security-icon{width:18px;height:18px;flex:0 0 18px;display:grid;place-items:center;border:1px solid #9bb0ad;border-radius:50%;color:#087f73;font-size:11px;font-weight:800}
+.submit-status{margin:13px 0 0;text-align:center;color:#52636a;font-size:13px}
+.status-mark{width:54px;height:54px;margin:28px 0 20px;display:grid;place-items:center;border-radius:50%;background:#e5f4f1;color:#087f73;font-size:25px;font-weight:800}
+.network-name{overflow-wrap:anywhere;color:#087f73}
+.notice{margin-top:24px;padding:16px;border:1px solid #d8e6e3;border-radius:14px;background:#f3f8f7;color:#40545b;font-size:14px;line-height:1.5}
+.foot{margin:20px 0 0;color:#718087;font-size:13px;line-height:1.5}
+@media(max-width:460px){body{padding-left:12px;padding-right:12px;align-items:start}.card{margin-top:8px;padding:26px 20px 22px;border-radius:20px}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+"#;
+
+const FORM_SCRIPT: &str = r#"
+const form=document.getElementById('setup-form');
+const password=document.getElementById('psk');
+const toggle=document.getElementById('toggle-password');
+const submit=document.getElementById('connect-button');
+const status=document.getElementById('submit-status');
+toggle.addEventListener('click',()=>{
+  const showing=password.type==='text';
+  password.type=showing?'password':'text';
+  toggle.textContent=showing?'Show':'Hide';
+  toggle.setAttribute('aria-pressed',String(!showing));
+  password.focus();
+});
+form.addEventListener('submit',()=>{
+  submit.disabled=true;
+  submit.textContent='Connecting…';
+  status.hidden=false;
+});
+"#;
+
+fn render_document(title: &str, content: &str, script: Option<&str>) -> String {
+    let script = script
+        .map(|source| format!("<script>{source}</script>"))
+        .unwrap_or_default();
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\"><meta name=\"theme-color\" content=\"#f5f7fa\"><title>{title}</title><style>{PAGE_STYLE}</style></head><body>{content}{script}</body></html>"
+    )
+}
+
 /// Render the provisioning form with one safe option per scanned SSID.
 pub fn render_page(ssids: &[String]) -> String {
     let options: String = ssids
         .iter()
         .map(|ssid| format!("<option value=\"{0}\">{0}</option>", html_escape(ssid)))
         .collect();
-    let body = format!(
-        "<!doctype html><html><head><meta name=viewport content=\"width=device-width,initial-scale=1\">\
-<title>Wave Wi-Fi Setup</title></head><body style=\"font-family:sans-serif;max-width:20em;margin:2em auto\">\
-<h2>Wave Wi-Fi Setup</h2><form method=POST action=/connect>\
-<label>Network<br><input list=nets name=ssid required maxlength=32></label>\
-<datalist id=nets>{options}</datalist><br><br>\
-<label>Password<br><input type=password name=psk minlength=8 maxlength=63></label><br><br>\
-<button type=submit>Connect</button></form></body></html>"
+    let content = format!(
+        r#"<main class="card"><div class="brand"><span class="mark" aria-hidden="true">W</span><span>Wave</span></div><h1>Wi-Fi setup</h1><p class="intro">Connect your Wave to a nearby network.</p><form id="setup-form" method="post" action="/connect"><div class="field"><label for="ssid">Network</label><input id="ssid" name="ssid" list="networks" required maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Choose or type a network"><datalist id="networks">{options}</datalist></div><div class="field"><label for="psk">Password</label><div class="password"><input id="psk" name="psk" type="password" minlength="8" maxlength="63" autocomplete="new-password" placeholder="Enter the Wi-Fi password"><button class="toggle" id="toggle-password" type="button" aria-controls="psk" aria-pressed="false">Show</button></div></div><button class="primary" id="connect-button" type="submit">Connect</button><p class="submit-status" id="submit-status" role="status" hidden>Sending credentials to your Wave…</p></form><p class="security"><span class="security-icon" aria-hidden="true">✓</span><span>Your credentials are sent directly to this Wave and stored as an encrypted Wi-Fi key.</span></p></main>"#
     );
+    let body = render_document("Wave Wi-Fi Setup", &content, Some(FORM_SCRIPT));
     response("200 OK", "text/html; charset=utf-8", &body)
 }
 
 pub fn render_ack(ssid: &str) -> String {
-    let body = format!(
-        "<!doctype html><html><body style=\"font-family:sans-serif\"><h2>Connecting to {}…</h2>\
-<p>You can close this page. The device will join the network.</p></body></html>",
+    let content = format!(
+        r#"<main class="card"><div class="brand"><span class="mark" aria-hidden="true">W</span><span>Wave</span></div><div class="status-mark" aria-hidden="true">✓</div><p class="eyebrow">Setup received</p><h1>Connecting to <span class="network-name">{}</span></h1><p class="intro">Your Wave is switching from its temporary setup network to your Wi-Fi.</p><div class="notice"><strong>The Wave Wi-Fi will now disappear.</strong><br>This is expected while the device changes networks.</div><p class="foot">You can close this page. Check the Wave screen for the connection result.</p></main>"#,
         html_escape(ssid)
     );
+    let body = render_document("Wave is connecting", &content, None);
     response("200 OK", "text/html; charset=utf-8", &body)
 }
 
@@ -381,9 +437,29 @@ mod tests {
     fn page_lists_and_escapes_ssids() {
         let page = render_page(&["HomeNet".to_string(), "<script>".to_string()]);
         assert!(page.contains("HomeNet"));
-        assert!(!page.contains("<script>"));
+        assert!(!page.contains("<option value=\"<script>"));
         assert!(page.contains("&lt;script&gt;"));
         assert!(page.starts_with("HTTP/1.1 200"));
+        assert!(page.contains("list=\"networks\""));
+        assert!(page.contains("id=\"toggle-password\""));
+        assert!(page.contains("password.type==='text'"));
+        assert!(page.contains("submit.disabled=true"));
+        assert!(page.contains("viewport-fit=cover"));
+        assert!(page.contains("Your credentials are sent directly"));
+        assert!(!page.contains("https://"));
+        assert!(!page.contains("<link"));
+        assert!(!page.contains("<img"));
+    }
+
+    #[test]
+    fn acknowledgement_is_polished_and_escapes_ssid() {
+        let page = render_ack("Home <script>");
+        assert!(page.starts_with("HTTP/1.1 200"));
+        assert!(page.contains("Connecting to"));
+        assert!(page.contains("Home &lt;script&gt;"));
+        assert!(!page.contains("Home <script>"));
+        assert!(page.contains("Wave Wi-Fi will now disappear"));
+        assert!(page.contains("Check the Wave screen"));
     }
 
     #[test]
