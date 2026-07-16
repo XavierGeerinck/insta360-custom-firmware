@@ -47,7 +47,10 @@ impl ProvisioningService {
     }
 
     fn set(&self, state: ProvisioningState) {
-        let _ = self.bus.provisioning.send(state);
+        // The UI reads the retained value directly from the sender instead of
+        // keeping a watch Receiver. `send()` discards the new value when there
+        // are zero receivers; `send_replace()` always updates it.
+        self.bus.provisioning.send_replace(state);
     }
 
     async fn provision(&self) {
@@ -243,10 +246,25 @@ async fn wait_for_cancel(rx: &mut broadcast::Receiver<Command>) {
 mod tests {
     use super::*;
 
+    fn service_without_watch_receivers() -> ProvisioningService {
+        ProvisioningService::new(Arc::new(StateBus::new()), "00:11:22:33:44:55".into())
+    }
+
     #[test]
     fn passphrase_is_8_chars_hex() {
         let p = gen_passphrase();
         assert_eq!(p.len(), 8);
         assert!(p.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn state_is_retained_without_watch_receiver() {
+        let service = service_without_watch_receivers();
+        assert_eq!(service.bus.provisioning.receiver_count(), 0);
+        service.set(ProvisioningState::Scanning);
+        assert_eq!(
+            *service.bus.provisioning.borrow(),
+            ProvisioningState::Scanning
+        );
     }
 }
