@@ -3,6 +3,7 @@
 //!  - ApActive           → scan Wi-Fi QR, with text credentials as fallback
 //!  - Connecting         → "Connecting to <ssid>…"
 //!  - Connected / Failed → result line
+//!
 //! Back button cancels provisioning and returns to System settings.
 
 use crate::bindings::*;
@@ -101,6 +102,11 @@ impl WifiProvisioningScreen {
     }
 
     /// Refresh the QR or status text from the latest ProvisioningState.
+    ///
+    /// # Safety
+    ///
+    /// Must run on the LVGL UI thread while the objects created by `create`
+    /// remain alive.
     pub unsafe fn update_state(&mut self, state: &ProvisioningState) {
         if self.body.is_null()
             || self.qr_panel.is_null()
