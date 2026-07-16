@@ -86,14 +86,15 @@ printf '  connected: %s (%s)\n' "$ACTUAL_SSID" "$IP"
 echo "[6/7] cleanup and secret checks"
 device_shell 'if pidof hostapd >/dev/null; then exit 1; fi'
 device_shell 'test ! -e /tmp/waved-hostapd.conf'
-CONFIG_MODE=$(device_shell 'stat -c %a /etc/wpa_supplicant.conf' | tr -d '\r')
-[[ "$CONFIG_MODE" == 600 ]] || fail "wpa_supplicant.conf mode is $CONFIG_MODE, expected 600"
+CONFIG_PERMS=$(device_shell 'ls -l /etc/wpa_supplicant.conf' | tr -d '\r' | cut -c1-10)
+[[ "$CONFIG_PERMS" == -rw------- ]] \
+  || fail "wpa_supplicant.conf permissions are $CONFIG_PERMS, expected -rw-------"
 NETWORKS=$(device_shell 'wpa_cli -i wlan0 list_networks' | tr -d '\r')
 TARGET_ROWS=$(printf '%s\n' "$NETWORKS" | awk -F '\t' -v ssid="$SSID" '$2 == ssid')
 TARGET_COUNT=$(printf '%s\n' "$TARGET_ROWS" | awk 'NF { count++ } END { print count + 0 }')
 [[ "$TARGET_COUNT" == 1 ]] || fail "expected exactly one saved profile for requested SSID, found $TARGET_COUNT"
 [[ "$TARGET_ROWS" != *"[DISABLED]"* ]] || fail "requested saved profile is disabled"
-unset CONFIG_MODE NETWORKS TARGET_ROWS TARGET_COUNT
+unset CONFIG_PERMS NETWORKS TARGET_ROWS TARGET_COUNT
 if [[ -n "$PSK" ]]; then
   REMOTE_TEXT=$("${ADB[@]}" exec-out sh -c \
     'cat /data/waved/waved.log /etc/wpa_supplicant.conf 2>/dev/null')
