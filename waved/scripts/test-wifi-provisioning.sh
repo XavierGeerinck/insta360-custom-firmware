@@ -36,15 +36,25 @@ done
 device_shell 'ip -4 addr show wlan0 2>/dev/null | grep -q "192.168.2.1/24"' \
   || fail "provisioning AP address did not appear"
 
-echo "[3/7] AP, DHCP, and setup page"
+echo "[3/7] AP, DHCP, DNS, and captive setup page"
 device_shell 'pidof hostapd >/dev/null' || fail "hostapd is not running"
 device_shell 'grep -qi ":0043 " /proc/net/udp' || fail "DHCP server is not bound to UDP/67"
+device_shell 'grep -qi ":0035 " /proc/net/udp' || fail "DNS server is not bound to UDP/53"
 HTTP_CODE=$(device_shell "curl -sS -o /dev/null -w '%{http_code}' http://192.168.2.1/" | tr -d '\r')
 [[ "$HTTP_CODE" == 200 ]] || fail "GET / returned HTTP $HTTP_CODE"
+CAPTIVE_HEADERS=$(device_shell \
+  "curl -sS -D - -o /dev/null http://192.168.2.1/generate_204" | tr -d '\r')
+grep -q '^HTTP/1.1 302 Found$' <<<"$CAPTIVE_HEADERS" \
+  || fail "captive probe did not return HTTP 302"
+grep -qi '^Location: http://192\.168\.2\.1/$' <<<"$CAPTIVE_HEADERS" \
+  || fail "captive probe did not redirect to the setup root"
+unset CAPTIVE_HEADERS
 
 echo "[4/7] phone gate"
-echo "Join the Wave-XXXX network using the password shown on the Wave."
-echo "Confirm the phone receives 192.168.2.50–200 and loads http://192.168.2.1/."
+echo "Scan the QR shown on the Wave and accept the Wi-Fi join prompt."
+echo "Confirm the phone joins Wave-XXXX and receives 192.168.2.50–200."
+echo "Confirm the setup sheet opens, or tap the phone's 'Sign in to network' prompt."
+echo "The Wave screen also shows the SSID, password, and IP as a manual fallback."
 read -r -p "Press Enter after that succeeds: "
 
 FORM=$(printf '%s\0%s' "$SSID" "$PSK" | python3 -c '

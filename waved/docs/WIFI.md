@@ -3,6 +3,8 @@
 How `waved` manages Wi-Fi: station-mode monitoring/connection, and on-device
 phone/web provisioning. Design spec:
 [`docs/superpowers/specs/2026-06-04-wifi-provisioning-design.md`](superpowers/specs/2026-06-04-wifi-provisioning-design.md).
+The one-scan QR/captive extension is specified in
+[`docs/superpowers/specs/2026-07-16-wifi-qr-captive-portal-design.md`](superpowers/specs/2026-07-16-wifi-qr-captive-portal-design.md).
 
 ## Hardware / stack
 
@@ -64,12 +66,22 @@ Idle → Scanning → ApActive{ssid,passphrase,url} → Connecting{ssid} → Con
 1. **Scanning** — `wpa::scan()` runs while still in STA mode (a single radio
    can't reliably scan as AP); the SSID list is cached for the form.
 2. **ApActive** — `ApController` brings `wlan0` up as AP (see below). The
-   on-device screen shows the AP SSID, passphrase, and `http://192.168.2.1`.
-3. The embedded HTTP server serves a one-page form (`GET /`) and accepts
+   on-device screen shows a standard WPA Wi-Fi QR, with the AP SSID,
+   passphrase, and `192.168.2.1` alongside as a manual fallback.
+3. Scanning the QR joins the temporary network. Wildcard DNS resolves captive
+   checks to the camera, and arbitrary HTTP `GET`/`HEAD` probes redirect to
+   `http://192.168.2.1/`. Depending on the phone, the setup sheet opens or a
+   **Sign in to network** prompt appears; tap that prompt if it is not opened
+   automatically.
+4. The embedded HTTP server serves a one-page form (`GET /`) and accepts
    `POST /connect` (SSID dropdown + password). Resolves on creds, a **5-minute
    timeout**, or `Command::CancelWifiProvisioning`.
-4. AP is torn down (STA restored) on **every** exit path, then `wpa::connect`
+5. AP is torn down (STA restored) on **every** exit path, then `wpa::connect`
    joins the chosen network → `Connected` / `Failed`.
+
+The QR payload is `WIFI:T:WPA;S:<escaped SSID>;P:<escaped passphrase>;H:false;;`.
+It contains only the temporary AP credentials; opening the setup form remains
+the phone's normal captive-network flow.
 
 ### AP network layout
 
@@ -77,9 +89,10 @@ Idle → Scanning → ApActive{ssid,passphrase,url} → Connecting{ssid} → Con
 |---|---|
 | AP SSID | `Wave-XXXX` (XXXX = last 4 hex of the Wi-Fi MAC, uppercase) |
 | Security | **WPA2-PSK** (not open — see Security) |
-| Passphrase | 8 hex chars derived from the MAC, shown on the device screen |
+| Passphrase | Random 8 hex chars generated for each AP session, shown on screen |
 | Gateway IP | `192.168.2.1` |
 | DHCP range | `192.168.2.50` – `192.168.2.200`, 12 h lease (in-process DHCPv4) |
+| DNS | UDP/53 wildcard A/ANY response → `192.168.2.1` (in-process) |
 | HTTP | `192.168.2.1:80`, lifetime == AP lifetime |
 
 The hostapd runtime config is written to `/tmp/waved-hostapd.conf` with mode
@@ -93,10 +106,11 @@ waved-wifi stops udhcpc + wpa_supplicant
 ip addr flush dev wlan0 ; ip link set wlan0 up ; ip addr add 192.168.2.1/24 dev wlan0
 hostapd -B /tmp/waved-hostapd.conf
 in-process DHCP binds wlan0:67
+in-process captive DNS binds wlan0:53
 ```
 AP down / STA restore (`ApController::stop`):
 ```
-stop in-process DHCP ; killall -TERM hostapd ; ip addr flush dev wlan0
+stop in-process DNS + DHCP ; killall -TERM hostapd ; ip addr flush dev wlan0
 wpa_supplicant -B -Dnl80211 -i wlan0 -c /etc/wpa_supplicant.conf
 udhcpc -i wlan0 -b  # after association
 ```
@@ -128,10 +142,11 @@ The persistent station config is `/etc/wpa_supplicant.conf`.
 ## Acceptance
 
 `scripts/test-wifi-provisioning.sh <ssid> <psk>` — triggers provisioning,
-asserts the AP + page are reachable, POSTs credentials, and asserts STA
-reconnect.
+asserts AP/DHCP/DNS/HTTP readiness, checks a captive-probe redirect, pauses for
+the operator to scan the QR and observe the captive setup sheet/prompt, POSTs
+credentials, and asserts STA reconnect.
 
 ## Not implemented (YAGNI for v1)
 
-Captive-portal auto-redirect; BLE GATT provisioning; on-device keyboard / text
-entry; WPS / 802.1X / EAP (device is WPA2-PSK only).
+BLE GATT provisioning; on-device keyboard / text entry; WPS / 802.1X / EAP
+(device is WPA2-PSK only).
