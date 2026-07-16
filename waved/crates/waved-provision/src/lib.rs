@@ -4,7 +4,7 @@ pub mod http;
 
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use waved_state::{Command, ProvisioningState, StateBus};
 
 const PROV_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
+const HTTP_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Generate a new WPA2-compatible eight-hex passphrase for each AP session.
 pub fn gen_passphrase() -> String {
@@ -180,26 +181,46 @@ impl ProvisioningService {
         };
         loop {
             let (mut sock, _) = listener.accept().await.ok()?;
-            let mut buf = vec![0u8; 4096];
-            let n = sock.read(&mut buf).await.ok()?;
-            let raw = String::from_utf8_lossy(&buf[..n]).to_string();
-            let req = match http::parse_request(&raw) {
-                Some(r) => r,
-                None => continue,
+            let request = match tokio::time::timeout(HTTP_IO_TIMEOUT, http::read_request(&mut sock))
+                .await
+            {
+                Ok(Ok(request)) => request,
+                Ok(Err(error)) => {
+                    let response = http::render_error(error);
+                    let _ =
+                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
+                            .await;
+                    continue;
+                }
+                Err(_) => {
+                    let response = http::render_error(http::HttpError::BadRequest);
+                    let _ = sock.write_all(response.as_bytes()).await;
+                    continue;
+                }
             };
-            if req.method == "POST" && req.path == "/connect" {
-                let form = http::parse_form(&req.body);
-                let ssid = form.get("ssid").cloned().unwrap_or_default();
-                let psk = form.get("psk").cloned().unwrap_or_default();
-                let _ = sock.write_all(http::render_ack(&ssid).as_bytes()).await;
-                let _ = sock.shutdown().await;
-                if !ssid.is_empty() {
+            match http::route(request) {
+                Ok(http::Route::Form) => {
+                    let response = http::render_page(ssids);
+                    let _ =
+                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
+                            .await;
+                }
+                Ok(http::Route::Connect { ssid, psk }) => {
+                    let response = http::render_ack(&ssid);
+                    let _ =
+                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
+                            .await;
+                    let _ = sock.shutdown().await;
                     return Some((ssid, psk));
                 }
-            } else {
-                let _ = sock.write_all(http::render_page(ssids).as_bytes()).await;
-                let _ = sock.shutdown().await;
+                Err(error) => {
+                    let response = http::render_error(error);
+                    let _ =
+                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
+                            .await;
+                }
             }
+            let _ = sock.shutdown().await;
         }
     }
 }
