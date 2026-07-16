@@ -109,6 +109,17 @@ impl ProvisioningService {
                 return;
             }
         };
+        let http_listener = match TcpListener::bind((ap::AP_IP, 80)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                warn!("provisioning HTTP bind failed: {error}");
+                let _ = ap.stop().await;
+                self.set(ProvisioningState::Failed {
+                    reason: "setup page start failed".into(),
+                });
+                return;
+            }
+        };
         let (services_shutdown, dhcp_rx) = watch::channel(false);
         let dns_rx = dhcp_rx.clone();
         let mut dhcp_task = tokio::spawn(dhcp.serve(dhcp_rx));
@@ -127,7 +138,7 @@ impl ProvisioningService {
             Failed(String),
         }
         let outcome = tokio::select! {
-            credentials = self.serve(&ssids) => match credentials {
+            credentials = self.serve(http_listener, &ssids) => match credentials {
                 Some((ssid, psk)) => Outcome::Credentials(ssid, psk),
                 None => Outcome::Failed("setup page stopped".into()),
             },
@@ -204,14 +215,7 @@ impl ProvisioningService {
     }
 
     /// One-shot HTTP server on AP_IP:80. Returns the submitted (ssid, psk).
-    async fn serve(&self, ssids: &[String]) -> Option<(String, String)> {
-        let listener = match TcpListener::bind((ap::AP_IP, 80)).await {
-            Ok(l) => l,
-            Err(e) => {
-                warn!("provisioning bind failed: {e}");
-                return None;
-            }
-        };
+    async fn serve(&self, listener: TcpListener, ssids: &[String]) -> Option<(String, String)> {
         loop {
             let (mut sock, _) = listener.accept().await.ok()?;
             let request = match tokio::time::timeout(HTTP_IO_TIMEOUT, http::read_request(&mut sock))
@@ -234,6 +238,12 @@ impl ProvisioningService {
             match http::route(request) {
                 Ok(http::Route::Form) => {
                     let response = http::render_page(ssids);
+                    let _ =
+                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
+                            .await;
+                }
+                Ok(http::Route::CaptiveRedirect { head_only }) => {
+                    let response = http::render_captive_redirect(head_only);
                     let _ =
                         tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
                             .await;

@@ -175,6 +175,7 @@ pub fn validate_credentials(ssid: &str, psk: &str) -> Result<(), HttpError> {
 
 pub enum Route {
     Form,
+    CaptiveRedirect { head_only: bool },
     Connect { ssid: String, psk: String },
 }
 
@@ -188,6 +189,9 @@ pub fn route(request: Request) -> Result<Route, HttpError> {
             validate_credentials(&ssid, &psk)?;
             Ok(Route::Connect { ssid, psk })
         }
+        ("GET", "/connect") => Err(HttpError::MethodNotAllowed),
+        ("GET", _) => Ok(Route::CaptiveRedirect { head_only: false }),
+        ("HEAD", _) => Ok(Route::CaptiveRedirect { head_only: true }),
         (_, "/" | "/connect") => Err(HttpError::MethodNotAllowed),
         _ => Err(HttpError::NotFound),
     }
@@ -216,6 +220,20 @@ pub fn render_error(error: HttpError) -> String {
         HttpError::MethodNotAllowed => ("405 Method Not Allowed", "Method not allowed"),
     };
     response(status, "text/plain; charset=utf-8", message)
+}
+
+/// Redirect a captive-network probe to the canonical local setup form. The
+/// request host/path are never reflected into either the header or body.
+pub fn render_captive_redirect(head_only: bool) -> String {
+    let body = if head_only {
+        ""
+    } else {
+        "<!doctype html><html><body><a href=\"http://192.168.2.1/\">Open Wave Wi-Fi Setup</a></body></html>"
+    };
+    format!(
+        "HTTP/1.1 302 Found\r\nLocation: http://192.168.2.1/\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 /// Render the provisioning form with one safe option per scanned SSID.
@@ -338,7 +356,25 @@ mod tests {
             path: "/missing".into(),
             body: String::new(),
         });
-        assert!(matches!(missing, Err(HttpError::NotFound)));
+        assert!(matches!(
+            missing,
+            Ok(Route::CaptiveRedirect { head_only: false })
+        ));
+        let head = route(Request {
+            method: "HEAD".into(),
+            path: "/hotspot-detect.html".into(),
+            body: String::new(),
+        });
+        assert!(matches!(
+            head,
+            Ok(Route::CaptiveRedirect { head_only: true })
+        ));
+        let unknown_method = route(Request {
+            method: "DELETE".into(),
+            path: "/missing".into(),
+            body: String::new(),
+        });
+        assert!(matches!(unknown_method, Err(HttpError::NotFound)));
     }
 
     #[test]
@@ -356,5 +392,18 @@ mod tests {
         assert!(render_error(HttpError::PayloadTooLarge).starts_with("HTTP/1.1 413"));
         assert!(render_error(HttpError::NotFound).starts_with("HTTP/1.1 404"));
         assert!(render_error(HttpError::MethodNotAllowed).starts_with("HTTP/1.1 405"));
+    }
+
+    #[test]
+    fn captive_redirect_is_canonical_and_head_has_no_body() {
+        let get = render_captive_redirect(false);
+        assert!(get.starts_with("HTTP/1.1 302 Found"));
+        assert!(get.contains("\r\nLocation: http://192.168.2.1/\r\n"));
+        assert!(get.ends_with("</html>"));
+
+        let head = render_captive_redirect(true);
+        assert!(head.starts_with("HTTP/1.1 302 Found"));
+        assert!(head.ends_with("\r\n\r\n"));
+        assert!(head.contains("\r\nContent-Length: 0\r\n"));
     }
 }
