@@ -9,9 +9,10 @@ phone/web provisioning. Design spec:
 - **Chipset:** ATBM6031 (ATBM613x family) over **SDIO**, dual-band 2.4/5 GHz.
   Kernel modules: `aml_wifi.ko` (Amlogic glue) → `atbm613x_wifi_sdio.ko`,
   exposed to userspace via **nl80211**.
-- **Userspace tools** (provided by the stock rootfs, reused by `waved`):
-  `wpa_supplicant`, `wpa_cli`, `wpa_passphrase`, `udhcpc`, and — for AP mode —
-  `hostapd` + `dnsmasq`.
+- **Userspace tools** reused from the stock rootfs: `wpa_supplicant`,
+  `wpa_cli`, `udhcpc`, and `hostapd`. Hardware probing on 2026-07-16 found
+  that `dnsmasq` and `wpa_passphrase` are absent, so `waved` supplies DHCP and
+  WPA2 key derivation in process.
 - Single radio: `wlan0` is **either STA or AP**, never both. Provisioning is a
   mode toggle.
 
@@ -35,13 +36,16 @@ phone/web provisioning. Design spec:
 - A `tokio::time::timeout` (10 s) on every external command so a wedged binary
   can't freeze the loop.
 - **Quote-safe encoding**: SSID is set as hex (`set_network N ssid <hex>`); the
-  PSK is derived through `wpa_passphrase` and stored as the 64-hex PMK
+  PSK is derived in Rust with PBKDF2-HMAC-SHA1 (4096 rounds) and stored as the 64-hex PMK
   (`set_network N psk <hex>`). This handles any valid SSID/passphrase without
   quoting issues **and** keeps the passphrase hashed at rest.
 - **PSK never logged**: the `wpa_cli` debug log masks the value after a `psk`
   arg (`psk ****`).
 - Roam handling tracks the last SSID, firing `WifiDisconnected` +
   `WifiConnected` when the network changes without a full drop.
+- `waved-wifi` owns station lifecycle: it idempotently starts
+  `wpa_supplicant` with `/etc/wpa_supplicant.conf`, starts `udhcpc` only after
+  association, and retries recovery from the normal ten-second poll loop.
 
 ## Provisioning (`waved-provision`)
 
@@ -75,32 +79,30 @@ Idle → Scanning → ApActive{ssid,passphrase,url} → Connecting{ssid} → Con
 | Security | **WPA2-PSK** (not open — see Security) |
 | Passphrase | 8 hex chars derived from the MAC, shown on the device screen |
 | Gateway IP | `192.168.2.1` |
-| DHCP range | `192.168.2.50` – `192.168.2.200`, 12 h lease (`dnsmasq`) |
+| DHCP range | `192.168.2.50` – `192.168.2.200`, 12 h lease (in-process DHCPv4) |
 | HTTP | `192.168.2.1:80`, lifetime == AP lifetime |
 
-Runtime configs are written to `/tmp/waved-hostapd.conf` and
-`/tmp/waved-dnsmasq.conf`.
+The hostapd runtime config is written to `/tmp/waved-hostapd.conf` with mode
+`0600` and removed during every teardown path.
 
 ### On-device commands used
 
 AP up (`ApController::start`):
 ```
-wpa_cli disconnect ; killall -q wpa_supplicant
+waved-wifi stops udhcpc + wpa_supplicant
 ip addr flush dev wlan0 ; ip link set wlan0 up ; ip addr add 192.168.2.1/24 dev wlan0
 hostapd -B /tmp/waved-hostapd.conf
-dnsmasq -C /tmp/waved-dnsmasq.conf
+in-process DHCP binds wlan0:67
 ```
 AP down / STA restore (`ApController::stop`):
 ```
-killall -q dnsmasq ; killall -q hostapd ; ip addr flush dev wlan0
-wpa_supplicant -B -Dnl80211 -iwlan0 -c /tmp/wpa_supplicant.conf
-udhcpc -i wlan0 -b
+stop in-process DHCP ; killall -TERM hostapd ; ip addr flush dev wlan0
+wpa_supplicant -B -Dnl80211 -i wlan0 -c /etc/wpa_supplicant.conf
+udhcpc -i wlan0 -b  # after association
 ```
 
-> **TODO (reconcile on hardware):** the exact STA-restore invocation must match
-> how the device's own init (`S50_ko_install` / `S60wifi`) starts
-> `wpa_supplicant` — verify the config path and driver flags on-device and
-> update `ApController::stop` if they differ.
+The rootfs has no Wi-Fi userspace init service: `S50_ko_install` loads the
+ATBM6031 driver only. `waved` therefore owns the userspace station processes.
 
 ## Security decisions (improvements over stock)
 
@@ -108,20 +110,20 @@ udhcpc -i wlan0 -b
   AP; ours encrypts the link so the user's home Wi-Fi password isn't sniffable
   over the air during the plain-HTTP `POST`.
 - **No PSK in logs** at any level.
-- **PSK hashed at rest** via `wpa_passphrase` (no plaintext passphrase written to
-  `wpa_supplicant.conf`).
+- **PSK hashed at rest** via native PBKDF2 (no submitted plaintext passphrase
+  written to `wpa_supplicant.conf`).
 
-## Prerequisite probe (Task 0)
+## Measured prerequisite probe (2026-07-16)
 
-Approach A assumes `hostapd`, `dnsmasq`, `wpa_passphrase`, `wpa_cli` exist in the
-rootfs and the radio supports AP mode. Verify before relying on provisioning:
+Probe command:
 ```bash
-adb shell 'for b in hostapd dnsmasq wpa_passphrase wpa_cli; do printf "%s: " $b; command -v $b || echo MISSING; done'
+adb shell 'for b in hostapd dnsmasq wpa_passphrase wpa_cli udhcpc; do printf "%s: " $b; command -v $b || echo MISSING; done'
 adb shell 'iw list 2>/dev/null | grep -A6 "Supported interface modes"'   # expect "* AP"
 ```
-**Probe result:** _not yet run — fill in once checked on hardware._ If
-`hostapd`/`dnsmasq` are missing, bundle static aarch64 binaries or fall back to
-spec Approach C (configs written by `waved`, daemons run by init.d).
+
+Result: `hostapd`, `wpa_cli`, and `udhcpc` are present; `dnsmasq` and
+`wpa_passphrase` are missing; `iw` reports both `managed` and `AP/VLAN` modes.
+The persistent station config is `/etc/wpa_supplicant.conf`.
 
 ## Acceptance
 
