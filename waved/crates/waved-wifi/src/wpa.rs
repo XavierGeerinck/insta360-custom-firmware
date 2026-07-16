@@ -1,13 +1,18 @@
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use std::fmt::Write as _;
+use std::net::Ipv4Addr;
 use std::process::Output;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::process::Command;
 use tracing::debug;
 
 const CMD_TIMEOUT: Duration = Duration::from_secs(10);
+const IFACE: &str = "wlan0";
+const SUPPLICANT_CONF: &str = "/etc/wpa_supplicant.conf";
+static STATION_SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Error)]
 pub enum WifiError {
@@ -21,6 +26,8 @@ pub enum WifiError {
     BadNetworkId(String),
     #[error("invalid credential: {0}")]
     InvalidCredential(&'static str),
+    #[error("timed out waiting for Wi-Fi connection")]
+    ConnectionTimeout,
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -62,6 +69,79 @@ async fn wpa_cli(args: &[&str]) -> Result<String, WifiError> {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     debug!("wpa_cli {:?} → {}", redact_psk(args), stdout.trim());
     check_wpa_ok(&stdout)
+}
+
+async fn command_output(program: &str, args: &[&str]) -> Result<Output, WifiError> {
+    let fut = Command::new(program).args(args).output();
+    let output = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
+        Ok(res) => res?,
+        Err(_) => return Err(WifiError::Timeout),
+    };
+    if !output.status.success() {
+        let code = output.status.code().unwrap_or(-1);
+        debug!("{program} exited with status {code}");
+        return Err(WifiError::BadExit(code));
+    }
+    Ok(output)
+}
+
+async fn process_running(name: &str) -> Result<bool, WifiError> {
+    let fut = Command::new("pidof").arg(name).output();
+    match tokio::time::timeout(CMD_TIMEOUT, fut).await {
+        Ok(Ok(output)) => Ok(output.status.success()),
+        Ok(Err(e)) => Err(WifiError::Io(e)),
+        Err(_) => Err(WifiError::Timeout),
+    }
+}
+
+/// Start the station supplicant when normal STA ownership is active.
+/// Idempotent so the Wi-Fi poll loop can use it as its recovery primitive.
+pub async fn ensure_station() -> Result<(), WifiError> {
+    if STATION_SUSPENDED.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    command_output("ip", &["link", "set", IFACE, "up"]).await?;
+    if !process_running("wpa_supplicant").await? {
+        command_output(
+            "wpa_supplicant",
+            &["-B", "-Dnl80211", "-i", IFACE, "-c", SUPPLICANT_CONF],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Stop station processes and prevent the background poller from restarting
+/// them while the single radio is owned by the provisioning AP.
+pub async fn stop_station() -> Result<(), WifiError> {
+    STATION_SUSPENDED.store(true, Ordering::SeqCst);
+    if process_running("udhcpc").await? {
+        command_output("killall", &["-TERM", "udhcpc"]).await?;
+    }
+    if process_running("wpa_supplicant").await? {
+        command_output("killall", &["-TERM", "wpa_supplicant"]).await?;
+    }
+    Ok(())
+}
+
+/// Return radio ownership to STA mode after provisioning.
+pub async fn restore_station() -> Result<(), WifiError> {
+    STATION_SUSPENDED.store(false, Ordering::SeqCst);
+    ensure_station().await
+}
+
+pub fn station_is_suspended() -> bool {
+    STATION_SUSPENDED.load(Ordering::SeqCst)
+}
+
+/// Start the BusyBox DHCP client after association. It backgrounds itself;
+/// process detection prevents repeated clients from accumulating.
+pub async fn ensure_dhcp() -> Result<(), WifiError> {
+    if station_is_suspended() || process_running("udhcpc").await? {
+        return Ok(());
+    }
+    command_output("udhcpc", &["-i", IFACE, "-b"]).await?;
+    Ok(())
 }
 
 /// Encode an SSID as the lowercase-hex form wpa_supplicant accepts unquoted
@@ -150,6 +230,7 @@ pub async fn connect(ssid: &str, password: &str) -> Result<(), WifiError> {
         return Err(WifiError::InvalidCredential("empty ssid"));
     }
     check_psk_len(password)?;
+    ensure_station().await?;
 
     let id = parse_network_id(&wpa_cli(&["add_network"]).await?)?;
     let ssid_hex = ssid_to_hex(ssid);
@@ -189,6 +270,67 @@ pub fn parse_wpa_status(output: &str) -> Option<(String, String)> {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StationStatus {
+    pub state: String,
+    pub ssid: Option<String>,
+    pub ip_addr: Option<String>,
+}
+
+pub fn parse_station_status(output: &str) -> StationStatus {
+    let mut status = StationStatus::default();
+    for line in output.lines() {
+        if let Some(value) = line.strip_prefix("wpa_state=") {
+            status.state = value.to_string();
+        } else if let Some(value) = line.strip_prefix("ssid=") {
+            status.ssid = Some(value.to_string());
+        } else if let Some(value) = line.strip_prefix("ip_address=") {
+            status.ip_addr = Some(value.to_string());
+        }
+    }
+    status
+}
+
+fn valid_ipv4(value: &str) -> bool {
+    value
+        .parse::<Ipv4Addr>()
+        .map(|ip| !ip.is_unspecified())
+        .unwrap_or(false)
+}
+
+pub fn connection_complete(status: &StationStatus, requested_ssid: &str) -> bool {
+    status.state == "COMPLETED"
+        && status.ssid.as_deref() == Some(requested_ssid)
+        && status.ip_addr.as_deref().map(valid_ipv4).unwrap_or(false)
+}
+
+pub async fn station_status() -> Result<StationStatus, WifiError> {
+    wpa_cli(&["status"])
+        .await
+        .map(|output| parse_station_status(&output))
+}
+
+pub async fn wait_for_connection(
+    requested_ssid: &str,
+    timeout: Duration,
+) -> Result<StationStatus, WifiError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        ensure_station().await?;
+        let status = station_status().await?;
+        if connection_complete(&status, requested_ssid) {
+            return Ok(status);
+        }
+        if status.state == "COMPLETED" && status.ip_addr.is_none() {
+            ensure_dhcp().await?;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(WifiError::ConnectionTimeout);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 /// Parse the `RSSI=<dbm>` line from `wpa_cli signal_poll`.
 pub fn parse_signal(output: &str) -> Option<i8> {
     output
@@ -198,8 +340,12 @@ pub fn parse_signal(output: &str) -> Option<i8> {
 }
 
 pub async fn status() -> Option<(String, String, i8)> {
-    let output = wpa_cli(&["status"]).await.ok()?;
-    let (ssid, ip) = parse_wpa_status(&output)?;
+    let station = station_status().await.ok()?;
+    if station.state == "COMPLETED" && station.ip_addr.is_none() {
+        let _ = ensure_dhcp().await;
+    }
+    let ssid = station.ssid?;
+    let ip = station.ip_addr.filter(|value| valid_ipv4(value))?;
     let signal = match wpa_cli(&["signal_poll"]).await {
         Ok(s) => parse_signal(&s).unwrap_or(0),
         Err(_) => 0,
@@ -229,6 +375,29 @@ mod tests {
     fn parse_ssid_only_no_ip() {
         let output = "ssid=MyNetwork\nwpa_state=COMPLETED\n";
         assert!(parse_wpa_status(output).is_none());
+    }
+
+    #[test]
+    fn parse_associated_without_ip() {
+        let status = parse_station_status("ssid=Home\nwpa_state=COMPLETED\n");
+        assert_eq!(status.state, "COMPLETED");
+        assert_eq!(status.ssid.as_deref(), Some("Home"));
+        assert_eq!(status.ip_addr, None);
+        assert!(!connection_complete(&status, "Home"));
+    }
+
+    #[test]
+    fn connection_requires_requested_ssid_and_real_ipv4() {
+        let complete = parse_station_status(
+            "ssid=Home\nip_address=192.168.1.42\nwpa_state=COMPLETED\n",
+        );
+        assert!(connection_complete(&complete, "Home"));
+        assert!(!connection_complete(&complete, "Other"));
+
+        let unspecified = parse_station_status(
+            "ssid=Home\nip_address=0.0.0.0\nwpa_state=COMPLETED\n",
+        );
+        assert!(!connection_complete(&unspecified, "Home"));
     }
 
     #[test]

@@ -36,6 +36,9 @@ impl WifiService {
 
     pub async fn run(self, mut commands: broadcast::Receiver<Command>) {
         info!("wifi_srv started");
+        if let Err(e) = wpa::ensure_station().await {
+            warn!("station initialization failed: {e}");
+        }
         let mut last_ssid: Option<String> = None;
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
 
@@ -50,6 +53,9 @@ impl WifiService {
     }
 
     async fn poll(&self, last_ssid: &mut Option<String>) {
+        if let Err(e) = wpa::ensure_station().await {
+            warn!("station recovery failed: {e}");
+        }
         let state = match wpa::status().await {
             Some((ssid, ip, signal)) => {
                 if ssid_changed(last_ssid.as_deref(), &ssid) {
