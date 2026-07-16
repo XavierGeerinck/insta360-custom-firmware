@@ -38,11 +38,15 @@ impl UiService {
                 }
             })
             .expect("failed to spawn ui-lvgl thread");
-        Self { thread_handle: Some(handle) }
+        Self {
+            thread_handle: Some(handle),
+        }
     }
 
     pub fn join(mut self) {
-        if let Some(h) = self.thread_handle.take() { let _ = h.join(); }
+        if let Some(h) = self.thread_handle.take() {
+            let _ = h.join();
+        }
     }
 }
 
@@ -52,10 +56,10 @@ fn ui_thread_main(
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("UI thread starting");
 
-    let audio_rx   = bus.audio.subscribe();
+    let audio_rx = bus.audio.subscribe();
     let battery_rx = bus.battery.subscribe();
-    let bt_rx      = bus.bt.subscribe();
-    let wifi_rx    = bus.wifi.subscribe();
+    let bt_rx = bus.bt.subscribe();
+    let wifi_rx = bus.wifi.subscribe();
     let meeting_rx = bus.meeting.subscribe();
 
     let mut cmd_rx = bus.commands.subscribe();
@@ -67,7 +71,7 @@ fn ui_thread_main(
         lv_fs_posix_init(); // register 'A:' → POSIX FS for PNG asset loading
     }
 
-    let fb    = FramebufferDisplay::init()?;
+    let fb = FramebufferDisplay::init()?;
     let touch_ptr = Box::into_raw(Box::new(TouchInput::init()?));
 
     unsafe {
@@ -77,7 +81,7 @@ fn ui_thread_main(
 
         let buf1_ptr = fb.buf1.as_ptr() as *mut _;
         let buf2_ptr = fb.buf2.as_ptr() as *mut _;
-        let buf_len  = fb.buf1.len() as u32;
+        let buf_len = fb.buf1.len() as u32;
         let fb_raw = Box::into_raw(Box::new(fb));
         lv_display_set_user_data(disp, fb_raw as *mut _);
 
@@ -96,17 +100,17 @@ fn ui_thread_main(
     }
 
     let status_bar = unsafe { StatusBar::create() };
-    let mut toast  = unsafe { Toast::create() };
+    let mut toast = unsafe { Toast::create() };
 
     let mut nav = ScreenManager::new();
-    let mut home       = screens::home::HomeScreen::new(Arc::clone(&bus));
-    let mut recording  = screens::recording::RecordingScreen::new(Arc::clone(&bus));
-    let mut settings   = screens::settings::SettingsScreen::new(Arc::clone(&bus));
+    let mut home = screens::home::HomeScreen::new(Arc::clone(&bus));
+    let mut recording = screens::recording::RecordingScreen::new(Arc::clone(&bus));
+    let mut settings = screens::settings::SettingsScreen::new(Arc::clone(&bus));
     let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
-    let mut noise_red  = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
-    let mut system     = screens::system::SystemScreen::new(Arc::clone(&bus));
-    let mut wifi_prov  = screens::wifi_provisioning::WifiProvisioningScreen::new(Arc::clone(&bus));
-    let mut volume     = screens::volume::VolumeScreen::new(Arc::clone(&bus));
+    let mut noise_red = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
+    let mut system = screens::system::SystemScreen::new(Arc::clone(&bus));
+    let mut wifi_prov = screens::wifi_provisioning::WifiProvisioningScreen::new(Arc::clone(&bus));
+    let mut volume = screens::volume::VolumeScreen::new(Arc::clone(&bus));
     let mut confirmation = screens::confirmation::ConfirmationScreen::new(Arc::clone(&bus));
 
     // Track which non-settings screen to return to when settings closes.
@@ -114,14 +118,16 @@ fn ui_thread_main(
     let mut prev_recording = false;
 
     let root = home.create();
-    unsafe { lv_screen_load(root); }
+    unsafe {
+        lv_screen_load(root);
+    }
     nav.set_root(root);
 
     let mut last_tick = Instant::now();
 
-    let mut prev_batt:  u8   = 255;
-    let mut prev_wifi:  bool = false;
-    let mut prev_bt:    bool = false;
+    let mut prev_batt: u8 = 255;
+    let mut prev_wifi: bool = false;
+    let mut prev_bt: bool = false;
     let mut prev_muted: bool = false;
     // Seeded on the first tick, then drives the transient volume toast.
     // `None` means we haven't observed any value yet (suppress the first
@@ -133,27 +139,35 @@ fn ui_thread_main(
         let elapsed_ms = last_tick.elapsed().as_millis() as u32;
         last_tick = Instant::now();
 
-        unsafe { lv_tick_inc(elapsed_ms); }
-        unsafe { (*touch_ptr).poll(); }
+        unsafe {
+            lv_tick_inc(elapsed_ms);
+        }
+        unsafe {
+            (*touch_ptr).poll();
+        }
 
         {
-            let batt  = battery_rx.borrow();
+            let batt = battery_rx.borrow();
             let audio = audio_rx.borrow();
-            let bt    = bt_rx.borrow();
-            let wifi  = wifi_rx.borrow();
-            let new_batt  = batt.level;
-            let new_wifi  = wifi.connected;
-            let new_bt    = bt.connected;
+            let bt = bt_rx.borrow();
+            let wifi = wifi_rx.borrow();
+            let new_batt = batt.level;
+            let new_wifi = wifi.connected;
+            let new_bt = bt.connected;
             let new_muted = audio.mic_muted;
-            if new_batt != prev_batt || new_wifi != prev_wifi
-                || new_bt != prev_bt || new_muted != prev_muted
+            if new_batt != prev_batt
+                || new_wifi != prev_wifi
+                || new_bt != prev_bt
+                || new_muted != prev_muted
             {
                 // wifi.signal_strength now carries real RSSI (see waved-wifi); icon
                 // tiering by strength is a follow-up UI-asset task.
-                unsafe { status_bar.update(new_batt, new_wifi, new_bt, new_muted); }
-                prev_batt  = new_batt;
-                prev_wifi  = new_wifi;
-                prev_bt    = new_bt;
+                unsafe {
+                    status_bar.update(new_batt, new_wifi, new_bt, new_muted);
+                }
+                prev_batt = new_batt;
+                prev_wifi = new_wifi;
+                prev_bt = new_bt;
                 prev_muted = new_muted;
             }
 
@@ -170,7 +184,9 @@ fn ui_thread_main(
                 } else {
                     format!("Volume: {}%", new_speaker_vol)
                 };
-                unsafe { toast.show(&msg, 1200); }
+                unsafe {
+                    toast.show(&msg, 1200);
+                }
             }
             prev_speaker_vol = Some(new_speaker_vol);
             prev_speaker_muted = Some(new_speaker_muted);
@@ -195,8 +211,12 @@ fn ui_thread_main(
             );
         }
 
-        unsafe { lv_timer_handler(); }
-        unsafe { toast.tick(); }
+        unsafe {
+            lv_timer_handler();
+        }
+        unsafe {
+            toast.tick();
+        }
 
         // Auto-navigate based on meeting state. Three states drive the
         // top-level recording flow:
@@ -212,8 +232,8 @@ fn ui_thread_main(
         );
         if on_recording_axis {
             let want = match (snap.recording, snap.pending_decision.is_some()) {
-                (true, _)      => UiScreen::Recording,
-                (false, true)  => UiScreen::Confirmation,
+                (true, _) => UiScreen::Recording,
+                (false, true) => UiScreen::Confirmation,
                 (false, false) => UiScreen::Home,
             };
             if want != nav.current {
@@ -233,7 +253,9 @@ fn ui_thread_main(
                     }
                     _ => unreachable!(),
                 };
-                unsafe { lv_screen_load(root); }
+                unsafe {
+                    lv_screen_load(root);
+                }
                 nav.navigate_to(want);
                 nav.set_root(root);
             }
@@ -242,36 +264,50 @@ fn ui_thread_main(
         match &nav.current {
             UiScreen::Home => {
                 let audio = audio_rx.borrow().clone();
-                let bt    = bt_rx.borrow().clone();
-                let wifi  = wifi_rx.borrow().clone();
-                unsafe { home.update_state(&audio, &bt, &wifi); }
+                let bt = bt_rx.borrow().clone();
+                let wifi = wifi_rx.borrow().clone();
+                unsafe {
+                    home.update_state(&audio, &bt, &wifi);
+                }
             }
             UiScreen::Recording => {
-                let audio   = audio_rx.borrow().clone();
+                let audio = audio_rx.borrow().clone();
                 let meeting = meeting_rx.borrow().clone();
-                unsafe { recording.update_state(&audio, &meeting); }
+                unsafe {
+                    recording.update_state(&audio, &meeting);
+                }
             }
             UiScreen::Settings => {}
-            UiScreen::System   => {}
+            UiScreen::System => {}
             UiScreen::Volume => {
                 let audio = audio_rx.borrow().clone();
-                unsafe { volume.update_state(&audio); }
+                unsafe {
+                    volume.update_state(&audio);
+                }
             }
             UiScreen::AudioMode => {
                 let audio = audio_rx.borrow().clone();
-                unsafe { audio_mode.update_state(&audio); }
+                unsafe {
+                    audio_mode.update_state(&audio);
+                }
             }
             UiScreen::NoiseReduction => {
                 let audio = audio_rx.borrow().clone();
-                unsafe { noise_red.update_state(&audio); }
+                unsafe {
+                    noise_red.update_state(&audio);
+                }
             }
             UiScreen::Confirmation => {
                 let meeting = meeting_rx.borrow().clone();
-                unsafe { confirmation.update_state(&meeting); }
+                unsafe {
+                    confirmation.update_state(&meeting);
+                }
             }
             UiScreen::WifiProvisioning => {
                 let prov = bus.provisioning.borrow().clone();
-                unsafe { wifi_prov.update_state(&prov); }
+                unsafe {
+                    wifi_prov.update_state(&prov);
+                }
             }
         }
 
@@ -322,28 +358,34 @@ fn handle_command(
     }
 
     match cmd {
-        Command::AddBookmark => {
-            unsafe { toast.show("Bookmark added", 1500); }
-        }
-        Command::Shutdown => {
-            unsafe { toast.show("Shutting down...", 2000); }
-        }
+        Command::AddBookmark => unsafe {
+            toast.show("Bookmark added", 1500);
+        },
+        Command::Shutdown => unsafe {
+            toast.show("Shutting down...", 2000);
+        },
         Command::OpenSettings => {
             *return_to_recording = nav.current == UiScreen::Recording;
             let root = settings.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::Settings);
             nav.set_root(root);
         }
         Command::OpenSystemSettings => {
             let root = system.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::System);
             nav.set_root(root);
         }
-        Command::OpenWifiProvisioning => {
+        Command::OpenWifiSettings | Command::OpenWifiProvisioning => {
             let root = wifi_prov.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::WifiProvisioning);
             nav.set_root(root);
         }
@@ -351,7 +393,9 @@ fn handle_command(
             // Remember return context (Home vs Recording) just like OpenSettings does.
             *return_to_recording = nav.current == UiScreen::Recording;
             let root = volume.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::Volume);
             nav.set_root(root);
         }
@@ -360,21 +404,27 @@ fn handle_command(
                 UiScreen::AudioMode => {
                     // AudioMode → back to More screen.
                     let root = settings.create();
-                    unsafe { lv_screen_load(root); }
+                    unsafe {
+                        lv_screen_load(root);
+                    }
                     nav.navigate_to(UiScreen::Settings);
                     nav.set_root(root);
                 }
                 UiScreen::System => {
                     // System → back to More screen.
                     let root = settings.create();
-                    unsafe { lv_screen_load(root); }
+                    unsafe {
+                        lv_screen_load(root);
+                    }
                     nav.navigate_to(UiScreen::Settings);
                     nav.set_root(root);
                 }
                 UiScreen::WifiProvisioning => {
                     // Wi-Fi provisioning → back to System settings (entered from there).
                     let root = system.create();
-                    unsafe { lv_screen_load(root); }
+                    unsafe {
+                        lv_screen_load(root);
+                    }
                     nav.navigate_to(UiScreen::System);
                     nav.set_root(root);
                 }
@@ -383,13 +433,17 @@ fn handle_command(
                     let _ = noise_red;
                     if *return_to_recording {
                         let root = recording.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Recording);
                         nav.set_root(root);
                         *prev_recording = true;
                     } else {
                         let root = home.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Home);
                         nav.set_root(root);
                     }
@@ -399,13 +453,17 @@ fn handle_command(
                     let _ = volume;
                     if *return_to_recording {
                         let root = recording.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Recording);
                         nav.set_root(root);
                         *prev_recording = true;
                     } else {
                         let root = home.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Home);
                         nav.set_root(root);
                     }
@@ -414,13 +472,17 @@ fn handle_command(
                     // More → back to Home or Recording.
                     if *return_to_recording {
                         let root = recording.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Recording);
                         nav.set_root(root);
                         *prev_recording = true;
                     } else {
                         let root = home.create();
-                        unsafe { lv_screen_load(root); }
+                        unsafe {
+                            lv_screen_load(root);
+                        }
                         nav.navigate_to(UiScreen::Home);
                         nav.set_root(root);
                     }
@@ -430,7 +492,9 @@ fn handle_command(
         }
         Command::OpenAudioMode => {
             let root = audio_mode.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::AudioMode);
             nav.set_root(root);
         }
@@ -439,7 +503,9 @@ fn handle_command(
             // takes us back to the right place — entered from Home shortcut.
             *return_to_recording = nav.current == UiScreen::Recording;
             let root = noise_red.create();
-            unsafe { lv_screen_load(root); }
+            unsafe {
+                lv_screen_load(root);
+            }
             nav.navigate_to(UiScreen::NoiseReduction);
             nav.set_root(root);
         }
@@ -447,11 +513,7 @@ fn handle_command(
     }
 }
 
-unsafe extern "C" fn flush_cb(
-    disp: *mut lv_display_t,
-    area: *const lv_area_t,
-    px_map: *mut u8,
-) {
+unsafe extern "C" fn flush_cb(disp: *mut lv_display_t, area: *const lv_area_t, px_map: *mut u8) {
     let fb = lv_display_get_user_data(disp) as *mut display::FramebufferDisplay;
     if !fb.is_null() {
         (*fb).flush(&*area, px_map as *const u8);
@@ -459,10 +521,7 @@ unsafe extern "C" fn flush_cb(
     lv_display_flush_ready(disp);
 }
 
-unsafe extern "C" fn touch_read_cb(
-    indev: *mut lv_indev_t,
-    data: *mut lv_indev_data_t,
-) {
+unsafe extern "C" fn touch_read_cb(indev: *mut lv_indev_t, data: *mut lv_indev_data_t) {
     let touch = lv_indev_get_user_data(indev) as *const input::TouchInput;
     if touch.is_null() {
         (*data).state = lv_indev_state_t_LV_INDEV_STATE_RELEASED;

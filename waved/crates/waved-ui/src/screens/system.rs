@@ -15,10 +15,10 @@
 //!
 //! We only implement the rows whose underlying features this firmware supports.
 
-use std::ffi::CString;
-use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
 use waved_state::{Command, StateBus};
 
 extern "C" {
@@ -35,42 +35,47 @@ enum RowAction {
     OpenAudioMode,
     PowerOff,
     Bookmark, // placeholder for rows whose feature isn't implemented
-    OpenWifiProvisioning,
+    OpenWifiSettings,
 }
 
 const ROWS: &[(&str, RowAction)] = &[
-    ("Audio Mode",      RowAction::OpenAudioMode),
+    ("Audio Mode", RowAction::OpenAudioMode),
     ("Noise Reduction", RowAction::Bookmark),
-    ("Mic",             RowAction::Bookmark),
-    ("Bluetooth",       RowAction::Bookmark),
-    ("Wi-Fi",           RowAction::OpenWifiProvisioning),
-    ("USB Mode",        RowAction::Bookmark),
-    ("Language",        RowAction::Bookmark),
-    ("Auto Sleep",      RowAction::Bookmark),
-    ("Power Off",       RowAction::PowerOff),
+    ("Mic", RowAction::Bookmark),
+    ("Bluetooth", RowAction::Bookmark),
+    ("Wi-Fi", RowAction::OpenWifiSettings),
+    ("USB Mode", RowAction::Bookmark),
+    ("Language", RowAction::Bookmark),
+    ("Auto Sleep", RowAction::Bookmark),
+    ("Power Off", RowAction::PowerOff),
 ];
 
 // ── Event callbacks ──────────────────────────────────────────────────────────
 
 unsafe extern "C" fn back_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
-        if !tx.is_null() { let _ = (*tx).send(Command::CloseSettings); }
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::CloseSettings);
+        }
     }
 }
 
 unsafe extern "C" fn row_btn_cb(e: *mut lv_event_t) {
-    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED { return; }
-    let data = lv_event_get_user_data(e)
-        as *const (tokio::sync::broadcast::Sender<Command>, RowAction);
-    if data.is_null() { return; }
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
+    let data =
+        lv_event_get_user_data(e) as *const (tokio::sync::broadcast::Sender<Command>, RowAction);
+    if data.is_null() {
+        return;
+    }
     let (tx, action) = &*data;
     let cmd = match action {
-        RowAction::OpenAudioMode        => Command::OpenAudioMode,
-        RowAction::PowerOff             => Command::Shutdown,
-        RowAction::Bookmark             => Command::AddBookmark,
-        RowAction::OpenWifiProvisioning => Command::OpenWifiProvisioning,
+        RowAction::OpenAudioMode => Command::OpenAudioMode,
+        RowAction::PowerOff => Command::Shutdown,
+        RowAction::Bookmark => Command::AddBookmark,
+        RowAction::OpenWifiSettings => Command::OpenWifiSettings,
     };
     let _ = tx.send(cmd);
 }
@@ -82,7 +87,9 @@ pub struct SystemScreen {
 }
 
 impl SystemScreen {
-    pub fn new(bus: Arc<StateBus>) -> Self { Self { bus } }
+    pub fn new(bus: Arc<StateBus>) -> Self {
+        Self { bus }
+    }
 }
 
 impl super::Screen for SystemScreen {
@@ -130,8 +137,12 @@ impl super::Screen for SystemScreen {
             lv_obj_set_style_pad_right(btn_back, 0, 0);
             lv_obj_remove_flag(btn_back, lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
             let back_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
-            lv_obj_add_event_cb(btn_back, Some(back_btn_cb),
-                lv_event_code_t_LV_EVENT_CLICKED, back_tx as *mut _);
+            lv_obj_add_event_cb(
+                btn_back,
+                Some(back_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                back_tx as *mut _,
+            );
 
             // Scrollable list container: 360×220 at (20, 60), flex column, vertical
             // scroll. The circle clips outside the centre; keep content inside x=20..380.
@@ -163,7 +174,7 @@ impl super::Screen for SystemScreen {
                 lv_obj_set_size(row, 285, 60);
                 lv_obj_set_style_radius(row, 18, 0);
                 lv_obj_set_style_bg_color(row, rgb(CLR_WHITE), 0);
-                lv_obj_set_style_bg_opa(row, 25, 0);               // 0x19
+                lv_obj_set_style_bg_opa(row, 25, 0); // 0x19
                 lv_obj_set_style_bg_opa(row, 90, SEL_PRESSED);
                 lv_obj_set_style_border_width(row, 0, 0);
                 lv_obj_set_style_shadow_width(row, 0, 0);
@@ -181,11 +192,13 @@ impl super::Screen for SystemScreen {
                 lv_obj_center(lbl);
                 lv_obj_remove_flag(lbl, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
 
-                let data = Box::into_raw(Box::new(
-                    (self.bus.commands.clone(), action),
-                ));
-                lv_obj_add_event_cb(row, Some(row_btn_cb),
-                    lv_event_code_t_LV_EVENT_CLICKED, data as *mut _);
+                let data = Box::into_raw(Box::new((self.bus.commands.clone(), action)));
+                lv_obj_add_event_cb(
+                    row,
+                    Some(row_btn_cb),
+                    lv_event_code_t_LV_EVENT_CLICKED,
+                    data as *mut _,
+                );
             }
 
             screen

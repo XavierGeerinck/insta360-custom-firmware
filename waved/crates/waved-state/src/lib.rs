@@ -43,7 +43,7 @@ pub struct AudioState {
     /// Same shape, but for the reference / far-end channel.
     pub incoming_freq_bands: [f32; FREQ_BAND_COUNT],
     pub nr_level: NrLevel,
-    pub playback_preset: PlaybackPreset,  // SP#5
+    pub playback_preset: PlaybackPreset, // SP#5
     /// Host wrote Report 0x05 (Off-hook LED) — `true` while the host
     /// signals "you are in a call". Plumbed by `waved-audio::hid::HidReader`.
     pub call_off_hook: bool,
@@ -97,7 +97,9 @@ pub enum AudioMode {
     /// estimate, smoothed via EWMA on the unit-vector (see beam/steered.rs).
     /// `initial_az_deg` is where the beam points before the first
     /// high-confidence DoA frame arrives (default 0 = forward).
-    Steered { initial_az_deg: f32 },
+    Steered {
+        initial_az_deg: f32,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -150,7 +152,11 @@ pub enum ProvisioningState {
     /// Scanning for networks before bringing up the AP.
     Scanning,
     /// AP is up; user should join `ssid` and browse to `url`.
-    ApActive { ssid: String, passphrase: String, url: String },
+    ApActive {
+        ssid: String,
+        passphrase: String,
+        url: String,
+    },
     /// Credentials received; reconnecting as STA to `ssid`.
     Connecting { ssid: String },
     /// Provisioning finished — connected to `ssid`.
@@ -276,10 +282,15 @@ pub enum Command {
     /// User chose Discard on the confirmation screen — hard-delete the
     /// recording dir, the meeting row, and any bookmarks for it.
     DiscardRecording(Uuid),
+    /// UI-only: open the non-disruptive Wi-Fi status/management screen.
+    OpenWifiSettings,
     /// UI-only: enter WiFi provisioning (scan → AP → web form).
     OpenWifiProvisioning,
     /// Provisioning web form / WifiService: join this network.
-    WifiConnect { ssid: String, password: String },
+    WifiConnect {
+        ssid: String,
+        password: String,
+    },
     /// UI-only: abort provisioning and revert to STA.
     CancelWifiProvisioning,
 }
@@ -434,7 +445,10 @@ mod tests {
     #[test]
     fn set_playback_preset_command_routes() {
         let cmd = Command::SetPlaybackPreset(PlaybackPreset::Media);
-        assert!(matches!(cmd, Command::SetPlaybackPreset(PlaybackPreset::Media)));
+        assert!(matches!(
+            cmd,
+            Command::SetPlaybackPreset(PlaybackPreset::Media)
+        ));
     }
 
     #[test]
@@ -456,12 +470,16 @@ mod tests {
     #[test]
     fn audio_mode_serializes_steered_variant() {
         use serde_json;
-        let m = AudioMode::Steered { initial_az_deg: 90.0 };
+        let m = AudioMode::Steered {
+            initial_az_deg: 90.0,
+        };
         let s = serde_json::to_string(&m).expect("serializes");
         assert!(s.contains("steered"), "json: {s}");
         assert!(s.contains("initial_az_deg"), "json: {s}");
         let back: AudioMode = serde_json::from_str(&s).expect("round-trips");
-        assert!(matches!(back, AudioMode::Steered { initial_az_deg } if (initial_az_deg - 90.0).abs() < 1e-6));
+        assert!(
+            matches!(back, AudioMode::Steered { initial_az_deg } if (initial_az_deg - 90.0).abs() < 1e-6)
+        );
     }
 
     #[test]
