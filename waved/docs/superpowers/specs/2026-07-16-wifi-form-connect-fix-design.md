@@ -43,8 +43,10 @@ The page will use the approved clean-light direction:
 - a soft neutral page background and centered white setup card;
 - compact Wave identity treatment using CSS only;
 - clear title and one-sentence instruction;
-- an editable Network input backed by a datalist of scanned SSID suggestions,
-  preserving support for hidden or unlisted networks;
+- a native Network selector populated with scanned SSIDs, followed by an
+  `Other network…` choice that reveals an editable SSID field for hidden or
+  unlisted networks (the measured iPhone captive browser does not expose HTML
+  datalist suggestions reliably);
 - a Password input with a Show/Hide button;
 - a large, high-contrast Connect button;
 - concise local-security copy explaining that credentials stay on the device;

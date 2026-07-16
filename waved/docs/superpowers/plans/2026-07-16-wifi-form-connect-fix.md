@@ -24,7 +24,8 @@ the camera firmware's informational `wpa_cli add_network` prefix.
 
 1. Replace the unstyled form with the approved self-contained clean-light
    mobile design.
-2. Keep the Network field editable and retain scanned SSIDs through a datalist.
+2. Use a native scanned-network selector; selecting `Other network…` reveals
+   an editable field for a hidden or unlisted SSID.
 3. Add an accessible Show/Hide password control, focus styles, local-security
    note, and disabled `Connecting…` submit state.
 4. Restyle the acknowledgement page with the escaped submitted SSID and clear

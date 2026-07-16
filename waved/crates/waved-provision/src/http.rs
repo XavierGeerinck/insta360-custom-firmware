@@ -5,6 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const MAX_HEADER_BYTES: usize = 8 * 1024;
 pub const MAX_BODY_BYTES: usize = 4 * 1024;
+const OTHER_NETWORK_VALUE: &str = "__other_network__";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HttpError {
@@ -184,7 +185,12 @@ pub fn route(request: Request) -> Result<Route, HttpError> {
         ("GET", "/") => Ok(Route::Form),
         ("POST", "/connect") => {
             let form = parse_form(&request.body)?;
-            let ssid = form.get("ssid").cloned().unwrap_or_default();
+            let selected_ssid = form.get("ssid").cloned().unwrap_or_default();
+            let ssid = if selected_ssid == OTHER_NETWORK_VALUE {
+                form.get("other_ssid").cloned().unwrap_or_default()
+            } else {
+                selected_ssid
+            };
             let psk = form.get("psk").cloned().unwrap_or_default();
             validate_credentials(&ssid, &psk)?;
             Ok(Route::Connect { ssid, psk })
@@ -249,8 +255,10 @@ h1{margin:26px 0 9px;font-size:clamp(27px,7vw,34px);line-height:1.12;letter-spac
 .intro{margin:0 0 26px;color:#617078;font-size:15px;line-height:1.55}
 .field{margin-top:18px}
 label{display:block;margin-bottom:8px;color:#34464e;font-size:13px;font-weight:700}
-input{width:100%;height:52px;padding:0 15px;border:1px solid #cfd9dc;border-radius:13px;background:#fff;color:#17222b;font:inherit;font-size:16px;outline:none;transition:border-color .15s,box-shadow .15s}
-input:focus-visible,.toggle:focus-visible,.primary:focus-visible{outline:none;border-color:#087f73;box-shadow:0 0 0 4px rgba(8,127,115,.14)}
+input,select{width:100%;height:52px;padding:0 15px;border:1px solid #cfd9dc;border-radius:13px;background:#fff;color:#17222b;font:inherit;font-size:16px;outline:none;transition:border-color .15s,box-shadow .15s}
+select{cursor:pointer}
+input:focus-visible,select:focus-visible,.toggle:focus-visible,.primary:focus-visible{outline:none;border-color:#087f73;box-shadow:0 0 0 4px rgba(8,127,115,.14)}
+.other-network[hidden]{display:none}
 .password{position:relative}
 .password input{padding-right:76px}
 .toggle{position:absolute;top:7px;right:7px;height:38px;padding:0 11px;border:0;border-radius:9px;background:#eef5f4;color:#087f73;font:inherit;font-size:13px;font-weight:750;cursor:pointer}
@@ -274,6 +282,16 @@ const password=document.getElementById('psk');
 const toggle=document.getElementById('toggle-password');
 const submit=document.getElementById('connect-button');
 const status=document.getElementById('submit-status');
+const network=document.getElementById('ssid');
+const otherField=document.getElementById('other-network-field');
+const otherSsid=document.getElementById('other-ssid');
+network.addEventListener('change',()=>{
+  const other=network.value==='__other_network__';
+  otherField.hidden=!other;
+  otherSsid.disabled=!other;
+  otherSsid.required=other;
+  if(other)otherSsid.focus();
+});
 toggle.addEventListener('click',()=>{
   const showing=password.type==='text';
   password.type=showing?'password':'text';
@@ -304,7 +322,7 @@ pub fn render_page(ssids: &[String]) -> String {
         .map(|ssid| format!("<option value=\"{0}\">{0}</option>", html_escape(ssid)))
         .collect();
     let content = format!(
-        r#"<main class="card"><div class="brand"><span class="mark" aria-hidden="true">W</span><span>Wave</span></div><h1>Wi-Fi setup</h1><p class="intro">Connect your Wave to a nearby network.</p><form id="setup-form" method="post" action="/connect"><div class="field"><label for="ssid">Network</label><input id="ssid" name="ssid" list="networks" required maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Choose or type a network"><datalist id="networks">{options}</datalist></div><div class="field"><label for="psk">Password</label><div class="password"><input id="psk" name="psk" type="password" minlength="8" maxlength="63" autocomplete="new-password" placeholder="Enter the Wi-Fi password"><button class="toggle" id="toggle-password" type="button" aria-controls="psk" aria-pressed="false">Show</button></div></div><button class="primary" id="connect-button" type="submit">Connect</button><p class="submit-status" id="submit-status" role="status" hidden>Sending credentials to your Wave…</p></form><p class="security"><span class="security-icon" aria-hidden="true">✓</span><span>Your credentials are sent directly to this Wave and stored as an encrypted Wi-Fi key.</span></p></main>"#
+        r#"<main class="card"><div class="brand"><span class="mark" aria-hidden="true">W</span><span>Wave</span></div><h1>Wi-Fi setup</h1><p class="intro">Connect your Wave to a nearby network.</p><form id="setup-form" method="post" action="/connect"><div class="field"><label for="ssid">Network</label><select id="ssid" name="ssid" required><option value="" selected disabled>Choose a network</option>{options}<option value="{OTHER_NETWORK_VALUE}">Other network…</option></select></div><div class="field other-network" id="other-network-field" hidden><label for="other-ssid">Network name</label><input id="other-ssid" name="other_ssid" disabled maxlength="32" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Enter the network name"></div><div class="field"><label for="psk">Password</label><div class="password"><input id="psk" name="psk" type="password" minlength="8" maxlength="63" autocomplete="new-password" placeholder="Enter the Wi-Fi password"><button class="toggle" id="toggle-password" type="button" aria-controls="psk" aria-pressed="false">Show</button></div></div><button class="primary" id="connect-button" type="submit">Connect</button><p class="submit-status" id="submit-status" role="status" hidden>Sending credentials to your Wave…</p></form><p class="security"><span class="security-icon" aria-hidden="true">✓</span><span>Your credentials are sent directly to this Wave and stored as an encrypted Wi-Fi key.</span></p></main>"#
     );
     let body = render_document("Wave Wi-Fi Setup", &content, Some(FORM_SCRIPT));
     response("200 OK", "text/html; charset=utf-8", &body)
@@ -394,6 +412,26 @@ mod tests {
     }
 
     #[test]
+    fn other_network_selection_uses_the_typed_ssid() {
+        let selected = route(Request {
+            method: "POST".into(),
+            path: "/connect".into(),
+            body: "ssid=__other_network__&other_ssid=Hidden+Lab&psk=password123".into(),
+        });
+        assert!(matches!(
+            selected,
+            Ok(Route::Connect { ssid, psk }) if ssid == "Hidden Lab" && psk == "password123"
+        ));
+
+        let missing = route(Request {
+            method: "POST".into(),
+            path: "/connect".into(),
+            body: "ssid=__other_network__&other_ssid=&psk=password123".into(),
+        });
+        assert!(matches!(missing, Err(HttpError::BadRequest)));
+    }
+
+    #[test]
     fn routes_methods_and_paths_explicitly() {
         let form = route(Request {
             method: "GET".into(),
@@ -440,7 +478,11 @@ mod tests {
         assert!(!page.contains("<option value=\"<script>"));
         assert!(page.contains("&lt;script&gt;"));
         assert!(page.starts_with("HTTP/1.1 200"));
-        assert!(page.contains("list=\"networks\""));
+        assert!(page.contains("<select id=\"ssid\" name=\"ssid\" required>"));
+        assert!(page.contains("<option value=\"HomeNet\">HomeNet</option>"));
+        assert!(page.contains("Other network…"));
+        assert!(page.contains("id=\"other-network-field\" hidden"));
+        assert!(page.contains("otherSsid.disabled=!other"));
         assert!(page.contains("id=\"toggle-password\""));
         assert!(page.contains("password.type==='text'"));
         assert!(page.contains("submit.disabled=true"));
