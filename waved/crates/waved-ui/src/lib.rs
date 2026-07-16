@@ -305,8 +305,9 @@ fn ui_thread_main(
             }
             UiScreen::WifiProvisioning => {
                 let prov = bus.provisioning.borrow().clone();
+                let wifi = wifi_rx.borrow().clone();
                 unsafe {
-                    wifi_prov.update_state(&prov);
+                    wifi_prov.update_state(&prov, &wifi);
                 }
             }
         }
@@ -381,7 +382,17 @@ fn handle_command(
             nav.navigate_to(UiScreen::System);
             nav.set_root(root);
         }
-        Command::OpenWifiSettings | Command::OpenWifiProvisioning => {
+        Command::OpenWifiSettings => {
+            wifi_prov.open_management();
+            let root = wifi_prov.create();
+            unsafe {
+                lv_screen_load(root);
+            }
+            nav.navigate_to(UiScreen::WifiProvisioning);
+            nav.set_root(root);
+        }
+        Command::OpenWifiProvisioning => {
+            wifi_prov.begin_provisioning();
             let root = wifi_prov.create();
             unsafe {
                 lv_screen_load(root);
