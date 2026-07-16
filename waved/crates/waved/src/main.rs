@@ -7,6 +7,9 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use waved_state::{Command, DeviceEvent, MotorPosition, StateBus};
 
+#[cfg(any(test, not(feature = "simulate")))]
+mod mic_capture;
+
 #[cfg(not(feature = "simulate"))]
 const CONFIG_PATH: &str = "/data/waved/config.toml";
 #[cfg(feature = "simulate")]
@@ -203,7 +206,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         );
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();
-        let mic_record_rx = audio_svc.subscribe_processed();
+        let mic_recorder = mic_capture::path_from_env()
+            .map(|path| (path, audio_svc.subscribe_processed()));
         meeting_doa_rx = audio_svc.subscribe_doa();
 
         // Build the capture source. Three modes:
@@ -466,39 +470,9 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         let audio_cmd_rx = bus.commands.subscribe();
         tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
 
-        // Always-on mic recorder: writes post-AEC mono to /tmp/mic_capture.pcm
-        // as raw S16LE 48 kHz mono for post-test analysis and subjective
-        // listening. File is truncated on each process start.
-        tokio::spawn(async move {
-            use std::io::Write;
-            let mut rx = mic_record_rx;
-            let path = "/tmp/mic_capture.pcm";
-            let file = std::fs::OpenOptions::new()
-                .create(true).write(true).truncate(true).open(path);
-            let mut file = match file {
-                Ok(f) => std::io::BufWriter::new(f),
-                Err(e) => { warn!("mic_capture.pcm create failed: {e}"); return; }
-            };
-            loop {
-                match rx.recv().await {
-                    Ok(frame) => {
-                        let mut buf = Vec::with_capacity(frame.mic_mono_f32.len() * 2);
-                        for &s in &frame.mic_mono_f32 {
-                            let i = (s * i16::MAX as f32)
-                                .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                            buf.extend_from_slice(&i.to_le_bytes());
-                        }
-                        if let Err(e) = file.write_all(&buf) {
-                            warn!("mic_capture.pcm write error: {e}");
-                        }
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("mic recorder lagged {n} frames");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
-                }
-            }
-        });
+        if let Some((path, rx)) = mic_recorder {
+            mic_capture::spawn(path, rx);
+        }
 
         tracing::info!("capture wired: config={cfg_src_str} alignment={alignment}");
     }
