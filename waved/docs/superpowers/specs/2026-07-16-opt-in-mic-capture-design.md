@@ -1,7 +1,7 @@
 # Opt-in diagnostic microphone capture — design
 
 **Date:** 2026-07-16  
-**Status:** Approved for specification
+**Status:** Approved
 
 ## Problem
 
