@@ -12,3 +12,5 @@ waved-config = { path = "../waved-config" }
 tokio = { workspace = true, features = ["sync", "process", "time"] }
 tracing.workspace = true
 thiserror.workspace = true
+hmac = "0.12"
+sha1 = "0.10"

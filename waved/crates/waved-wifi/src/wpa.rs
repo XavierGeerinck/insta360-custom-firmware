@@ -1,3 +1,6 @@
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
+use std::fmt::Write as _;
 use std::process::Output;
 use std::time::Duration;
 use thiserror::Error;
@@ -67,19 +70,44 @@ pub fn ssid_to_hex(ssid: &str) -> String {
     ssid.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Extract the derived `psk=<hex>` line from `wpa_passphrase` output,
-/// skipping the commented `#psk="..."` plaintext echo.
-pub fn parse_wpa_passphrase_psk(output: &str) -> Option<String> {
-    for line in output.lines() {
-        let t = line.trim();
-        if t.starts_with('#') {
-            continue;
+/// Derive the 256-bit WPA/WPA2 pre-shared key defined by IEEE 802.11i:
+/// PBKDF2-HMAC-SHA1(passphrase, SSID, 4096), rendered as lowercase hex.
+pub fn derive_wpa2_psk(ssid: &str, passphrase: &str) -> String {
+    type HmacSha1 = Hmac<Sha1>;
+
+    let mut derived = [0u8; 32];
+    let mut written = 0;
+    for block_index in 1u32.. {
+        let mut mac = HmacSha1::new_from_slice(passphrase.as_bytes())
+            .expect("HMAC accepts keys of any length");
+        mac.update(ssid.as_bytes());
+        mac.update(&block_index.to_be_bytes());
+        let mut u = mac.finalize().into_bytes();
+        let mut block = u;
+
+        for _ in 1..4096 {
+            let mut mac = HmacSha1::new_from_slice(passphrase.as_bytes())
+                .expect("HMAC accepts keys of any length");
+            mac.update(&u);
+            u = mac.finalize().into_bytes();
+            for (dst, src) in block.iter_mut().zip(u.iter()) {
+                *dst ^= *src;
+            }
         }
-        if let Some(hex) = t.strip_prefix("psk=") {
-            return Some(hex.to_string());
+
+        let count = (derived.len() - written).min(block.len());
+        derived[written..written + count].copy_from_slice(&block[..count]);
+        written += count;
+        if written == derived.len() {
+            break;
         }
     }
-    None
+
+    let mut hex = String::with_capacity(64);
+    for byte in derived {
+        write!(&mut hex, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    hex
 }
 
 pub fn parse_scan_results(output: &str) -> Vec<String> {
@@ -117,20 +145,6 @@ pub fn check_psk_len(psk: &str) -> Result<(), WifiError> {
     }
 }
 
-async fn wpa_passphrase(ssid: &str, psk: &str) -> Result<String, WifiError> {
-    let fut = Command::new("wpa_passphrase").arg(ssid).arg(psk).output();
-    let output = match tokio::time::timeout(CMD_TIMEOUT, fut).await {
-        Ok(res) => res?,
-        Err(_) => return Err(WifiError::Timeout),
-    };
-    if !output.status.success() {
-        return Err(WifiError::BadExit(output.status.code().unwrap_or(-1)));
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    parse_wpa_passphrase_psk(&text)
-        .ok_or(WifiError::InvalidCredential("wpa_passphrase produced no psk"))
-}
-
 pub async fn connect(ssid: &str, password: &str) -> Result<(), WifiError> {
     if ssid.is_empty() {
         return Err(WifiError::InvalidCredential("empty ssid"));
@@ -144,7 +158,7 @@ pub async fn connect(ssid: &str, password: &str) -> Result<(), WifiError> {
     if password.is_empty() {
         wpa_cli(&["set_network", &id, "key_mgmt", "NONE"]).await?;
     } else {
-        let psk_hex = wpa_passphrase(ssid, password).await?;
+        let psk_hex = derive_wpa2_psk(ssid, password);
         wpa_cli(&["set_network", &id, "psk", &psk_hex]).await?;
     }
 
@@ -258,15 +272,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_passphrase_extracts_psk_hex() {
-        let out = "network={\n\tssid=\"x\"\n\t#psk=\"secret\"\n\tpsk=0123abcd\n}\n";
-        assert_eq!(parse_wpa_passphrase_psk(out).unwrap(), "0123abcd");
+    fn derive_wpa2_psk_ieee_vector() {
+        assert_eq!(
+            derive_wpa2_psk("IEEE", "password"),
+            "f42c6fc52df0ebef9ebb4b90b38a5f90\
+             2e83fe1b135a70e23aed762e9710a12e"
+        );
     }
 
     #[test]
-    fn parse_passphrase_ignores_commented_line() {
-        let out = "\t#psk=\"plaintext\"\n";
-        assert!(parse_wpa_passphrase_psk(out).is_none());
+    fn derive_wpa2_psk_second_vector() {
+        assert_eq!(
+            derive_wpa2_psk("ThisIsASSID", "ThisIsAPassword"),
+            "0dc0d6eb90555ed6419756b9a15ec3e3\
+             209b63df707dd508d14581f8982721af"
+        );
     }
 
     #[test]
