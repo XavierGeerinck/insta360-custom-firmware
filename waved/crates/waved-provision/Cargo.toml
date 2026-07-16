@@ -9,3 +9,4 @@ waved-wifi = { path = "../waved-wifi" }
 tokio = { workspace = true, features = ["sync", "process", "time", "net", "io-util", "rt", "macros"] }
 tracing.workspace = true
 thiserror.workspace = true
+libc = "0.2"

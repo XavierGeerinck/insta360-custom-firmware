@@ -1,4 +1,5 @@
 pub mod ap;
+pub mod dhcp;
 pub mod http;
 
 use std::sync::Arc;
