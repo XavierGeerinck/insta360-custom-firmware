@@ -56,6 +56,10 @@ fn wifi_qr_payload(ssid: &str, passphrase: &str) -> String {
     )
 }
 
+fn qrcode_update_succeeded(result: lv_result_t) -> bool {
+    result == lv_result_t_LV_RESULT_OK
+}
+
 impl WifiProvisioningScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
@@ -129,7 +133,11 @@ impl WifiProvisioningScreen {
         };
 
         let payload = wifi_qr_payload(ssid, passphrase);
-        if lv_qrcode_update(self.qr, payload.as_ptr().cast(), payload.len() as u32) != 0 {
+        if !qrcode_update_succeeded(lv_qrcode_update(
+            self.qr,
+            payload.as_ptr().cast(),
+            payload.len() as u32,
+        )) {
             self.show_text_state(state);
             return;
         }
@@ -284,5 +292,11 @@ mod tests {
             wifi_qr_payload("Wave:guest;lab", "p,ass\\\"word"),
             "WIFI:T:WPA;S:Wave\\:guest\\;lab;P:p\\,ass\\\\\\\"word;H:false;;"
         );
+    }
+
+    #[test]
+    fn qrcode_result_accepts_only_lvgl_success() {
+        assert!(qrcode_update_succeeded(lv_result_t_LV_RESULT_OK));
+        assert!(!qrcode_update_succeeded(lv_result_t_LV_RESULT_INVALID));
     }
 }
