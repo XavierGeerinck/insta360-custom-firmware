@@ -1,5 +1,6 @@
 pub mod ap;
 pub mod dhcp;
+pub mod dns;
 pub mod http;
 
 use std::sync::Arc;
@@ -97,8 +98,21 @@ impl ProvisioningService {
                 return;
             }
         };
-        let (dhcp_shutdown, dhcp_rx) = watch::channel(false);
+        let dns = match dns::Server::bind() {
+            Ok(server) => server,
+            Err(error) => {
+                warn!("DNS bind failed: {error}");
+                let _ = ap.stop().await;
+                self.set(ProvisioningState::Failed {
+                    reason: "DNS start failed".into(),
+                });
+                return;
+            }
+        };
+        let (services_shutdown, dhcp_rx) = watch::channel(false);
+        let dns_rx = dhcp_rx.clone();
         let mut dhcp_task = tokio::spawn(dhcp.serve(dhcp_rx));
+        let mut dns_task = tokio::spawn(dns.serve(dns_rx));
         self.set(ProvisioningState::ApActive {
             ssid: ap.ssid.clone(),
             passphrase,
@@ -127,15 +141,30 @@ impl ProvisioningService {
                 };
                 Outcome::Failed(reason)
             },
+            result = &mut dns_task => {
+                let reason = match result {
+                    Ok(Ok(())) => "DNS server stopped".to_string(),
+                    Ok(Err(error)) => format!("DNS server failed: {error}"),
+                    Err(error) => format!("DNS task failed: {error}"),
+                };
+                Outcome::Failed(reason)
+            },
         };
 
         // 4. Tear down AP, restore STA.
-        let _ = dhcp_shutdown.send(true);
+        let _ = services_shutdown.send(true);
         if !dhcp_task.is_finished() {
             match dhcp_task.await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => warn!("DHCP shutdown failed: {error}"),
                 Err(error) => warn!("DHCP task join failed: {error}"),
+            }
+        }
+        if !dns_task.is_finished() {
+            match dns_task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!("DNS shutdown failed: {error}"),
+                Err(error) => warn!("DNS task join failed: {error}"),
             }
         }
         if let Err(error) = ap.stop().await {
