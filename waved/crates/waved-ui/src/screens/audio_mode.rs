@@ -11,10 +11,10 @@
 //!     5 check/uncheck icons spaced with OUT_RIGHT_MID +18
 //!   Done button (bg_image=btn_done_white.png) 64px at BOTTOM_MID y=-8 → CloseSettings
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::bindings::*;
 use crate::theme::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use waved_state::{AudioMode, AudioState, Command, StateBus};
 
 extern "C" {
@@ -91,12 +91,11 @@ pub(crate) fn nearest_index_to_midline(centres: &[i32], midline: i32) -> usize {
 
 fn mode_to_idx(mode: &AudioMode) -> usize {
     match mode {
-        AudioMode::Omni          => 0,
-        AudioMode::Cardioid
-        | AudioMode::Steered { .. } => 1,
+        AudioMode::Omni => 0,
+        AudioMode::Cardioid | AudioMode::Steered { .. } => 1,
         AudioMode::Supercardioid => 2,
-        AudioMode::Figure8       => 3,
-        AudioMode::Stereo        => 4,
+        AudioMode::Figure8 => 3,
+        AudioMode::Stereo => 4,
     }
 }
 
@@ -106,8 +105,8 @@ macro_rules! mode_cb {
     ($name:ident, $mode:expr) => {
         unsafe extern "C" fn $name(e: *mut lv_event_t) {
             if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-                let tx = lv_event_get_user_data(e)
-                    as *const tokio::sync::broadcast::Sender<Command>;
+                let tx =
+                    lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
                 if !tx.is_null() {
                     let _ = (*tx).send(Command::SetAudioMode($mode));
                 }
@@ -122,14 +121,12 @@ mode_cb!(mode2_cb, AudioMode::Supercardioid);
 mode_cb!(mode3_cb, AudioMode::Figure8);
 mode_cb!(mode4_cb, AudioMode::Stereo);
 
-const CARD_CBS: &[unsafe extern "C" fn(*mut lv_event_t)] = &[
-    mode0_cb, mode1_cb, mode2_cb, mode3_cb, mode4_cb,
-];
+const CARD_CBS: &[unsafe extern "C" fn(*mut lv_event_t)] =
+    &[mode0_cb, mode1_cb, mode2_cb, mode3_cb, mode4_cb];
 
 unsafe extern "C" fn done_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::CloseSettings);
         }
@@ -165,7 +162,9 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
     let mut centres = Vec::with_capacity(count);
     for i in 0..count {
         let child = lv_obj_get_child(carousel, i as i32);
-        if child.is_null() { return; }
+        if child.is_null() {
+            return;
+        }
         let cx = lv_obj_get_x(child) + lv_obj_get_width(child) / 2;
         centres.push(cx);
     }
@@ -180,20 +179,20 @@ unsafe extern "C" fn carousel_scroll_end_cb(e: *mut lv_event_t) {
 struct DoaCacheKey {
     centered: usize,
     rotation: i32,
-    active:   bool,
+    active: bool,
 }
 
 pub struct AudioModeScreen {
-    bus:          Arc<StateBus>,
-    cards:        [*mut lv_obj_t; 5],
-    radios:       [*mut lv_obj_t; 5],
-    indicators:   [*mut lv_obj_t; 5],
-    doa_arrows:   [*mut lv_obj_t; 5],
+    bus: Arc<StateBus>,
+    cards: [*mut lv_obj_t; 5],
+    radios: [*mut lv_obj_t; 5],
+    indicators: [*mut lv_obj_t; 5],
+    doa_arrows: [*mut lv_obj_t; 5],
     centered_idx: Arc<AtomicUsize>,
-    prev_mode:    Option<AudioMode>,
-    prev_doa:     Option<DoaCacheKey>,
-    doa_show:     bool,
-    doa_streak:   i32,
+    prev_mode: Option<AudioMode>,
+    prev_doa: Option<DoaCacheKey>,
+    doa_show: bool,
+    doa_streak: i32,
 }
 
 /// Engage after this many consecutive ticks where `audio.doa_active` is true.
@@ -226,15 +225,15 @@ impl AudioModeScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
             bus,
-            cards:        [std::ptr::null_mut(); 5],
-            radios:       [std::ptr::null_mut(); 5],
-            indicators:   [std::ptr::null_mut(); 5],
-            doa_arrows:   [std::ptr::null_mut(); 5],
+            cards: [std::ptr::null_mut(); 5],
+            radios: [std::ptr::null_mut(); 5],
+            indicators: [std::ptr::null_mut(); 5],
+            doa_arrows: [std::ptr::null_mut(); 5],
             centered_idx: Arc::new(AtomicUsize::new(0)),
-            prev_mode:    None,
-            prev_doa:     None,
-            doa_show:     false,
-            doa_streak:   0,
+            prev_mode: None,
+            prev_doa: None,
+            doa_show: false,
+            doa_streak: 0,
         }
     }
 
@@ -278,10 +277,7 @@ impl AudioModeScreen {
             // reflects the old card — the DOA arrow stays on it until
             // SCROLL_END fires and the next tick rebuilds the cache key.
             if self.prev_mode.is_some() && !self.cards[selected_idx].is_null() {
-                lv_obj_scroll_to_view(
-                    self.cards[selected_idx],
-                    lv_anim_enable_t_LV_ANIM_ON,
-                );
+                lv_obj_scroll_to_view(self.cards[selected_idx], lv_anim_enable_t_LV_ANIM_ON);
             }
 
             self.prev_mode = Some(audio.mode.clone());
@@ -298,12 +294,18 @@ impl AudioModeScreen {
 
         let centered = self.centered_idx.load(Ordering::Relaxed);
         let rotation = az_to_lvgl_rotation(audio.doa_horizontal);
-        let key = DoaCacheKey { centered, rotation, active: self.doa_show };
+        let key = DoaCacheKey {
+            centered,
+            rotation,
+            active: self.doa_show,
+        };
 
         if self.prev_doa.as_ref() != Some(&key) {
             for i in 0..5 {
                 let arrow = self.doa_arrows[i];
-                if arrow.is_null() { continue; }
+                if arrow.is_null() {
+                    continue;
+                }
                 let show = i == centered && self.doa_show;
                 if show {
                     lv_image_set_rotation(arrow, rotation);
@@ -324,13 +326,13 @@ impl super::Screen for AudioModeScreen {
         unsafe {
             // Reset state so update_state triggers on first tick.
             self.prev_mode = None;
-            self.prev_doa  = None;
-            self.doa_show   = false;
+            self.prev_doa = None;
+            self.doa_show = false;
             self.doa_streak = 0;
-            self.cards        = [std::ptr::null_mut(); 5];
-            self.radios       = [std::ptr::null_mut(); 5];
-            self.indicators   = [std::ptr::null_mut(); 5];
-            self.doa_arrows   = [std::ptr::null_mut(); 5];
+            self.cards = [std::ptr::null_mut(); 5];
+            self.radios = [std::ptr::null_mut(); 5];
+            self.indicators = [std::ptr::null_mut(); 5];
+            self.doa_arrows = [std::ptr::null_mut(); 5];
 
             let screen = lv_obj_create(std::ptr::null_mut());
             lv_obj_set_size(screen, 400, 304);
@@ -375,7 +377,7 @@ impl super::Screen for AudioModeScreen {
 
             // ── 5 mode cards ─────────────────────────────────────────────────
             let current_mode = self.bus.audio.borrow().mode.clone();
-            let initial_idx  = mode_to_idx(&current_mode);
+            let initial_idx = mode_to_idx(&current_mode);
             self.centered_idx.store(initial_idx, Ordering::Relaxed);
 
             for i in 0..5usize {
@@ -402,8 +404,10 @@ impl super::Screen for AudioModeScreen {
                 let radio = lv_image_create(card);
                 lv_obj_set_size(radio, 36, 36);
                 lv_obj_align(radio, lv_align_t_LV_ALIGN_TOP_RIGHT, 0, 0);
-                lv_image_set_src(radio,
-                    b"A:/etc/pspapp/lvgl/icon/btn/radio_unchecked.png\0".as_ptr() as *const _);
+                lv_image_set_src(
+                    radio,
+                    b"A:/etc/pspapp/lvgl/icon/btn/radio_unchecked.png\0".as_ptr() as *const _,
+                );
                 lv_obj_remove_flag(radio, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
                 self.radios[i] = radio;
 
@@ -435,22 +439,22 @@ impl super::Screen for AudioModeScreen {
                 lv_obj_set_width(lbl, 142);
                 let s = std::ffi::CString::new(LABELS[i]).unwrap();
                 lv_label_set_text(lbl, s.as_ptr());
-                lv_obj_align_to(lbl, mode_img,
-                    lv_align_t_LV_ALIGN_OUT_RIGHT_TOP, 10, 10);
+                lv_obj_align_to(lbl, mode_img, lv_align_t_LV_ALIGN_OUT_RIGHT_TOP, 10, 10);
                 lv_obj_remove_flag(lbl, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
 
                 // Card click → SetAudioMode.
                 let tx = Box::into_raw(Box::new(self.bus.commands.clone()));
-                lv_obj_add_event_cb(card, Some(CARD_CBS[i]),
-                    lv_event_code_t_LV_EVENT_CLICKED, tx as *mut _);
+                lv_obj_add_event_cb(
+                    card,
+                    Some(CARD_CBS[i]),
+                    lv_event_code_t_LV_EVENT_CLICKED,
+                    tx as *mut _,
+                );
             }
 
             // Scroll carousel to show the initially-selected card.
             if !self.cards[initial_idx].is_null() {
-                lv_obj_scroll_to_view(
-                    self.cards[initial_idx],
-                    lv_anim_enable_t_LV_ANIM_OFF,
-                );
+                lv_obj_scroll_to_view(self.cards[initial_idx], lv_anim_enable_t_LV_ANIM_OFF);
             }
 
             // ── Indicator strip (160×24, BOTTOM_MID y=-75) ───────────────────
@@ -467,8 +471,7 @@ impl super::Screen for AudioModeScreen {
 
             // Icon[0]: align LEFT_MID; icons[1-4]: OUT_RIGHT_MID +18 from previous.
             let icon0 = lv_image_create(indicator);
-            lv_image_set_src(icon0,
-                INDICATOR_UNCHECK[0].as_ptr() as *const _);
+            lv_image_set_src(icon0, INDICATOR_UNCHECK[0].as_ptr() as *const _);
             lv_obj_align(icon0, lv_align_t_LV_ALIGN_LEFT_MID, 0, 0);
             self.indicators[0] = icon0;
 
@@ -476,8 +479,7 @@ impl super::Screen for AudioModeScreen {
             for i in 1..5usize {
                 let icon = lv_image_create(indicator);
                 lv_image_set_src(icon, INDICATOR_UNCHECK[i].as_ptr() as *const _);
-                lv_obj_align_to(icon, prev_icon,
-                    lv_align_t_LV_ALIGN_OUT_RIGHT_MID, 18, 0);
+                lv_obj_align_to(icon, prev_icon, lv_align_t_LV_ALIGN_OUT_RIGHT_MID, 18, 0);
                 self.indicators[i] = icon;
                 prev_icon = icon;
             }
@@ -501,8 +503,12 @@ impl super::Screen for AudioModeScreen {
             lv_obj_remove_flag(btn_done, lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_add_flag(btn_done, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
             let done_tx = Box::into_raw(Box::new(self.bus.commands.clone()));
-            lv_obj_add_event_cb(btn_done, Some(done_btn_cb),
-                lv_event_code_t_LV_EVENT_CLICKED, done_tx as *mut _);
+            lv_obj_add_event_cb(
+                btn_done,
+                Some(done_btn_cb),
+                lv_event_code_t_LV_EVENT_CLICKED,
+                done_tx as *mut _,
+            );
 
             screen
         }
@@ -651,12 +657,16 @@ mod tests {
         // Simulate: 5 ticks silent, 2 ticks burst, 5 ticks silent again.
         let mut streak = 0;
         let mut show = false;
-        for _ in 0..5 { update_hysteresis(&mut streak, &mut show, false); }
+        for _ in 0..5 {
+            update_hysteresis(&mut streak, &mut show, false);
+        }
         assert!(!show);
         update_hysteresis(&mut streak, &mut show, true);
         update_hysteresis(&mut streak, &mut show, true);
         assert!(!show, "2-tick burst is below ENGAGE=3 threshold");
-        for _ in 0..5 { update_hysteresis(&mut streak, &mut show, false); }
+        for _ in 0..5 {
+            update_hysteresis(&mut streak, &mut show, false);
+        }
         assert!(!show);
     }
 }

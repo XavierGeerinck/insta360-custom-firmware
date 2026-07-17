@@ -30,8 +30,8 @@ pub fn play(path: &str) {
 
 // ── Stock pspapp asset paths ──────────────────────────────────────────────────
 
-pub const SFX_MIC_MUTE:   &str = "/etc/pspapp/micmute.wav";
+pub const SFX_MIC_MUTE: &str = "/etc/pspapp/micmute.wav";
 pub const SFX_MIC_UNMUTE: &str = "/etc/pspapp/micunmute.wav";
-pub const SFX_SPK_VOL:    &str = "/etc/pspapp/speakervol.wav";
-pub const SFX_AIRECORD:   &str = "/etc/pspapp/airecord.wav";
-pub const SFX_SHUTDOWN:   &str = "/etc/pspapp/shutdown.wav";
+pub const SFX_SPK_VOL: &str = "/etc/pspapp/speakervol.wav";
+pub const SFX_AIRECORD: &str = "/etc/pspapp/airecord.wav";
+pub const SFX_SHUTDOWN: &str = "/etc/pspapp/shutdown.wav";

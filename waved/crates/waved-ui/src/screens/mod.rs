@@ -16,7 +16,9 @@ use crate::bindings::lv_obj_t;
 pub trait Screen {
     fn create(&mut self) -> *mut lv_obj_t;
     fn destroy(&mut self, root: *mut lv_obj_t) {
-        unsafe { crate::bindings::lv_obj_delete(root); }
+        unsafe {
+            crate::bindings::lv_obj_delete(root);
+        }
     }
     /// Called each LVGL tick to refresh state-driven labels/values.
     fn update(&mut self, _root: *mut lv_obj_t) {}

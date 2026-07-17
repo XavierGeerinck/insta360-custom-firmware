@@ -26,7 +26,11 @@ impl Toast {
         lv_label_set_text(lbl, c"".as_ptr());
         lv_obj_center(lbl);
 
-        Self { obj, lbl, hide_at_ms: None }
+        Self {
+            obj,
+            lbl,
+            hide_at_ms: None,
+        }
     }
 
     pub unsafe fn show(&mut self, msg: &str, duration_ms: u64) {

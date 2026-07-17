@@ -34,8 +34,8 @@ impl TouchInput {
     pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
         #[cfg(not(feature = "simulate"))]
         {
-            use std::os::unix::io::IntoRawFd;
             use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::io::IntoRawFd;
             // event1 = ILITEK_TDDI touch controller
             // event0 = vad_keypad (VAD microphone button, not touch)
             let file = std::fs::OpenOptions::new()
@@ -43,7 +43,11 @@ impl TouchInput {
                 .custom_flags(libc::O_NONBLOCK)
                 .open("/dev/input/event1")?;
             let fd = file.into_raw_fd();
-            info!("[touch] opened /dev/input/event1 fd={} sizeof(InputEvent)={}", fd, std::mem::size_of::<InputEvent>());
+            info!(
+                "[touch] opened /dev/input/event1 fd={} sizeof(InputEvent)={}",
+                fd,
+                std::mem::size_of::<InputEvent>()
+            );
 
             // Log the device name from the kernel to confirm it's ILITEK_TDDI.
             unsafe {
@@ -56,7 +60,10 @@ impl TouchInput {
                     let dev_name = std::str::from_utf8(&name[..end]).unwrap_or("?");
                     info!("[touch] EVIOCGNAME = {:?}", dev_name);
                 } else {
-                    info!("[touch] EVIOCGNAME failed: {}", std::io::Error::last_os_error());
+                    info!(
+                        "[touch] EVIOCGNAME failed: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
 
                 // EVIOCGRAB grants exclusive access so no other process steals events.
@@ -72,12 +79,21 @@ impl TouchInput {
                 }
             }
 
-            return Ok(Self { fd, x: 0, y: 0, pressed: false });
+            return Ok(Self {
+                fd,
+                x: 0,
+                y: 0,
+                pressed: false,
+            });
         }
         #[cfg(feature = "simulate")]
         {
             info!("[touch] SIMULATE MODE — no real touch input");
-            Ok(Self { x: 0, y: 0, pressed: false })
+            Ok(Self {
+                x: 0,
+                y: 0,
+                pressed: false,
+            })
         }
     }
 
@@ -89,7 +105,9 @@ impl TouchInput {
             let sz = std::mem::size_of::<InputEvent>();
             loop {
                 let n = libc::read(self.fd, &mut ev as *mut _ as *mut libc::c_void, sz);
-                if n < sz as isize { break; }
+                if n < sz as isize {
+                    break;
+                }
                 match ev.r#type {
                     EV_KEY if ev.code == BTN_TOUCH => {
                         self.pressed = ev.value != 0;
@@ -115,6 +133,8 @@ impl TouchInput {
 impl Drop for TouchInput {
     fn drop(&mut self) {
         #[cfg(not(feature = "simulate"))]
-        unsafe { libc::close(self.fd); }
+        unsafe {
+            libc::close(self.fd);
+        }
     }
 }

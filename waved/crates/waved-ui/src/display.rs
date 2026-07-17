@@ -44,10 +44,7 @@ impl FramebufferDisplay {
                 .open("/dev/fb0")?;
             let fd = std::os::unix::io::IntoRawFd::into_raw_fd(file);
             // Turn on backlight
-            let _ = std::fs::write(
-                "/sys/class/leds/lcd-backlight/brightness",
-                "255",
-            );
+            let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", "255");
             return Ok(Self { fd, buf1, buf2 });
         }
 
@@ -59,11 +56,7 @@ impl FramebufferDisplay {
     ///
     /// # Safety
     /// `color_p` must point to at least `area.width * area.height` RGB565 pixels.
-    pub unsafe fn flush(
-        &self,
-        area: &lv_area_t,
-        color_p: *const u8,
-    ) {
+    pub unsafe fn flush(&self, area: &lv_area_t, color_p: *const u8) {
         #[cfg(not(feature = "simulate"))]
         {
             let x1 = area.x1 as usize;

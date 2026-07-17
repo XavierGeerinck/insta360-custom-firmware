@@ -12,10 +12,10 @@
 //! Our LV_ALIGN_CENTER offsets from screen centre (200, 152):
 //!   Vol: (-142, +8)   Mic: (+142, +8)   Rec: (0, +46)
 
-use std::ffi::CString;
-use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
 use waved_state::{AudioState, BluetoothState, Command, StateBus, WifiState};
 
 // ── Button event callbacks ────────────────────────────────────────────────────
@@ -23,8 +23,7 @@ use waved_state::{AudioState, BluetoothState, Command, StateBus, WifiState};
 /// Mic button clicked → toggle mic mute.
 unsafe extern "C" fn mic_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::ToggleMicMute);
         }
@@ -34,8 +33,7 @@ unsafe extern "C" fn mic_btn_cb(e: *mut lv_event_t) {
 /// Record button clicked → start recording.
 unsafe extern "C" fn rec_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::StartRecording);
         }
@@ -45,8 +43,7 @@ unsafe extern "C" fn rec_btn_cb(e: *mut lv_event_t) {
 /// Vol button → open Speaker Volume screen (pspapp page 0xd).
 unsafe extern "C" fn vol_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::OpenVolume);
         }
@@ -56,8 +53,7 @@ unsafe extern "C" fn vol_btn_cb(e: *mut lv_event_t) {
 /// Bottom "More" button → navigate to Settings screen (page 0xb equivalent).
 unsafe extern "C" fn more_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::OpenSettings);
         }
@@ -67,8 +63,7 @@ unsafe extern "C" fn more_btn_cb(e: *mut lv_event_t) {
 /// Noise Reduction shortcut → navigate to NR screen (SP#4).
 unsafe extern "C" fn nr_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::OpenNoiseReduction);
         }
@@ -83,24 +78,28 @@ extern "C" {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn connection_text(bt: bool, wifi: bool) -> &'static str {
-    if bt        { "BT Connected"   }
-    else if wifi { "WiFi Connected" }
-    else         { "Not Connected"  }
+    if bt {
+        "BT Connected"
+    } else if wifi {
+        "WiFi Connected"
+    } else {
+        "Not Connected"
+    }
 }
 
 // ── Struct ────────────────────────────────────────────────────────────────────
 
 pub struct HomeScreen {
-    bus:        Arc<StateBus>,
+    bus: Arc<StateBus>,
     /// Small connection status label below the status bar.
     lbl_status: *mut lv_obj_t,
     /// Mute label inside the mic button — "Mute" / "MUTED" in red.
-    lbl_mute:   *mut lv_obj_t,
+    lbl_mute: *mut lv_obj_t,
     /// Mic icon inside the mic button — swapped when muted.
-    img_mic:    *mut lv_obj_t,
+    img_mic: *mut lv_obj_t,
     // Change detection
-    prev_bt:    bool,
-    prev_wifi:  bool,
+    prev_bt: bool,
+    prev_wifi: bool,
     prev_muted: bool,
 }
 
@@ -109,10 +108,10 @@ impl HomeScreen {
         Self {
             bus,
             lbl_status: std::ptr::null_mut(),
-            lbl_mute:   std::ptr::null_mut(),
-            img_mic:    std::ptr::null_mut(),
-            prev_bt:    false,
-            prev_wifi:  false,
+            lbl_mute: std::ptr::null_mut(),
+            img_mic: std::ptr::null_mut(),
+            prev_bt: false,
+            prev_wifi: false,
             prev_muted: false,
         }
     }
@@ -121,21 +120,21 @@ impl HomeScreen {
     pub unsafe fn update_state(
         &mut self,
         audio: &AudioState,
-        bt:    &BluetoothState,
-        wifi:  &WifiState,
+        bt: &BluetoothState,
+        wifi: &WifiState,
     ) {
         // Connection status label
         if bt.connected != self.prev_bt || wifi.connected != self.prev_wifi {
-            let text  = connection_text(bt.connected, wifi.connected);
-            let s     = CString::new(text).unwrap();
+            let text = connection_text(bt.connected, wifi.connected);
+            let s = CString::new(text).unwrap();
             lv_label_set_text(self.lbl_status, s.as_ptr());
             let color = if bt.connected || wifi.connected {
-                rgb(0x00c85a)       // green
+                rgb(0x00c85a) // green
             } else {
                 rgb(CLR_TEXT_DIM)
             };
             lv_obj_set_style_text_color(self.lbl_status, color, 0);
-            self.prev_bt   = bt.connected;
+            self.prev_bt = bt.connected;
             self.prev_wifi = wifi.connected;
         }
 

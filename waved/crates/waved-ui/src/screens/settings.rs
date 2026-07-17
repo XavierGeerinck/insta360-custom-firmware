@@ -25,10 +25,10 @@
 //!   Pressed-state overlay child: 120×120 white bg_opa=25, hidden by default.
 //!   Arrow child: arrow_down.png at TOP_MID y=16.
 
-use std::ffi::CString;
-use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
 use waved_state::{Command, StateBus};
 
 extern "C" {
@@ -42,34 +42,38 @@ const SEL_PRESSED: u32 = 32;
 
 unsafe extern "C" fn back_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
-        if !tx.is_null() { let _ = (*tx).send(Command::CloseSettings); }
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::CloseSettings);
+        }
     }
 }
 
 unsafe extern "C" fn audio_mode_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
-        if !tx.is_null() { let _ = (*tx).send(Command::OpenAudioMode); }
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::OpenAudioMode);
+        }
     }
 }
 
 unsafe extern "C" fn settings_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
-        if !tx.is_null() { let _ = (*tx).send(Command::OpenSystemSettings); }
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::OpenSystemSettings);
+        }
     }
 }
 
 // Files is not yet implemented — emit a bookmark toast as tap confirmation.
 unsafe extern "C" fn noop_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
-        if !tx.is_null() { let _ = (*tx).send(Command::AddBookmark); }
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
+        if !tx.is_null() {
+            let _ = (*tx).send(Command::AddBookmark);
+        }
     }
 }
 
@@ -80,7 +84,9 @@ pub struct SettingsScreen {
 }
 
 impl SettingsScreen {
-    pub fn new(bus: Arc<StateBus>) -> Self { Self { bus } }
+    pub fn new(bus: Arc<StateBus>) -> Self {
+        Self { bus }
+    }
 }
 
 /// Create a 116×116 icon+text circular button, matching pspapp
@@ -89,7 +95,8 @@ unsafe fn make_icon_txt_btn(
     parent: *mut lv_obj_t,
     icon_path: &[u8],
     label_text: &str,
-    x: i32, y: i32,
+    x: i32,
+    y: i32,
     cb: unsafe extern "C" fn(*mut lv_event_t),
     tx: *mut ::std::os::raw::c_void,
 ) -> *mut lv_obj_t {
@@ -99,8 +106,8 @@ unsafe fn make_icon_txt_btn(
     lv_obj_set_style_radius(btn, 116, 0);
     lv_obj_set_style_border_width(btn, 0, 0);
     lv_obj_set_style_bg_color(btn, rgb(CLR_WHITE), 0);
-    lv_obj_set_style_bg_opa(btn, 44, 0);               // 0x2c base
-    lv_obj_set_style_bg_opa(btn, 95,  SEL_PRESSED);    // brighter on press
+    lv_obj_set_style_bg_opa(btn, 44, 0); // 0x2c base
+    lv_obj_set_style_bg_opa(btn, 95, SEL_PRESSED); // brighter on press
     lv_obj_set_style_pad_top(btn, 0, 0);
     lv_obj_set_style_pad_bottom(btn, 0, 0);
     lv_obj_set_style_pad_left(btn, 0, 0);
@@ -132,10 +139,7 @@ unsafe fn make_icon_txt_btn(
 
 /// Create a 120×120 transparent circular back button with arrow_down icon,
 /// matching pspapp `ui_icon_circule_button_ctrl_create` + size 0x78.
-unsafe fn make_back_btn(
-    parent: *mut lv_obj_t,
-    tx: *mut ::std::os::raw::c_void,
-) -> *mut lv_obj_t {
+unsafe fn make_back_btn(parent: *mut lv_obj_t, tx: *mut ::std::os::raw::c_void) -> *mut lv_obj_t {
     let btn = lv_button_create(parent);
     lv_obj_set_size(btn, 120, 120);
     lv_obj_align(btn, lv_align_t_LV_ALIGN_TOP_MID, 0, 264);
@@ -153,13 +157,14 @@ unsafe fn make_back_btn(
     lv_obj_remove_flag(btn, lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
 
     let arrow = lv_image_create(btn);
-    lv_image_set_src(arrow,
-        b"A:/etc/pspapp/lvgl/icon/btn/arrow_down.png\0".as_ptr() as *const _);
+    lv_image_set_src(
+        arrow,
+        b"A:/etc/pspapp/lvgl/icon/btn/arrow_down.png\0".as_ptr() as *const _,
+    );
     lv_obj_align(arrow, lv_align_t_LV_ALIGN_TOP_MID, 0, 16);
     lv_obj_remove_flag(arrow, lv_obj_flag_t_LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_add_event_cb(btn, Some(back_btn_cb),
-        lv_event_code_t_LV_EVENT_CLICKED, tx);
+    lv_obj_add_event_cb(btn, Some(back_btn_cb), lv_event_code_t_LV_EVENT_CLICKED, tx);
     btn
 }
 
@@ -189,7 +194,8 @@ impl super::Screen for SettingsScreen {
                 screen,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_folder.png\0",
                 "Files",
-                10, 68,
+                10,
+                68,
                 noop_btn_cb,
                 files_tx as *mut _,
             );
@@ -200,7 +206,8 @@ impl super::Screen for SettingsScreen {
                 screen,
                 b"A:/etc/pspapp/lvgl/icon/beamforming/btn_audio_mode.png\0",
                 "Audio Mode",
-                142, 128,
+                142,
+                128,
                 audio_mode_btn_cb,
                 audio_tx as *mut _,
             );
@@ -211,7 +218,8 @@ impl super::Screen for SettingsScreen {
                 screen,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_settings.png\0",
                 "Settings",
-                274, 68,
+                274,
+                68,
                 settings_btn_cb,
                 sys_tx as *mut _,
             );

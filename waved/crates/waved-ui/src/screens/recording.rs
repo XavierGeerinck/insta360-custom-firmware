@@ -256,23 +256,26 @@ impl RecordingScreen {
             let band_idx = (i * waved_state::FREQ_BAND_COUNT) / WAVE_BARS;
             let band_idx = band_idx.min(waved_state::FREQ_BAND_COUNT - 1);
             let out_band_norm = level_to_height_norm(outgoing_band[band_idx], outgoing_floor);
-            let in_band_norm  = level_to_height_norm(incoming_band[band_idx], incoming_floor);
+            let in_band_norm = level_to_height_norm(incoming_band[band_idx], incoming_floor);
 
             let w = WAVE_BAR_WEIGHTS[i];
             // Per-bar per-push jitter ∈ [1−JITTER, 1]. Only applied when
             // the channel is non-zero — silent bars must stay flat.
             let out_jit = if out_band_norm > 0.0 {
                 1.0 - WAVE_JITTER + WAVE_JITTER * jitter_unit(i, t)
-            } else { 1.0 };
+            } else {
+                1.0
+            };
             let in_jit = if in_band_norm > 0.0 {
                 1.0 - WAVE_JITTER + WAVE_JITTER * jitter_unit(i, t.wrapping_add(0xA5A5))
-            } else { 1.0 };
+            } else {
+                1.0
+            };
             let out_target = (out_band_norm * w * out_jit).clamp(0.0, 1.0);
-            let in_target  = (in_band_norm * w * in_jit).clamp(0.0, 1.0);
+            let in_target = (in_band_norm * w * in_jit).clamp(0.0, 1.0);
             self.outgoing_history[i] =
                 self.outgoing_history[i] * alpha + out_target * (1.0 - alpha);
-            self.incoming_history[i] =
-                self.incoming_history[i] * alpha + in_target * (1.0 - alpha);
+            self.incoming_history[i] = self.incoming_history[i] * alpha + in_target * (1.0 - alpha);
         }
     }
 
@@ -317,7 +320,11 @@ impl RecordingScreen {
 
         // Track per-frequency-band peaks since the last push.
         for b in 0..waved_state::FREQ_BAND_COUNT {
-            let out_b = if audio.mic_muted { 0.0 } else { audio.vu_freq_bands[b] };
+            let out_b = if audio.mic_muted {
+                0.0
+            } else {
+                audio.vu_freq_bands[b]
+            };
             if out_b > self.outgoing_peak_band[b] {
                 self.outgoing_peak_band[b] = out_b;
             }
@@ -347,7 +354,12 @@ impl RecordingScreen {
         if should_push {
             let out_band = self.outgoing_peak_band;
             let in_band = self.incoming_peak_band;
-            self.step_heights(&out_band, &in_band, self.outgoing_floor, self.incoming_floor);
+            self.step_heights(
+                &out_band,
+                &in_band,
+                self.outgoing_floor,
+                self.incoming_floor,
+            );
             self.outgoing_peak_band = [0.0; waved_state::FREQ_BAND_COUNT];
             self.incoming_peak_band = [0.0; waved_state::FREQ_BAND_COUNT];
             self.last_push = Some(now);
@@ -570,12 +582,11 @@ mod tests {
         for _ in 0..30 {
             s.step_heights(&loud, &silence, floor, floor);
         }
-        let max_h = s
-            .outgoing_history
-            .iter()
-            .cloned()
-            .fold(0.0f32, f32::max);
-        assert!(max_h > 0.7, "expected at least one bar to saturate, max={max_h}");
+        let max_h = s.outgoing_history.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            max_h > 0.7,
+            "expected at least one bar to saturate, max={max_h}"
+        );
     }
 
     #[test]
@@ -610,7 +621,10 @@ mod tests {
             s.step_heights(&loud, &silence, floor, floor);
         }
         let any_in_active = s.incoming_history.iter().any(|h| *h > 0.05);
-        assert!(!any_in_active, "incoming should stay quiet when only outgoing is driven");
+        assert!(
+            !any_in_active,
+            "incoming should stay quiet when only outgoing is driven"
+        );
     }
 
     #[test]

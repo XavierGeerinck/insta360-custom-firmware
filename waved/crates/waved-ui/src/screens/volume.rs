@@ -21,10 +21,10 @@
 //! `bar_vol_{10..100}.png` stepped by 10. Label: "Off" at 0/muted, "Max" at 100,
 //! else numeric.
 
-use std::ffi::CString;
-use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
 use waved_state::{AudioState, Command, StateBus};
 
 extern "C" {
@@ -40,31 +40,41 @@ fn bar_asset(vol: u16, muted: bool) -> &'static [u8] {
         return b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0";
     }
     match vol {
-        1..=10   => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_10.png\0",
-        11..=20  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_20.png\0",
-        21..=30  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_30.png\0",
-        31..=40  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_40.png\0",
-        41..=50  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_50.png\0",
-        51..=60  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_60.png\0",
-        61..=70  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_70.png\0",
-        71..=80  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_80.png\0",
-        81..=90  => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_90.png\0",
-        _        => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_100.png\0",
+        1..=10 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_10.png\0",
+        11..=20 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_20.png\0",
+        21..=30 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_30.png\0",
+        31..=40 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_40.png\0",
+        41..=50 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_50.png\0",
+        51..=60 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_60.png\0",
+        61..=70 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_70.png\0",
+        71..=80 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_80.png\0",
+        81..=90 => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_90.png\0",
+        _ => b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_100.png\0",
     }
 }
 
 /// Volume-down step matching pspapp: round down to nearest 10, below 1 mute.
 /// Returns (new_vol, should_mute).
 pub fn step_down(vol: u16) -> (u16, bool) {
-    if vol == 0 { return (0, true); }
+    if vol == 0 {
+        return (0, true);
+    }
     let new = (vol.saturating_sub(10) / 10) * 10;
-    if new < 1 { (0, true) } else { (new, false) }
+    if new < 1 {
+        (0, true)
+    } else {
+        (new, false)
+    }
 }
 
 /// Volume-up step: round up to nearest 10, clamp to 100.
 pub fn step_up(vol: u16) -> u16 {
     let new = ((vol + 10) / 10) * 10;
-    if new > 100 { 100 } else { new }
+    if new > 100 {
+        100
+    } else {
+        new
+    }
 }
 
 // ── Event callbacks ─────────────────────────────────────────────────────────
@@ -84,9 +94,13 @@ unsafe extern "C" fn back_cb(e: *mut lv_event_t) {
 }
 
 unsafe extern "C" fn down_cb(e: *mut lv_event_t) {
-    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED { return; }
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
     let data = lv_event_get_user_data(e) as *const BusData;
-    if data.is_null() { return; }
+    if data.is_null() {
+        return;
+    }
     let bus = &(&*data).0;
     let vol = bus.audio.borrow().speaker_volume;
     let (new_vol, mute) = step_down(vol);
@@ -97,9 +111,13 @@ unsafe extern "C" fn down_cb(e: *mut lv_event_t) {
 }
 
 unsafe extern "C" fn up_cb(e: *mut lv_event_t) {
-    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED { return; }
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
     let data = lv_event_get_user_data(e) as *const BusData;
-    if data.is_null() { return; }
+    if data.is_null() {
+        return;
+    }
     let bus = &(&*data).0;
     let vol = bus.audio.borrow().speaker_volume;
     let new_vol = step_up(vol);
@@ -110,9 +128,13 @@ unsafe extern "C" fn up_cb(e: *mut lv_event_t) {
 }
 
 unsafe extern "C" fn mute_cb(e: *mut lv_event_t) {
-    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED { return; }
+    if lv_event_get_code(e) != lv_event_code_t_LV_EVENT_CLICKED {
+        return;
+    }
     let data = lv_event_get_user_data(e) as *const BusData;
-    if data.is_null() { return; }
+    if data.is_null() {
+        return;
+    }
     let bus = &(&*data).0;
     let (muted, vol) = {
         let a = bus.audio.borrow();
@@ -131,11 +153,11 @@ unsafe extern "C" fn mute_cb(e: *mut lv_event_t) {
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 pub struct VolumeScreen {
-    bus:       Arc<StateBus>,
-    img_bar:   *mut lv_obj_t,
-    lbl_vol:   *mut lv_obj_t,
-    btn_mute:  *mut lv_obj_t,
-    prev_vol:  Option<u16>,
+    bus: Arc<StateBus>,
+    img_bar: *mut lv_obj_t,
+    lbl_vol: *mut lv_obj_t,
+    btn_mute: *mut lv_obj_t,
+    prev_vol: Option<u16>,
     prev_mute: Option<bool>,
 }
 
@@ -143,10 +165,10 @@ impl VolumeScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
             bus,
-            img_bar:   std::ptr::null_mut(),
-            lbl_vol:   std::ptr::null_mut(),
-            btn_mute:  std::ptr::null_mut(),
-            prev_vol:  None,
+            img_bar: std::ptr::null_mut(),
+            lbl_vol: std::ptr::null_mut(),
+            btn_mute: std::ptr::null_mut(),
+            prev_vol: None,
             prev_mute: None,
         }
     }
@@ -155,7 +177,9 @@ impl VolumeScreen {
     pub unsafe fn update_state(&mut self, audio: &AudioState) {
         let vol = audio.speaker_volume;
         let muted = audio.speaker_muted;
-        if self.prev_vol == Some(vol) && self.prev_mute == Some(muted) { return; }
+        if self.prev_vol == Some(vol) && self.prev_mute == Some(muted) {
+            return;
+        }
 
         if !self.img_bar.is_null() {
             lv_image_set_src(self.img_bar, bar_asset(vol, muted).as_ptr() as *const _);
@@ -182,7 +206,7 @@ impl VolumeScreen {
             lv_obj_set_style_bg_image_src(self.btn_mute, src.as_ptr() as *const _, 0);
         }
 
-        self.prev_vol  = Some(vol);
+        self.prev_vol = Some(vol);
         self.prev_mute = Some(muted);
     }
 }
@@ -191,7 +215,7 @@ impl super::Screen for VolumeScreen {
     fn create(&mut self) -> *mut lv_obj_t {
         unsafe {
             // Reset memoization so first tick refreshes labels/images.
-            self.prev_vol  = None;
+            self.prev_vol = None;
             self.prev_mute = None;
 
             // Root — solid black, matches pspapp style 0x1b on the page container.
@@ -219,10 +243,11 @@ impl super::Screen for VolumeScreen {
             // Volume bar — 140×36 below title +8 (centered on title).
             let img_bar = lv_image_create(screen);
             lv_obj_set_size(img_bar, 140, 36);
-            lv_image_set_src(img_bar,
-                b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0".as_ptr() as *const _);
-            lv_obj_align_to(img_bar, title,
-                lv_align_t_LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
+            lv_image_set_src(
+                img_bar,
+                b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0".as_ptr() as *const _,
+            );
+            lv_obj_align_to(img_bar, title, lv_align_t_LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
             self.img_bar = img_bar;
 
             // Volume label — 200×36 below bar.
@@ -232,14 +257,17 @@ impl super::Screen for VolumeScreen {
             lv_obj_set_style_text_color(lbl_vol, rgb(CLR_WHITE), 0);
             lv_obj_set_style_text_font(lbl_vol, &lv_font_montserrat_20, 0);
             lv_obj_set_style_text_align(lbl_vol, lv_text_align_t_LV_TEXT_ALIGN_CENTER, 0);
-            lv_obj_align_to(lbl_vol, img_bar,
-                lv_align_t_LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
+            lv_obj_align_to(lbl_vol, img_bar, lv_align_t_LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
             self.lbl_vol = lbl_vol;
 
             // Back button — 76×76 at (20, 121), bg_img=btn_goback.png.
             let back_data = Box::into_raw(Box::new(BusData(Arc::clone(&self.bus))));
             let btn_back = make_icon_button(
-                screen, 76, 76, 20, 121,
+                screen,
+                76,
+                76,
+                20,
+                121,
                 b"A:/etc/pspapp/lvgl/icon/btn/btn_goback.png\0",
                 back_cb,
                 back_data as *mut _,
@@ -249,7 +277,11 @@ impl super::Screen for VolumeScreen {
             // Down button — 90×90 at (102, 186), bg_img=spk_down.png.
             let down_data = Box::into_raw(Box::new(BusData(Arc::clone(&self.bus))));
             let _btn_down = make_icon_button(
-                screen, 90, 90, 102, 186,
+                screen,
+                90,
+                90,
+                102,
+                186,
                 b"A:/etc/pspapp/lvgl/icon/volume/spk_down.png\0",
                 down_cb,
                 down_data as *mut _,
@@ -258,7 +290,11 @@ impl super::Screen for VolumeScreen {
             // Up button — 90×90 at (208, 186), bg_img=spk_up.png.
             let up_data = Box::into_raw(Box::new(BusData(Arc::clone(&self.bus))));
             let _btn_up = make_icon_button(
-                screen, 90, 90, 208, 186,
+                screen,
+                90,
+                90,
+                208,
+                186,
                 b"A:/etc/pspapp/lvgl/icon/volume/spk_up.png\0",
                 up_cb,
                 up_data as *mut _,
@@ -267,7 +303,11 @@ impl super::Screen for VolumeScreen {
             // Mute toggle — 76×76 at (304, 121). Initial icon set by update_state.
             let mute_data = Box::into_raw(Box::new(BusData(Arc::clone(&self.bus))));
             let btn_mute = make_icon_button(
-                screen, 76, 76, 304, 121,
+                screen,
+                76,
+                76,
+                304,
+                121,
                 b"A:/etc/pspapp/lvgl/icon/volume/spk_on.png\0",
                 mute_cb,
                 mute_data as *mut _,
@@ -283,7 +323,10 @@ impl super::Screen for VolumeScreen {
 /// padding/border, transparent bg (shows only the icon PNG).
 unsafe fn make_icon_button(
     parent: *mut lv_obj_t,
-    w: i32, h: i32, x: i32, y: i32,
+    w: i32,
+    h: i32,
+    x: i32,
+    y: i32,
     icon_path: &[u8],
     cb: unsafe extern "C" fn(*mut lv_event_t),
     user_data: *mut ::std::os::raw::c_void,
@@ -328,14 +371,29 @@ mod tests {
 
     #[test]
     fn bar_asset_muted_is_zero() {
-        assert_eq!(bar_asset(50, true), b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0");
+        assert_eq!(
+            bar_asset(50, true),
+            b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0"
+        );
     }
 
     #[test]
     fn bar_asset_bucketing() {
-        assert_eq!(bar_asset(0, false),  b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0");
-        assert_eq!(bar_asset(10, false), b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_10.png\0");
-        assert_eq!(bar_asset(11, false), b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_20.png\0");
-        assert_eq!(bar_asset(100,false), b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_100.png\0");
+        assert_eq!(
+            bar_asset(0, false),
+            b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_0.png\0"
+        );
+        assert_eq!(
+            bar_asset(10, false),
+            b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_10.png\0"
+        );
+        assert_eq!(
+            bar_asset(11, false),
+            b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_20.png\0"
+        );
+        assert_eq!(
+            bar_asset(100, false),
+            b"A:/etc/pspapp/lvgl/icon/volume/bar_vol_100.png\0"
+        );
     }
 }

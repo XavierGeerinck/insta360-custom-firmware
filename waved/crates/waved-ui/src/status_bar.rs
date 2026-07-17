@@ -14,8 +14,8 @@ extern "C" {
 
 fn battery_icon(pct: u8) -> &'static [u8] {
     match pct {
-        0..=5   => b"A:/etc/pspapp/lvgl/icon/status/battery_0_5.png\0",
-        6..=10  => b"A:/etc/pspapp/lvgl/icon/status/battery_6_10.png\0",
+        0..=5 => b"A:/etc/pspapp/lvgl/icon/status/battery_0_5.png\0",
+        6..=10 => b"A:/etc/pspapp/lvgl/icon/status/battery_6_10.png\0",
         11..=20 => b"A:/etc/pspapp/lvgl/icon/status/battery_11_20.png\0",
         21..=30 => b"A:/etc/pspapp/lvgl/icon/status/battery_21_30.png\0",
         31..=40 => b"A:/etc/pspapp/lvgl/icon/status/battery_31_40.png\0",
@@ -24,7 +24,7 @@ fn battery_icon(pct: u8) -> &'static [u8] {
         61..=70 => b"A:/etc/pspapp/lvgl/icon/status/battery_61_70.png\0",
         71..=80 => b"A:/etc/pspapp/lvgl/icon/status/battery_71_80.png\0",
         81..=90 => b"A:/etc/pspapp/lvgl/icon/status/battery_81_90.png\0",
-        _       => b"A:/etc/pspapp/lvgl/icon/status/battery_91_100.png\0",
+        _ => b"A:/etc/pspapp/lvgl/icon/status/battery_91_100.png\0",
     }
 }
 
@@ -48,10 +48,10 @@ fn bt_icon(connected: bool) -> &'static [u8] {
 
 pub struct StatusBar {
     img_battery: *mut lv_obj_t,
-    img_wifi:    *mut lv_obj_t,
-    img_bt:      *mut lv_obj_t,
-    lbl_mic:     *mut lv_obj_t,   // small text "M" when muted
-    lbl_time:    *mut lv_obj_t,
+    img_wifi: *mut lv_obj_t,
+    img_bt: *mut lv_obj_t,
+    lbl_mic: *mut lv_obj_t, // small text "M" when muted
+    lbl_time: *mut lv_obj_t,
 }
 
 impl StatusBar {
@@ -87,8 +87,8 @@ impl StatusBar {
 
         // Initialize at 0%; will update to real level once MCU sends battery data.
         let img_battery = mk_icon(-46, battery_icon(0));
-        let img_wifi    = mk_icon(-22, wifi_icon(false));
-        let img_bt      = mk_icon(  2, bt_icon(false));
+        let img_wifi = mk_icon(-22, wifi_icon(false));
+        let img_bt = mk_icon(2, bt_icon(false));
 
         // Small "M" label when mic is muted (hidden by default)
         let lbl_mic = lv_label_create(root);
@@ -104,7 +104,13 @@ impl StatusBar {
         lv_obj_set_style_text_font(lbl_time, &lv_font_montserrat_12, 0);
         lv_obj_align(lbl_time, lv_align_t_LV_ALIGN_CENTER, 52, 0);
 
-        Self { img_battery, img_wifi, img_bt, lbl_mic, lbl_time }
+        Self {
+            img_battery,
+            img_wifi,
+            img_bt,
+            lbl_mic,
+            lbl_time,
+        }
     }
 
     pub unsafe fn update(
@@ -116,11 +122,21 @@ impl StatusBar {
     ) {
         use std::ffi::CString;
 
-        lv_image_set_src(self.img_battery, battery_icon(battery_pct).as_ptr() as *const _);
-        lv_image_set_src(self.img_wifi,    wifi_icon(wifi_connected).as_ptr() as *const _);
-        lv_image_set_src(self.img_bt,      bt_icon(bt_connected).as_ptr() as *const _);
+        lv_image_set_src(
+            self.img_battery,
+            battery_icon(battery_pct).as_ptr() as *const _,
+        );
+        lv_image_set_src(
+            self.img_wifi,
+            wifi_icon(wifi_connected).as_ptr() as *const _,
+        );
+        lv_image_set_src(self.img_bt, bt_icon(bt_connected).as_ptr() as *const _);
 
-        let mic_text = if mic_muted { c"M".as_ptr() } else { c"".as_ptr() };
+        let mic_text = if mic_muted {
+            c"M".as_ptr()
+        } else {
+            c"".as_ptr()
+        };
         lv_label_set_text(self.lbl_mic, mic_text);
 
         // Wall clock

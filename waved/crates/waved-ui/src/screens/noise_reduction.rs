@@ -21,10 +21,10 @@
 //!   y=178  Sublabel for the active level
 //!   y=-20  Done button (BOTTOM_MID), check_circle.png
 
-use std::ffi::CString;
-use std::sync::Arc;
 use crate::bindings::*;
 use crate::theme::*;
+use std::ffi::CString;
+use std::sync::Arc;
 use waved_state::{AudioState, Command, NrLevel, StateBus};
 
 extern "C" {
@@ -52,9 +52,9 @@ fn idx_to_level(idx: usize) -> NrLevel {
 
 fn level_to_idx(level: &NrLevel) -> usize {
     match level {
-        NrLevel::Off  => 0,
-        NrLevel::Low  => 1,
-        NrLevel::Med  => 2,
+        NrLevel::Off => 0,
+        NrLevel::Low => 1,
+        NrLevel::Med => 2,
         NrLevel::High => 3,
     }
 }
@@ -67,9 +67,9 @@ fn level_to_idx(level: &NrLevel) -> usize {
 // inside the callback.
 
 struct ClickData {
-    tx:     tokio::sync::broadcast::Sender<Command>,
+    tx: tokio::sync::broadcast::Sender<Command>,
     screen: *mut NoiseReductionScreen,
-    idx:    usize,
+    idx: usize,
 }
 
 unsafe extern "C" fn level_click_cb(e: *mut lv_event_t) {
@@ -77,7 +77,9 @@ unsafe extern "C" fn level_click_cb(e: *mut lv_event_t) {
         return;
     }
     let data = lv_event_get_user_data(e) as *const ClickData;
-    if data.is_null() { return; }
+    if data.is_null() {
+        return;
+    }
     let d = &*data;
 
     // Optimistic UI — paint before round-tripping through the audio service.
@@ -90,8 +92,7 @@ unsafe extern "C" fn level_click_cb(e: *mut lv_event_t) {
 
 unsafe extern "C" fn done_btn_cb(e: *mut lv_event_t) {
     if lv_event_get_code(e) == lv_event_code_t_LV_EVENT_CLICKED {
-        let tx = lv_event_get_user_data(e)
-            as *const tokio::sync::broadcast::Sender<Command>;
+        let tx = lv_event_get_user_data(e) as *const tokio::sync::broadcast::Sender<Command>;
         if !tx.is_null() {
             let _ = (*tx).send(Command::CloseSettings);
         }
@@ -101,8 +102,8 @@ unsafe extern "C" fn done_btn_cb(e: *mut lv_event_t) {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 pub struct NoiseReductionScreen {
-    bus:        Arc<StateBus>,
-    circles:    [*mut lv_obj_t; 4],
+    bus: Arc<StateBus>,
+    circles: [*mut lv_obj_t; 4],
     inner_lbls: [*mut lv_obj_t; 4],
     detail_lbl: *mut lv_obj_t,
     /// Last level we painted. Tracks `audio.nr_level` once `pending` is
@@ -119,11 +120,11 @@ impl NoiseReductionScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
         Self {
             bus,
-            circles:    [std::ptr::null_mut(); 4],
+            circles: [std::ptr::null_mut(); 4],
             inner_lbls: [std::ptr::null_mut(); 4],
             detail_lbl: std::ptr::null_mut(),
             prev_level: None,
-            pending:    None,
+            pending: None,
         }
     }
 
@@ -154,7 +155,9 @@ impl NoiseReductionScreen {
     /// Caller is responsible for setting `prev_level` / `pending`.
     unsafe fn paint(&self, idx: usize) {
         for i in 0..4usize {
-            if self.circles[i].is_null() { continue; }
+            if self.circles[i].is_null() {
+                continue;
+            }
             Self::paint_circle(self.circles[i], self.inner_lbls[i], i == idx);
         }
         if !self.detail_lbl.is_null() {
@@ -170,7 +173,7 @@ impl NoiseReductionScreen {
         self.paint(idx);
         let level = idx_to_level(idx);
         self.prev_level = Some(level.clone());
-        self.pending    = Some(level);
+        self.pending = Some(level);
     }
 
     /// Called every UI tick. While `pending` is `Some`, ignores
@@ -180,7 +183,7 @@ impl NoiseReductionScreen {
         if let Some(p) = self.pending.clone() {
             if audio.nr_level == p {
                 // Audio caught up — clear pending and resume normal sync.
-                self.pending    = None;
+                self.pending = None;
                 self.prev_level = Some(audio.nr_level.clone());
             }
             // Either way: don't repaint. Visual already shows `pending`.
@@ -198,8 +201,8 @@ impl super::Screen for NoiseReductionScreen {
     fn create(&mut self) -> *mut lv_obj_t {
         unsafe {
             self.prev_level = None;
-            self.pending    = None;
-            self.circles    = [std::ptr::null_mut(); 4];
+            self.pending = None;
+            self.circles = [std::ptr::null_mut(); 4];
             self.inner_lbls = [std::ptr::null_mut(); 4];
             let screen_ptr: *mut Self = self as *mut Self;
 
@@ -221,7 +224,7 @@ impl super::Screen for NoiseReductionScreen {
 
             // ── Row of 4 circles ─────────────────────────────────────────────
             const SIZE: i32 = 76;
-            const GAP:  i32 = 16;
+            const GAP: i32 = 16;
             const STEP: i32 = SIZE + GAP;
             let x0: i32 = (400 - (4 * SIZE + 3 * GAP)) / 2;
             let y0: i32 = 88;
@@ -247,9 +250,9 @@ impl super::Screen for NoiseReductionScreen {
                 Self::paint_circle(circle, lbl, false);
 
                 let click_data = Box::into_raw(Box::new(ClickData {
-                    tx:     self.bus.commands.clone(),
+                    tx: self.bus.commands.clone(),
                     screen: screen_ptr,
-                    idx:    i,
+                    idx: i,
                 }));
                 lv_obj_add_event_cb(
                     circle,
@@ -258,7 +261,7 @@ impl super::Screen for NoiseReductionScreen {
                     click_data as *mut _,
                 );
 
-                self.circles[i]    = circle;
+                self.circles[i] = circle;
                 self.inner_lbls[i] = lbl;
             }
 

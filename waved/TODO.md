@@ -6,7 +6,7 @@ See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.
 
 ## Sub-projects
 
-- [~] **SP#1 — Capture foundation + measurement harness** (v2 in progress)
+- [x] **SP#1 — Capture foundation + measurement harness** (v2 complete; two coordinated ALSA streams + aligned `AudioFrame` + config schema v3/v4 + hardware probe all landed and verified on-device — SP#2–6 all run on this foundation on-device)
 - [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
 - [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
 - [x] **SP#4 — Neural NS + dereverb (DeepFilterNet 3, CPU)** — DFN3 running on Cortex-A55 via `tract-NEON`. Acceptance: init clean, process alive ≥ 8 s under load, CPU delta well under the 5 % budget (sampled noise; DFN3 cost ~0–2 %). NPU path was deliberately abandoned after a full toolchain survey — see "SP#4 NPU history" below for what we learned.
@@ -61,12 +61,15 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
   `docs/AUDIO_HARDWARE.md` "Per-pair confidence-weighted LS" and
   "SRP-PHAT alternative backend" sections.
 
-- Elevation bias +3° to +18° after pure-Z pair swap. **F2 status:**
-  diagnostic instrumented (`WAVED_DOA_DEBUG` now emits per-pair
-  sharpness + per-pair implied elevation). Operator measurement
-  sweep script: `scripts/test-doa-elevation.sh`. Outcome decision
-  pending — geometric artifact → document only; algorithmic →
-  queue F2b fix.
+- ~~Elevation bias +3° to +18° after pure-Z pair swap.~~ **RESOLVED
+  (F2, 2026-05-27): GEOMETRIC — document-only, no code fix.** Measured
+  sweep (`scripts/test-doa-elevation.sh`) shows elevation is observable
+  (sign + ordering always correct) but saturates at steep angles: the
+  cross-ring Z-pairs (0,4)/(2,6) have small `dz`, so τ runs out of
+  vertical aperture and per-pair `el_p` ceilings ~+35°. Not fixable in
+  software — treat `elevation_deg` as a coarse low-confidence band
+  (below / level / above), never a calibrated angle. Full table +
+  caveats in `docs/AUDIO_HARDWARE.md` elevation section.
 
 - Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003).
   Preamp / gain staging belongs in SP#5. (Unchanged.)
@@ -78,6 +81,10 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
   data. Trigger to promote: F3 acceptance shows SRP gives materially
   better speaker separation in real meetings, AND test 5 of
   `test-doa-improvements.sh` confirms < 5% CPU delta.
+  **Status (2026-05-27):** F3 diarization acceptance ran on GCC-PHAT
+  and passed (clusters separated cleanly at `CLUSTER_TOLERANCE_DEG=30`),
+  so the "SRP materially better" half of the trigger was never
+  exercised — promote-trigger remains unmet. Still open as opt-in.
 - **Vendor `libmodel_infer.so` FFI binding.** Explicitly deferred per
   F2 spec §6. Trigger: F3 surfaces "two close speakers get merged"
   pattern that improved Rust DoA can't handle.
@@ -90,10 +97,11 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
   startup. Trigger: A/B comparison need on the same device run.
 - **Per-AudioConfig SRP grid resolution.** 5° az × 10° el hardcoded.
   Promote to config if tuning evidence demands.
-- **Elevation bias root-cause fix.** Pending the diagnostic sweep
-  from `test-doa-elevation.sh`. If azimuth-varying bias is seen,
-  needs an algorithmic fix candidate (possibly the same pair-shadow
-  weighting applied to elevation pairs).
+- ~~**Elevation bias root-cause fix.**~~ Closed 2026-05-27 — sweep
+  ran, verdict GEOMETRIC (vertical-aperture saturation), document-only.
+  See the resolved residual above. A residual near-level offset (~+7°)
+  *could* be partially calibrated, but would need a goniometric rig +
+  full 4-azimuth sweep before any F2b is queued — not currently planned.
 - **Hot-path allocations in SrpPhatEstimator::estimate().** ~12
   per-call Vec allocations (8 per_ch_fft + 4 cross_per_pair).
   Pre-allocating as fields on `SrpPhatEstimator` would eliminate.
@@ -110,12 +118,12 @@ Items intentionally deferred during SP#1 v2 because they belong to their owning 
 - NR strength wiring: NrLevel::Low/Med/High currently all engage the same DFN3 atten settings. Map to `RuntimeParams::with_atten_lim` per the SP#4 spec §2.5 wet/dry idea.
 
 ### SP#5 follow-ups (not blockers)
-- **MBAGC `knee_db` is dead.** `MbagcParams.knee_db` is populated from stock JSON and round-trips through config, but `band_gain_linear` ignores it (hard clamp `raw.min(max_gain).max(0.0)`). Voice preset therefore diverges from stock at the gain-curve knee. Implement a soft knee (e.g., quadratic transition over `knee_db` dB approaching the target from below) so the stock numbers actually behave per stock.
-- **Preset switch cosine ramp not implemented.** Spec §2.8 calls for a 5 ms cosine envelope on switch to mask coefficient discontinuity. Hard swap currently lands directly at the period boundary. Manual listening on `scripts/test-playback-eq.sh` test 4 didn't surface a click, but the risk is real if presets ever differ more aggressively. Add `pending_tuning` + N-frame gain envelope in `PlaybackDspChain::set_preset`.
-- **`limiter_reduction_db` snapshot is last-block, not peak-hold.** Acceptance test 3 reads after playback finishes → silence → `reduction_db = 0.0`. Add peak-hold-with-decay (window matching the 500 ms stats cadence) so the field reflects observed limiter activity over the recent past.
+- ~~**MBAGC `knee_db` is dead.**~~ **RESOLVED (cd82180).** `band_gain_linear` now applies a quadratic soft knee that meets the hard curve tangentially at `raw = knee/2` and reaches zero at `raw = -knee/2` (`playback/dsp/mbagc.rs:154-182`, covered by `soft_knee_quadratic_transition` test). Voice preset matches the stock knee behaviour.
+- ~~**Preset switch cosine ramp not implemented.**~~ **RESOLVED (cd82180).** `PlaybackDspChain` now arms a 5 ms raised-cosine envelope on `set_preset` and crossfades `last_output` → new chain output across the ramp (`playback/dsp/chain.rs:10,69,106`), per spec §2.8.
+- ~~**`limiter_reduction_db` snapshot is last-block, not peak-hold.**~~ **RESOLVED (cd82180).** `Limiter` now keeps a peak-hold-with-decay reduction (`PEAK_HOLD_DECAY_DB_PER_S`, `playback/dsp/limiter.rs:131-132`) so the stat reflects recent limiter activity rather than the instantaneous last block.
 - **`scripts/cpu_delta.py` baseline (11.5%) is pre-SP#4.** With DFN3 enabled by default, the post-SP#4 baseline at silence is ~43%. Re-baseline once SP#4's pre-build-at-startup follow-up lands; until then test 5 will fire on outdated numbers.
 - ~~**`AudioConfig::validate()` doesn't shape-check the EQ array.**~~ Resolved by inspection on 2026-05-02. The `[[BiquadParams; 4]; 2]` field type already enforces spec §5.1 shape at deserialization; serde rejects any other shape with a clear message before `validate()` even runs. Classifying as `Parse` rather than `Invalid` is correct (structurally malformed, not policy-violating). Test `rejects_wrong_shape_eq_array` documents the path.
-- **No unit-level test for mid-playback preset switch.** The acceptance script's manual test 4 is the only coverage. Add a `playback.rs::tests` case that sends a preset on `preset_tx` after N batches and asserts MBAGC envelope state was reset.
+- ~~**No unit-level test for mid-playback preset switch.**~~ **RESOLVED.** `playback/dsp/chain.rs:167-204` exercises a hot-signal preset switch and asserts the limiter `reduction_db` resets to 0 on rebuild and the cosine ramp + limiter recovery behave across the following batch.
 - **Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.** Originally listed pre-implementation; descoped per the SP#5 spec §4 non-goals (the amixer path manages the unused TDMOUT_A; cleanup belongs alongside SP#6 once the new pipeline owns volume control end-to-end).
 
 ### SP#6 follow-ups (not blockers)

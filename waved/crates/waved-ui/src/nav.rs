@@ -22,7 +22,9 @@ pub enum UiScreen {
 }
 
 impl Default for UiScreen {
-    fn default() -> Self { Self::Home }
+    fn default() -> Self {
+        Self::Home
+    }
 }
 
 pub struct ScreenManager {
@@ -41,7 +43,9 @@ impl ScreenManager {
     /// Navigate to a new screen. Destroys the current one first.
     pub fn navigate_to(&mut self, screen: UiScreen) {
         if !self.current_root.is_null() {
-            unsafe { crate::bindings::lv_obj_delete(self.current_root); }
+            unsafe {
+                crate::bindings::lv_obj_delete(self.current_root);
+            }
             self.current_root = std::ptr::null_mut();
         }
         self.current = screen;

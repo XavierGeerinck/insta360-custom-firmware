@@ -29,7 +29,9 @@ mod tests {
 
     #[test]
     fn missing_key_returns_key_name() {
-        let i18n = I18n { strings: Default::default() };
+        let i18n = I18n {
+            strings: Default::default(),
+        };
         assert_eq!(i18n.tr("some.key"), "some.key");
     }
 

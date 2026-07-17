@@ -5,13 +5,13 @@
 //! `docs/superpowers/specs/2026-04-30-waved-recording-save-discard-design.md`
 //! §7 for visual specifications.
 
-use std::path::Path;
 use crate::bindings::*;
 use crate::theme::*;
 use std::ffi::CString;
+use std::path::Path;
 use std::sync::Arc;
-use waved_state::{Command, MeetingState, PendingDecision, StateBus};
 use uuid::Uuid;
+use waved_state::{Command, MeetingState, PendingDecision, StateBus};
 
 const BTN_SIZE: i32 = 64;
 const BTN_GAP: i32 = 16;
@@ -24,8 +24,8 @@ const BTN_Y_OFFSET: i32 = -52;
 const CLR_TITLE_GREEN: u32 = 0x34c759;
 /// Per-button background colours. Match brightness so opaque white-on-tint
 /// icons read uniformly. See mockup A in the design doc.
-const CLR_BTN_SAVE: u32    = 0x2563eb; // blue
-const CLR_BTN_SEND: u32    = 0x16a34a; // green
+const CLR_BTN_SAVE: u32 = 0x2563eb; // blue
+const CLR_BTN_SEND: u32 = 0x16a34a; // green
 const CLR_BTN_DISCARD: u32 = 0xdc2626; // red
 
 extern "C" {
@@ -117,7 +117,9 @@ unsafe extern "C" fn save_btn_cb(e: *mut lv_event_t) {
         return;
     }
     let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
-    if ctx.is_null() { return; }
+    if ctx.is_null() {
+        return;
+    }
     let _ = (*ctx).tx.send(Command::SaveRecording((*ctx).id));
 }
 
@@ -126,7 +128,9 @@ unsafe extern "C" fn send_btn_cb(e: *mut lv_event_t) {
         return;
     }
     let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
-    if ctx.is_null() { return; }
+    if ctx.is_null() {
+        return;
+    }
     let _ = (*ctx).tx.send(Command::SendRecording((*ctx).id));
 }
 
@@ -135,7 +139,9 @@ unsafe extern "C" fn discard_btn_cb(e: *mut lv_event_t) {
         return;
     }
     let ctx = lv_event_get_user_data(e) as *const ButtonCtx;
-    if ctx.is_null() { return; }
+    if ctx.is_null() {
+        return;
+    }
     let _ = (*ctx).tx.send(Command::DiscardRecording((*ctx).id));
 }
 
@@ -148,7 +154,10 @@ pub struct ConfirmationScreen {
 
 impl ConfirmationScreen {
     pub fn new(bus: Arc<StateBus>) -> Self {
-        Self { bus, decision: None }
+        Self {
+            bus,
+            decision: None,
+        }
     }
 
     /// Called by the UI loop just before `create()` whenever the
@@ -315,7 +324,8 @@ mod tests {
 
     #[test]
     fn format_path_truncates_uuid_parent_dir() {
-        let p = PathBuf::from("/mnt/udisk/recordings/4f3a8e2c-1234-5678-9abc-def012345678/audio.wav");
+        let p =
+            PathBuf::from("/mnt/udisk/recordings/4f3a8e2c-1234-5678-9abc-def012345678/audio.wav");
         assert_eq!(format_path(&p), "4f3a8e2c.../audio.wav");
     }
 
@@ -365,7 +375,10 @@ mod tests {
 
     #[test]
     fn format_duration_size_basic() {
-        assert_eq!(format_duration_size(74, 12_582_912), "duration 01:14 · 12.0 MB");
+        assert_eq!(
+            format_duration_size(74, 12_582_912),
+            "duration 01:14 · 12.0 MB"
+        );
     }
 
     #[test]
