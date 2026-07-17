@@ -159,6 +159,13 @@ pub enum ProvisioningState {
     },
     /// Credentials received; reconnecting as STA to `ssid`.
     Connecting { ssid: String },
+    /// Validating and atomically persisting setup fields.
+    Saving,
+    /// Restoring a previously saved station profile.
+    Reconnecting,
+    /// Station connectivity is restored and services are restarting with the
+    /// newly persisted configuration.
+    Restarting,
     /// Provisioning finished — connected to `ssid`.
     Connected { ssid: String },
     /// Provisioning failed; `reason` is user-facing.
@@ -293,6 +300,9 @@ pub enum Command {
     },
     /// UI-only: abort provisioning and revert to STA.
     CancelWifiProvisioning,
+    /// Internal lifecycle command emitted after setup has persisted settings,
+    /// restored station connectivity, and is ready to reload all services.
+    RestartForConfig,
 }
 
 // --- State Bus ---

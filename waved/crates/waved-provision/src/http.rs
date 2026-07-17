@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const MAX_HEADER_BYTES: usize = 8 * 1024;
-pub const MAX_BODY_BYTES: usize = 4 * 1024;
+pub const MAX_BODY_BYTES: usize = 32 * 1024;
 const OTHER_NETWORK_VALUE: &str = "__other_network__";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,33 +177,40 @@ pub fn validate_credentials(ssid: &str, psk: &str) -> Result<(), HttpError> {
 pub enum Route {
     Form,
     CaptiveRedirect { head_only: bool },
-    Connect { ssid: String, psk: String },
+    Save { form: HashMap<String, String> },
+    SaveConnect { form: HashMap<String, String> },
 }
 
 pub fn route(request: Request) -> Result<Route, HttpError> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => Ok(Route::Form),
-        ("POST", "/connect") => {
-            let form = parse_form(&request.body)?;
-            let selected_ssid = form.get("ssid").cloned().unwrap_or_default();
-            let ssid = if selected_ssid == OTHER_NETWORK_VALUE {
-                form.get("other_ssid").cloned().unwrap_or_default()
-            } else {
-                selected_ssid
-            };
-            let psk = form.get("psk").cloned().unwrap_or_default();
-            validate_credentials(&ssid, &psk)?;
-            Ok(Route::Connect { ssid, psk })
-        }
-        ("GET", "/connect") => Err(HttpError::MethodNotAllowed),
+        ("POST", "/save") => Ok(Route::Save {
+            form: parse_form(&request.body)?,
+        }),
+        ("POST", "/save-connect" | "/connect") => Ok(Route::SaveConnect {
+            form: parse_form(&request.body)?,
+        }),
+        ("GET", "/save" | "/save-connect" | "/connect") => Err(HttpError::MethodNotAllowed),
         ("GET", _) => Ok(Route::CaptiveRedirect { head_only: false }),
         ("HEAD", _) => Ok(Route::CaptiveRedirect { head_only: true }),
-        (_, "/" | "/connect") => Err(HttpError::MethodNotAllowed),
+        (_, "/" | "/save" | "/save-connect" | "/connect") => Err(HttpError::MethodNotAllowed),
         _ => Err(HttpError::NotFound),
     }
 }
 
-fn html_escape(value: &str) -> String {
+pub fn wifi_credentials(form: &HashMap<String, String>) -> Result<(String, String), HttpError> {
+    let selected_ssid = form.get("ssid").cloned().unwrap_or_default();
+    let ssid = if selected_ssid == OTHER_NETWORK_VALUE {
+        form.get("other_ssid").cloned().unwrap_or_default()
+    } else {
+        selected_ssid
+    };
+    let psk = form.get("psk").cloned().unwrap_or_default();
+    validate_credentials(&ssid, &psk)?;
+    Ok((ssid, psk))
+}
+
+pub(crate) fn html_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -211,7 +218,7 @@ fn html_escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn response(status: &str, content_type: &str, body: &str) -> String {
+pub(crate) fn response(status: &str, content_type: &str, body: &str) -> String {
     format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -418,17 +425,26 @@ mod tests {
             path: "/connect".into(),
             body: "ssid=__other_network__&other_ssid=Hidden+Lab&psk=password123".into(),
         });
-        assert!(matches!(
-            selected,
-            Ok(Route::Connect { ssid, psk }) if ssid == "Hidden Lab" && psk == "password123"
-        ));
+        let Ok(Route::SaveConnect { form }) = selected else {
+            panic!("expected save-connect route");
+        };
+        assert_eq!(
+            wifi_credentials(&form).unwrap(),
+            ("Hidden Lab".into(), "password123".into())
+        );
 
         let missing = route(Request {
             method: "POST".into(),
             path: "/connect".into(),
             body: "ssid=__other_network__&other_ssid=&psk=password123".into(),
         });
-        assert!(matches!(missing, Err(HttpError::BadRequest)));
+        let Ok(Route::SaveConnect { form }) = missing else {
+            panic!("expected save-connect route");
+        };
+        assert!(matches!(
+            wifi_credentials(&form),
+            Err(HttpError::BadRequest)
+        ));
     }
 
     #[test]
@@ -445,6 +461,12 @@ mod tests {
             body: String::new(),
         });
         assert!(matches!(method, Err(HttpError::MethodNotAllowed)));
+        let save = route(Request {
+            method: "POST".into(),
+            path: "/save".into(),
+            body: "csrf=token".into(),
+        });
+        assert!(matches!(save, Ok(Route::Save { .. })));
         let missing = route(Request {
             method: "GET".into(),
             path: "/missing".into(),

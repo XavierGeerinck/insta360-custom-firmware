@@ -138,6 +138,18 @@ fn render_model(
             text: format!("Connecting to\n{ssid}\u{2026}"),
             retry: false,
         },
+        ProvisioningState::Saving => RenderModel::Message {
+            text: "Saving settings\u{2026}".to_string(),
+            retry: false,
+        },
+        ProvisioningState::Reconnecting => RenderModel::Message {
+            text: "Reconnecting to\nsaved Wi-Fi\u{2026}".to_string(),
+            retry: false,
+        },
+        ProvisioningState::Restarting => RenderModel::Message {
+            text: "Settings saved\nRestarting\u{2026}".to_string(),
+            retry: false,
+        },
         ProvisioningState::Failed { reason } if provisioning_session => RenderModel::Message {
             text: format!("Connection failed\n{reason}"),
             retry: true,

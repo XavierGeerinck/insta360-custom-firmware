@@ -2,7 +2,10 @@ pub mod ap;
 pub mod dhcp;
 pub mod dns;
 pub mod http;
+mod setup_form;
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -10,6 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tracing::{info, warn};
+use waved_config::{apply_form, field_specs, FormSubmission, WavedConfig};
 use waved_state::{Command, ProvisioningState, StateBus};
 
 const PROV_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
@@ -23,11 +27,21 @@ pub fn gen_passphrase() -> String {
 pub struct ProvisioningService {
     bus: Arc<StateBus>,
     mac: String,
+    config_path: PathBuf,
+}
+
+struct SetupAction {
+    wifi: Option<(String, String)>,
+    test_webhook: bool,
 }
 
 impl ProvisioningService {
-    pub fn new(bus: Arc<StateBus>, mac: String) -> Self {
-        Self { bus, mac }
+    pub fn new(bus: Arc<StateBus>, mac: String, config_path: impl Into<PathBuf>) -> Self {
+        Self {
+            bus,
+            mac,
+            config_path: config_path.into(),
+        }
     }
 
     pub async fn run(self, mut commands: broadcast::Receiver<Command>) {
@@ -69,6 +83,8 @@ impl ProvisioningService {
         let mut ssids = waved_wifi::wpa::scan().await.unwrap_or_default();
         ssids.sort();
         ssids.dedup();
+        let config = WavedConfig::load_or_default(&self.config_path);
+        let csrf = uuid::Uuid::new_v4().simple().to_string();
 
         if matches!(cancel_rx.try_recv(), Ok(Command::CancelWifiProvisioning)) {
             self.set(ProvisioningState::Idle);
@@ -133,13 +149,13 @@ impl ProvisioningService {
 
         // 3. Serve the form until creds arrive, timeout, or cancel.
         enum Outcome {
-            Credentials(String, String),
+            Saved(SetupAction),
             Cancelled,
             Failed(String),
         }
         let outcome = tokio::select! {
-            credentials = self.serve(http_listener, &ssids) => match credentials {
-                Some((ssid, psk)) => Outcome::Credentials(ssid, psk),
+            action = self.serve(http_listener, &ssids, &csrf, config) => match action {
+                Some(action) => Outcome::Saved(action),
                 None => Outcome::Failed("setup page stopped".into()),
             },
             _ = tokio::time::sleep(PROV_TIMEOUT) => Outcome::Cancelled,
@@ -184,24 +200,53 @@ impl ProvisioningService {
 
         // 5. Connect (or report idle/failure).
         match outcome {
-            Outcome::Credentials(ssid, psk) => {
-                self.set(ProvisioningState::Connecting { ssid: ssid.clone() });
-                match waved_wifi::wpa::connect(&ssid, &psk).await {
-                    Ok(()) => {
-                        match waved_wifi::wpa::wait_for_connection(&ssid, Duration::from_secs(45))
+            Outcome::Saved(action) => {
+                let connected_ssid = match action.wifi {
+                    Some((ssid, psk)) => {
+                        self.set(ProvisioningState::Connecting { ssid: ssid.clone() });
+                        match waved_wifi::wpa::connect(&ssid, &psk).await {
+                            Ok(()) => match waved_wifi::wpa::wait_for_connection(
+                                &ssid,
+                                Duration::from_secs(45),
+                            )
                             .await
-                        {
-                            Ok(_) => self.set(ProvisioningState::Connected { ssid }),
-                            Err(error) => self.set(ProvisioningState::Failed {
-                                reason: format!("connection timed out: {error}"),
-                            }),
+                            {
+                                Ok(_) => Some(ssid),
+                                Err(error) => {
+                                    self.set(ProvisioningState::Failed {
+                                        reason: format!("connection timed out: {error}"),
+                                    });
+                                    None
+                                }
+                            },
+                            Err(error) => {
+                                self.set(ProvisioningState::Failed {
+                                    reason: format!("connect failed: {error}"),
+                                });
+                                None
+                            }
                         }
                     }
-                    Err(e) => {
-                        self.set(ProvisioningState::Failed {
-                            reason: format!("connect failed: {e}"),
-                        });
+                    None => {
+                        self.set(ProvisioningState::Reconnecting);
+                        match wait_for_any_connection(Duration::from_secs(45)).await {
+                            Ok(ssid) => Some(ssid),
+                            Err(error) => {
+                                self.set(ProvisioningState::Failed { reason: error });
+                                None
+                            }
+                        }
                     }
+                };
+                if let Some(ssid) = connected_ssid {
+                    if action.test_webhook {
+                        if let Err(error) = mark_webhook_test_pending(&self.config_path) {
+                            warn!("failed to persist webhook test marker: {error}");
+                        }
+                    }
+                    self.set(ProvisioningState::Restarting);
+                    info!(%ssid, "setup applied; requesting controlled restart");
+                    let _ = self.bus.commands.send(Command::RestartForConfig);
                 }
             }
             Outcome::Cancelled => self.set(ProvisioningState::Idle),
@@ -214,8 +259,15 @@ impl ProvisioningService {
         }
     }
 
-    /// One-shot HTTP server on AP_IP:80. Returns the submitted (ssid, psk).
-    async fn serve(&self, listener: TcpListener, ssids: &[String]) -> Option<(String, String)> {
+    /// Setup HTTP server on AP_IP:80. Invalid submissions are rendered in the
+    /// same AP session; a valid save returns the optional station credentials.
+    async fn serve(
+        &self,
+        listener: TcpListener,
+        ssids: &[String],
+        csrf: &str,
+        mut config: WavedConfig,
+    ) -> Option<SetupAction> {
         loop {
             let (mut sock, _) = listener.accept().await.ok()?;
             let request = match tokio::time::timeout(HTTP_IO_TIMEOUT, http::read_request(&mut sock))
@@ -237,7 +289,7 @@ impl ProvisioningService {
             };
             match http::route(request) {
                 Ok(http::Route::Form) => {
-                    let response = http::render_page(ssids);
+                    let response = setup_form::render_page(&config, ssids, csrf, &[], None);
                     let _ =
                         tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
                             .await;
@@ -248,13 +300,77 @@ impl ProvisioningService {
                         tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
                             .await;
                 }
-                Ok(http::Route::Connect { ssid, psk }) => {
-                    let response = http::render_ack(&ssid);
-                    let _ =
-                        tokio::time::timeout(HTTP_IO_TIMEOUT, sock.write_all(response.as_bytes()))
-                            .await;
-                    let _ = sock.shutdown().await;
-                    return Some((ssid, psk));
+                Ok(route @ (http::Route::Save { .. } | http::Route::SaveConnect { .. })) => {
+                    let (form, connect) = match route {
+                        http::Route::Save { form } => (form, false),
+                        http::Route::SaveConnect { form } => (form, true),
+                        _ => unreachable!(),
+                    };
+                    if form.get("csrf").map(String::as_str) != Some(csrf) {
+                        let response = http::render_error(http::HttpError::BadRequest);
+                        let _ = sock.write_all(response.as_bytes()).await;
+                        let _ = sock.shutdown().await;
+                        continue;
+                    }
+
+                    let wifi = if connect {
+                        match http::wifi_credentials(&form) {
+                            Ok(credentials) => Some(credentials),
+                            Err(_) => {
+                                let response = setup_form::render_page(
+                                    &config,
+                                    ssids,
+                                    csrf,
+                                    &[],
+                                    Some("Select a valid Wi-Fi network and password."),
+                                );
+                                let _ = sock.write_all(response.as_bytes()).await;
+                                let _ = sock.shutdown().await;
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let submission = config_submission(&form);
+                    match apply_form(&config, &submission) {
+                        Ok(next) => match next.save(&self.config_path) {
+                            Ok(()) => {
+                                self.set(ProvisioningState::Saving);
+                                config = next;
+                                let response = setup_form::render_ack(
+                                    wifi.as_ref().map(|(ssid, _)| ssid.as_str()),
+                                    !config.api.endpoint.is_empty(),
+                                );
+                                let _ = tokio::time::timeout(
+                                    HTTP_IO_TIMEOUT,
+                                    sock.write_all(response.as_bytes()),
+                                )
+                                .await;
+                                let _ = sock.shutdown().await;
+                                return Some(SetupAction {
+                                    wifi,
+                                    test_webhook: !config.api.endpoint.is_empty(),
+                                });
+                            }
+                            Err(error) => {
+                                let response = setup_form::render_page(
+                                    &config,
+                                    ssids,
+                                    csrf,
+                                    &[],
+                                    Some(&format!("Could not save settings: {error}")),
+                                );
+                                let _ = sock.write_all(response.as_bytes()).await;
+                            }
+                        },
+                        Err(errors) => {
+                            let response =
+                                setup_form::render_page(&config, ssids, csrf, &errors, None);
+                            let _ = sock.write_all(response.as_bytes()).await;
+                        }
+                    }
                 }
                 Err(error) => {
                     let response = http::render_error(error);
@@ -266,6 +382,49 @@ impl ProvisioningService {
             let _ = sock.shutdown().await;
         }
     }
+}
+
+fn config_submission(form: &HashMap<String, String>) -> FormSubmission {
+    let paths: BTreeSet<&str> = field_specs().iter().map(|spec| spec.path).collect();
+    let mut submission = FormSubmission {
+        values: BTreeMap::new(),
+        clear_secrets: BTreeSet::new(),
+    };
+    for (key, value) in form {
+        if paths.contains(key.as_str()) || key == "audio.steered_initial_az_deg" {
+            submission.values.insert(key.clone(), value.clone());
+        } else if let Some(path) = key.strip_prefix("clear.") {
+            if paths.contains(path) && value == "true" {
+                submission.clear_secrets.insert(path.to_string());
+            }
+        }
+    }
+    submission
+}
+
+async fn wait_for_any_connection(timeout: Duration) -> Result<String, String> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if let Err(error) = waved_wifi::wpa::ensure_station().await {
+            return Err(format!("station restore failed: {error}"));
+        }
+        if let Some((ssid, _, _)) = waved_wifi::wpa::status().await {
+            return Ok(ssid);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err("timed out reconnecting to a saved network".into());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn mark_webhook_test_pending(config_path: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let marker = parent.join("webhook-test.pending");
+    std::fs::write(&marker, b"pending\n")?;
+    std::fs::set_permissions(marker, std::fs::Permissions::from_mode(0o600))
 }
 
 /// Resolve when a `CancelWifiProvisioning` command arrives on `rx` (or the
@@ -286,7 +445,11 @@ mod tests {
     use super::*;
 
     fn service_without_watch_receivers() -> ProvisioningService {
-        ProvisioningService::new(Arc::new(StateBus::new()), "00:11:22:33:44:55".into())
+        ProvisioningService::new(
+            Arc::new(StateBus::new()),
+            "00:11:22:33:44:55".into(),
+            "/tmp/waved-test-config.toml",
+        )
     }
 
     #[test]
@@ -305,5 +468,30 @@ mod tests {
             *service.bus.provisioning.borrow(),
             ProvisioningState::Scanning
         );
+    }
+
+    #[test]
+    fn config_submission_filters_transport_fields_and_handles_secret_clear() {
+        let form = HashMap::from([
+            ("csrf".into(), "session".into()),
+            ("ssid".into(), "Home".into()),
+            ("psk".into(), "password123".into()),
+            ("device.name".into(), "Board room".into()),
+            ("api.endpoint".into(), "https://receiver.test/hook".into()),
+            ("clear.api.auth_token".into(), "true".into()),
+            ("unknown.field".into(), "ignored".into()),
+        ]);
+        let submission = config_submission(&form);
+        assert_eq!(
+            submission.values.get("device.name").map(String::as_str),
+            Some("Board room")
+        );
+        assert_eq!(
+            submission.values.get("api.endpoint").map(String::as_str),
+            Some("https://receiver.test/hook")
+        );
+        assert!(submission.clear_secrets.contains("api.auth_token"));
+        assert!(!submission.values.contains_key("ssid"));
+        assert!(!submission.values.contains_key("unknown.field"));
     }
 }

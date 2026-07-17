@@ -3737,6 +3737,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "waved-config",
  "waved-state",
  "waved-wifi",
 ]

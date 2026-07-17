@@ -517,7 +517,8 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "00:00:00:00:00:00".to_string());
         let prov_cmds = bus.commands.subscribe();
-        let prov_svc = waved_provision::ProvisioningService::new(Arc::clone(&bus), mac);
+        let prov_svc =
+            waved_provision::ProvisioningService::new(Arc::clone(&bus), mac, CONFIG_PATH);
         tokio::spawn(async move { prov_svc.run(prov_cmds).await });
     }
     #[cfg(feature = "simulate")]
@@ -614,13 +615,31 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
     tokio::spawn(mode_switch_handler(bus.commands.clone()));
 
-    // Wait for SIGTERM or SIGINT
+    // Wait for SIGTERM, SIGINT, or a controlled configuration restart.
     use tokio::signal::unix::{signal, SignalKind};
     let mut sigterm = signal(SignalKind::terminate()).unwrap();
     let mut sigint = signal(SignalKind::interrupt()).unwrap();
+    let mut lifecycle_commands = bus.commands.subscribe();
+    let lifecycle = async {
+        loop {
+            match lifecycle_commands.recv().await {
+                Ok(Command::RestartForConfig) => {
+                    info!("received configuration restart request");
+                    return;
+                }
+                Ok(Command::Shutdown) => {
+                    info!("received shutdown command");
+                    return;
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    };
     tokio::select! {
         _ = sigterm.recv() => info!("received SIGTERM"),
         _ = sigint.recv() => info!("received SIGINT"),
+        _ = lifecycle => {}
     }
 
     info!("shutdown signal received");

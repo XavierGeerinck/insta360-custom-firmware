@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 waved-state = { path = "../waved-state" }
 waved-wifi = { path = "../waved-wifi" }
+waved-config = { path = "../waved-config" }
 tokio = { workspace = true, features = ["sync", "process", "time", "net", "io-util", "rt", "macros"] }
 tracing.workspace = true
 thiserror.workspace = true
