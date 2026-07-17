@@ -491,6 +491,7 @@ mod tests {
             ssid: "Office 5G".into(),
             ip_addr: "192.168.1.148".into(),
             signal_strength: -61,
+            clock_synchronized: true,
         };
         let text = management_text(&wifi);
         assert!(text.contains("Connected"));

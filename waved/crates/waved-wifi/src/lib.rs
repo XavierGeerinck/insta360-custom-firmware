@@ -1,3 +1,4 @@
+pub mod ntp;
 pub mod wpa;
 
 #[cfg(feature = "simulate")]
@@ -40,11 +41,12 @@ impl WifiService {
             warn!("station initialization failed: {e}");
         }
         let mut last_ssid: Option<String> = None;
+        let mut clock_synchronized = false;
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(10));
 
         loop {
             tokio::select! {
-                _ = tick.tick() => self.poll(&mut last_ssid).await,
+                _ = tick.tick() => self.poll(&mut last_ssid, &mut clock_synchronized).await,
                 cmd = commands.recv() => {
                     if let Ok(cmd) = cmd { self.handle_command(cmd).await; }
                 }
@@ -52,7 +54,7 @@ impl WifiService {
         }
     }
 
-    async fn poll(&self, last_ssid: &mut Option<String>) {
+    async fn poll(&self, last_ssid: &mut Option<String>, clock_synchronized: &mut bool) {
         if let Err(e) = wpa::ensure_station().await {
             warn!("station recovery failed: {e}");
         }
@@ -63,11 +65,19 @@ impl WifiService {
                         let _ = self.events_tx.send(DeviceEvent::WifiDisconnected);
                     }
                     info!("wifi connected: {ssid} ({ip})");
-                    let _ = self.events_tx.send(DeviceEvent::WifiConnected(ssid.clone()));
+                    let _ = self
+                        .events_tx
+                        .send(DeviceEvent::WifiConnected(ssid.clone()));
                     *last_ssid = Some(ssid.clone());
-                    self.sync_ntp().await;
+                    *clock_synchronized = self.sync_ntp().await;
                 }
-                WifiState { connected: true, ssid, ip_addr: ip, signal_strength: signal }
+                WifiState {
+                    connected: true,
+                    ssid,
+                    ip_addr: ip,
+                    signal_strength: signal,
+                    clock_synchronized: *clock_synchronized,
+                }
             }
             None => {
                 if last_ssid.is_some() {
@@ -90,26 +100,20 @@ impl WifiService {
         }
     }
 
-    async fn sync_ntp(&self) {
+    async fn sync_ntp(&self) -> bool {
         for server in &self.ntp_servers {
             info!("attempting NTP sync with {server}");
-            match tokio::process::Command::new("ntpd")
-                .args(["-q", "-p", server])
-                .status()
-                .await
-            {
-                Ok(status) if status.success() => {
+            match ntp::synchronize(server).await {
+                Ok(()) => {
                     info!("NTP sync successful via {server}");
-                    return;
+                    return true;
                 }
-                Ok(status) => {
-                    debug!("NTP sync via {server} failed with status: {status}");
-                }
-                Err(e) => {
-                    warn!("NTP command failed for {server}: {e}");
+                Err(error) => {
+                    debug!("NTP sync via {server} failed: {error}");
                 }
             }
         }
         warn!("NTP sync failed with all servers");
+        false
     }
 }

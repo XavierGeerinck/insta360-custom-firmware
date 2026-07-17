@@ -36,6 +36,7 @@ enum RowAction {
     PowerOff,
     Bookmark, // placeholder for rows whose feature isn't implemented
     OpenWifiSettings,
+    OpenWebhookStatus,
 }
 
 const ROWS: &[(&str, RowAction)] = &[
@@ -44,6 +45,7 @@ const ROWS: &[(&str, RowAction)] = &[
     ("Mic", RowAction::Bookmark),
     ("Bluetooth", RowAction::Bookmark),
     ("Wi-Fi", RowAction::OpenWifiSettings),
+    ("Webhook", RowAction::OpenWebhookStatus),
     ("USB Mode", RowAction::Bookmark),
     ("Language", RowAction::Bookmark),
     ("Auto Sleep", RowAction::Bookmark),
@@ -76,6 +78,7 @@ unsafe extern "C" fn row_btn_cb(e: *mut lv_event_t) {
         RowAction::PowerOff => Command::Shutdown,
         RowAction::Bookmark => Command::AddBookmark,
         RowAction::OpenWifiSettings => Command::OpenWifiSettings,
+        RowAction::OpenWebhookStatus => Command::OpenWebhookStatus,
     };
     let _ = tx.send(cmd);
 }

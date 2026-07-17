@@ -142,6 +142,7 @@ pub struct WifiState {
     pub ssid: String,
     pub ip_addr: String,
     pub signal_strength: i8,
+    pub clock_synchronized: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -180,6 +181,12 @@ pub struct MeetingState {
     pub duration_secs: u32,
     pub pending_uploads: u32,
     pub failed_uploads: u32,
+    pub last_upload_success_at: Option<String>,
+    pub last_upload_error: Option<String>,
+    pub last_webhook_test: Option<String>,
+    /// True when storage is over its configured threshold and there are no
+    /// delivered recordings that can be pruned safely.
+    pub storage_blocked: bool,
     /// `Some(...)` while the recording-screen Stop has fired but the user
     /// has not yet chosen Save / Send / Discard. UI uses presence of this
     /// field to switch to the ConfirmationScreen, and clears it via one of
@@ -260,6 +267,7 @@ pub enum Command {
     ResumeRecording,
     AddBookmark,
     RetryUpload(Uuid),
+    RetryFailedUploads,
     SetMotorPosition(MotorPosition),
     Shutdown,
     /// UI-only: navigate to the "More" screen (pspapp page 0xb / `ui_setting_screen`).
@@ -273,6 +281,8 @@ pub enum Command {
     OpenNoiseReduction,
     /// UI-only: navigate to the System Settings screen (pspapp page 0xe / `ui_setting_system`).
     OpenSystemSettings,
+    /// UI-only: show webhook configuration and delivery status.
+    OpenWebhookStatus,
     /// UI-only: navigate to the Speaker Volume screen (pspapp page 0xd / `ui_volume_screen`).
     OpenVolume,
     /// Test hook: force the beamformer to steer at a fixed (azimuth_deg, elevation_deg)

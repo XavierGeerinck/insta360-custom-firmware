@@ -29,8 +29,10 @@ The status menu and saved-network selection behavior are specified in
 `WifiService` (`crates/waved-wifi/src/lib.rs`) runs a `tokio::select!` loop:
 
 - **Poll** every 10 s via `wpa::status()` → `wpa_cli status` + `wpa_cli
-  signal_poll`, publishing `WifiState { connected, ssid, ip_addr,
-  signal_strength }` to the state bus. NTP (`ntpd -q`) is kicked on connect.
+  signal_poll`, publishing connection details to the state bus. On connect,
+  the bounded in-process SNTP client validates a response from the configured
+  servers and sets the system clock; the device does not depend on the absent
+  `ntpd` executable.
 - **Commands**: consumes `Command::WifiConnect { ssid, password }` from the bus
   and calls `wpa::connect`.
 
@@ -110,11 +112,20 @@ Idle → Scanning → ApActive{ssid,passphrase,url} → Connecting{ssid} → Con
    `http://192.168.2.1/`. Depending on the phone, the setup sheet opens or a
    **Sign in to network** prompt appears; tap that prompt if it is not opened
    automatically.
-4. The embedded HTTP server serves a one-page form (`GET /`) and accepts
-   `POST /connect` (SSID dropdown + password). Resolves on creds, a **5-minute
-   timeout**, or `Command::CancelWifiProvisioning`.
-5. AP is torn down (STA restored) on **every** exit path, then `wpa::connect`
-   joins the chosen network → `Connected` / `Failed`.
+4. The embedded HTTP server serves the typed `config.toml` setup form
+   (`GET /`). `POST /save` persists settings and reconnects a saved station
+   profile; `POST /save-connect` also provisions the selected SSID.
+   Device, audio, webhook, storage, security, NTP, and Wi-Fi settings are
+   available. Secrets are write-only, requests are bounded to 32 KiB, and a
+   per-session CSRF token protects both final actions.
+5. Invalid settings leave the AP and form active with field-level errors.
+   Valid settings are atomically saved before teardown.
+6. AP is torn down (STA restored) on **every** exit path, then station mode
+   reconnects. A controlled process restart applies one consistent
+   configuration snapshot and triggers the pending webhook setup test.
+
+Webhook configuration and its multipart contract are documented in
+[`docs/WEBHOOKS.md`](WEBHOOKS.md).
 
 The QR payload is `WIFI:T:WPA;S:<escaped SSID>;P:<escaped passphrase>;H:false;;`.
 It contains only the temporary AP credentials; opening the setup form remains

@@ -19,6 +19,8 @@ pub enum UiScreen {
     Volume,
     /// WiFi provisioning flow — scan → AP info → connecting → result.
     WifiProvisioning,
+    /// Webhook endpoint and durable delivery status.
+    Webhook,
 }
 
 impl Default for UiScreen {

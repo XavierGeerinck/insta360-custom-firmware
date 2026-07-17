@@ -9,33 +9,20 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use waved_audio::callbacks::AudioFrame;
 use waved_audio::processed_frame::ProcessedAudioFrame;
-use waved_config::{ApiConfig, AudioConfig, DeviceConfig, NtpConfig, SecurityConfig, WavedConfig};
+use waved_config::{UploadMode, WavedConfig};
 use waved_meeting::MeetingService;
-use waved_state::{AudioMode, Command, DeviceEvent, MeetingState, WifiState};
+use waved_state::{Command, DeviceEvent, MeetingState, WifiState};
 
-fn test_config(endpoint: &str) -> WavedConfig {
-    WavedConfig {
-        device: DeviceConfig {
-            name: "test".into(),
-            language: "en".into(),
-        },
-        audio: AudioConfig {
-            mode: AudioMode::Omni,
-            speaker_volume: 100,
-            mic_volume: 100,
-        },
-        api: ApiConfig {
-            endpoint: endpoint.into(),
-            auth_token: "".into(),
-            retry_max: 1,
-            retry_backoff_ms: 10,
-        },
-        security: SecurityConfig {
-            device_password: "".into(),
-            ota_server: "".into(),
-        },
-        ntp: NtpConfig { servers: vec![] },
-    }
+fn test_config(endpoint: &str, upload_mode: UploadMode) -> WavedConfig {
+    let mut config = WavedConfig::default();
+    config.device.name = "test".into();
+    config.api.endpoint = endpoint.into();
+    config.api.upload_mode = upload_mode;
+    config.api.retry_max = 1;
+    config.api.retry_backoff_ms = 10;
+    config.storage.prune_uploaded_at_percent = 100;
+    config.storage.minimum_free_mb = 0;
+    config
 }
 
 fn fake_frame() -> ProcessedAudioFrame {
@@ -55,6 +42,10 @@ struct Harness {
 }
 
 async fn boot(connected: bool) -> Harness {
+    boot_with_mode(connected, UploadMode::Ask).await
+}
+
+async fn boot_with_mode(connected: bool, upload_mode: UploadMode) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let recordings_dir = dir.path().join("recordings");
     let db_path = dir.path().join("t.db").to_string_lossy().into_owned();
@@ -68,14 +59,16 @@ async fn boot(connected: bool) -> Harness {
         ..Default::default()
     });
     let (audio_tx, audio_rx) = mpsc::channel::<ProcessedAudioFrame>(16);
+    let (doa_tx, _) = broadcast::channel(16);
 
     let svc = MeetingService::new(
-        test_config("https://example.com/upload"),
+        test_config("https://example.com/upload", upload_mode),
         &db_path,
         recordings_dir.clone(),
         Arc::new(meeting_tx),
         events_tx,
         audio_rx,
+        doa_tx.subscribe(),
     )
     .await
     .unwrap();
@@ -104,7 +97,10 @@ async fn wait_for<F: Fn(&MeetingState) -> bool>(
             return;
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("timed out waiting for predicate; state = {:?}", *rx.borrow());
+            panic!(
+                "timed out waiting for predicate; state = {:?}",
+                *rx.borrow()
+            );
         }
         let _ = tokio::time::timeout(Duration::from_millis(50), rx.changed()).await;
     }
@@ -117,7 +113,10 @@ async fn record_and_stop(h: &mut Harness) -> uuid::Uuid {
     let _ = h.audio_tx.send(fake_frame()).await;
     tokio::time::sleep(Duration::from_millis(50)).await;
     h.cmd_tx.send(Command::StopRecording).unwrap();
-    wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_some() && !s.recording).await;
+    wait_for(&mut h.meeting_rx, |s| {
+        s.pending_decision.is_some() && !s.recording
+    })
+    .await;
     id
 }
 
@@ -166,9 +165,9 @@ async fn send_queues_upload_when_online() {
     let id = record_and_stop(&mut h).await;
     h.cmd_tx.send(Command::SendRecording(id)).unwrap();
     wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
-    // Simulated upload writes a copy under ./test_uploads/<id>.opus.
+    // Simulated upload writes a copy under ./test_uploads/<id>.wav.
     let sim_dir = std::path::Path::new("./test_uploads");
-    let target = sim_dir.join(format!("{id}.opus"));
+    let target = sim_dir.join(format!("{id}.wav"));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while !target.exists() && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -216,4 +215,36 @@ async fn start_during_pending_decision_is_ignored() {
     assert!(!s.recording, "StartRecording must be ignored while pending");
     assert_eq!(s.pending_decision, pending_before);
     let _ = id;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_mode_skips_confirmation_and_queues_offline() {
+    let mut h = boot_with_mode(false, UploadMode::Automatic).await;
+    h.cmd_tx.send(Command::StartRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| state.recording).await;
+    let _ = h.audio_tx.send(fake_frame()).await;
+    h.cmd_tx.send(Command::StopRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| {
+        !state.recording && state.pending_uploads == 1
+    })
+    .await;
+    assert!(h.meeting_rx.borrow().pending_decision.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn local_only_mode_skips_confirmation_without_queueing() {
+    let mut h = boot_with_mode(false, UploadMode::LocalOnly).await;
+    h.cmd_tx.send(Command::StartRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| state.recording).await;
+    let id = h.meeting_rx.borrow().meeting_id.unwrap();
+    let _ = h.audio_tx.send(fake_frame()).await;
+    h.cmd_tx.send(Command::StopRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| !state.recording).await;
+    assert!(h.meeting_rx.borrow().pending_decision.is_none());
+    assert_eq!(h.meeting_rx.borrow().pending_uploads, 0);
+    assert!(h
+        .recordings_dir
+        .join(id.to_string())
+        .join("metadata.json")
+        .exists());
 }

@@ -14,3 +14,4 @@ tracing.workspace = true
 thiserror.workspace = true
 hmac = "0.12"
 sha1 = "0.10"
+libc = "0.2"

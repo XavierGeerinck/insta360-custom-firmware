@@ -109,6 +109,8 @@ fn ui_thread_main(
     let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
     let mut noise_red = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
     let mut system = screens::system::SystemScreen::new(Arc::clone(&bus));
+    let mut webhook =
+        screens::webhook::WebhookScreen::new(Arc::clone(&bus), config.clone());
     let mut wifi_prov = screens::wifi_provisioning::WifiProvisioningScreen::new(Arc::clone(&bus));
     let mut volume = screens::volume::VolumeScreen::new(Arc::clone(&bus));
     let mut confirmation = screens::confirmation::ConfirmationScreen::new(Arc::clone(&bus));
@@ -176,8 +178,8 @@ fn ui_thread_main(
             // looking at the Volume screen (which renders its own bar).
             let new_speaker_vol = audio.speaker_volume;
             let new_speaker_muted = audio.speaker_muted;
-            let vol_changed = prev_speaker_vol.map_or(false, |p| p != new_speaker_vol);
-            let mute_changed = prev_speaker_muted.map_or(false, |p| p != new_speaker_muted);
+            let vol_changed = prev_speaker_vol.is_some_and(|p| p != new_speaker_vol);
+            let mute_changed = prev_speaker_muted.is_some_and(|p| p != new_speaker_muted);
             if (vol_changed || mute_changed) && nav.current != UiScreen::Volume {
                 let msg = if new_speaker_muted || new_speaker_vol == 0 {
                     "Volume: Off".to_string()
@@ -204,6 +206,7 @@ fn ui_thread_main(
                 &mut audio_mode,
                 &mut noise_red,
                 &mut system,
+                &mut webhook,
                 &mut wifi_prov,
                 &mut volume,
                 &mut return_to_recording,
@@ -279,6 +282,12 @@ fn ui_thread_main(
             }
             UiScreen::Settings => {}
             UiScreen::System => {}
+            UiScreen::Webhook => {
+                let meeting = meeting_rx.borrow().clone();
+                unsafe {
+                    webhook.update_state(&meeting);
+                }
+            }
             UiScreen::Volume => {
                 let audio = audio_rx.borrow().clone();
                 unsafe {
@@ -328,6 +337,7 @@ fn handle_command(
     audio_mode: &mut screens::audio_mode::AudioModeScreen,
     noise_red: &mut screens::noise_reduction::NoiseReductionScreen,
     system: &mut screens::system::SystemScreen,
+    webhook: &mut screens::webhook::WebhookScreen,
     wifi_prov: &mut screens::wifi_provisioning::WifiProvisioningScreen,
     volume: &mut screens::volume::VolumeScreen,
     return_to_recording: &mut bool,
@@ -391,6 +401,14 @@ fn handle_command(
             nav.navigate_to(UiScreen::WifiProvisioning);
             nav.set_root(root);
         }
+        Command::OpenWebhookStatus => {
+            let root = webhook.create();
+            unsafe {
+                lv_screen_load(root);
+            }
+            nav.navigate_to(UiScreen::Webhook);
+            nav.set_root(root);
+        }
         Command::OpenWifiProvisioning => {
             wifi_prov.begin_provisioning();
             let root = wifi_prov.create();
@@ -432,6 +450,14 @@ fn handle_command(
                 }
                 UiScreen::WifiProvisioning => {
                     // Wi-Fi provisioning → back to System settings (entered from there).
+                    let root = system.create();
+                    unsafe {
+                        lv_screen_load(root);
+                    }
+                    nav.navigate_to(UiScreen::System);
+                    nav.set_root(root);
+                }
+                UiScreen::Webhook => {
                     let root = system.create();
                     unsafe {
                         lv_screen_load(root);
