@@ -1,3 +1,5 @@
+config_version = 1
+
 [device]
 name = "Wave Open"
 language = "en"
@@ -8,10 +10,17 @@ speaker_volume = 150
 mic_volume = 200
 
 [api]
-endpoint = "https://localhost:8080/meetings/upload"
+endpoint = ""
 auth_token = ""
+upload_mode = "automatic"
+allow_insecure_http = false
 retry_max = 5
 retry_backoff_ms = 1000
+retry_max_backoff_ms = 60000
+
+[storage]
+prune_uploaded_at_percent = 85
+minimum_free_mb = 2048
 
 [security]
 device_password = ""
