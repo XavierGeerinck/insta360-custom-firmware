@@ -203,6 +203,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interruption_matrix_is_conservative_idempotent_and_preserves_bytes() {
+        let (temp, pool) = fixture().await;
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+        let partial = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::Recording,
+            &["audio.wav.partial"],
+        )
+        .await;
+        let wav_only = insert(&pool, &recordings, MeetingStatus::Recording, &["audio.wav"]).await;
+        let pair = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::Recording,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        let expected_files = [
+            (partial, "audio.wav.partial", b"fixture".as_slice()),
+            (wav_only, "audio.wav", b"fixture".as_slice()),
+            (pair, "audio.wav", b"fixture".as_slice()),
+            (pair, "metadata.json", b"fixture".as_slice()),
+        ];
+
+        let first = run(&pool, &recordings).await.unwrap();
+        let second = run(&pool, &recordings).await.unwrap();
+        assert_eq!(first.normalized, 3);
+        assert_eq!(first.incomplete, 2);
+        assert_eq!(second, ReconcileReport::default());
+
+        for (id, expected) in [
+            (partial, MeetingStatus::ArtifactError),
+            (wav_only, MeetingStatus::MissingArtifact),
+            (pair, MeetingStatus::LocalOnly),
+        ] {
+            let (status,): (String,) =
+                sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, expected.as_str());
+        }
+        for (id, filename, expected) in expected_files {
+            assert_eq!(
+                tokio::fs::read(recordings.join(id.to_string()).join(filename))
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert!(
+            db::claim_next_upload(&pool, 5).await.unwrap().is_none(),
+            "an interrupted artifact became uploadable"
+        );
+    }
+
+    #[tokio::test]
     async fn orphan_pair_is_imported_local_only_once() {
         let (temp, pool) = fixture().await;
         let recordings = temp.path().join("recordings");

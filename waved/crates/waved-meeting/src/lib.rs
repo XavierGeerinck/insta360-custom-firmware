@@ -254,10 +254,6 @@ impl MeetingService {
                         Ok(cmd) => {
                             match cmd {
                                 Command::StartRecording => {
-                                    if self.meeting_tx.borrow().storage_blocked {
-                                        warn!("recording start blocked by configured storage limits");
-                                        continue;
-                                    }
                                     if let Some(fault) =
                                         self.meeting_tx.borrow().recording_blocked_reason
                                     {
@@ -270,6 +266,17 @@ impl MeetingService {
                                     }
                                     if self.meeting_tx.borrow().pending_decision.is_some() {
                                         warn!("ignoring StartRecording: previous take awaits decision");
+                                        continue;
+                                    }
+                                    retention::enforce(
+                                        &self.pool,
+                                        &self.recordings_dir,
+                                        &self.config.storage,
+                                        &self.meeting_tx,
+                                    )
+                                    .await;
+                                    if self.meeting_tx.borrow().storage_blocked {
+                                        warn!("recording start blocked by configured storage limits");
                                         continue;
                                     }
                                     match recorder::ActiveRecording::start_with_integrity_epoch(
@@ -320,6 +327,12 @@ impl MeetingService {
                                                 // Freeze the pre-roll for the duration of the take — the
                                                 // recording's own writer owns the audio now. Resumed on stop.
                                                 prebuffer.pause();
+                                                #[cfg(feature = "recording-integrity-test-hooks")]
+                                                finalization_test_checkpoint(
+                                                    FinalizationCheckpoint::ActivePartial,
+                                                    id,
+                                                )
+                                                .await;
                                             }
                                         }
                                         Err(e) => error!("failed to start recording: {e}"),
@@ -452,6 +465,8 @@ impl MeetingService {
                 return;
             }
         };
+        #[cfg(feature = "recording-integrity-test-hooks")]
+        finalization_test_checkpoint(FinalizationCheckpoint::WavFinalized, id).await;
 
         let bookmarks = db::get_bookmarks(&self.pool, &id)
             .await
@@ -484,6 +499,8 @@ impl MeetingService {
             });
             return;
         }
+        #[cfg(feature = "recording-integrity-test-hooks")]
+        finalization_test_checkpoint(FinalizationCheckpoint::MetadataFinalized, id).await;
 
         let status = match self.config.api.upload_mode {
             UploadMode::Automatic => MeetingStatus::Queued,
@@ -705,6 +722,71 @@ impl MeetingService {
     }
 }
 
+#[cfg(feature = "recording-integrity-test-hooks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FinalizationCheckpoint {
+    ActivePartial,
+    WavFinalized,
+    MetadataFinalized,
+}
+
+#[cfg(feature = "recording-integrity-test-hooks")]
+impl FinalizationCheckpoint {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ActivePartial => "active-partial",
+            Self::WavFinalized => "wav-finalized",
+            Self::MetadataFinalized => "metadata-finalized",
+        }
+    }
+}
+
+#[cfg(feature = "recording-integrity-test-hooks")]
+async fn finalization_test_checkpoint(checkpoint: FinalizationCheckpoint, id: Uuid) {
+    const REQUEST_PATH: &str = "/tmp/waved-finalization-checkpoint";
+    const READY_PATH: &str = "/tmp/waved-finalization-ready";
+
+    let requested = match tokio::fs::read_to_string(REQUEST_PATH).await {
+        Ok(requested) => requested,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => {
+            warn!("finalization TEST CHECKPOINT request read failed: {error}");
+            return;
+        }
+    };
+    if requested.trim() != checkpoint.as_str() {
+        return;
+    }
+
+    let ready_new = format!("{READY_PATH}.new");
+    let ready = format!("{} {id}\n", checkpoint.as_str());
+    if let Err(error) = tokio::fs::write(&ready_new, ready).await {
+        warn!("finalization TEST CHECKPOINT marker write failed: {error}");
+        return;
+    }
+    if let Err(error) = tokio::fs::rename(&ready_new, READY_PATH).await {
+        warn!("finalization TEST CHECKPOINT marker publish failed: {error}");
+        let _ = tokio::fs::remove_file(&ready_new).await;
+        return;
+    }
+    warn!(
+        "finalization TEST CHECKPOINT {} reached for {id}",
+        checkpoint.as_str()
+    );
+
+    while tokio::fs::try_exists(REQUEST_PATH)
+        .await
+        .unwrap_or(false)
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let _ = tokio::fs::remove_file(READY_PATH).await;
+    warn!(
+        "finalization TEST CHECKPOINT {} released for {id}",
+        checkpoint.as_str()
+    );
+}
+
 #[cfg(test)]
 mod wiring_tests {
     use super::*;
@@ -717,6 +799,23 @@ mod wiring_tests {
     use waved_state::{
         Command, DeviceEvent, MeetingState, RecordingIntegrityFault,
     };
+
+    #[cfg(feature = "recording-integrity-test-hooks")]
+    #[test]
+    fn finalization_checkpoint_names_are_stable() {
+        assert_eq!(
+            FinalizationCheckpoint::ActivePartial.as_str(),
+            "active-partial"
+        );
+        assert_eq!(
+            FinalizationCheckpoint::WavFinalized.as_str(),
+            "wav-finalized"
+        );
+        assert_eq!(
+            FinalizationCheckpoint::MetadataFinalized.as_str(),
+            "metadata-finalized"
+        );
+    }
 
     fn high(ms: u64, az: f32) -> DoaFrame {
         DoaFrame {

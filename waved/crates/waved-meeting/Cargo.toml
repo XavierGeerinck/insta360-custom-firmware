@@ -3,6 +3,11 @@ name = "waved-meeting"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "retention-acceptance"
+path = "src/bin/retention-acceptance.rs"
+required-features = ["recording-integrity-test-hooks"]
+
 [features]
 simulate = []
 recording-integrity-test-hooks = []
@@ -11,7 +16,7 @@ recording-integrity-test-hooks = []
 waved-state = { path = "../waved-state" }
 waved-config = { path = "../waved-config" }
 waved-audio = { path = "../waved-audio" }
-tokio = { workspace = true, features = ["sync", "time", "fs", "io-util"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros", "rt"] }
 uuid.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -24,6 +24,8 @@ pub struct AudioStats {
     pub frames_emitted: u64,
     pub frames_dropped: u64,
     pub xrun_count: u64,
+    pub raw_frames_dropped: u64,
+    pub processed_frames_dropped: u64,
     pub rms_per_channel: Vec<f32>,
     pub clipping_rate_per_channel: Vec<f32>,
     pub dc_offset_per_channel: Vec<f32>,
@@ -230,6 +232,8 @@ pub fn compute_stats_with_processed(
         frames_emitted: cap_stats.frames_emitted.load(Ordering::Relaxed),
         frames_dropped: cap_stats.frames_dropped.load(Ordering::Relaxed),
         xrun_count: cap_stats.xrun_count.load(Ordering::Relaxed),
+        raw_frames_dropped: audio_state.raw_frames_dropped,
+        processed_frames_dropped: audio_state.processed_frames_dropped,
         rms_per_channel: per_ch_rms,
         clipping_rate_per_channel: per_ch_clip,
         dc_offset_per_channel: per_ch_dc,
@@ -387,6 +391,8 @@ mod tests {
             doa_horizontal: 47.5,
             doa_pitch: -12.0,
             doa_active: true,
+            raw_frames_dropped: 3,
+            processed_frames_dropped: 4,
             ..Default::default()
         };
         let s = compute_stats_with_processed(
@@ -399,6 +405,8 @@ mod tests {
         assert!((s.doa_horizontal - 47.5).abs() < 1e-6);
         assert!((s.doa_pitch + 12.0).abs() < 1e-6);
         assert!(s.doa_active);
+        assert_eq!(s.raw_frames_dropped, 3);
+        assert_eq!(s.processed_frames_dropped, 4);
     }
 
     #[test]
@@ -518,6 +526,8 @@ mod tests_hid_wiring {
             frames_emitted: 0,
             frames_dropped: 0,
             xrun_count: 0,
+            raw_frames_dropped: 0,
+            processed_frames_dropped: 0,
             rms_per_channel: vec![],
             clipping_rate_per_channel: vec![],
             dc_offset_per_channel: vec![],
