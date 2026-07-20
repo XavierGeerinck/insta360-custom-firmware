@@ -21,9 +21,12 @@ use tokio::sync::{broadcast, mpsc, watch, Notify};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 use waved_audio::doa::DoaFrame;
+use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::{UploadMode, WavedConfig};
-use waved_state::{Command, DeviceEvent, MeetingState, PendingDecision, WifiState};
+use waved_state::{
+    Command, DeviceEvent, MeetingState, PendingDecision, RecordingIntegrityFault, WifiState,
+};
 
 pub struct MeetingService {
     config: WavedConfig,
@@ -37,8 +40,17 @@ pub struct MeetingService {
     /// Per-frame DoA stream from F2's AudioService::subscribe_doa(). Drained
     /// only when a meeting is active; otherwise frames are discarded.
     doa_rx: broadcast::Receiver<DoaFrame>,
+    integrity: Arc<RecordingIntegrity>,
+    integrity_rx: mpsc::UnboundedReceiver<IntegritySignal>,
     device_id: String,
     webhook_test_marker: PathBuf,
+}
+
+pub struct MeetingPipelineInputs {
+    pub audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
+    pub doa_rx: broadcast::Receiver<DoaFrame>,
+    pub integrity: Arc<RecordingIntegrity>,
+    pub integrity_rx: mpsc::UnboundedReceiver<IntegritySignal>,
 }
 
 impl MeetingService {
@@ -50,6 +62,31 @@ impl MeetingService {
         events_tx: broadcast::Sender<DeviceEvent>,
         audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
         doa_rx: broadcast::Receiver<DoaFrame>,
+    ) -> Result<Self, sqlx::Error> {
+        let (_integrity_tx, integrity_rx) = mpsc::unbounded_channel();
+        Self::new_with_integrity(
+            config,
+            db_path,
+            recordings_dir,
+            meeting_tx,
+            events_tx,
+            MeetingPipelineInputs {
+                audio_rx,
+                doa_rx,
+                integrity: Arc::new(RecordingIntegrity::default()),
+                integrity_rx,
+            },
+        )
+        .await
+    }
+
+    pub async fn new_with_integrity(
+        config: WavedConfig,
+        db_path: &str,
+        recordings_dir: PathBuf,
+        meeting_tx: Arc<watch::Sender<MeetingState>>,
+        events_tx: broadcast::Sender<DeviceEvent>,
+        inputs: MeetingPipelineInputs,
     ) -> Result<Self, sqlx::Error> {
         let pool = db::init_pool(db_path).await?;
         if let Err(error) = reconcile::run(&pool, &recordings_dir).await {
@@ -70,8 +107,10 @@ impl MeetingService {
             recordings_dir,
             meeting_tx,
             events_tx,
-            audio_rx,
-            doa_rx,
+            audio_rx: inputs.audio_rx,
+            doa_rx: inputs.doa_rx,
+            integrity: inputs.integrity,
+            integrity_rx: inputs.integrity_rx,
             device_id: metadata::stable_device_id(),
             webhook_test_marker,
         })
@@ -127,9 +166,41 @@ impl MeetingService {
                 // writer. Append is synchronous (BufWriter under the hood),
                 // a few hundred microseconds per ~21 ms ALSA period.
                 Some(frame) = self.audio_rx.recv() => {
-                    match active.as_mut() {
-                        Some(rec) => rec.append_samples(&frame.mic_mono_f32),
-                        None => prebuffer.push(&frame.mic_mono_f32),
+                    if let Some(rec) = active.as_mut() {
+                        if let Err(error) = rec.append_samples(&frame.mic_mono_f32) {
+                            warn!("recording WAV write failed: {error}");
+                            self.integrity
+                                .record_fault(RecordingIntegrityFault::WavWriteFailed);
+                            let rec = active.take().expect("active recording disappeared");
+                            diarizer = None;
+                            self.abort_recording(
+                                rec,
+                                RecordingIntegrityFault::WavWriteFailed,
+                            )
+                            .await;
+                            prebuffer.clear();
+                            prebuffer.resume();
+                        }
+                    } else {
+                        prebuffer.push(&frame.mic_mono_f32);
+                    }
+                }
+                Some(signal) = self.integrity_rx.recv() => {
+                    let fault = signal.fault;
+                    let affects_active = active
+                        .as_ref()
+                        .is_some_and(|rec| self.integrity.epoch() != rec.integrity_epoch());
+                    if affects_active {
+                        let rec = active.take().expect("active recording disappeared");
+                        diarizer = None;
+                        self.abort_recording(rec, fault).await;
+                        prebuffer.clear();
+                        prebuffer.resume();
+                    } else {
+                        self.publish_idle_fault(fault);
+                    }
+                    if let Some(acknowledgement) = signal.acknowledgement {
+                        let _ = acknowledgement.send(());
                     }
                 }
                 // Drain DoA frames into the active diarizer. Frames arriving
@@ -187,6 +258,12 @@ impl MeetingService {
                                         warn!("recording start blocked by configured storage limits");
                                         continue;
                                     }
+                                    if let Some(fault) =
+                                        self.meeting_tx.borrow().recording_blocked_reason
+                                    {
+                                        warn!("recording start blocked: {}", fault.diagnostic());
+                                        continue;
+                                    }
                                     if active.is_some() {
                                         warn!("already recording, ignoring start");
                                         continue;
@@ -195,10 +272,13 @@ impl MeetingService {
                                         warn!("ignoring StartRecording: previous take awaits decision");
                                         continue;
                                     }
-                                    match recorder::ActiveRecording::start(
+                                    match recorder::ActiveRecording::start_with_integrity_epoch(
                                         &self.recordings_dir,
                                         &format!("{:?}", self.config.audio.mode),
-                                    ).await {
+                                        self.integrity.epoch(),
+                                    )
+                                    .await
+                                    {
                                         Ok(rec) => {
                                             let id = rec.id;
                                             let _ = db::insert_meeting(
@@ -218,16 +298,35 @@ impl MeetingService {
                                             // new WAV before any live frames arrive.
                                             let prefix = prebuffer.drain_all();
                                             // active was just set above; the unwrap is safe by construction.
-                                            active.as_mut().unwrap().append_pre_roll(&prefix);
-                                            // Freeze the pre-roll for the duration of the take — the
-                                            // recording's own writer owns the audio now. Resumed on stop.
-                                            prebuffer.pause();
+                                            if let Err(error) =
+                                                active.as_mut().unwrap().append_pre_roll(&prefix)
+                                            {
+                                                warn!("recording pre-roll write failed: {error}");
+                                                self.integrity.record_fault(
+                                                    RecordingIntegrityFault::WavWriteFailed,
+                                                );
+                                                let rec = active
+                                                    .take()
+                                                    .expect("active recording disappeared");
+                                                diarizer = None;
+                                                self.abort_recording(
+                                                    rec,
+                                                    RecordingIntegrityFault::WavWriteFailed,
+                                                )
+                                                .await;
+                                                prebuffer.clear();
+                                                prebuffer.resume();
+                                            } else {
+                                                // Freeze the pre-roll for the duration of the take — the
+                                                // recording's own writer owns the audio now. Resumed on stop.
+                                                prebuffer.pause();
+                                            }
                                         }
                                         Err(e) => error!("failed to start recording: {e}"),
                                     }
                                 }
                                 Command::StopRecording => {
-                                    if let Some(rec) = active.take() {
+                                    if let Some(mut rec) = active.take() {
                                         if let Some(mut d) = diarizer.take() {
                                             if let Some(seg) = d.finalize() {
                                                 if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
@@ -235,9 +334,19 @@ impl MeetingService {
                                                 }
                                             }
                                         }
-                                        self.stop_recording(rec).await;
-                                        upload_wake.notify_one();
+                                        let (fault, acknowledgements) =
+                                            self.drain_before_stop(&mut rec);
+                                        if let Some(fault) = fault {
+                                            self.abort_recording(rec, fault).await;
+                                        } else {
+                                            self.stop_recording(rec).await;
+                                            upload_wake.notify_one();
+                                        }
+                                        for acknowledgement in acknowledgements {
+                                            let _ = acknowledgement.send(());
+                                        }
                                         // Re-arm the pre-roll now that the take is closed.
+                                        prebuffer.clear();
                                         prebuffer.resume();
                                     }
                                 }
@@ -336,13 +445,10 @@ impl MeetingService {
             Ok(recording) => recording,
             Err(error) => {
                 error!("failed to finalize recording {id}: {error}");
-                let _ = db::set_status(&self.pool, &id, MeetingStatus::ArtifactError).await;
-                self.meeting_tx.send_modify(|state| {
-                    state.recording = false;
-                    state.paused = false;
-                    state.meeting_id = None;
-                    state.pending_decision = None;
-                });
+                self.integrity
+                    .record_fault(RecordingIntegrityFault::WavWriteFailed);
+                self.mark_recording_fault(id, duration, RecordingIntegrityFault::WavWriteFailed)
+                    .await;
                 return;
             }
         };
@@ -428,6 +534,108 @@ impl MeetingService {
         .await;
     }
 
+    fn drain_before_stop(
+        &mut self,
+        rec: &mut recorder::ActiveRecording,
+    ) -> (
+        Option<RecordingIntegrityFault>,
+        Vec<tokio::sync::oneshot::Sender<()>>,
+    ) {
+        let mut fault = None;
+        let mut acknowledgements = Vec::new();
+
+        loop {
+            match self.audio_rx.try_recv() {
+                Ok(frame) => {
+                    if rec.append_samples(&frame.mic_mono_f32).is_err() {
+                        self.integrity
+                            .record_fault(RecordingIntegrityFault::WavWriteFailed);
+                        fault.get_or_insert(RecordingIntegrityFault::WavWriteFailed);
+                        break;
+                    }
+                }
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    self.integrity
+                        .record_fault(RecordingIntegrityFault::ProcessedFrameChannelClosed);
+                    fault.get_or_insert(RecordingIntegrityFault::ProcessedFrameChannelClosed);
+                    break;
+                }
+            }
+        }
+
+        while let Ok(signal) = self.integrity_rx.try_recv() {
+            if self.integrity.epoch() != rec.integrity_epoch() {
+                fault.get_or_insert(signal.fault);
+            }
+            if let Some(acknowledgement) = signal.acknowledgement {
+                acknowledgements.push(acknowledgement);
+            }
+        }
+        if self.integrity.epoch() != rec.integrity_epoch() {
+            fault = fault.or_else(|| self.integrity.last_fault());
+        }
+
+        (fault, acknowledgements)
+    }
+
+    async fn abort_recording(
+        &self,
+        rec: recorder::ActiveRecording,
+        fault: RecordingIntegrityFault,
+    ) {
+        let id = rec.id;
+        let duration = rec.duration_secs();
+        match rec.abort() {
+            Ok(path) => warn!(
+                "recording interrupted: {id}; partial WAV preserved at {} ({})",
+                path.display(),
+                fault.diagnostic()
+            ),
+            Err(error) => warn!("failed to close partial recording {id}: {error}"),
+        }
+        self.mark_recording_fault(id, duration, fault).await;
+    }
+
+    async fn mark_recording_fault(
+        &self,
+        id: Uuid,
+        duration: u32,
+        fault: RecordingIntegrityFault,
+    ) {
+        if let Err(error) = db::mark_artifact_error(&self.pool, &id, duration, fault).await {
+            warn!("failed to persist recording integrity fault for {id}: {error}");
+        }
+        self.meeting_tx.send_modify(|state| {
+            state.recording = false;
+            state.paused = false;
+            state.meeting_id = None;
+            state.duration_secs = duration;
+            state.pending_decision = None;
+            state.last_recording_error = Some(fault);
+            if fault.blocks_recording() {
+                state.recording_blocked_reason = Some(fault);
+            }
+        });
+        let _ = self.events_tx.send(DeviceEvent::RecordingIntegrityFailed {
+            meeting_id: Some(id),
+            fault,
+        });
+    }
+
+    fn publish_idle_fault(&self, fault: RecordingIntegrityFault) {
+        self.meeting_tx.send_modify(|state| {
+            state.last_recording_error = Some(fault);
+            if fault.blocks_recording() {
+                state.recording_blocked_reason = Some(fault);
+            }
+        });
+        let _ = self.events_tx.send(DeviceEvent::RecordingIntegrityFailed {
+            meeting_id: None,
+            fault,
+        });
+    }
+
     /// Returns the recording dir for an id under self.recordings_dir.
     fn dir_for(&self, id: &Uuid) -> PathBuf {
         self.recordings_dir.join(id.to_string())
@@ -503,8 +711,12 @@ mod wiring_tests {
     use std::sync::Arc;
     use tokio::sync::{broadcast, mpsc, watch};
     use waved_audio::doa::{DoaBackend, DoaFrame};
+    use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
+    use waved_audio::processed_frame::ProcessedAudioFrame;
     use waved_config::WavedConfig;
-    use waved_state::{Command, DeviceEvent, MeetingState};
+    use waved_state::{
+        Command, DeviceEvent, MeetingState, RecordingIntegrityFault,
+    };
 
     fn high(ms: u64, az: f32) -> DoaFrame {
         DoaFrame {
@@ -515,6 +727,18 @@ mod wiring_tests {
             confidence: 0.8,
             vad: true,
             backend: DoaBackend::GccPhat,
+        }
+    }
+
+    fn processed_frame(timestamp_ms: u64) -> ProcessedAudioFrame {
+        ProcessedAudioFrame {
+            mic_mono_f32: vec![0.25; 480],
+            mic_stereo_f32: None,
+            reference_f32: vec![0.0; 480],
+            sample_rate: 48_000,
+            timestamp_ms,
+            raw_mic_i16: vec![0; 480],
+            raw_mic_channels: 1,
         }
     }
 
@@ -582,5 +806,169 @@ mod wiring_tests {
         assert!(rows.len() >= 2, "expected ≥ 2 segments, got {}", rows.len());
         assert_eq!(rows[0].0, 1, "first segment should be speaker_id=1");
         assert_eq!(rows[1].0, 2, "second segment should be speaker_id=2");
+    }
+
+    #[tokio::test]
+    async fn integrity_signal_aborts_take_before_ack_and_excludes_upload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("t.db");
+        let recordings_dir = tmp.path().join("rec");
+        std::fs::create_dir_all(&recordings_dir).unwrap();
+        let (meeting_tx_inner, _meeting_rx) = watch::channel(MeetingState::default());
+        let meeting_tx = Arc::new(meeting_tx_inner);
+        let (events_tx, mut events_rx) = broadcast::channel::<DeviceEvent>(16);
+        let (audio_tx, audio_rx) = mpsc::channel(64);
+        let (doa_tx, _) = broadcast::channel::<DoaFrame>(4);
+        let integrity = Arc::new(RecordingIntegrity::default());
+        let (integrity_tx, integrity_rx) = mpsc::unbounded_channel();
+        let mut config = WavedConfig::default();
+        config.storage.prune_uploaded_at_percent = 100;
+        config.storage.minimum_free_mb = 0;
+        let svc = MeetingService::new_with_integrity(
+            config,
+            db_path.to_str().unwrap(),
+            recordings_dir.clone(),
+            Arc::clone(&meeting_tx),
+            events_tx,
+            MeetingPipelineInputs {
+                audio_rx,
+                doa_rx: doa_tx.subscribe(),
+                integrity: Arc::clone(&integrity),
+                integrity_rx,
+            },
+        )
+        .await
+        .unwrap();
+        let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(16);
+        let (_wifi_tx, wifi_rx) = watch::channel(WifiState::default());
+        let _handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
+
+        cmd_tx.send(Command::StartRecording).unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let id = meeting_tx.borrow().meeting_id.expect("recording started");
+        audio_tx.send(processed_frame(0)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        integrity_tx
+            .send(IntegritySignal::with_acknowledgement(
+                RecordingIntegrityFault::ProcessedFrameDropped,
+                ack_tx,
+            ))
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), ack_rx)
+            .await
+            .expect("fault acknowledgement timed out")
+            .unwrap();
+
+        let pool = db::init_pool(db_path.to_str().unwrap()).await.unwrap();
+        let row: (String, Option<String>) =
+            sqlx::query_as("SELECT upload_status, last_error FROM meetings WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(row.0, MeetingStatus::ArtifactError.as_str());
+        assert_eq!(
+            row.1.as_deref(),
+            Some(RecordingIntegrityFault::ProcessedFrameDropped.diagnostic())
+        );
+        let dir = recordings_dir.join(id.to_string());
+        assert!(dir.join("audio.wav.partial").exists());
+        assert!(!dir.join("audio.wav").exists());
+        assert!(!dir.join("metadata.json").exists());
+        assert!(!meeting_tx.borrow().recording);
+        assert_eq!(
+            meeting_tx.borrow().last_recording_error,
+            Some(RecordingIntegrityFault::ProcessedFrameDropped)
+        );
+        assert_eq!(meeting_tx.borrow().recording_blocked_reason, None);
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(DeviceEvent::RecordingStarted(event_id)) if event_id == id
+        ));
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(DeviceEvent::RecordingIntegrityFailed {
+                meeting_id: Some(event_id),
+                fault: RecordingIntegrityFault::ProcessedFrameDropped,
+            }) if event_id == id
+        ));
+        assert!(db::claim_next_upload(&pool, 5).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_drains_queued_fault_instead_of_finalizing_and_storage_fault_blocks_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("t.db");
+        let recordings_dir = tmp.path().join("rec");
+        std::fs::create_dir_all(&recordings_dir).unwrap();
+        let (meeting_tx_inner, _meeting_rx) = watch::channel(MeetingState::default());
+        let meeting_tx = Arc::new(meeting_tx_inner);
+        let (events_tx, _events_rx) = broadcast::channel::<DeviceEvent>(16);
+        let (audio_tx, audio_rx) = mpsc::channel(64);
+        let (doa_tx, _) = broadcast::channel::<DoaFrame>(4);
+        let integrity = Arc::new(RecordingIntegrity::default());
+        let (integrity_tx, integrity_rx) = mpsc::unbounded_channel();
+        let mut config = WavedConfig::default();
+        config.storage.prune_uploaded_at_percent = 100;
+        config.storage.minimum_free_mb = 0;
+        let svc = MeetingService::new_with_integrity(
+            config,
+            db_path.to_str().unwrap(),
+            recordings_dir.clone(),
+            Arc::clone(&meeting_tx),
+            events_tx,
+            MeetingPipelineInputs {
+                audio_rx,
+                doa_rx: doa_tx.subscribe(),
+                integrity: Arc::clone(&integrity),
+                integrity_rx,
+            },
+        )
+        .await
+        .unwrap();
+        let (cmd_tx, cmd_rx) = broadcast::channel::<Command>(16);
+        let (_wifi_tx, wifi_rx) = watch::channel(WifiState::default());
+        let _handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
+
+        cmd_tx.send(Command::StartRecording).unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        let id = meeting_tx.borrow().meeting_id.expect("recording started");
+        audio_tx.send(processed_frame(0)).await.unwrap();
+        integrity.record_fault(RecordingIntegrityFault::WavWriteFailed);
+        integrity_tx
+            .send(IntegritySignal::new(
+                RecordingIntegrityFault::WavWriteFailed,
+            ))
+            .unwrap();
+        cmd_tx.send(Command::StopRecording).unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let pool = db::init_pool(db_path.to_str().unwrap()).await.unwrap();
+        let (status,): (String,) =
+            sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, MeetingStatus::ArtifactError.as_str());
+        let dir = recordings_dir.join(id.to_string());
+        assert!(dir.join("audio.wav.partial").exists());
+        assert!(!dir.join("audio.wav").exists());
+        assert_eq!(
+            meeting_tx.borrow().recording_blocked_reason,
+            Some(RecordingIntegrityFault::WavWriteFailed)
+        );
+
+        cmd_tx.send(Command::StartRecording).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!meeting_tx.borrow().recording);
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM meetings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "blocked start created another meeting");
     }
 }

@@ -8,6 +8,7 @@ pub mod screens;
 pub mod status_bar;
 pub mod theme;
 pub mod toast;
+mod integrity_notice;
 mod upload_notice;
 
 use std::sync::Arc;
@@ -219,6 +220,14 @@ fn ui_thread_main(
         }
 
         while let Ok(event) = event_rx.try_recv() {
+            if let Some(integrity_toast) = integrity_notice::for_event(&event) {
+                unsafe {
+                    toast.show(
+                        integrity_toast.message(),
+                        integrity_toast.duration_ms(),
+                    );
+                }
+            }
             if let Some(upload_toast) = upload_notices.handle(&event) {
                 unsafe {
                     toast.show(upload_toast.message(), upload_toast.duration_ms());
@@ -372,7 +381,10 @@ fn handle_command(
         Command::SetSpeakerVolume(_) | Command::ToggleSpeakerMute => {
             audio_fx::play(audio_fx::SFX_SPK_VOL);
         }
-        Command::StartRecording => {
+        Command::StartRecording
+            if !bus.meeting.borrow().storage_blocked
+                && bus.meeting.borrow().recording_blocked_reason.is_none() =>
+        {
             audio_fx::play(audio_fx::SFX_AIRECORD);
         }
         Command::Shutdown => {
@@ -382,6 +394,14 @@ fn handle_command(
     }
 
     match cmd {
+        Command::StartRecording
+            if bus.meeting.borrow().storage_blocked
+                || bus.meeting.borrow().recording_blocked_reason.is_some() =>
+        {
+            unsafe {
+                toast.show("Recording unavailable", 2_500);
+            }
+        }
         Command::StopRecording => {
             if let Some(id) = bus.meeting.borrow().meeting_id {
                 upload_notices.track(id);

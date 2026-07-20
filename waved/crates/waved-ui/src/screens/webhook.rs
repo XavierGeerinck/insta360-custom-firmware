@@ -40,12 +40,19 @@ pub fn render_model(config: &WavedConfig, meeting: &MeetingState) -> WebhookRend
         "{} queued  •  {} failed",
         meeting.pending_uploads, meeting.failed_uploads
     );
+    let recording_blocked = meeting.recording_blocked_reason;
     if meeting.storage_blocked {
         delivery.push_str("  •  Storage full");
-    } else if let Some(success) = &meeting.last_upload_success_at {
-        delivery.push_str(&format!("\nLast sent {}", compact_timestamp(success)));
-    } else if let Some(error) = &meeting.last_upload_error {
-        delivery.push_str(&format!("\n{error}"));
+    }
+    if let Some(fault) = recording_blocked {
+        delivery.push_str(&format!("\nRecording unavailable: {}", fault.diagnostic()));
+    }
+    if !meeting.storage_blocked && recording_blocked.is_none() {
+        if let Some(success) = &meeting.last_upload_success_at {
+            delivery.push_str(&format!("\nLast sent {}", compact_timestamp(success)));
+        } else if let Some(error) = &meeting.last_upload_error {
+            delivery.push_str(&format!("\n{error}"));
+        }
     }
     WebhookRenderModel {
         endpoint,
@@ -252,5 +259,16 @@ mod tests {
         assert!(model.delivery.contains("3 queued"));
         assert!(model.delivery.contains("2 failed"));
         assert!(model.delivery.contains("Storage full"));
+    }
+
+    #[test]
+    fn recording_block_uses_only_the_fixed_integrity_diagnostic() {
+        let meeting = MeetingState {
+            recording_blocked_reason: Some(waved_state::RecordingIntegrityFault::WavWriteFailed),
+            ..Default::default()
+        };
+        let model = render_model(&WavedConfig::default(), &meeting);
+        assert!(model.delivery.contains("Recording unavailable"));
+        assert!(model.delivery.contains("recording storage write failed"));
     }
 }

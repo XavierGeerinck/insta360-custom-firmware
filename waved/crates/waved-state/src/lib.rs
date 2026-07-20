@@ -53,6 +53,15 @@ pub struct AudioState {
     /// Host wrote Report 0x06 (Mute LED) — `true` while the host signals
     /// "the call is muted host-side". Informational only.
     pub call_host_muted: bool,
+    /// False after the live capture/DSP producer terminates unexpectedly.
+    /// A watchdog restart creates a fresh healthy state.
+    pub capture_healthy: bool,
+    /// Recovered ALSA xruns observed since process start.
+    pub capture_xruns: u64,
+    /// Raw capture frames dropped before DSP since process start.
+    pub raw_frames_dropped: u64,
+    /// Processed frames dropped before the meeting recorder since process start.
+    pub processed_frames_dropped: u64,
 }
 
 impl Default for AudioState {
@@ -80,7 +89,67 @@ impl Default for AudioState {
             call_off_hook: false,
             call_ringing: false,
             call_host_muted: false,
+            capture_healthy: true,
+            capture_xruns: 0,
+            raw_frames_dropped: 0,
+            processed_frames_dropped: 0,
         }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordingIntegrityFault {
+    CaptureEnded = 1,
+    CaptureReadFailed = 2,
+    CaptureXrun = 3,
+    RawFrameDropped = 4,
+    RawFrameChannelClosed = 5,
+    ProcessedFrameDropped = 6,
+    ProcessedFrameChannelClosed = 7,
+    WavWriteFailed = 8,
+}
+
+impl RecordingIntegrityFault {
+    pub const fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            1 => Self::CaptureEnded,
+            2 => Self::CaptureReadFailed,
+            3 => Self::CaptureXrun,
+            4 => Self::RawFrameDropped,
+            5 => Self::RawFrameChannelClosed,
+            6 => Self::ProcessedFrameDropped,
+            7 => Self::ProcessedFrameChannelClosed,
+            8 => Self::WavWriteFailed,
+            _ => return None,
+        })
+    }
+
+    pub const fn diagnostic(self) -> &'static str {
+        match self {
+            Self::CaptureEnded => "audio capture ended unexpectedly",
+            Self::CaptureReadFailed => "audio capture read failed",
+            Self::CaptureXrun => "audio capture lost frames",
+            Self::RawFrameDropped => "raw audio frame dropped",
+            Self::RawFrameChannelClosed => "raw audio channel closed",
+            Self::ProcessedFrameDropped => "recording audio frame dropped",
+            Self::ProcessedFrameChannelClosed => "recording audio channel closed",
+            Self::WavWriteFailed => "recording storage write failed",
+        }
+    }
+
+    pub const fn requires_restart(self) -> bool {
+        matches!(
+            self,
+            Self::CaptureEnded
+                | Self::CaptureReadFailed
+                | Self::RawFrameChannelClosed
+                | Self::ProcessedFrameChannelClosed
+        )
+    }
+
+    pub const fn blocks_recording(self) -> bool {
+        matches!(self, Self::WavWriteFailed)
     }
 }
 
@@ -187,6 +256,11 @@ pub struct MeetingState {
     /// True when storage is over its configured threshold and there are no
     /// delivered recordings that can be pruned safely.
     pub storage_blocked: bool,
+    /// Persistent within the current process when recording storage cannot be
+    /// trusted. New recording starts are rejected while set.
+    pub recording_blocked_reason: Option<RecordingIntegrityFault>,
+    /// Last sanitized recording-integrity fault observed in this process.
+    pub last_recording_error: Option<RecordingIntegrityFault>,
     /// `Some(...)` while the recording-screen Stop has fired but the user
     /// has not yet chosen Save / Send / Discard. UI uses presence of this
     /// field to switch to the ConfirmationScreen, and clears it via one of
@@ -241,6 +315,10 @@ pub enum DeviceEvent {
     RecordingUploadSucceeded(Uuid),
     RecordingUploadDeferred(Uuid),
     RecordingUploadNeedsAttention(Uuid),
+    RecordingIntegrityFailed {
+        meeting_id: Option<Uuid>,
+        fault: RecordingIntegrityFault,
+    },
     LowBattery(u8),
     MotorObstruction,
 }
@@ -443,6 +521,48 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn recording_integrity_event_keeps_fault_and_meeting_id() {
+        let bus = StateBus::new();
+        let mut rx = bus.events.subscribe();
+        let id = Uuid::new_v4();
+        bus.events
+            .send(DeviceEvent::RecordingIntegrityFailed {
+                meeting_id: Some(id),
+                fault: RecordingIntegrityFault::ProcessedFrameDropped,
+            })
+            .unwrap();
+
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            DeviceEvent::RecordingIntegrityFailed {
+                meeting_id: Some(received),
+                fault: RecordingIntegrityFault::ProcessedFrameDropped,
+            } if received == id
+        ));
+    }
+
+    #[test]
+    fn recording_integrity_fault_codes_and_copy_are_stable() {
+        for fault in [
+            RecordingIntegrityFault::CaptureEnded,
+            RecordingIntegrityFault::CaptureReadFailed,
+            RecordingIntegrityFault::CaptureXrun,
+            RecordingIntegrityFault::RawFrameDropped,
+            RecordingIntegrityFault::RawFrameChannelClosed,
+            RecordingIntegrityFault::ProcessedFrameDropped,
+            RecordingIntegrityFault::ProcessedFrameChannelClosed,
+            RecordingIntegrityFault::WavWriteFailed,
+        ] {
+            assert_eq!(RecordingIntegrityFault::from_code(fault as u8), Some(fault));
+            assert!(fault.diagnostic().is_ascii());
+        }
+        assert_eq!(RecordingIntegrityFault::from_code(0), None);
+        assert!(RecordingIntegrityFault::CaptureEnded.requires_restart());
+        assert!(!RecordingIntegrityFault::CaptureXrun.requires_restart());
+        assert!(RecordingIntegrityFault::WavWriteFailed.blocks_recording());
+    }
+
     #[test]
     fn motor_position_default_is_low() {
         assert_eq!(MotorPosition::default(), MotorPosition::Low);
@@ -459,6 +579,10 @@ mod tests {
         assert_eq!(state.vu_level, [0.0f32; 8]);
         assert_eq!(state.incoming_vu_level, [0.0f32; 8]);
         assert_eq!(state.nr_level, NrLevel::Off);
+        assert!(state.capture_healthy);
+        assert_eq!(state.capture_xruns, 0);
+        assert_eq!(state.raw_frames_dropped, 0);
+        assert_eq!(state.processed_frames_dropped, 0);
     }
 
     #[test]

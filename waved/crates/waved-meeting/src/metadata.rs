@@ -182,8 +182,10 @@ mod tests {
     async fn complete_metadata_uses_samples_and_never_empty_device_id() {
         let dir = tempfile::tempdir().unwrap();
         let mut recording = ActiveRecording::start(dir.path(), "omni").await.unwrap();
-        recording.append_pre_roll(&vec![0.0; 48_000]);
-        recording.append_samples(&vec![0.0; 96_000]);
+        recording
+            .append_pre_roll(&vec![0.0; 48_000])
+            .unwrap();
+        recording.append_samples(&vec![0.0; 96_000]).unwrap();
         let finalized = recording.finalize().unwrap();
         let metadata = build_and_write(
             &finalized,

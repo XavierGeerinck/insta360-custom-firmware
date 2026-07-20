@@ -54,7 +54,6 @@ impl PreBuffer {
         self.samples.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.samples.clear();
     }
@@ -90,12 +89,15 @@ pub struct ActiveRecording {
     pub audio_mode: String,
     pub started_at: Option<String>,
     pub clock_synchronized: bool,
+    integrity_epoch: u64,
     total_samples: u64,
     pre_roll_samples: u64,
     /// Open WAV writer. `Some` while recording, `None` once finalized.
     /// We keep the writer hot so each `ProcessedAudioFrame` appends with
     /// no per-frame open/seek overhead.
     writer: Option<hound::WavWriter<BufWriter<File>>>,
+    #[cfg(test)]
+    fail_writes_after_samples: Option<u64>,
 }
 
 pub struct FinalizedRecording {
@@ -126,6 +128,14 @@ impl FinalizedRecording {
 
 impl ActiveRecording {
     pub async fn start(base_dir: &Path, audio_mode: &str) -> std::io::Result<Self> {
+        Self::start_with_integrity_epoch(base_dir, audio_mode, 0).await
+    }
+
+    pub async fn start_with_integrity_epoch(
+        base_dir: &Path,
+        audio_mode: &str,
+        integrity_epoch: u64,
+    ) -> std::io::Result<Self> {
         let id = Uuid::new_v4();
         let dir = base_dir.join(id.to_string());
         fs::create_dir_all(&dir).await?;
@@ -153,9 +163,12 @@ impl ActiveRecording {
             audio_mode: audio_mode.to_string(),
             started_at: clock_synchronized.then(|| now.to_rfc3339()),
             clock_synchronized,
+            integrity_epoch,
             total_samples: 0,
             pre_roll_samples: 0,
             writer: Some(writer),
+            #[cfg(test)]
+            fail_writes_after_samples: None,
         })
     }
 
@@ -172,33 +185,67 @@ impl ActiveRecording {
         self.dir.join("audio.wav.partial")
     }
 
-    pub fn append_pre_roll(&mut self, samples: &[f32]) {
-        let written = self.append_samples_inner(samples);
+    pub fn integrity_epoch(&self) -> u64 {
+        self.integrity_epoch
+    }
+
+    pub fn append_pre_roll(&mut self, samples: &[f32]) -> std::io::Result<u64> {
+        let written = self.append_samples_inner(samples)?;
         self.pre_roll_samples = self.pre_roll_samples.saturating_add(written);
+        Ok(written)
     }
 
-    /// Append a block of f32 mono samples in [-1.0, 1.0]. Saturating
-    /// clamp to S16. Errors are logged but don't tear down the recording —
-    /// a bad frame mid-meeting is better than losing the whole take.
-    pub fn append_samples(&mut self, samples: &[f32]) {
-        let _ = self.append_samples_inner(samples);
+    /// Append a block of f32 mono samples in [-1.0, 1.0], saturating to S16.
+    /// Any write error is returned so the meeting service can fail the take
+    /// closed and preserve the partial WAV for diagnosis.
+    pub fn append_samples(&mut self, samples: &[f32]) -> std::io::Result<u64> {
+        self.append_samples_inner(samples)
     }
 
-    fn append_samples_inner(&mut self, samples: &[f32]) -> u64 {
+    fn append_samples_inner(&mut self, samples: &[f32]) -> std::io::Result<u64> {
+        #[cfg(test)]
+        let fail_after_samples = self.fail_writes_after_samples;
         let Some(writer) = self.writer.as_mut() else {
-            return 0;
+            return Err(std::io::Error::other("recording writer unavailable"));
         };
         let mut written = 0_u64;
         for &s in samples {
+            #[cfg(test)]
+            if fail_after_samples.is_some_and(|limit| self.total_samples + written >= limit) {
+                self.total_samples = self.total_samples.saturating_add(written);
+                return Err(std::io::Error::other("injected wav write failure"));
+            }
             let clamped = (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32);
-            if let Err(e) = writer.write_sample(clamped as i16) {
-                tracing::warn!("wav write error: {e}");
-                break;
+            if let Err(error) = writer.write_sample(clamped as i16) {
+                self.total_samples = self.total_samples.saturating_add(written);
+                return Err(std::io::Error::other(error));
             }
             written += 1;
         }
         self.total_samples = self.total_samples.saturating_add(written);
-        written
+        Ok(written)
+    }
+
+    #[cfg(test)]
+    pub fn fail_writes_after(&mut self, samples: u64) {
+        self.fail_writes_after_samples = Some(samples);
+    }
+
+    /// Make an interrupted take inspectable without exposing it as a complete
+    /// or uploadable artifact.
+    pub fn abort(mut self) -> std::io::Result<PathBuf> {
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| std::io::Error::other("recording already closed"))?;
+        let finalize_error = writer.finalize().err().map(std::io::Error::other);
+        let partial = self.partial_audio_path();
+        let file_sync_error = File::open(&partial).and_then(|file| file.sync_all()).err();
+        let dir_sync_error = File::open(&self.dir).and_then(|dir| dir.sync_all()).err();
+        if let Some(error) = finalize_error.or(file_sync_error).or(dir_sync_error) {
+            return Err(error);
+        }
+        Ok(partial)
     }
 
     /// Close and sync the WAV, then atomically expose it as `audio.wav`.
@@ -274,7 +321,7 @@ mod tests {
         // 100 ms of silence
         let n = (RECORDING_SAMPLE_RATE / 10) as usize;
         let zeros = vec![0.0f32; n];
-        rec.append_samples(&zeros);
+        rec.append_samples(&zeros).unwrap();
         let finalized = rec.finalize().unwrap();
 
         let reader = hound::WavReader::open(finalized.audio_path).unwrap();
@@ -365,8 +412,9 @@ mod tests {
         let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
 
         // Splice prebuffer prefix, then write 1 s of live audio at 0.75.
-        rec.append_pre_roll(&pb.drain_all());
-        rec.append_samples(&vec![0.75_f32; RECORDING_SAMPLE_RATE as usize]);
+        rec.append_pre_roll(&pb.drain_all()).unwrap();
+        rec.append_samples(&vec![0.75_f32; RECORDING_SAMPLE_RATE as usize])
+            .unwrap();
         let finalized = rec.finalize().unwrap();
 
         let mut reader = hound::WavReader::open(finalized.audio_path).unwrap();
@@ -408,8 +456,9 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
-        rec.append_pre_roll(&pb.drain_all());
-        rec.append_samples(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize]); // 1 s live
+        rec.append_pre_roll(&pb.drain_all()).unwrap();
+        rec.append_samples(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize])
+            .unwrap(); // 1 s live
         let finalized = rec.finalize().unwrap();
 
         let mut reader = hound::WavReader::open(finalized.audio_path).unwrap();
@@ -422,5 +471,38 @@ mod tests {
         assert_eq!(samples.len(), 2 * RECORDING_SAMPLE_RATE as usize);
         // 0.5 * 32768 = 16384 = 0x4000
         assert!(samples.iter().all(|&s| s == 0x4000));
+    }
+
+    #[tokio::test]
+    async fn injected_write_failure_is_reported_and_abort_preserves_partial_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start_with_integrity_epoch(dir.path(), "Test", 7)
+            .await
+            .unwrap();
+        rec.fail_writes_after(2);
+
+        let error = rec.append_samples(&[0.25, 0.5, 0.75]).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(rec.integrity_epoch(), 7);
+
+        let partial = rec.abort().unwrap();
+        assert!(partial.exists());
+        assert!(!partial.with_file_name("audio.wav").exists());
+        let reader = hound::WavReader::open(partial).unwrap();
+        assert_eq!(reader.duration(), 2);
+    }
+
+    #[tokio::test]
+    async fn injected_pre_roll_failure_is_returned_without_exposing_a_final_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+        rec.fail_writes_after(1);
+
+        rec.append_pre_roll(&[0.1, 0.2]).unwrap_err();
+        let partial = rec.abort().unwrap();
+
+        assert!(partial.exists());
+        assert!(!partial.with_file_name("audio.wav").exists());
+        assert_eq!(hound::WavReader::open(partial).unwrap().duration(), 1);
     }
 }

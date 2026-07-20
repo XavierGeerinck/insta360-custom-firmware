@@ -2,6 +2,7 @@ use crate::model::MeetingStatus;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tracing::info;
 use uuid::Uuid;
+use waved_state::RecordingIntegrityFault;
 
 pub async fn init_pool(path: &str) -> Result<SqlitePool, sqlx::Error> {
     let pool = SqlitePoolOptions::new()
@@ -127,6 +128,26 @@ pub async fn finish_meeting(
     )
     .bind(duration_secs)
     .bind(status.as_str())
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn mark_artifact_error(
+    pool: &SqlitePool,
+    id: &Uuid,
+    duration_secs: u32,
+    fault: RecordingIntegrityFault,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE meetings SET end_time = datetime('now'), duration_secs = ?, \
+         upload_status = ?, last_error = ?, last_status_code = NULL, \
+         next_attempt_at_ms = NULL WHERE id = ?",
+    )
+    .bind(duration_secs)
+    .bind(MeetingStatus::ArtifactError.as_str())
+    .bind(truncate_diagnostic(fault.diagnostic()))
     .bind(id.to_string())
     .execute(pool)
     .await?;
@@ -609,6 +630,40 @@ mod tests {
         assert!(second.is_none());
         assert_eq!(after, 1);
         assert_eq!(status, MeetingStatus::Uploading.as_str());
+    }
+
+    #[tokio::test]
+    async fn artifact_error_is_terminal_and_keeps_a_sanitized_diagnostic() {
+        let pool = fresh_pool().await;
+        let id = Uuid::new_v4();
+        insert_meeting(&pool, &id, "omni", "/tmp/partial")
+            .await
+            .unwrap();
+
+        mark_artifact_error(
+            &pool,
+            &id,
+            12,
+            RecordingIntegrityFault::ProcessedFrameDropped,
+        )
+        .await
+        .unwrap();
+
+        let row: (String, i64, Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT upload_status, duration_secs, last_error, next_attempt_at_ms \
+             FROM meetings WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, MeetingStatus::ArtifactError.as_str());
+        assert_eq!(row.1, 12);
+        assert_eq!(
+            row.2.as_deref(),
+            Some(RecordingIntegrityFault::ProcessedFrameDropped.diagnostic())
+        );
+        assert_eq!(row.3, None);
     }
 
     #[tokio::test]

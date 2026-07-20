@@ -10,6 +10,7 @@ pub mod processed_frame;
 pub mod stats_collector;
 pub mod spectrum;
 pub mod fixtures;
+pub mod integrity;
 pub mod metrics;
 
 #[cfg(feature = "simulate")]
@@ -27,6 +28,7 @@ use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
 use crate::beam::{steered::SteeredBeam, Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
 use crate::doa::{DoaBackend, DoaEstimator, DoaFrame, DoaPublisher, SrpPhatEstimator};
+use crate::integrity::{AudioServiceExit, IntegritySignal, RecordingIntegrity};
 use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
 use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
 
@@ -256,10 +258,10 @@ pub fn apply_mic_volume(samples: &mut [f32], pct: u16) {
 
 pub struct AudioService {
     audio_tx: Arc<watch::Sender<AudioState>>,
-    /// Kept alive so the channel stays open for future C SDK callback registration.
-    _frame_tx: mpsc::Sender<AudioFrame>,
     frame_rx: mpsc::Receiver<AudioFrame>,
     meeting_tx: mpsc::Sender<ProcessedAudioFrame>,
+    integrity: Arc<RecordingIntegrity>,
+    integrity_tx: mpsc::UnboundedSender<IntegritySignal>,
     stats_tee: broadcast::Sender<AudioFrame>,
     processed_tx: broadcast::Sender<ProcessedAudioFrame>,
     frame_size: usize,
@@ -314,6 +316,11 @@ impl AudioService {
     ) -> Self {
         let (stats_tee, _) = broadcast::channel(16);
         let (processed_tx, _) = broadcast::channel(16);
+        // The producer must own the final raw-frame sender. Keeping this
+        // constructor argument alive inside AudioService would mask capture
+        // thread death by preventing frame_rx from ever closing.
+        drop(frame_tx);
+        let (integrity_tx, _integrity_rx) = mpsc::unbounded_channel();
         let (initial_nr, initial_mode) = {
             let s = audio_tx.borrow();
             (s.nr_level.clone(), s.mode.clone())
@@ -331,9 +338,10 @@ impl AudioService {
         let doa_publisher = DoaPublisher::new();
         Self {
             audio_tx,
-            _frame_tx: frame_tx,
             frame_rx,
             meeting_tx,
+            integrity: Arc::new(RecordingIntegrity::default()),
+            integrity_tx,
             stats_tee,
             processed_tx,
             frame_size,
@@ -396,6 +404,17 @@ impl AudioService {
     /// `PlaybackService` is constructed (since playback owns the Arc).
     pub fn set_dsp_metrics(&mut self, metrics: Arc<crate::playback::DspMetrics>) {
         self.dsp_metrics = Some(metrics);
+    }
+
+    /// Replace the standalone test integrity state with the production-shared
+    /// state and fault channel.
+    pub fn set_recording_integrity(
+        &mut self,
+        integrity: Arc<RecordingIntegrity>,
+        integrity_tx: mpsc::UnboundedSender<IntegritySignal>,
+    ) {
+        self.integrity = integrity;
+        self.integrity_tx = integrity_tx;
     }
 
     /// Construct `AudioService` with a specific DoA backend. Falls back to
@@ -541,7 +560,10 @@ impl AudioService {
         }
     }
 
-    pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) {
+    pub async fn run(
+        mut self,
+        mut cmd_rx: broadcast::Receiver<Command>,
+    ) -> AudioServiceExit {
         info!(
             "audio_srv starting (DSP on: frame_size={} sample_rate={})",
             self.frame_size, self.sample_rate
@@ -550,47 +572,65 @@ impl AudioService {
         loop {
             tokio::select! {
                 frame = self.frame_rx.recv() => {
-                    if let Some(mut frame) = frame {
-                        let muted = self.audio_tx.borrow().mic_muted;
-                        apply_mic_mute(&mut frame.data, muted);
-                        let vu = compute_vu(&frame.data, 8);
-                        let incoming_vu = frame
-                            .reference
-                            .as_deref()
-                            .map(|reference| compute_vu(reference, 8))
-                            .unwrap_or_else(|| vec![0.0; 8]);
+                    let Some(mut frame) = frame else {
+                        self.audio_tx.send_modify(|state| state.capture_healthy = false);
+                        return AudioServiceExit::RawFrameChannelClosed;
+                    };
+                    let muted = self.audio_tx.borrow().mic_muted;
+                    apply_mic_mute(&mut frame.data, muted);
+                    let vu = compute_vu(&frame.data, 8);
+                    let incoming_vu = frame
+                        .reference
+                        .as_deref()
+                        .map(|reference| compute_vu(reference, 8))
+                        .unwrap_or_else(|| vec![0.0; 8]);
 
-                        // Mic spectrum: downmix 8-ch → mono i16, FFT,
-                        // log-spaced bin to FREQ_BAND_COUNT magnitudes.
-                        let mono = mix_to_mono(&frame.data, frame.channels.max(1) as usize);
-                        let n = mono.len().min(self.mic_spectrum_input.len());
-                        self.mic_spectrum_input[..n].copy_from_slice(&mono[..n]);
-                        if n < self.mic_spectrum_input.len() {
-                            self.mic_spectrum_input[n..].fill(0);
+                    // Mic spectrum: downmix 8-ch → mono i16, FFT,
+                    // log-spaced bin to FREQ_BAND_COUNT magnitudes.
+                    let mono = mix_to_mono(&frame.data, frame.channels.max(1) as usize);
+                    let n = mono.len().min(self.mic_spectrum_input.len());
+                    self.mic_spectrum_input[..n].copy_from_slice(&mono[..n]);
+                    if n < self.mic_spectrum_input.len() {
+                        self.mic_spectrum_input[n..].fill(0);
+                    }
+                    let mut mic_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
+                    self.mic_spectrum
+                        .compute(&self.mic_spectrum_input, &mut mic_bands);
+
+                    // Reference spectrum: same pipeline on the
+                    // far-end / playback signal when present.
+                    let mut ref_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
+                    if let Some(reference) = frame.reference.as_deref() {
+                        let chs = frame.reference_channels.max(1) as usize;
+                        let mono = mix_to_mono(reference, chs);
+                        self.ref_spectrum.compute(&mono, &mut ref_bands);
+                    }
+
+                    let integrity = self.integrity.snapshot();
+                    self.audio_tx.send_modify(|s| {
+                        s.vu_level.copy_from_slice(&vu);
+                        s.incoming_vu_level.copy_from_slice(&incoming_vu);
+                        s.vu_freq_bands.copy_from_slice(&mic_bands);
+                        s.incoming_freq_bands.copy_from_slice(&ref_bands);
+                        s.capture_xruns = integrity.xruns;
+                        s.raw_frames_dropped = integrity.raw_frames_dropped;
+                        s.processed_frames_dropped = integrity.processed_frames_dropped;
+                    });
+                    let _ = self.stats_tee.send(frame.clone());
+
+                    let processed = self.process_frame(&frame);
+                    let _ = self.processed_tx.send(processed.clone());
+                    match self.meeting_tx.try_send(processed) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            self.publish_integrity_fault(
+                                waved_state::RecordingIntegrityFault::ProcessedFrameDropped,
+                            );
                         }
-                        let mut mic_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
-                        self.mic_spectrum.compute(&self.mic_spectrum_input, &mut mic_bands);
-
-                        // Reference spectrum: same pipeline on the
-                        // far-end / playback signal when present.
-                        let mut ref_bands = [0.0f32; waved_state::FREQ_BAND_COUNT];
-                        if let Some(reference) = frame.reference.as_deref() {
-                            let chs = frame.reference_channels.max(1) as usize;
-                            let mono = mix_to_mono(reference, chs);
-                            self.ref_spectrum.compute(&mono, &mut ref_bands);
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            self.audio_tx.send_modify(|state| state.capture_healthy = false);
+                            return AudioServiceExit::ProcessedFrameChannelClosed;
                         }
-
-                        self.audio_tx.send_modify(|s| {
-                            s.vu_level.copy_from_slice(&vu);
-                            s.incoming_vu_level.copy_from_slice(&incoming_vu);
-                            s.vu_freq_bands.copy_from_slice(&mic_bands);
-                            s.incoming_freq_bands.copy_from_slice(&ref_bands);
-                        });
-                        let _ = self.stats_tee.send(frame.clone());
-
-                        let processed = self.process_frame(&frame);
-                        let _ = self.processed_tx.send(processed.clone());
-                        let _ = self.meeting_tx.try_send(processed);
                     }
                 }
                 cmd = cmd_rx.recv() => {
@@ -644,8 +684,11 @@ impl AudioService {
                         Ok(Command::SetMicVolume(v)) => {
                             self.audio_tx.send_modify(|s| s.mic_volume = v);
                         }
+                        Ok(Command::Shutdown) => return AudioServiceExit::StopRequested,
                         Ok(_) => {}
-                        Err(broadcast::error::RecvError::Closed) => return,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            return AudioServiceExit::StopRequested;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("audio_srv lagged {n} commands");
                         }
@@ -653,6 +696,20 @@ impl AudioService {
                 }
             }
         }
+    }
+
+    fn publish_integrity_fault(
+        &self,
+        fault: waved_state::RecordingIntegrityFault,
+    ) {
+        self.integrity.record_fault(fault);
+        let snapshot = self.integrity.snapshot();
+        self.audio_tx.send_modify(|state| {
+            state.capture_xruns = snapshot.xruns;
+            state.raw_frames_dropped = snapshot.raw_frames_dropped;
+            state.processed_frames_dropped = snapshot.processed_frames_dropped;
+        });
+        let _ = self.integrity_tx.send(IntegritySignal::new(fault));
     }
 }
 
@@ -1281,5 +1338,77 @@ mod tests {
         let raw = vec![16000i16; 256];
         let frame = AudioFrame::mic_only(raw, 1, 48_000, 0);
         let _ = svc.process_frame(&frame); // must not panic
+    }
+
+    #[tokio::test]
+    async fn processed_frame_backpressure_records_and_signals_a_drop() {
+        let (audio_tx, _audio_rx) = watch::channel(AudioState::default());
+        let (frame_tx, frame_rx) = mpsc::channel(4);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(1);
+        let integrity = Arc::new(RecordingIntegrity::default());
+        let (integrity_tx, mut integrity_rx) = mpsc::unbounded_channel();
+        let mut svc = AudioService::new(
+            Arc::new(audio_tx),
+            frame_tx.clone(),
+            frame_rx,
+            meeting_tx,
+            16,
+            48_000,
+            crate::beam::MicGeometry::default(),
+        );
+        svc.set_recording_integrity(Arc::clone(&integrity), integrity_tx);
+        let (cmd_tx, cmd_rx) = broadcast::channel(4);
+        frame_tx
+            .send(AudioFrame::mic_only(vec![0; 16], 1, 48_000, 0))
+            .await
+            .unwrap();
+        frame_tx
+            .send(AudioFrame::mic_only(vec![0; 16], 1, 48_000, 1))
+            .await
+            .unwrap();
+        let handle = tokio::spawn(svc.run(cmd_rx));
+
+        let signal = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            integrity_rx.recv(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            signal.fault,
+            waved_state::RecordingIntegrityFault::ProcessedFrameDropped
+        );
+        assert_eq!(integrity.snapshot().processed_frames_dropped, 1);
+
+        cmd_tx.send(Command::Shutdown).unwrap();
+        assert_eq!(handle.await.unwrap(), AudioServiceExit::StopRequested);
+    }
+
+    #[tokio::test]
+    async fn closed_processed_frame_channel_is_a_fatal_typed_exit() {
+        let (audio_tx, _audio_rx) = watch::channel(AudioState::default());
+        let (frame_tx, frame_rx) = mpsc::channel(2);
+        let (meeting_tx, meeting_rx) = mpsc::channel(1);
+        drop(meeting_rx);
+        let svc = AudioService::new(
+            Arc::new(audio_tx),
+            frame_tx.clone(),
+            frame_rx,
+            meeting_tx,
+            16,
+            48_000,
+            crate::beam::MicGeometry::default(),
+        );
+        let (_cmd_tx, cmd_rx) = broadcast::channel(2);
+        frame_tx
+            .send(AudioFrame::mic_only(vec![0; 16], 1, 48_000, 0))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            svc.run(cmd_rx).await,
+            AudioServiceExit::ProcessedFrameChannelClosed
+        );
     }
 }

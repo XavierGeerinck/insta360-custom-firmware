@@ -5,6 +5,7 @@ edition.workspace = true
 
 [features]
 simulate = []
+recording-integrity-test-hooks = []
 
 [dependencies]
 waved-state = { path = "../waved-state" }

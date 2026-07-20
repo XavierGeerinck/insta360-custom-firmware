@@ -18,7 +18,7 @@ pub mod mic_software_ref;
 
 pub mod alsa_dual_stream;
 
-pub use thread::{CaptureStats, run_capture_loop};
+pub use thread::{run_capture_loop, run_capture_loop_with_integrity, CaptureStats};
 pub use single_stream::SingleStreamFrameSource;
 pub use mic_software_ref::MicWithSoftwareReferenceSource;
 

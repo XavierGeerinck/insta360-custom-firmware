@@ -144,6 +144,18 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     //               ProcessedAudioFrame → meeting channel → MeetingService.
     // Simulate: SimAudioService writes silence ProcessedAudioFrames directly.
     let (meeting_tx, meeting_rx) = tokio::sync::mpsc::channel::<waved_audio::processed_frame::ProcessedAudioFrame>(32);
+    let recording_integrity =
+        Arc::new(waved_audio::integrity::RecordingIntegrity::default());
+    let (integrity_tx, integrity_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (pipeline_fatal_tx, mut pipeline_fatal_rx) =
+        tokio::sync::mpsc::unbounded_channel::<waved_state::RecordingIntegrityFault>();
+    let pipeline_fault_claimed =
+        Arc::new(std::sync::atomic::AtomicBool::new(false));
+    #[cfg(not(any(
+        feature = "capture-alsa",
+        feature = "recording-integrity-test-hooks"
+    )))]
+    let _ = (&pipeline_fatal_tx, &pipeline_fault_claimed);
 
     // DoA receiver for MeetingService. Initialised to a closed channel so
     // the non-capture-alsa paths (simulate / bare) compile without a real
@@ -169,7 +181,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             alsa_dual_stream::AlsaDualStreamSource,
             mic_software_ref::MicWithSoftwareReferenceSource,
             single_stream::SingleStreamFrameSource,
-            run_capture_loop, CaptureStats, ChannelMapSource,
+            run_capture_loop_with_integrity, CaptureStats, ChannelMapSource,
         };
         use waved_audio::playback::{spawn_playback, PlaybackConfig};
         use waved_audio::stats_collector;
@@ -192,7 +204,6 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         let capture_stats = CaptureStats::new();
         let capture_stop = Arc::new(AtomicBool::new(false));
         capture_stop_flag = Arc::clone(&capture_stop);
-
         let (frame_tx, frame_rx) = waved_audio::callbacks::create_audio_channel();
         let mut audio_svc = waved_audio::AudioService::new_with_backend(
             Arc::clone(&bus.audio),
@@ -203,6 +214,10 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             cfg.capture.mic_sample_rate,
             cfg.mic_geometry.clone().unwrap_or_default(),
             cfg.doa_backend,
+        );
+        audio_svc.set_recording_integrity(
+            Arc::clone(&recording_integrity),
+            integrity_tx.clone(),
         );
         let stats_rx = audio_svc.subscribe_frames();
         let stats_processed_rx = audio_svc.subscribe_processed();
@@ -458,17 +473,65 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
 
         let stats_c = Arc::clone(&capture_stats);
         let stop_c = Arc::clone(&capture_stop);
+        let capture_integrity = Arc::clone(&recording_integrity);
+        let capture_integrity_tx = integrity_tx.clone();
+        let capture_fatal_tx = pipeline_fatal_tx.clone();
+        let capture_fault_claimed = Arc::clone(&pipeline_fault_claimed);
         std::thread::Builder::new()
             .name("audio-capture".into())
-            .spawn(move || match source {
-                SourceDyn::Dual(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
-                SourceDyn::Single(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
-                SourceDyn::SoftwareRef(s) => run_capture_loop(s, frame_tx, stop_c, stats_c),
+            .spawn(move || {
+                let exit = match source {
+                    SourceDyn::Dual(s) => run_capture_loop_with_integrity(
+                        s,
+                        frame_tx,
+                        stop_c,
+                        stats_c,
+                        Arc::clone(&capture_integrity),
+                        capture_integrity_tx,
+                    ),
+                    SourceDyn::Single(s) => run_capture_loop_with_integrity(
+                        s,
+                        frame_tx,
+                        stop_c,
+                        stats_c,
+                        Arc::clone(&capture_integrity),
+                        capture_integrity_tx,
+                    ),
+                    SourceDyn::SoftwareRef(s) => run_capture_loop_with_integrity(
+                        s,
+                        frame_tx,
+                        stop_c,
+                        stats_c,
+                        Arc::clone(&capture_integrity),
+                        capture_integrity_tx,
+                    ),
+                };
+                if let Some(fault) = exit.fault() {
+                    publish_first_pipeline_fault(
+                        &capture_fault_claimed,
+                        &capture_integrity,
+                        &capture_fatal_tx,
+                        fault,
+                    );
+                }
             })
             .expect("spawn capture thread");
 
         let audio_cmd_rx = bus.commands.subscribe();
-        tokio::spawn(async move { audio_svc.run(audio_cmd_rx).await });
+        let audio_integrity = Arc::clone(&recording_integrity);
+        let audio_fatal_tx = pipeline_fatal_tx.clone();
+        let audio_fault_claimed = Arc::clone(&pipeline_fault_claimed);
+        tokio::spawn(async move {
+            let exit = audio_svc.run(audio_cmd_rx).await;
+            if let Some(fault) = exit.fault() {
+                publish_first_pipeline_fault(
+                    &audio_fault_claimed,
+                    &audio_integrity,
+                    &audio_fatal_tx,
+                    fault,
+                );
+            }
+        });
 
         if let Some((path, rx)) = mic_recorder {
             mic_capture::spawn(path, rx);
@@ -532,14 +595,18 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     }
 
     // Meeting service
-    match waved_meeting::MeetingService::new(
+    match waved_meeting::MeetingService::new_with_integrity(
         config.clone(),
         DB_PATH,
         PathBuf::from(RECORDINGS_DIR),
         Arc::clone(&bus.meeting),
         bus.events.clone(),
-        meeting_rx,
-        meeting_doa_rx,
+        waved_meeting::MeetingPipelineInputs {
+            audio_rx: meeting_rx,
+            doa_rx: meeting_doa_rx,
+            integrity: Arc::clone(&recording_integrity),
+            integrity_rx,
+        },
     ).await {
         Ok(meeting_svc) => {
             let meeting_cmd_rx = bus.commands.subscribe();
@@ -614,6 +681,14 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     }
 
     tokio::spawn(mode_switch_handler(bus.commands.clone()));
+    #[cfg(feature = "recording-integrity-test-hooks")]
+    tokio::spawn(recording_integrity_test_hook(
+        Arc::clone(&recording_integrity),
+        integrity_tx.clone(),
+        Arc::clone(&pipeline_fault_claimed),
+        pipeline_fatal_tx.clone(),
+        bus.commands.clone(),
+    ));
 
     // Wait for SIGTERM, SIGINT, or a controlled configuration restart.
     use tokio::signal::unix::{signal, SignalKind};
@@ -640,6 +715,27 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         _ = sigterm.recv() => info!("received SIGTERM"),
         _ = sigint.recv() => info!("received SIGINT"),
         _ = lifecycle => {}
+        fault = pipeline_fatal_rx.recv() => {
+            if let Some(fault) = fault {
+                bus.audio.send_modify(|state| {
+                    let snapshot = recording_integrity.snapshot();
+                    state.capture_healthy = false;
+                    state.capture_xruns = snapshot.xruns;
+                    state.raw_frames_dropped = snapshot.raw_frames_dropped;
+                    state.processed_frames_dropped = snapshot.processed_frames_dropped;
+                });
+                error!("fatal audio pipeline fault: {}; restarting process", fault.diagnostic());
+                if !acknowledge_pipeline_fault(
+                    &integrity_tx,
+                    fault,
+                    std::time::Duration::from_secs(2),
+                )
+                .await
+                {
+                    warn!("meeting service did not acknowledge audio fault before restart");
+                }
+            }
+        }
     }
 
     info!("shutdown signal received");
@@ -647,6 +743,126 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+}
+
+fn publish_first_pipeline_fault(
+    claimed: &std::sync::atomic::AtomicBool,
+    integrity: &waved_audio::integrity::RecordingIntegrity,
+    fatal_tx: &tokio::sync::mpsc::UnboundedSender<waved_state::RecordingIntegrityFault>,
+    fault: waved_state::RecordingIntegrityFault,
+) -> bool {
+    if claimed.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return false;
+    }
+    integrity.record_fault(fault);
+    let _ = fatal_tx.send(fault);
+    true
+}
+
+async fn acknowledge_pipeline_fault(
+    integrity_tx: &tokio::sync::mpsc::UnboundedSender<
+        waved_audio::integrity::IntegritySignal,
+    >,
+    fault: waved_state::RecordingIntegrityFault,
+    timeout: std::time::Duration,
+) -> bool {
+    let (acknowledgement, acknowledged) = tokio::sync::oneshot::channel();
+    if integrity_tx
+        .send(waved_audio::integrity::IntegritySignal::with_acknowledgement(
+            fault,
+            acknowledgement,
+        ))
+        .is_err()
+    {
+        return false;
+    }
+    tokio::time::timeout(timeout, acknowledged)
+        .await
+        .is_ok_and(|result| result.is_ok())
+}
+
+#[cfg(feature = "recording-integrity-test-hooks")]
+async fn recording_integrity_test_hook(
+    integrity: Arc<waved_audio::integrity::RecordingIntegrity>,
+    integrity_tx: tokio::sync::mpsc::UnboundedSender<
+        waved_audio::integrity::IntegritySignal,
+    >,
+    pipeline_fault_claimed: Arc<std::sync::atomic::AtomicBool>,
+    pipeline_fatal_tx: tokio::sync::mpsc::UnboundedSender<waved_state::RecordingIntegrityFault>,
+    commands: tokio::sync::broadcast::Sender<Command>,
+) {
+    use tokio::signal::unix::{signal, SignalKind};
+    const HOOK_PATH: &str = "/tmp/waved-integrity-fault";
+    let mut sighup = match signal(SignalKind::hangup()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            warn!("recording integrity test hook unavailable: {error}");
+            return;
+        }
+    };
+    warn!("recording integrity TEST HOOK ready at {HOOK_PATH}");
+
+    while sighup.recv().await.is_some() {
+        let raw = match std::fs::read_to_string(HOOK_PATH) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                warn!("integrity test hook read failed: {error}");
+                continue;
+            }
+        };
+        let _ = std::fs::remove_file(HOOK_PATH);
+        let action = raw.trim().to_ascii_lowercase();
+        match action.as_str() {
+            "start" => {
+                warn!("TEST HOOK: start recording");
+                let _ = commands.send(Command::StartRecording);
+            }
+            "stop" => {
+                warn!("TEST HOOK: stop recording");
+                let _ = commands.send(Command::StopRecording);
+            }
+            _ => {
+                let Some(fault) = parse_integrity_test_fault(&action) else {
+                    warn!("TEST HOOK: unknown recording integrity action {action:?}");
+                    continue;
+                };
+                warn!("TEST HOOK: injecting {}", fault.diagnostic());
+                if fault.requires_restart() {
+                    publish_first_pipeline_fault(
+                        &pipeline_fault_claimed,
+                        &integrity,
+                        &pipeline_fatal_tx,
+                        fault,
+                    );
+                } else {
+                    integrity.record_fault(fault);
+                    let _ = integrity_tx
+                        .send(waved_audio::integrity::IntegritySignal::new(fault));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "recording-integrity-test-hooks")]
+fn parse_integrity_test_fault(
+    value: &str,
+) -> Option<waved_state::RecordingIntegrityFault> {
+    use waved_state::RecordingIntegrityFault;
+    Some(match value {
+        "capture-ended" => RecordingIntegrityFault::CaptureEnded,
+        "capture-read-failed" => RecordingIntegrityFault::CaptureReadFailed,
+        "capture-xrun" => RecordingIntegrityFault::CaptureXrun,
+        "raw-frame-dropped" => RecordingIntegrityFault::RawFrameDropped,
+        "raw-channel-closed" => RecordingIntegrityFault::RawFrameChannelClosed,
+        "processed-frame-dropped" => RecordingIntegrityFault::ProcessedFrameDropped,
+        "processed-channel-closed" => {
+            RecordingIntegrityFault::ProcessedFrameChannelClosed
+        }
+        "wav-write-failed" => RecordingIntegrityFault::WavWriteFailed,
+        _ => return None,
+    })
 }
 
 /// SIGHUP handler: reloads beamforming test hooks from `/tmp`.
@@ -782,6 +998,99 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
 fn parse_doa_override(s: &str) -> Option<(f32, f32)> {
     let (a, b) = s.split_once(',')?;
     Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+}
+
+#[cfg(test)]
+mod integrity_supervisor_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use waved_audio::integrity::RecordingIntegrity;
+    use waved_state::RecordingIntegrityFault;
+
+    #[test]
+    fn only_the_first_terminal_pipeline_fault_is_published() {
+        let claimed = AtomicBool::new(false);
+        let integrity = RecordingIntegrity::default();
+        let (tx, mut rx) =
+            tokio::sync::mpsc::unbounded_channel::<RecordingIntegrityFault>();
+
+        assert!(publish_first_pipeline_fault(
+            &claimed,
+            &integrity,
+            &tx,
+            RecordingIntegrityFault::CaptureReadFailed,
+        ));
+        assert!(!publish_first_pipeline_fault(
+            &claimed,
+            &integrity,
+            &tx,
+            RecordingIntegrityFault::RawFrameChannelClosed,
+        ));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            RecordingIntegrityFault::CaptureReadFailed
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(integrity.epoch(), 1);
+    }
+
+    #[tokio::test]
+    async fn fatal_pipeline_fault_waits_for_actor_acknowledgement() {
+        let (tx, mut rx) =
+            tokio::sync::mpsc::unbounded_channel::<waved_audio::integrity::IntegritySignal>();
+        let responder = tokio::spawn(async move {
+            let signal = rx.recv().await.unwrap();
+            assert_eq!(
+                signal.fault,
+                RecordingIntegrityFault::ProcessedFrameChannelClosed
+            );
+            signal.acknowledgement.unwrap().send(()).unwrap();
+        });
+
+        assert!(
+            acknowledge_pipeline_fault(
+                &tx,
+                RecordingIntegrityFault::ProcessedFrameChannelClosed,
+                std::time::Duration::from_secs(1),
+            )
+            .await
+        );
+        responder.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fatal_pipeline_fault_timeout_is_bounded() {
+        let (tx, mut rx) =
+            tokio::sync::mpsc::unbounded_channel::<waved_audio::integrity::IntegritySignal>();
+        let holder = tokio::spawn(async move {
+            let _signal = rx.recv().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        });
+
+        assert!(
+            !acknowledge_pipeline_fault(
+                &tx,
+                RecordingIntegrityFault::CaptureEnded,
+                std::time::Duration::from_millis(10),
+            )
+            .await
+        );
+        holder.abort();
+    }
+
+    #[cfg(feature = "recording-integrity-test-hooks")]
+    #[test]
+    fn test_hook_accepts_only_fixed_fault_names() {
+        assert_eq!(
+            parse_integrity_test_fault("wav-write-failed"),
+            Some(RecordingIntegrityFault::WavWriteFailed)
+        );
+        assert_eq!(
+            parse_integrity_test_fault("processed-frame-dropped"),
+            Some(RecordingIntegrityFault::ProcessedFrameDropped)
+        );
+        assert_eq!(parse_integrity_test_fault("anything else"), None);
+    }
 }
 
 /// SIGUSR2 handler: plays `/data/waved/playback.s16le` (raw S16LE stereo

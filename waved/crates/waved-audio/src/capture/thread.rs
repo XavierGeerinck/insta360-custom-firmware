@@ -5,10 +5,12 @@
 
 use super::AudioFrameSource;
 use crate::callbacks::AudioFrame;
-use std::sync::Arc;
+use crate::integrity::{CaptureExit, IntegritySignal, RecordingIntegrity};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
+use waved_state::RecordingIntegrityFault;
 
 pub struct CaptureStats {
     pub frames_emitted: AtomicU64,
@@ -44,17 +46,30 @@ fn set_realtime_priority() {
 #[cfg(not(target_os = "linux"))]
 fn set_realtime_priority() {}
 
-/// Runs the capture loop, consuming the source to EOF or until stop_flag.
+/// Runs the capture loop, consuming the source to EOF or until `stop_flag`.
 ///
 /// Repeatedly calls `source.next_frame()` to pull complete AudioFrames
 /// (which already have timestamps and sample conversion done internally).
 /// Output frames on `frame_tx` as they arrive from the source.
 pub fn run_capture_loop<S: AudioFrameSource>(
+    source: S,
+    frame_tx: mpsc::Sender<AudioFrame>,
+    stop_flag: Arc<AtomicBool>,
+    stats: Arc<CaptureStats>,
+) -> CaptureExit {
+    let integrity = Arc::new(RecordingIntegrity::default());
+    let (fault_tx, _fault_rx) = mpsc::unbounded_channel();
+    run_capture_loop_with_integrity(source, frame_tx, stop_flag, stats, integrity, fault_tx)
+}
+
+pub fn run_capture_loop_with_integrity<S: AudioFrameSource>(
     mut source: S,
     frame_tx: mpsc::Sender<AudioFrame>,
     stop_flag: Arc<AtomicBool>,
     stats: Arc<CaptureStats>,
-) {
+    integrity: Arc<RecordingIntegrity>,
+    fault_tx: mpsc::UnboundedSender<IntegritySignal>,
+) -> CaptureExit {
     let sample_rate = source.sample_rate();
     let mut consecutive_errors = 0u32;
     set_realtime_priority();
@@ -64,125 +79,226 @@ pub fn run_capture_loop<S: AudioFrameSource>(
         match source.next_frame() {
             Ok(None) => {
                 info!("capture source EOF");
-                return;
+                return if stop_flag.load(Ordering::Relaxed) {
+                    CaptureExit::StopRequested
+                } else {
+                    CaptureExit::EndOfStream
+                };
             }
             Ok(Some(frame)) => {
                 consecutive_errors = 0;
                 match frame_tx.try_send(frame) {
-                    Ok(()) => { stats.frames_emitted.fetch_add(1, Ordering::Relaxed); }
+                    Ok(()) => {
+                        stats.frames_emitted.fetch_add(1, Ordering::Relaxed);
+                    }
                     Err(mpsc::error::TrySendError::Full(_)) => {
                         let n = stats.frames_dropped.fetch_add(1, Ordering::Relaxed) + 1;
+                        publish_fault(
+                            &integrity,
+                            &fault_tx,
+                            RecordingIntegrityFault::RawFrameDropped,
+                        );
                         if n % 50 == 1 {
                             warn!("capture backpressure: {n} frames dropped");
                         }
                     }
                     Err(mpsc::error::TrySendError::Closed(_)) => {
                         info!("frame_tx closed, stopping capture");
-                        return;
+                        return if stop_flag.load(Ordering::Relaxed) {
+                            CaptureExit::StopRequested
+                        } else {
+                            CaptureExit::RawFrameChannelClosed
+                        };
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
                 let n = stats.xrun_count.fetch_add(1, Ordering::Relaxed) + 1;
+                publish_fault(&integrity, &fault_tx, RecordingIntegrityFault::CaptureXrun);
                 // Logging is on the capture thread: rate-limit so the stderr
                 // lock doesn't starve us into more xruns.
                 if n <= 5 || n.is_power_of_two() || n % 500 == 0 {
-                    warn!("xrun #{n} ({e})");
+                    warn!("xrun #{n} ({error})");
                 }
                 // Source is expected to recover internally; we just continue.
             }
-            Err(e) => {
+            Err(error) => {
                 consecutive_errors += 1;
-                error!("capture read error: {e}");
+                error!("capture read error: {error}");
                 if consecutive_errors > 3 {
                     error!("too many read errors, stopping capture");
-                    return;
+                    return CaptureExit::FatalRead;
                 }
             }
         }
     }
     info!("capture loop stopped (stop flag set)");
+    CaptureExit::StopRequested
+}
+
+fn publish_fault(
+    integrity: &RecordingIntegrity,
+    fault_tx: &mpsc::UnboundedSender<IntegritySignal>,
+    fault: RecordingIntegrityFault,
+) {
+    integrity.record_fault(fault);
+    let _ = fault_tx.send(IntegritySignal::new(fault));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::mock::MockPcmSource;
     use super::super::single_stream::SingleStreamFrameSource;
+    use super::*;
+
+    fn integrity_channels() -> (
+        Arc<RecordingIntegrity>,
+        mpsc::UnboundedSender<IntegritySignal>,
+        mpsc::UnboundedReceiver<IntegritySignal>,
+    ) {
+        let integrity = Arc::new(RecordingIntegrity::default());
+        let (fault_tx, fault_rx) = mpsc::unbounded_channel();
+        (integrity, fault_tx, fault_rx)
+    }
 
     #[tokio::test]
     async fn emits_one_frame_per_batch() {
-        let mock = MockPcmSource::new(1, 48000)
-            .with_batch(vec![10 << 16, 20 << 16]); // 2 samples, 1 channel = period_frames=2
-        let src = SingleStreamFrameSource::new(mock, 2, 1); // period_frames=2, channels=1
+        let mock = MockPcmSource::new(1, 48_000).with_batch(vec![10 << 16, 20 << 16]);
+        let source = SingleStreamFrameSource::new(mock, 2, 1);
         let (tx, mut rx) = mpsc::channel(8);
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
+        let (integrity, fault_tx, _fault_rx) = integrity_channels();
         let handle = {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, tx, stop, stats);
+                run_capture_loop_with_integrity(source, tx, stop, stats, integrity, fault_tx)
             })
         };
+
         let frame = rx.recv().await.expect("one frame");
         assert_eq!(frame.channels, 1);
         assert_eq!(frame.data, vec![10i16, 20i16]);
         stop.store(true, Ordering::Relaxed);
-        handle.join().unwrap();
+        let _ = handle.join().unwrap();
         assert_eq!(stats.frames_emitted.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
     async fn drops_frames_on_backpressure() {
-        // Queue 100 single-sample batches
-        let mut mock = MockPcmSource::new(1, 48000);
+        let mut mock = MockPcmSource::new(1, 48_000);
         for _ in 0..100 {
-            mock = mock.with_batch(vec![0 << 16]);
+            mock = mock.with_batch(vec![0]);
         }
-        let src = SingleStreamFrameSource::new(mock, 1, 1); // period_frames=1, channels=1
+        let source = SingleStreamFrameSource::new(mock, 1, 1);
         let (tx, _rx) = mpsc::channel(2);
-        // Don't drain _rx — force backpressure.
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
+        let (integrity, fault_tx, mut fault_rx) = integrity_channels();
+        let snapshot_handle = Arc::clone(&integrity);
         {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, tx, stop, stats);
-            }).join().unwrap();
+                run_capture_loop_with_integrity(source, tx, stop, stats, integrity, fault_tx)
+            })
+            .join()
+            .unwrap();
         }
+
         let emitted = stats.frames_emitted.load(Ordering::Relaxed);
         let dropped = stats.frames_dropped.load(Ordering::Relaxed);
-        assert!(emitted <= 2, "should emit at most cap=2 frames, got {emitted}");
+        assert!(emitted <= 2, "should emit at most cap=2, got {emitted}");
         assert!(dropped >= 95, "should drop most, got {dropped}");
-        let _ = stop;
+        assert_eq!(
+            fault_rx.try_recv().unwrap().fault,
+            RecordingIntegrityFault::RawFrameDropped
+        );
+        assert_eq!(snapshot_handle.snapshot().raw_frames_dropped, dropped);
     }
 
     #[tokio::test]
     async fn xrun_increments_counter_and_continues() {
         use std::io::ErrorKind;
-        let mock = MockPcmSource::new(1, 48000)
+
+        let mock = MockPcmSource::new(1, 48_000)
             .with_batch(vec![1 << 16])
             .with_error(ErrorKind::BrokenPipe, "xrun")
             .with_batch(vec![2 << 16]);
-        let src = SingleStreamFrameSource::new(mock, 1, 1); // period_frames=1, channels=1
+        let source = SingleStreamFrameSource::new(mock, 1, 1);
         let (tx, mut rx) = mpsc::channel(8);
         let stats = CaptureStats::new();
         let stop = Arc::new(AtomicBool::new(false));
+        let (integrity, fault_tx, mut fault_rx) = integrity_channels();
+        let snapshot_handle = Arc::clone(&integrity);
         {
             let stats = Arc::clone(&stats);
             let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
-                run_capture_loop(src, tx, stop, stats);
-            }).join().unwrap();
+                run_capture_loop_with_integrity(source, tx, stop, stats, integrity, fault_tx)
+            })
+            .join()
+            .unwrap();
         }
-        // Should have emitted 2 frames (before and after the xrun).
-        let frame1 = rx.try_recv().expect("frame 1");
-        let frame2 = rx.try_recv().expect("frame 2");
-        assert_eq!(frame1.data, vec![1i16]);
-        assert_eq!(frame2.data, vec![2i16]);
+
+        assert_eq!(rx.try_recv().expect("frame 1").data, vec![1i16]);
+        assert_eq!(rx.try_recv().expect("frame 2").data, vec![2i16]);
         assert_eq!(stats.xrun_count.load(Ordering::Relaxed), 1);
         assert_eq!(stats.frames_emitted.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            fault_rx.try_recv().unwrap().fault,
+            RecordingIntegrityFault::CaptureXrun
+        );
+        assert_eq!(snapshot_handle.snapshot().xruns, 1);
+    }
+
+    #[test]
+    fn requested_stop_is_not_a_fault() {
+        let source = SingleStreamFrameSource::new(MockPcmSource::new(1, 48_000), 1, 1);
+        let (tx, _rx) = mpsc::channel(1);
+        let stop = Arc::new(AtomicBool::new(true));
+        let (integrity, fault_tx, mut fault_rx) = integrity_channels();
+        let snapshot_handle = Arc::clone(&integrity);
+
+        let exit = run_capture_loop_with_integrity(
+            source,
+            tx,
+            stop,
+            CaptureStats::new(),
+            integrity,
+            fault_tx,
+        );
+
+        assert_eq!(exit, CaptureExit::StopRequested);
+        assert!(fault_rx.try_recv().is_err());
+        assert_eq!(snapshot_handle.epoch(), 0);
+    }
+
+    #[test]
+    fn fatal_read_returns_typed_exit_without_fabricating_drop() {
+        use std::io::ErrorKind;
+
+        let mut mock = MockPcmSource::new(1, 48_000);
+        for _ in 0..4 {
+            mock = mock.with_error(ErrorKind::Other, "fatal");
+        }
+        let source = SingleStreamFrameSource::new(mock, 1, 1);
+        let (tx, _rx) = mpsc::channel(1);
+        let (integrity, fault_tx, mut fault_rx) = integrity_channels();
+        let snapshot_handle = Arc::clone(&integrity);
+
+        let exit = run_capture_loop_with_integrity(
+            source,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            CaptureStats::new(),
+            integrity,
+            fault_tx,
+        );
+
+        assert_eq!(exit, CaptureExit::FatalRead);
+        assert!(fault_rx.try_recv().is_err());
+        assert_eq!(snapshot_handle.epoch(), 0);
     }
 }

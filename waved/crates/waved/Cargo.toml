@@ -20,6 +20,10 @@ simulate = [
 ]
 ui = ["dep:waved-ui"]
 capture-alsa = ["waved-audio/capture-alsa"]
+recording-integrity-test-hooks = [
+    "waved-audio/recording-integrity-test-hooks",
+    "waved-meeting/recording-integrity-test-hooks",
+]
 
 [dependencies]
 waved-state = { path = "../waved-state" }
