@@ -32,25 +32,35 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
         let partial = dir.join("audio.wav.partial").is_file();
         let legacy_opus = dir.join("audio.opus").is_file();
         let current = MeetingStatus::parse(&row.status);
+        let legacy_status = matches!(row.status.as_str(), "pending" | "upload_failed");
+        let metadata_v1 =
+            legacy_status && metadata && metadata_schema_is_v1(&dir.join("metadata.json")).await;
 
-        let repaired = match current {
-            Some(MeetingStatus::Uploading) if wav && metadata => Some(MeetingStatus::Queued),
-            Some(MeetingStatus::Queued) if wav && metadata => None,
-            Some(MeetingStatus::RetryWait) if wav && metadata => None,
-            Some(MeetingStatus::Recording) if wav && metadata => Some(MeetingStatus::LocalOnly),
-            Some(MeetingStatus::Recording) if partial => Some(MeetingStatus::ArtifactError),
-            Some(MeetingStatus::LocalOnly | MeetingStatus::Uploaded) if wav && metadata => None,
-            Some(MeetingStatus::AwaitingDecision) if wav && metadata => None,
-            Some(
-                MeetingStatus::MissingArtifact
-                | MeetingStatus::LegacyUnsupported
-                | MeetingStatus::ArtifactError
-                | MeetingStatus::ConfigurationError,
-            ) => None,
-            _ if legacy_opus && !wav => Some(MeetingStatus::LegacyUnsupported),
-            _ if partial && !wav => Some(MeetingStatus::ArtifactError),
-            _ if !wav || !metadata => Some(MeetingStatus::MissingArtifact),
-            _ => None,
+        let repaired = match row.status.as_str() {
+            "pending" if wav && metadata_v1 => Some(MeetingStatus::Queued),
+            "upload_failed" if wav && metadata_v1 => Some(MeetingStatus::RetryWait),
+            "pending" | "upload_failed" if wav && metadata => {
+                Some(MeetingStatus::LegacyUnsupported)
+            }
+            _ => match current {
+                Some(MeetingStatus::Uploading) if wav && metadata => Some(MeetingStatus::Queued),
+                Some(MeetingStatus::Queued) if wav && metadata => None,
+                Some(MeetingStatus::RetryWait) if wav && metadata => None,
+                Some(MeetingStatus::Recording) if wav && metadata => Some(MeetingStatus::LocalOnly),
+                Some(MeetingStatus::Recording) if partial => Some(MeetingStatus::ArtifactError),
+                Some(MeetingStatus::LocalOnly | MeetingStatus::Uploaded) if wav && metadata => None,
+                Some(MeetingStatus::AwaitingDecision) if wav && metadata => None,
+                Some(
+                    MeetingStatus::MissingArtifact
+                    | MeetingStatus::LegacyUnsupported
+                    | MeetingStatus::ArtifactError
+                    | MeetingStatus::ConfigurationError,
+                ) => None,
+                _ if legacy_opus && !wav => Some(MeetingStatus::LegacyUnsupported),
+                _ if partial && !wav => Some(MeetingStatus::ArtifactError),
+                _ if !wav || !metadata => Some(MeetingStatus::MissingArtifact),
+                _ => None,
+            },
         };
         if let Some(status) = repaired {
             db::set_status(pool, &id, status).await?;
@@ -93,6 +103,24 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
         report.normalized, report.incomplete, report.imported
     );
     Ok(report)
+}
+
+async fn metadata_schema_is_v1(path: &Path) -> bool {
+    const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+
+    let Ok(metadata) = tokio::fs::metadata(path).await else {
+        return false;
+    };
+    if metadata.len() > MAX_METADATA_BYTES {
+        return false;
+    }
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return false;
+    };
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| value.get("schema_version")?.as_u64())
+        == Some(1)
 }
 
 #[cfg(test)]
@@ -197,5 +225,81 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(status, MeetingStatus::LocalOnly.as_str());
+    }
+
+    #[tokio::test]
+    async fn legacy_queue_statuses_are_normalized_only_for_v1_metadata() {
+        let (temp, pool) = fixture().await;
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+
+        let legacy_failed = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::RetryWait,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        sqlx::query("UPDATE meetings SET upload_status = 'upload_failed' WHERE id = ?")
+            .bind(legacy_failed.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let v1_pending = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::Queued,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        tokio::fs::write(
+            recordings
+                .join(v1_pending.to_string())
+                .join("metadata.json"),
+            br#"{"schema_version":1}"#,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE meetings SET upload_status = 'pending' WHERE id = ?")
+            .bind(v1_pending.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let v1_failed = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::RetryWait,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        tokio::fs::write(
+            recordings.join(v1_failed.to_string()).join("metadata.json"),
+            br#"{"schema_version":1}"#,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE meetings SET upload_status = 'upload_failed' WHERE id = ?")
+            .bind(v1_failed.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        run(&pool, &recordings).await.unwrap();
+
+        for (id, expected) in [
+            (legacy_failed, MeetingStatus::LegacyUnsupported),
+            (v1_pending, MeetingStatus::Queued),
+            (v1_failed, MeetingStatus::RetryWait),
+        ] {
+            let (status,): (String,) =
+                sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, expected.as_str());
+        }
     }
 }
