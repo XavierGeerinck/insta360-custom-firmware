@@ -12,6 +12,7 @@ test_uploads/
 scripts/backup/
 scripts/results/
 .superpowers/
+/recording-resilience-*/
 
 # Vendored third-party sources (reproducible via scripts/build-*.sh)
 /third_party/

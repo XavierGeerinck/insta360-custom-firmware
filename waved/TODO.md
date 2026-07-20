@@ -46,16 +46,23 @@ Priority:
   only `audio.wav.partial`, persist `artifact_error`, never become uploadable,
   and show fixed on-device fault copy. Deterministic host tests and on-device
   frame-drop/writer-failure injection pass.
-- [ ] **Run long-session and interrupted-finalization acceptance.** Record for
-  at least one hour while tracking RSS, dropped frames, WAV duration, sample
-  count, and free space. Repeat with process termination and power loss during
-  recording/finalization. Boot reconciliation must retain or classify every
-  artifact without presenting a corrupt file as uploaded.
-- [ ] **Exercise storage-pressure safety on-device.** Force both configured
-  retention thresholds in an isolated fixture area. Only recordings already
-  marked `uploaded` may be pruned; queued, failed, local-only, active, and
-  incomplete recordings must survive. New recording starts must be blocked
+- [x] **Run interrupted-finalization acceptance.** A feature-gated device
+  harness reboots at active-partial, WAV-finalized, and metadata-finalized
+  boundaries. Two reconciliation passes preserve the exact bytes and classify
+  them as `artifact_error`, `missing_artifact`, and `local_only`; none becomes
+  uploadable. The same run validates a real WAV's header, sample count,
+  duration, size, checksum, metadata, RSS, free space, and integrity counters.
+- [x] **Exercise storage-pressure safety on-device.** Both configured
+  retention thresholds were forced in an isolated fixture area. Only
+  recordings already marked `uploaded` are pruned oldest-first; queued, failed,
+  local-only, active, and incomplete recordings survive. Unsafe database paths
+  are rejected and new recording starts recheck storage and remain blocked
   when no safe pruning candidate exists.
+- [ ] **Run the literal one-hour and physical power-loss certification.** Use
+  `ALLOW_DEVICE_REBOOT=yes ADB_SERIAL=<serial> DURATION_SECONDS=3600
+  SAMPLE_INTERVAL_SECONDS=30 ./scripts/test-recording-resilience.sh`. Preserve
+  the generated evidence directory and repeat the active/finalization cases
+  once with controlled physical power removal rather than a software reboot.
 
 ### P1 — Recording and webhook production hardening
 
@@ -124,7 +131,7 @@ Priority:
 
 | Capability | Status | Evidence or remaining gap |
 |---|---|---|
-| Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture harness and fail-closed liveness/drop recovery pass on-device; long-session and power-interruption acceptance remain P0. |
+| Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture, fail-closed recovery, shortened endurance, storage pressure, and three reboot boundaries pass on-device; literal one-hour and physical power-loss certification remain P0. |
 | AEC and processed USB microphone | **Unknown** | Waved measures 22.7–26.6 dB ERLE and passes its acceptance bar, but needs the same-fixture stock comparison. |
 | Beamforming modes and horizontal DOA | **Partial** | Directional modes and GCC-PHAT work; exact stock beam patterns and close/simultaneous-speaker behavior are not yet compared. |
 | Neural noise suppression | **Unknown** | DFN3 works on CPU; stock-vs-Waved speech quality and sustained-load behavior remain unmeasured. |
@@ -133,7 +140,7 @@ Priority:
 | HID consumer and telephony controls | **Matched** | Stock report IDs and UI/MCU bridges are implemented and covered by `scripts/test-hid-control.sh`. |
 | Official Wave Controller vendor controls | **Unknown** | Run the official application against Waved, then capture stock USB control traffic only if a missing control is observed. |
 | macOS UAC2 master-volume control | **Partial** | Consumer keys and mute work; the kernel playback Feature Unit does not expose the stock-equivalent master-volume control. |
-| Local WAV meeting recording | **Partial** | Finalization, metadata, bookmarks, diarization, reconciliation, and real uploads work; long-session and interruption acceptance remain P0. |
+| Local WAV meeting recording | **Partial** | Finalization, metadata, bookmarks, diarization, reconciliation, real uploads, storage pressure, and three reboot boundaries pass; literal one-hour and physical power-loss certification remain P0. |
 | Generic multipart recording webhook | **Better** | Durable streaming upload, retry, retention, idempotency, setup configuration, status UI, and toasts are open-firmware capabilities; the full failure matrix remains P1. |
 | Wi-Fi provisioning and saved-network reconnect | **Better** | Waved provides a WPA2 setup AP, QR/manual credentials, a captive configuration form, saved-network fallback, and live connection status; stock setup AP was open. |
 | Device configuration through setup portal | **Better** | Versioned `config.toml` fields can be edited and validated without exposing stored secrets. |

@@ -563,6 +563,6 @@ phase_enabled wav-finalized &&
 phase_enabled metadata-finalized &&
   run_interruption_phase 5 metadata-finalized local_only
 
-echo "PASS: shortened recording resilience and storage-pressure acceptance completed"
+echo "PASS: selected recording resilience phases completed ($RUN_PHASES)"
 echo "One-hour certification:"
 echo "  ALLOW_DEVICE_REBOOT=yes ADB_SERIAL=${ADB_SERIAL:-<serial>} DURATION_SECONDS=3600 SAMPLE_INTERVAL_SECONDS=30 ./scripts/test-recording-resilience.sh"
