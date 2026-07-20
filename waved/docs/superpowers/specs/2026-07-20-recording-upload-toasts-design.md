@@ -48,7 +48,7 @@ has a broadcast `DeviceEvent` channel. The feature should reuse both.
 
 When the UI receives `Command::StopRecording`, it immediately shows:
 
-> Saving recording…
+> Saving recording...
 
 The toast lasts 1.5 seconds. Existing state-driven navigation remains
 authoritative: Automatic mode returns to Home after durable finalization, Ask
@@ -65,9 +65,9 @@ corresponding database state:
 - successful `2xx` delivery followed by `mark_uploaded`:
   **Recording uploaded**;
 - transient failure with retries remaining:
-  **Saved — upload queued**;
+  **Saved - upload queued**;
 - permanent configuration/artifact failure, or exhausted retries:
-  **Saved — check Webhook**.
+  **Saved - check Webhook**.
 
 The UI displays an upload-result toast only when its UUID is in the notice
 tracker. A confirmed success removes the UUID. Deferred and needs-attention
@@ -106,7 +106,7 @@ The UI thread subscribes to `bus.events` alongside its existing command
 receiver. It drains both receivers on every LVGL loop:
 
 1. `Command::StopRecording` captures the current meeting UUID, adds it to the
-   bounded tracker, and shows **Saving recording…**.
+   bounded tracker, and shows **Saving recording...**.
 2. Upload-result events are mapped to toast text only when the tracker contains
    their UUID.
 3. Lagged event-channel errors are ignored for toast purposes because the
@@ -125,9 +125,9 @@ can be tested without LVGL.
   claim.
 - Discard does not produce an upload toast.
 - Missing endpoint, invalid authentication, missing artifacts, and exhausted
-  retries use **Saved — check Webhook**.
+  retries use **Saved - check Webhook**.
 - Offline or transient network failure with attempts remaining uses
-  **Saved — upload queued**.
+  **Saved - upload queued**.
 - Existing queue counters and the Webhook status screen remain the detailed
   diagnostic surface.
 
@@ -150,7 +150,7 @@ remain compatible with GLIBC 2.17.
 On-device acceptance:
 
 1. Start a short Automatic-mode recording.
-2. Tap Stop and observe **Saving recording…** immediately.
+2. Tap Stop and observe **Saving recording...** immediately.
 3. Confirm the UI returns to Home after durable finalization.
 4. Let the receiver return `202`.
 5. Observe **Recording uploaded**.

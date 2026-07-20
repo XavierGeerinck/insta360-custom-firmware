@@ -54,7 +54,7 @@ recording is uploaded, deferred, or requires webhook attention.
 
 1. Add a pure Rust bounded UUID tracker with capacity 16.
 2. On `StopRecording`, capture the active meeting UUID, track it, and show
-   `Saving recording…` for 1.5 seconds.
+   `Saving recording...` for 1.5 seconds.
 3. Subscribe the UI thread to `DeviceEvent`.
 4. Map matching succeeded, deferred, and needs-attention events to the approved
    text.
@@ -75,7 +75,7 @@ recording is uploaded, deferred, or requires webhook attention.
 6. Stop every existing watchdog by actual PID, start exactly one supervisor,
    and verify UART/ALSA ownership, Wi-Fi, NTP, database state, and checksum.
 7. Record a short Automatic-mode meeting:
-   - Stop immediately shows `Saving recording…`;
+   - Stop immediately shows `Saving recording...`;
    - the receiver gets exactly one multipart request;
    - SQLite becomes `uploaded`; and
    - the display shows `Recording uploaded`.
