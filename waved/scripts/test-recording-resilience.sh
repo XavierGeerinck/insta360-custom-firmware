@@ -79,7 +79,7 @@ process_count() {
 watchdog_count() {
   adb_shell "ps -o pid,args 2>/dev/null" |
     tr -d '\r' |
-    awk '$2 == "/bin/sh" && $3 == "/etc/init.d/S60waved" && $4 == "start" { count++ } END { print count + 0 }'
+    awk '/\/bin\/sh \/etc\/init.d\/S60waved start$/ { count++ } END { print count + 0 }'
 }
 
 db_query() {
@@ -101,7 +101,7 @@ meeting_status() {
 }
 
 stop_supervisor() {
-  adb_shell "pids=\$(ps -o pid,args 2>/dev/null | awk '\$2 == \"/bin/sh\" && \$3 == \"/etc/init.d/S60waved\" && \$4 == \"start\" { print \$1 }'); \
+  adb_shell "pids=\$(ps -o pid,args 2>/dev/null | awk '/\\/bin\\/sh \\/etc\\/init.d\\/S60waved start\$/ { print \$1 }'); \
     test -z \"\$pids\" || kill -9 \$pids 2>/dev/null; \
     killall -9 waved 2>/dev/null; sleep 2; true" >/dev/null
 }
