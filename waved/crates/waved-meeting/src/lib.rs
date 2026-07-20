@@ -104,6 +104,7 @@ impl MeetingService {
                 device_id: self.device_id.clone(),
             },
             Arc::clone(&self.meeting_tx),
+            self.events_tx.clone(),
             Arc::clone(&upload_wake),
         );
         let _upload_task = tokio::spawn(upload_worker.run(wifi_rx.clone()));

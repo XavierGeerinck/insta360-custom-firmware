@@ -38,7 +38,7 @@ struct Harness {
     wifi_tx: watch::Sender<WifiState>,
     audio_tx: mpsc::Sender<ProcessedAudioFrame>,
     recordings_dir: PathBuf,
-    _events_rx: broadcast::Receiver<DeviceEvent>,
+    events_rx: broadcast::Receiver<DeviceEvent>,
 }
 
 async fn boot(connected: bool) -> Harness {
@@ -82,7 +82,7 @@ async fn boot_with_mode(connected: bool, upload_mode: UploadMode) -> Harness {
         wifi_tx,
         audio_tx,
         recordings_dir,
-        _events_rx: events_rx,
+        events_rx,
     }
 }
 
@@ -229,6 +229,32 @@ async fn automatic_mode_skips_confirmation_and_queues_offline() {
     })
     .await;
     assert!(h.meeting_rx.borrow().pending_decision.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_upload_emits_success_for_the_recording_id() {
+    let mut h = boot_with_mode(true, UploadMode::Automatic).await;
+    h.cmd_tx.send(Command::StartRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| state.recording).await;
+    let id = h.meeting_rx.borrow().meeting_id.unwrap();
+    let _ = h.audio_tx.send(fake_frame()).await;
+    h.cmd_tx.send(Command::StopRecording).unwrap();
+    wait_for(&mut h.meeting_rx, |state| !state.recording).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let event = tokio::time::timeout(remaining, h.events_rx.recv())
+            .await
+            .expect("timed out waiting for upload event")
+            .expect("event channel closed");
+        if matches!(
+            event,
+            DeviceEvent::RecordingUploadSucceeded(received) if received == id
+        ) {
+            break;
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

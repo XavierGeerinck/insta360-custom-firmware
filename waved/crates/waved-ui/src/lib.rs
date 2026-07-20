@@ -8,6 +8,7 @@ pub mod screens;
 pub mod status_bar;
 pub mod theme;
 pub mod toast;
+mod upload_notice;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,6 +24,7 @@ use nav::{ScreenManager, UiScreen};
 use screens::Screen;
 use status_bar::StatusBar;
 use toast::Toast;
+use upload_notice::UploadNoticeTracker;
 
 pub struct UiService {
     thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -63,6 +65,7 @@ fn ui_thread_main(
     let meeting_rx = bus.meeting.subscribe();
 
     let mut cmd_rx = bus.commands.subscribe();
+    let mut event_rx = bus.events.subscribe();
 
     let _i18n = I18n::load(&config.device.language);
 
@@ -109,8 +112,7 @@ fn ui_thread_main(
     let mut audio_mode = screens::audio_mode::AudioModeScreen::new(Arc::clone(&bus));
     let mut noise_red = screens::noise_reduction::NoiseReductionScreen::new(Arc::clone(&bus));
     let mut system = screens::system::SystemScreen::new(Arc::clone(&bus));
-    let mut webhook =
-        screens::webhook::WebhookScreen::new(Arc::clone(&bus), config.clone());
+    let mut webhook = screens::webhook::WebhookScreen::new(Arc::clone(&bus), config.clone());
     let mut wifi_prov = screens::wifi_provisioning::WifiProvisioningScreen::new(Arc::clone(&bus));
     let mut volume = screens::volume::VolumeScreen::new(Arc::clone(&bus));
     let mut confirmation = screens::confirmation::ConfirmationScreen::new(Arc::clone(&bus));
@@ -118,6 +120,7 @@ fn ui_thread_main(
     // Track which non-settings screen to return to when settings closes.
     let mut return_to_recording = false;
     let mut prev_recording = false;
+    let mut upload_notices = UploadNoticeTracker::default();
 
     let root = home.create();
     unsafe {
@@ -199,6 +202,7 @@ fn ui_thread_main(
                 &cmd,
                 &bus,
                 &mut toast,
+                &mut upload_notices,
                 &mut nav,
                 &mut home,
                 &mut recording,
@@ -212,6 +216,14 @@ fn ui_thread_main(
                 &mut return_to_recording,
                 &mut prev_recording,
             );
+        }
+
+        while let Ok(event) = event_rx.try_recv() {
+            if let Some(upload_toast) = upload_notices.handle(&event) {
+                unsafe {
+                    toast.show(upload_toast.message(), upload_toast.duration_ms());
+                }
+            }
         }
 
         unsafe {
@@ -330,6 +342,7 @@ fn handle_command(
     cmd: &Command,
     bus: &Arc<StateBus>,
     toast: &mut Toast,
+    upload_notices: &mut UploadNoticeTracker,
     nav: &mut ScreenManager,
     home: &mut screens::home::HomeScreen,
     recording: &mut screens::recording::RecordingScreen,
@@ -369,6 +382,14 @@ fn handle_command(
     }
 
     match cmd {
+        Command::StopRecording => {
+            if let Some(id) = bus.meeting.borrow().meeting_id {
+                upload_notices.track(id);
+            }
+            unsafe {
+                toast.show("Saving recording...", 1_500);
+            }
+        }
         Command::AddBookmark => unsafe {
             toast.show("Bookmark added", 1500);
         },

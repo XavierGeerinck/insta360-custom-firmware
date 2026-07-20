@@ -238,6 +238,9 @@ pub enum DeviceEvent {
     WifiDisconnected,
     RecordingStarted(Uuid),
     RecordingStopped(Uuid),
+    RecordingUploadSucceeded(Uuid),
+    RecordingUploadDeferred(Uuid),
+    RecordingUploadNeedsAttention(Uuid),
     LowBattery(u8),
     MotorObstruction,
 }
@@ -415,6 +418,28 @@ mod tests {
         match rx2.recv().await.unwrap() {
             DeviceEvent::UsbConnected => {}
             other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn recording_upload_events_keep_their_meeting_id() {
+        let bus = StateBus::new();
+        let mut rx = bus.events.subscribe();
+        let id = Uuid::new_v4();
+
+        for event in [
+            DeviceEvent::RecordingUploadSucceeded(id),
+            DeviceEvent::RecordingUploadDeferred(id),
+            DeviceEvent::RecordingUploadNeedsAttention(id),
+        ] {
+            bus.events.send(event).unwrap();
+            let received_id = match rx.recv().await.unwrap() {
+                DeviceEvent::RecordingUploadSucceeded(received)
+                | DeviceEvent::RecordingUploadDeferred(received)
+                | DeviceEvent::RecordingUploadNeedsAttention(received) => received,
+                other => panic!("unexpected event: {other:?}"),
+            };
+            assert_eq!(received_id, id);
         }
     }
 

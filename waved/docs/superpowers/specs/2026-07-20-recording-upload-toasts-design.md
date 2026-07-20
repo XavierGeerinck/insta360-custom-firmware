@@ -55,7 +55,8 @@ authoritative: Automatic mode returns to Home after durable finalization, Ask
 mode opens the confirmation screen, and Local-only mode returns to Home.
 
 The UI records the active meeting UUID in a small bounded notice tracker before
-the meeting service clears `MeetingState.meeting_id`.
+the meeting service clears `MeetingState.meeting_id`. The existing
+`RecordingStopped` event supplies the same UUID as a race-safe fallback.
 
 ### 4.2 Delivery result
 
@@ -106,10 +107,13 @@ The UI thread subscribes to `bus.events` alongside its existing command
 receiver. It drains both receivers on every LVGL loop:
 
 1. `Command::StopRecording` captures the current meeting UUID, adds it to the
-   bounded tracker, and shows **Saving recording...**.
-2. Upload-result events are mapped to toast text only when the tracker contains
+   bounded tracker when still available, and always shows
+   **Saving recording...**.
+2. `RecordingStopped` adds the UUID as a fallback when finalization won the
+   race and cleared the watched meeting state first.
+3. Upload-result events are mapped to toast text only when the tracker contains
    their UUID.
-3. Lagged event-channel errors are ignored for toast purposes because the
+4. Lagged event-channel errors are ignored for toast purposes because the
    notification is non-durable and queue/database state remains visible on the
    Webhook status screen.
 

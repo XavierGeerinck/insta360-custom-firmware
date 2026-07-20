@@ -6,10 +6,10 @@ use crate::upload::WebhookClient;
 use sqlx::SqlitePool;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{broadcast, watch, Notify};
 use tracing::{error, info, warn};
 use waved_config::{ApiConfig, StorageConfig};
-use waved_state::{MeetingState, WifiState};
+use waved_state::{DeviceEvent, MeetingState, WifiState};
 
 pub struct UploadWorker {
     pool: SqlitePool,
@@ -19,6 +19,7 @@ pub struct UploadWorker {
     webhook_test_marker: PathBuf,
     device_id: String,
     meeting_tx: Arc<watch::Sender<MeetingState>>,
+    events_tx: broadcast::Sender<DeviceEvent>,
     wake: Arc<Notify>,
 }
 
@@ -35,6 +36,7 @@ impl UploadWorker {
         pool: SqlitePool,
         settings: WorkerSettings,
         meeting_tx: Arc<watch::Sender<MeetingState>>,
+        events_tx: broadcast::Sender<DeviceEvent>,
         wake: Arc<Notify>,
     ) -> Self {
         Self {
@@ -45,6 +47,7 @@ impl UploadWorker {
             webhook_test_marker: settings.webhook_test_marker,
             device_id: settings.device_id,
             meeting_tx,
+            events_tx,
             wake,
         }
     }
@@ -153,6 +156,9 @@ impl UploadWorker {
                             warn!("failed to mark {} uploaded: {error}", candidate.id);
                         } else {
                             info!("webhook delivery complete for {}", candidate.id);
+                            let _ = self
+                                .events_tx
+                                .send(DeviceEvent::RecordingUploadSucceeded(candidate.id));
                             let timestamp = chrono::Utc::now().to_rfc3339();
                             self.meeting_tx.send_modify(|state| {
                                 state.last_upload_success_at = Some(timestamp);
@@ -168,7 +174,7 @@ impl UploadWorker {
                         }
                     }
                     Err(UploadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                        let _ = db::mark_upload_failure(
+                        if let Err(db_error) = db::mark_upload_failure(
                             &self.pool,
                             &candidate.id,
                             MeetingStatus::MissingArtifact,
@@ -176,7 +182,17 @@ impl UploadWorker {
                             None,
                             None,
                         )
-                        .await;
+                        .await
+                        {
+                            warn!(
+                                "failed to persist missing artifact for {}: {db_error}",
+                                candidate.id
+                            );
+                        } else {
+                            let _ = self
+                                .events_tx
+                                .send(DeviceEvent::RecordingUploadNeedsAttention(candidate.id));
+                        }
                     }
                     Err(error) if error.is_transient() => {
                         let delay = retry_delay_ms(
@@ -190,7 +206,7 @@ impl UploadWorker {
                             .saturating_add(delay.min(i64::MAX as u64) as i64);
                         let status_code = error.status_code();
                         let summary = test_summary(&error);
-                        let _ = db::mark_upload_failure(
+                        if let Err(db_error) = db::mark_upload_failure(
                             &self.pool,
                             &candidate.id,
                             MeetingStatus::RetryWait,
@@ -198,7 +214,19 @@ impl UploadWorker {
                             status_code,
                             Some(deadline),
                         )
-                        .await;
+                        .await
+                        {
+                            warn!(
+                                "failed to persist retry state for {}: {db_error}",
+                                candidate.id
+                            );
+                        } else {
+                            let _ = self.events_tx.send(transient_failure_event(
+                                candidate.id,
+                                candidate.attempt_cycle,
+                                self.api.retry_max,
+                            ));
+                        }
                         warn!(
                             "transient webhook failure for {}; retry {} in {}ms: {}",
                             candidate.id, candidate.attempt_cycle, delay, error
@@ -213,7 +241,7 @@ impl UploadWorker {
                         } else {
                             MeetingStatus::ConfigurationError
                         };
-                        let _ = db::mark_upload_failure(
+                        if let Err(db_error) = db::mark_upload_failure(
                             &self.pool,
                             &candidate.id,
                             status,
@@ -221,7 +249,17 @@ impl UploadWorker {
                             error.status_code(),
                             None,
                         )
-                        .await;
+                        .await
+                        {
+                            warn!(
+                                "failed to persist blocked delivery for {}: {db_error}",
+                                candidate.id
+                            );
+                        } else {
+                            let _ = self
+                                .events_tx
+                                .send(DeviceEvent::RecordingUploadNeedsAttention(candidate.id));
+                        }
                         let summary = test_summary(&error);
                         self.meeting_tx.send_modify(|state| {
                             state.last_upload_error = Some(summary);
@@ -287,6 +325,14 @@ impl UploadWorker {
     }
 }
 
+fn transient_failure_event(id: uuid::Uuid, attempt: u32, retry_max: u32) -> DeviceEvent {
+    if attempt < retry_max.max(1) {
+        DeviceEvent::RecordingUploadDeferred(id)
+    } else {
+        DeviceEvent::RecordingUploadNeedsAttention(id)
+    }
+}
+
 fn test_summary(error: &UploadError) -> String {
     match error.status_code() {
         Some(status) => format!("HTTP {status}"),
@@ -317,5 +363,22 @@ mod tests {
         assert!((900..=1_100).contains(&retry_delay_ms(1_000, 60_000, 1, 0)));
         assert!((1_800..=2_200).contains(&retry_delay_ms(1_000, 60_000, 2, 20)));
         assert!((54_000..=66_000).contains(&retry_delay_ms(1_000, 60_000, 20, 10)));
+    }
+
+    #[test]
+    fn transient_outcome_requires_attention_when_attempts_are_exhausted() {
+        let id = uuid::Uuid::new_v4();
+        assert!(matches!(
+            transient_failure_event(id, 1, 3),
+            DeviceEvent::RecordingUploadDeferred(received) if received == id
+        ));
+        assert!(matches!(
+            transient_failure_event(id, 3, 3),
+            DeviceEvent::RecordingUploadNeedsAttention(received) if received == id
+        ));
+        assert!(matches!(
+            transient_failure_event(id, 1, 0),
+            DeviceEvent::RecordingUploadNeedsAttention(received) if received == id
+        ));
     }
 }
