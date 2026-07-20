@@ -923,6 +923,19 @@ adb shell "kill -9 \$(pidof S60waved 2>/dev/null || echo 330); \
 
 Without the watchdog kill, the env var gets stripped on the next respawn.
 
+When starting the init script manually over ADB, let BusyBox detach it before
+the ADB session exits:
+
+```bash
+adb shell "start-stop-daemon -S -b -x /bin/sh -- /etc/init.d/S60waved start"
+```
+
+Launching `S60waved start` as an ordinary shell background job can leave the
+first `waved` process alive while its restart-loop subshell is reaped as the ADB
+session closes. `start-stop-daemon -b` was verified on-device to retain exactly
+one `/bin/sh /etc/init.d/S60waved start` watchdog and one `waved` process across
+the scripted five-second display restart.
+
 ## Deploy
 
 ```bash

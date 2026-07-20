@@ -30,7 +30,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if adb_shell "test -f '$HOOK'"; then
+if [[ "$(adb_shell "if test -f '$HOOK'; then echo yes; fi" | tr -d '\r')" == yes ]]; then
   HAD_HOOK=1
   "${ADB[@]}" pull "$HOOK" "$BACKUP" >/dev/null
 fi
@@ -87,8 +87,16 @@ wait_for_restart() {
 
 assert_partial_only() {
   local dir=$1
-  adb_shell "test -f '$dir/audio.wav.partial'"
-  if adb_shell "test -e '$dir/audio.wav' -o -e '$dir/metadata.json'"; then
+  if [[ "$(
+    adb_shell "if test -f '$dir/audio.wav.partial'; then echo yes; fi" | tr -d '\r'
+  )" != yes ]]; then
+    echo "Faulted take did not preserve audio.wav.partial: $dir" >&2
+    return 1
+  fi
+  if [[ "$(
+    adb_shell "if test -e '$dir/audio.wav' -o -e '$dir/metadata.json'; then echo yes; fi" |
+      tr -d '\r'
+  )" == yes ]]; then
     echo "Faulted take was exposed as a complete artifact: $dir" >&2
     return 1
   fi
@@ -97,7 +105,7 @@ assert_partial_only() {
 echo "Checking non-production hook..."
 inject capture-xrun
 sleep 1
-if adb_shell "test -e '$HOOK'"; then
+if [[ "$(adb_shell "if test -e '$HOOK'; then echo yes; fi" | tr -d '\r')" == yes ]]; then
   echo "Hook was not consumed. Deploy the test-hook build before running this script." >&2
   exit 1
 fi

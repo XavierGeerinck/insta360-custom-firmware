@@ -35,20 +35,17 @@ Priority:
 
 ### P0 — Audio capture and recording integrity
 
-- [ ] **Detect and recover from audio-capture failure.** `AudioService` keeps
-  `_frame_tx` alive, so a dead capture producer cannot close `frame_rx` and may
-  leave the service waiting silently. Publish capture liveness, make recording
-  state fail visibly, and either restart capture safely or block new
-  recordings. Acceptance: terminate or stall the capture producer during idle
-  and during recording; the UI reports the fault, no recording is reported as
-  healthy, and recovery does not require deleting existing files.
-- [ ] **Make every recording-path drop or write failure explicit.**
-  `AudioService` currently ignores a failed `meeting_tx.try_send`, and
-  `ActiveRecording::append_samples` logs WAV write errors without preserving a
-  durable fault. Count processed-frame drops, stop treating a damaged take as
-  uploadable, and surface the reason on-device. Acceptance: deterministic
-  channel saturation and injected writer failure both produce a visible
-  integrity fault and an `artifact_error` row; neither take is uploaded.
+- [x] **Detect and recover from audio-capture failure.** Capture EOF/read
+  failure and raw/processed channel closure are typed terminal exits. Active
+  takes fail closed, the meeting actor acknowledges durable fault persistence,
+  and the process exits through the normal watchdog path. On-device idle and
+  active injection verified restart without deleting the retained partial WAV.
+- [x] **Make every recording-path drop or write failure explicit.** Xruns,
+  raw/processed drops, channel closure, and WAV writes update a shared integrity
+  epoch. Stop drains queued faults before finalization; damaged takes retain
+  only `audio.wav.partial`, persist `artifact_error`, never become uploadable,
+  and show fixed on-device fault copy. Deterministic host tests and on-device
+  frame-drop/writer-failure injection pass.
 - [ ] **Run long-session and interrupted-finalization acceptance.** Record for
   at least one hour while tracking RSS, dropped frames, WAV duration, sample
   count, and free space. Repeat with process termination and power loss during
@@ -127,7 +124,7 @@ Priority:
 
 | Capability | Status | Evidence or remaining gap |
 |---|---|---|
-| Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture harness passes on-device; capture-producer health recovery and explicit downstream-drop handling remain P0. |
+| Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture harness and fail-closed liveness/drop recovery pass on-device; long-session and power-interruption acceptance remain P0. |
 | AEC and processed USB microphone | **Unknown** | Waved measures 22.7–26.6 dB ERLE and passes its acceptance bar, but needs the same-fixture stock comparison. |
 | Beamforming modes and horizontal DOA | **Partial** | Directional modes and GCC-PHAT work; exact stock beam patterns and close/simultaneous-speaker behavior are not yet compared. |
 | Neural noise suppression | **Unknown** | DFN3 works on CPU; stock-vs-Waved speech quality and sustained-load behavior remain unmeasured. |
@@ -189,6 +186,8 @@ Authoritative detail:
 - `docs/WEBHOOKS.md`
 - `docs/superpowers/specs/2026-07-17-webhook-setup-and-upload-design.md`
 - `docs/superpowers/specs/2026-07-20-recording-upload-toasts-design.md`
+- `docs/superpowers/specs/2026-07-20-recording-pipeline-integrity-design.md`
+- `docs/superpowers/plans/2026-07-20-recording-pipeline-integrity.md`
 
 ASR models and transcription remain out of scope. The device produces
 recordings and metadata for downstream systems to transcribe or analyze.
