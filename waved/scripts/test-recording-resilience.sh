@@ -29,6 +29,7 @@ PRODUCTION_BINARY="${PRODUCTION_BINARY:-$RELEASE_DIR/waved.production.stripped}"
 RETENTION_BINARY="${RETENTION_BINARY:-$RELEASE_DIR/retention-acceptance.stripped}"
 DURATION_SECONDS="${DURATION_SECONDS:-20}"
 SAMPLE_INTERVAL_SECONDS="${SAMPLE_INTERVAL_SECONDS:-2}"
+RUN_PHASES="${RUN_PHASES:-all}"
 DEVICE_BINARY="${DEVICE_BINARY:-/data/waved/waved}"
 DEVICE_RETENTION_BINARY="/tmp/waved-retention-acceptance"
 DATABASE="/data/waved/meetings.db"
@@ -263,6 +264,11 @@ json_counter() {
   local file=$1
   local field=$2
   jq -r ".$field // 0" "$file"
+}
+
+phase_enabled() {
+  local phase=$1
+  [[ "$RUN_PHASES" == all || ",$RUN_PHASES," == *",$phase,"* ]]
 }
 
 validate_wav_and_metadata() {
@@ -508,6 +514,8 @@ done
 [[ "$DURATION_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail "DURATION_SECONDS must be a positive integer"
 [[ "$SAMPLE_INTERVAL_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
   fail "SAMPLE_INTERVAL_SECONDS must be a positive integer"
+[[ "$RUN_PHASES" =~ ^(all|[a-z-]+(,[a-z-]+)*)$ ]] ||
+  fail "RUN_PHASES must be all or a comma-separated phase list"
 for artifact in "$HIL_BINARY" "$PRODUCTION_BINARY" "$RETENTION_BINARY"; do
   [[ -x "$artifact" || -f "$artifact" ]] || fail "build artifact not found: $artifact"
 done
@@ -546,11 +554,14 @@ wait_for_stable_waved > "$EVIDENCE_DIR/hil-pid.txt" || fail "HIL waved process d
 [[ "$(process_count)" == 1 && "$(watchdog_count)" == 1 ]] ||
   fail "HIL supervisor state is not singular"
 
-run_endurance_phase
-run_retention_phase
-run_interruption_phase 3 active-partial artifact_error
-run_interruption_phase 4 wav-finalized missing_artifact
-run_interruption_phase 5 metadata-finalized local_only
+phase_enabled endurance && run_endurance_phase
+phase_enabled retention && run_retention_phase
+phase_enabled active-partial &&
+  run_interruption_phase 3 active-partial artifact_error
+phase_enabled wav-finalized &&
+  run_interruption_phase 4 wav-finalized missing_artifact
+phase_enabled metadata-finalized &&
+  run_interruption_phase 5 metadata-finalized local_only
 
 echo "PASS: shortened recording resilience and storage-pressure acceptance completed"
 echo "One-hour certification:"
