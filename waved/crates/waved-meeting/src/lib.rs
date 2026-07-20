@@ -14,6 +14,7 @@ pub mod simulate;
 use crate::model::MeetingStatus;
 use crate::recorder::{PreBuffer, PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE};
 use sqlx::SqlitePool;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,179 @@ pub struct MeetingPipelineInputs {
     pub doa_rx: broadcast::Receiver<DoaFrame>,
     pub integrity: Arc<RecordingIntegrity>,
     pub integrity_rx: mpsc::UnboundedReceiver<IntegritySignal>,
+}
+
+#[derive(Clone)]
+struct RecordingFinalizer {
+    config: WavedConfig,
+    pool: SqlitePool,
+    recordings_dir: PathBuf,
+    meeting_tx: Arc<watch::Sender<MeetingState>>,
+    events_tx: broadcast::Sender<DeviceEvent>,
+    integrity: Arc<RecordingIntegrity>,
+    device_id: String,
+}
+
+impl From<&MeetingService> for RecordingFinalizer {
+    fn from(service: &MeetingService) -> Self {
+        Self {
+            config: service.config.clone(),
+            pool: service.pool.clone(),
+            recordings_dir: service.recordings_dir.clone(),
+            meeting_tx: Arc::clone(&service.meeting_tx),
+            events_tx: service.events_tx.clone(),
+            integrity: Arc::clone(&service.integrity),
+            device_id: service.device_id.clone(),
+        }
+    }
+}
+
+impl RecordingFinalizer {
+    /// Finalize both durable artifacts before making this take eligible for
+    /// either a user decision or background delivery.
+    async fn stop_recording(self, rec: recorder::ActiveRecording) {
+        let duration = rec.duration_secs();
+        let id = rec.id;
+        let finalized = match tokio::task::spawn_blocking(move || rec.finalize()).await {
+            Ok(Ok(recording)) => recording,
+            Ok(Err(error)) => {
+                error!("failed to finalize recording {id}: {error}");
+                self.integrity
+                    .record_fault(RecordingIntegrityFault::WavWriteFailed);
+                self.mark_recording_fault(
+                    id,
+                    duration,
+                    RecordingIntegrityFault::WavWriteFailed,
+                )
+                .await;
+                return;
+            }
+            Err(error) => {
+                error!("recording finalization task failed for {id}: {error}");
+                self.integrity
+                    .record_fault(RecordingIntegrityFault::WavWriteFailed);
+                self.mark_recording_fault(
+                    id,
+                    duration,
+                    RecordingIntegrityFault::WavWriteFailed,
+                )
+                .await;
+                return;
+            }
+        };
+        #[cfg(feature = "recording-integrity-test-hooks")]
+        finalization_test_checkpoint(FinalizationCheckpoint::WavFinalized, id).await;
+
+        let bookmarks = db::get_bookmarks(&self.pool, &id)
+            .await
+            .unwrap_or_else(|error| {
+                warn!("failed to load bookmarks for {id}: {error}");
+                Vec::new()
+            });
+        let segments = db::get_speaker_segments(&self.pool, &id)
+            .await
+            .unwrap_or_else(|error| {
+                warn!("failed to load speaker segments for {id}: {error}");
+                Vec::new()
+            });
+        if let Err(error) = metadata::build_and_write(
+            &finalized,
+            &self.config,
+            &self.device_id,
+            bookmarks,
+            segments,
+        )
+        .await
+        {
+            error!("failed to persist metadata for {id}: {error}");
+            let _ = db::set_status(&self.pool, &id, MeetingStatus::ArtifactError).await;
+            self.meeting_tx.send_modify(|state| {
+                state.recording = false;
+                state.paused = false;
+                state.meeting_id = None;
+                state.pending_decision = None;
+            });
+            return;
+        }
+        #[cfg(feature = "recording-integrity-test-hooks")]
+        finalization_test_checkpoint(FinalizationCheckpoint::MetadataFinalized, id).await;
+
+        let status = match self.config.api.upload_mode {
+            UploadMode::Automatic => MeetingStatus::Queued,
+            UploadMode::Ask => MeetingStatus::AwaitingDecision,
+            UploadMode::LocalOnly => MeetingStatus::LocalOnly,
+        };
+        if let Err(error) = db::finish_meeting(&self.pool, &id, duration, status).await {
+            error!("failed to persist final state for {id}: {error}");
+            self.meeting_tx.send_modify(|state| {
+                state.recording = false;
+                state.paused = false;
+                state.meeting_id = None;
+                state.duration_secs = duration;
+                state.pending_decision = None;
+            });
+            let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
+            return;
+        }
+        let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
+        let decision = (self.config.api.upload_mode == UploadMode::Ask).then(|| PendingDecision {
+            id,
+            audio_path: finalized.audio_path.clone(),
+            duration_secs: duration,
+            size_bytes: finalized.size_bytes,
+            endpoint: self.config.api.endpoint.clone(),
+        });
+
+        self.meeting_tx.send_modify(|state| {
+            state.recording = false;
+            state.paused = false;
+            state.meeting_id = None;
+            state.duration_secs = duration;
+            state.pending_decision = decision;
+        });
+        info!(
+            "recording stopped: {} ({}s, {} bytes) — {}",
+            id,
+            duration,
+            finalized.size_bytes,
+            status.as_str()
+        );
+        retention::enforce(
+            &self.pool,
+            &self.recordings_dir,
+            &self.config.storage,
+            &self.meeting_tx,
+        )
+        .await;
+    }
+
+    async fn mark_recording_fault(
+        &self,
+        id: Uuid,
+        duration: u32,
+        fault: RecordingIntegrityFault,
+    ) {
+        if let Err(error) = db::mark_artifact_error(&self.pool, &id, duration, fault).await {
+            warn!("failed to persist recording integrity fault for {id}: {error}");
+        }
+        self.meeting_tx.send_modify(|state| {
+            state.recording = false;
+            state.paused = false;
+            state.meeting_id = None;
+            state.duration_secs = duration;
+            state.pending_decision = None;
+            state.last_recording_error = Some(fault);
+            if fault.blocks_recording() {
+                state.recording_blocked_reason = Some(fault);
+            }
+        });
+        let _ = self
+            .events_tx
+            .send(DeviceEvent::RecordingIntegrityFailed {
+                meeting_id: Some(id),
+                fault,
+            });
+    }
 }
 
 impl MeetingService {
@@ -349,18 +523,26 @@ impl MeetingService {
                                         }
                                         let (fault, acknowledgements) =
                                             self.drain_before_stop(&mut rec);
+                                        // Audio received after the accepted Stop belongs to
+                                        // the next take's pre-roll, including while this take
+                                        // is being finalized and hashed.
+                                        prebuffer.clear();
+                                        prebuffer.resume();
                                         if let Some(fault) = fault {
                                             self.abort_recording(rec, fault).await;
                                         } else {
-                                            self.stop_recording(rec).await;
+                                            let finalization = self.stop_recording(rec);
+                                            self.await_finalization_with_drain(
+                                                &mut prebuffer,
+                                                &mut doa_closed,
+                                                finalization,
+                                            )
+                                            .await;
                                             upload_wake.notify_one();
                                         }
                                         for acknowledgement in acknowledgements {
                                             let _ = acknowledgement.send(());
                                         }
-                                        // Re-arm the pre-roll now that the take is closed.
-                                        prebuffer.clear();
-                                        prebuffer.resume();
                                     }
                                 }
                                 Command::AddBookmark => {
@@ -410,7 +592,15 @@ impl MeetingService {
                                                 }
                                             }
                                         }
-                                        self.stop_recording(rec).await;
+                                        prebuffer.clear();
+                                        prebuffer.resume();
+                                        let finalization = self.stop_recording(rec);
+                                        self.await_finalization_with_drain(
+                                            &mut prebuffer,
+                                            &mut doa_closed,
+                                            finalization,
+                                        )
+                                        .await;
                                     }
                                     // If a decision is still pending at shutdown,
                                     // implicit-save: never auto-discard data the
@@ -449,106 +639,70 @@ impl MeetingService {
         }
     }
 
-    /// Finalize both durable artifacts before making this take eligible for
-    /// either a user decision or background delivery.
-    async fn stop_recording(&self, rec: recorder::ActiveRecording) {
-        let duration = rec.duration_secs();
-        let id = rec.id;
-        let finalized = match rec.finalize() {
-            Ok(recording) => recording,
-            Err(error) => {
-                error!("failed to finalize recording {id}: {error}");
-                self.integrity
-                    .record_fault(RecordingIntegrityFault::WavWriteFailed);
-                self.mark_recording_fault(id, duration, RecordingIntegrityFault::WavWriteFailed)
-                    .await;
-                return;
+    fn stop_recording(
+        &self,
+        rec: recorder::ActiveRecording,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        RecordingFinalizer::from(self).stop_recording(rec)
+    }
+
+    async fn await_finalization_with_drain<F>(
+        &mut self,
+        prebuffer: &mut PreBuffer,
+        doa_closed: &mut bool,
+        finalization: F,
+    ) where
+        F: Future<Output = ()>,
+    {
+        tokio::pin!(finalization);
+        let mut audio_closed = false;
+        let mut integrity_closed = false;
+
+        loop {
+            tokio::select! {
+                biased;
+
+                () = &mut finalization => {
+                    // `biased` gives durable completion priority. Drain frames
+                    // that were already queued at that exact boundary before
+                    // command handling resumes, so an immediately queued Start
+                    // cannot overtake its own pre-roll.
+                    while let Ok(frame) = self.audio_rx.try_recv() {
+                        prebuffer.push(&frame.mic_mono_f32);
+                    }
+                    break;
+                },
+                frame = self.audio_rx.recv(), if !audio_closed => {
+                    match frame {
+                        Some(frame) => prebuffer.push(&frame.mic_mono_f32),
+                        None => audio_closed = true,
+                    }
+                }
+                signal = self.integrity_rx.recv(), if !integrity_closed => {
+                    match signal {
+                        Some(signal) => {
+                            self.publish_idle_fault(signal.fault);
+                            if let Some(acknowledgement) = signal.acknowledgement {
+                                let _ = acknowledgement.send(());
+                            }
+                        }
+                        None => integrity_closed = true,
+                    }
+                }
+                doa_recv = self.doa_rx.recv(), if !*doa_closed => {
+                    match doa_recv {
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("diarization receiver lagged {n} frames during finalization");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            warn!("DoA stream closed; diarization paused");
+                            *doa_closed = true;
+                        }
+                    }
+                }
             }
-        };
-        #[cfg(feature = "recording-integrity-test-hooks")]
-        finalization_test_checkpoint(FinalizationCheckpoint::WavFinalized, id).await;
-
-        let bookmarks = db::get_bookmarks(&self.pool, &id)
-            .await
-            .unwrap_or_else(|error| {
-                warn!("failed to load bookmarks for {id}: {error}");
-                Vec::new()
-            });
-        let segments = db::get_speaker_segments(&self.pool, &id)
-            .await
-            .unwrap_or_else(|error| {
-                warn!("failed to load speaker segments for {id}: {error}");
-                Vec::new()
-            });
-        if let Err(error) = metadata::build_and_write(
-            &finalized,
-            &self.config,
-            &self.device_id,
-            bookmarks,
-            segments,
-        )
-        .await
-        {
-            error!("failed to persist metadata for {id}: {error}");
-            let _ = db::set_status(&self.pool, &id, MeetingStatus::ArtifactError).await;
-            self.meeting_tx.send_modify(|state| {
-                state.recording = false;
-                state.paused = false;
-                state.meeting_id = None;
-                state.pending_decision = None;
-            });
-            return;
         }
-        #[cfg(feature = "recording-integrity-test-hooks")]
-        finalization_test_checkpoint(FinalizationCheckpoint::MetadataFinalized, id).await;
-
-        let status = match self.config.api.upload_mode {
-            UploadMode::Automatic => MeetingStatus::Queued,
-            UploadMode::Ask => MeetingStatus::AwaitingDecision,
-            UploadMode::LocalOnly => MeetingStatus::LocalOnly,
-        };
-        if let Err(error) = db::finish_meeting(&self.pool, &id, duration, status).await {
-            error!("failed to persist final state for {id}: {error}");
-            self.meeting_tx.send_modify(|state| {
-                state.recording = false;
-                state.paused = false;
-                state.meeting_id = None;
-                state.duration_secs = duration;
-                state.pending_decision = None;
-            });
-            let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
-            return;
-        }
-        let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
-        let decision = (self.config.api.upload_mode == UploadMode::Ask).then(|| PendingDecision {
-            id,
-            audio_path: finalized.audio_path.clone(),
-            duration_secs: duration,
-            size_bytes: finalized.size_bytes,
-            endpoint: self.config.api.endpoint.clone(),
-        });
-
-        self.meeting_tx.send_modify(|s| {
-            s.recording = false;
-            s.paused = false;
-            s.meeting_id = None;
-            s.duration_secs = duration;
-            s.pending_decision = decision;
-        });
-        info!(
-            "recording stopped: {} ({}s, {} bytes) — {}",
-            id,
-            duration,
-            finalized.size_bytes,
-            status.as_str()
-        );
-        retention::enforce(
-            &self.pool,
-            &self.recordings_dir,
-            &self.config.storage,
-            &self.meeting_tx,
-        )
-        .await;
     }
 
     fn drain_before_stop(
@@ -995,6 +1149,111 @@ mod wiring_tests {
             }) if event_id == id
         ));
         assert!(db::claim_next_upload(&pool, 5).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn finalization_drain_prevents_processed_channel_backpressure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("t.db");
+        let recordings_dir = tmp.path().join("rec");
+        std::fs::create_dir_all(&recordings_dir).unwrap();
+        let (meeting_tx_inner, _meeting_rx) = watch::channel(MeetingState::default());
+        let meeting_tx = Arc::new(meeting_tx_inner);
+        let (events_tx, mut events_rx) = broadcast::channel::<DeviceEvent>(16);
+        let (audio_tx, audio_rx) = mpsc::channel(2);
+        let (doa_tx, _) = broadcast::channel::<DoaFrame>(4);
+        let integrity = Arc::new(RecordingIntegrity::default());
+        let (integrity_tx, integrity_rx) = mpsc::unbounded_channel();
+        let mut config = WavedConfig::default();
+        config.storage.prune_uploaded_at_percent = 100;
+        config.storage.minimum_free_mb = 0;
+        let mut svc = MeetingService::new_with_integrity(
+            config,
+            db_path.to_str().unwrap(),
+            recordings_dir,
+            Arc::clone(&meeting_tx),
+            events_tx,
+            MeetingPipelineInputs {
+                audio_rx,
+                doa_rx: doa_tx.subscribe(),
+                integrity: Arc::clone(&integrity),
+                integrity_rx,
+            },
+        )
+        .await
+        .unwrap();
+
+        let streamed_frames = 12_usize;
+        let boundary_frames = 2_usize;
+        let expected_frames = streamed_frames + boundary_frames;
+        let integrity_for_producer = Arc::clone(&integrity);
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let producer = tokio::spawn(async move {
+            for index in 0..streamed_frames {
+                audio_tx
+                    .send(processed_frame(index as u64 * 10))
+                    .await
+                    .unwrap();
+            }
+            while audio_tx.capacity() != audio_tx.max_capacity() {
+                tokio::task::yield_now().await;
+            }
+
+            integrity_for_producer
+                .record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+            let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+            integrity_tx
+                .send(IntegritySignal::with_acknowledgement(
+                    RecordingIntegrityFault::ProcessedFrameDropped,
+                    ack_tx,
+                ))
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), ack_rx)
+                .await
+                .expect("idle integrity acknowledgement timed out")
+                .unwrap();
+
+            // Queue a full channel without yielding, then release finalization.
+            // The completion branch must drain these boundary frames before it
+            // returns to command handling.
+            for index in 0..boundary_frames {
+                audio_tx
+                    .try_send(processed_frame((streamed_frames + index) as u64 * 10))
+                    .unwrap();
+            }
+            release_tx.send(()).unwrap();
+        });
+
+        let mut prebuffer = PreBuffer::new(1, RECORDING_SAMPLE_RATE, 1);
+        let mut doa_closed = false;
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            svc.await_finalization_with_drain(
+                &mut prebuffer,
+                &mut doa_closed,
+                async move {
+                    release_rx.await.unwrap();
+                },
+            ),
+        )
+        .await
+        .expect("finalization drain deadlocked");
+        producer.await.unwrap();
+
+        let samples = prebuffer.drain_all();
+        assert_eq!(samples.len(), expected_frames * 480);
+        assert!(samples.iter().all(|sample| *sample == 0.25));
+        assert_eq!(
+            meeting_tx.borrow().last_recording_error,
+            Some(RecordingIntegrityFault::ProcessedFrameDropped)
+        );
+        assert!(matches!(
+            events_rx.try_recv(),
+            Ok(DeviceEvent::RecordingIntegrityFailed {
+                meeting_id: None,
+                fault: RecordingIntegrityFault::ProcessedFrameDropped,
+            })
+        ));
     }
 
     #[tokio::test]
