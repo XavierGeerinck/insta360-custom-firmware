@@ -1,145 +1,194 @@
-# Waved — Roadmap
+# Waved — whole-device roadmap
 
-This repository replaces the stock Insta360 Wave firmware's closed-source audio stack with an open-source equivalent. The work is split into seven sub-projects (SPs); each gets its own spec → plan → implementation cycle.
+Last reviewed: 2026-07-20
 
-See `docs/superpowers/specs/2026-04-16-waved-audio-capture-foundation-v2-design.md` for the authoritative SP#1 design.
+Waved replaces the stock Insta360 Wave firmware with an open device stack for
+audio capture and processing, local meeting recording, USB audio, Wi-Fi
+provisioning, and durable webhook delivery.
 
-## Sub-projects
+The current focus is:
 
-- [x] **SP#1 — Capture foundation + measurement harness** (v2 complete; two coordinated ALSA streams + aligned `AudioFrame` + config schema v3/v4 + hardware probe all landed and verified on-device — SP#2–6 all run on this foundation on-device)
-- [x] **SP#2 — AEC + playback path** (speexdsp + ProcessedAudioFrame pipeline landed; on-device ERLE 24.3 dB single-tone / 22.7 dB speech-band — beats the 20 dB spec; see `scripts/test-aec-on-device.sh` and `scripts/test-aec-conferencing.sh`)
-- [x] **SP#3 — Beamforming + DOA** (DAS + first-order differential cardioid/supercard/hypercard/figure-8/stereo, GCC-PHAT + pure-Z pair DOA; on-device acceptance passes all three gates — FBR ≥ 4 dB, DOA az error ≤ 10°, beam CPU delta 0.29% < 5%; see `scripts/test-beamforming.sh` and `docs/AUDIO_HARDWARE.md`)
-- [x] **SP#4 — Neural NS + dereverb (DeepFilterNet 3, CPU)** — DFN3 running on Cortex-A55 via `tract-NEON`. Acceptance: init clean, process alive ≥ 8 s under load, CPU delta well under the 5 % budget (sampled noise; DFN3 cost ~0–2 %). NPU path was deliberately abandoned after a full toolchain survey — see "SP#4 NPU history" below for what we learned.
-  - Crate: `crates/waved-npu/` exposes `NpuInfer` trait + `Dfn3CpuInfer` (bundled DFN3 low-latency model via `default-model-ll` feature).
-  - Pipeline: `crates/waved-audio/src/aec/deep_filter.rs` implements `NoiseSuppressor` over `Dfn3CpuInfer`. Internally hop-buffers 1024-sample ALSA periods into 480-sample DFN3 hops. Init failure falls back to `SpeexNoiseSuppressor`.
-  - Driving: SIGHUP + `/tmp/waved-nr` (off | low | med | high) — see `crates/waved/src/main.rs::mode_switch_handler`.
-  - Acceptance: `scripts/test-neural-ns.sh` (init engages, process alive, CPU delta ≤ 5 %).
-  - Future-NPU: the `NpuInfer` trait stays — when/if a usable VIP9000 toolchain lands (see `docs/COMPUTE_HARDWARE.md`), drop in a `Dfn3NpuInfer` impl, no caller changes.
+1. never lose or silently damage a recording;
+2. fix user-visible audio gaps and measure them against stock firmware; and
+3. make recording delivery dependable enough for unattended use.
 
-### SP#4 NPU history (closed; preserved for context)
+## Status and priority
 
-The NPU path was probed exhaustively before pivoting:
+Stock-parity status:
 
-  - ✅ NPU reachable from our process (`vxCreateContext`, `vsi_nn_CreateContext` — `crates/waved-npu-probe/`).
-  - ✅ TIM-VX cross-compiles + loads on device with `USE_EXTERNAL_OVXLIB=ON`.
-  - ✅ TIM-VX host `CompileToBinary` produces valid VPMN NBG (but prebuilt host SDK archmodel targets GC7000, not our chip).
-  - ✅ Public 6.4.18.5 SDK located at `github.com/eYs3D/eCV5546_*`; chip identified as `vip9000nano-di+` (ChipID 0x9000 / Rev 0x9002 / ProductID 0x5090009).
-  - ✅ `libnnsdk.so` reverse complete: ~30-symbol clean C API (`NNsdk_module_create/run_graph/...`), `dlopen`s the stack at runtime — would be trivial to FFI-bind from Rust if we had a DFN3 `.nb`.
-  - ✅ Khadas redistributable Acuity Toolkit found (GPL); ships VIPNANOQI target descriptors but not VIPNANODI+ (our variant).
-  - ❌ Insta360's `libOpenVX` was built without the NN binary subsystem — `libNN*Binary.so` is never `dlopen`ed.
-  - ❌ 6.4.18.5 userspace × 6.4.19 galcore: `vsi_nn_AddTensor` ioctl mismatch; pure-userspace mix hangs at context init.
-  - ❌ ORT 1.22 + VSI-NPU EP cross-compile: three upstream bugs.
-  - ❌ Replacing galcore with 6.4.18.5: feasible but requires sourcing Insta360's GPL kernel + porting an Amlogic platform file into eYs3D's source — weeks of work, not days.
+- **Matched** — the relevant observable stock behavior is reproduced.
+- **Better** — measured behavior is better, or Waved adds a useful capability
+  without regressing the stock path.
+- **Partial** — the main behavior works, but a known user-visible part is
+  missing.
+- **Unknown** — a concrete stock-device comparison is still required.
+- **Not planned** — the difference is understood and intentionally excluded.
 
-  **Net**: producing a `.nb` that runs on this exact chip without a VeriSilicon Acuity license costs weeks; running DFN3 ONNX on CPU costs days and the CPU has the headroom. The NPU stack stays a future optimization. Full path-status matrix in `docs/COMPUTE_HARDWARE.md`.
-- [x] **SP#5 — Playback EQ + gain staging** (HPF + 4-biquad EQ + 4-band MBAGC + lookahead limiter inside `PlaybackService`; voice preset matches stock `dynamic_eq_config_2.json` byte-for-byte; media preset bypasses MBAGC and flattens EQ; AEC reference tap moved to post-DSP — ERLE 23.2 dB on device, beats SP#2 baseline 22.7 dB; preset switch via `/tmp/waved-playback-preset` + SIGHUP. See `scripts/test-playback-eq.sh`, `scripts/test-aec-on-device.sh`, `docs/AUDIO_HARDWARE.md` Playback DSP Chain section.)
-- [x] **SP#6 — UAC2 routing for Wave Controller** (`crates/waved-audio/src/uac/`: `UacBridge` reads `hw:1,0c` → `play_batch` (host audio gets the SP#5 DSP chain + AEC reference for free), `UacUpstreamSink` reads `subscribe_processed()` → `hw:1,0p` (post-AEC mono → stereo dup), `UacControl` mirrors `hw:1` mixer events ↔ `AudioState`. ALSA-mixer-based volume + mute is now end-to-end through one mechanism — `speaker_mixer::amixer` shell-out gone. **AEC ERLE with host-played music: median 26.6 dB** (bar ≥ 20). See `scripts/test-uac2-routing.sh`, `docs/AUDIO_HARDWARE.md` UAC2 Routing section.)
-- [ ] **SP#7 — Wave Controller native compatibility** (vendor-specific UAC2 control surface + multichannel raw-mic upstream). Standard UAC2 already works for generic apps (Apple Music, Zoom, etc.); SP#7 covers what stock firmware did extra so the official Wave Controller app talks to the device natively. Two open work items, both deferred until a host-side test demands them — see "SP#7 scope" below.
+Priority:
 
-ASR (Silero VAD, WeNet, SenseVoice) is already open-source and out of scope.
+- **P0** — recording-loss, corruption, or silent-failure risk.
+- **P1** — important audio quality, delivery, or stock-parity work.
+- **P2** — useful hardening or observability.
+- **Deferred** — starts only when its stated trigger occurs.
 
-## SP#1 carry-overs for later SPs
+## Current priorities
 
-Items intentionally deferred during SP#1 v2 because they belong to their owning sub-project:
+### P0 — Audio capture and recording integrity
 
-### SP#3 (Beamforming) — all done
-- [x] `mic_geometry` in `AudioConfig` v3 (Task 8).
-- [x] `Command::SetAudioMode` wired to beamforming presets (Task 11).
-- [x] DOA consumer exposed via `doa_horizontal` in `/tmp/audio_stats.json` (Task 11 / stats_collector).
+- [ ] **Detect and recover from audio-capture failure.** `AudioService` keeps
+  `_frame_tx` alive, so a dead capture producer cannot close `frame_rx` and may
+  leave the service waiting silently. Publish capture liveness, make recording
+  state fail visibly, and either restart capture safely or block new
+  recordings. Acceptance: terminate or stall the capture producer during idle
+  and during recording; the UI reports the fault, no recording is reported as
+  healthy, and recovery does not require deleting existing files.
+- [ ] **Make every recording-path drop or write failure explicit.**
+  `AudioService` currently ignores a failed `meeting_tx.try_send`, and
+  `ActiveRecording::append_samples` logs WAV write errors without preserving a
+  durable fault. Count processed-frame drops, stop treating a damaged take as
+  uploadable, and surface the reason on-device. Acceptance: deterministic
+  channel saturation and injected writer failure both produce a visible
+  integrity fault and an `artifact_error` row; neither take is uploaded.
+- [ ] **Run long-session and interrupted-finalization acceptance.** Record for
+  at least one hour while tracking RSS, dropped frames, WAV duration, sample
+  count, and free space. Repeat with process termination and power loss during
+  recording/finalization. Boot reconciliation must retain or classify every
+  artifact without presenting a corrupt file as uploaded.
+- [ ] **Exercise storage-pressure safety on-device.** Force both configured
+  retention thresholds in an isolated fixture area. Only recordings already
+  marked `uploaded` may be pruned; queued, failed, local-only, active, and
+  incomplete recordings must survive. New recording starts must be blocked
+  when no safe pruning candidate exists.
 
-### SP#3 known residuals — F2 status
+### P1 — Recording and webhook production hardening
 
-- ~~Azimuth error at 270° is ~19° post-pair-swap (vs ~7° before).
-  Candidate fix: per-pair GCC-PHAT peak-sharpness confidence weighting
-  in the LS solve.~~ **F2 status:** weighted-LS shipped
-  (`solve_direction_weighted` + `MIN_SHARPNESS_THRESHOLD` guard) but
-  the 270° case turns out to simultaneously shadow BOTH XY pairs —
-  weighted-LS cannot exploit symmetric degradation. SRP-PHAT
-  alternative backend (`AudioConfig.doa_backend = "srp_phat"`) ships
-  as the intended fix; on-device validation pending via
-  `scripts/test-doa-improvements.sh` test 1. See
-  `docs/AUDIO_HARDWARE.md` "Per-pair confidence-weighted LS" and
-  "SRP-PHAT alternative backend" sections.
+- [ ] **Add the missing end-to-end webhook acceptance script.** Implement
+  `scripts/test-webhook-setup.sh` around the bounded local receiver. Cover the
+  setup form, automatic/ask/local-only modes, authentication redaction,
+  multipart metadata, WAV properties, and idempotency.
+- [ ] **Complete the failure and recovery matrix.** Test offline recording,
+  Wi-Fi loss during upload, transient retry, permanent HTTP 400, redirect
+  rejection, retry exhaustion, manual retry, endpoint changes, and reboot
+  during upload. Verify the `Saving recording...`, queued, attention, and
+  uploaded notifications against durable SQLite state.
+- [ ] **Qualify a production HTTPS webhook.** Configure a real authenticated
+  endpoint through the setup network, run its webhook test, cold-boot the
+  device, record, and confirm one accepted request with the same meeting UUID
+  used as the idempotency key. The current local HTTP receiver remains a
+  development tool only.
 
-- ~~Elevation bias +3° to +18° after pure-Z pair swap.~~ **RESOLVED
-  (F2, 2026-05-27): GEOMETRIC — document-only, no code fix.** Measured
-  sweep (`scripts/test-doa-elevation.sh`) shows elevation is observable
-  (sign + ordering always correct) but saturates at steep angles: the
-  cross-ring Z-pairs (0,4)/(2,6) have small `dz`, so τ runs out of
-  vertical aperture and per-pair `el_p` ceilings ~+35°. Not fixable in
-  software — treat `elevation_deg` as a coarse low-confidence band
-  (below / level / above), never a calibrated angle. Full table +
-  caveats in `docs/AUDIO_HARDWARE.md` elevation section.
+### P1 — Audio quality and stock comparison
 
-- Raw mic signal at ~−75 dBFS sits close to the VAD floor (0.0003).
-  Preamp / gain staging belongs in SP#5. (Unchanged.)
+- [ ] **Build a repeatable stock-vs-Waved audio fixture.** Capture the same
+  microphone, speaker-loopback, USB playback, and USB microphone material on
+  stock and open firmware at fixed hardware gain. Compare level, frequency
+  response, noise floor, clipping, latency, and AEC residual. This fixture is
+  the gate for changing stock-parity rows currently marked **Unknown**.
+- [ ] **Measure and, if needed, match upstream microphone EQ/gain.** Stock
+  contains `Insta360_UplinkAsr*` paths suggesting microphone frequency-response
+  compensation. First resolve this with an impulse/listening comparison; add
+  upstream biquads only if a repeatable audible or measured gap exists.
+- [ ] **Validate SRP-PHAT on-device before changing the DOA default.** Run
+  `scripts/test-doa-improvements.sh` with real meeting positions, including
+  270 degrees and simultaneous-room-noise cases. Promote SRP-PHAT only if it
+  materially improves speaker separation and remains below the 5% CPU-delta
+  limit. Elevation remains a coarse below/level/above band because the
+  microphone geometry cannot support a calibrated steep-angle estimate.
 
-### F2 follow-ups (not blockers; F2b candidates)
+### P2 — Audio hardening and observability
 
-- **SRP-PHAT default switch.** F2 ships SRP-PHAT as opt-in
-  (`doa_backend = "srp_phat"`). Default remains GCC-PHAT pending more
-  data. Trigger to promote: F3 acceptance shows SRP gives materially
-  better speaker separation in real meetings, AND test 5 of
-  `test-doa-improvements.sh` confirms < 5% CPU delta.
-  **Status (2026-05-27):** F3 diarization acceptance ran on GCC-PHAT
-  and passed (clusters separated cleanly at `CLUSTER_TOLERANCE_DEG=30`),
-  so the "SRP materially better" half of the trigger was never
-  exercised — promote-trigger remains unmet. Still open as opt-in.
-- **Vendor `libmodel_infer.so` FFI binding.** Explicitly deferred per
-  F2 spec §6. Trigger: F3 surfaces "two close speakers get merged"
-  pattern that improved Rust DoA can't handle.
-- **Multi-source DoA.** Current single-source assumption is fine for
-  F3's clustering. Trigger: simultaneous speakers scenario.
-- **Steered cardioid → steered supercardioid / hypercardioid /
-  figure-8.** Pattern shape is orthogonal to direction; YAGNI until
-  requested.
-- **Runtime DoA backend switch.** F2 reads `doa_backend` once at
-  startup. Trigger: A/B comparison need on the same device run.
-- **Per-AudioConfig SRP grid resolution.** 5° az × 10° el hardcoded.
-  Promote to config if tuning evidence demands.
-- ~~**Elevation bias root-cause fix.**~~ Closed 2026-05-27 — sweep
-  ran, verdict GEOMETRIC (vertical-aperture saturation), document-only.
-  See the resolved residual above. A residual near-level offset (~+7°)
-  *could* be partially calibrated, but would need a goniometric rig +
-  full 4-azimuth sweep before any F2b is queued — not currently planned.
-- **Hot-path allocations in SrpPhatEstimator::estimate().** ~12
-  per-call Vec allocations (8 per_ch_fft + 4 cross_per_pair).
-  Pre-allocating as fields on `SrpPhatEstimator` would eliminate.
-  Not currently a bottleneck — the 440k complex-ops grid loop
-  dominates SRP cost. Promote when the grid loop is optimised.
+- [ ] **Prebuild DeepFilterNet at startup.** A live switch from NR Off to an
+  enabled level currently rebuilds the tract session and can drop about 50
+  frames. Construct DFN3 once, switch the active backend without rebuilding,
+  and then re-baseline `scripts/cpu_delta.py`.
+- [ ] **Profile neural suppression under sustained speech and playback.**
+  Existing acceptance used a mostly quiet room where DFN3 gating skipped work.
+  Repeat with `scripts/test-aec-conferencing.sh` playback and publish sustained
+  CPU, memory, underrun, and frame-drop results.
+- [ ] **Expose noise-suppression observability.** Add `ns_backend` and
+  `ns_frame_ms` to `/tmp/audio_stats.json` so device tests can distinguish
+  DFN3 from the Speex fallback.
+- [ ] **Reap stale stats temporary files.** Remove stale
+  `/tmp/audio_stats.json.tmp` after a failed atomic rename. The next successful
+  write already self-corrects, so this remains low priority.
 
-### SP#4 (Neural NS + dereverb) — done
-- DeepFilterNet 3 v0.5.6 integrated on CPU via `tract`; bundled low-latency model. See `crates/waved-npu/`, `crates/waved-audio/src/aec/deep_filter.rs`, `scripts/test-neural-ns.sh`.
+### P2 — Wi-Fi and setup hardening
 
-### SP#4 follow-ups (not blockers)
-- Tract session creation takes ~1.5 s; engaging NR live drops ~50 frames during the rebuild. Pre-build DFN3 at startup (regardless of initial NR level) and only flip the active backend on `SetNrLevel` to eliminate the warm-up gap.
-- Speech-loaded CPU profile: current measurement was a quiet room (DFN3's lsnr gating skipped decoder layers most of the time). Re-measure with the AEC-conferencing playback running to see actual sustained cost.
-- `ns_backend` + `ns_frame_ms` stats fields (per spec §5.2) — useful for ongoing observability; deferred until we have a stats consumer that needs them.
-- NR strength wiring: NrLevel::Low/Med/High currently all engage the same DFN3 atten settings. Map to `RuntimeParams::with_atten_lim` per the SP#4 spec §2.5 wet/dry idea.
+- [ ] **Automate a cold-boot provisioning regression.** Verify saved-network
+  fallback, automatic reconnection, setup-AP start/stop, circular-screen
+  reachability, configuration migration, and webhook test status without
+  relying on manual inspection.
+- [ ] **Test multi-AP roaming with a local webhook receiver.** The current mesh
+  can isolate clients on different radios. Confirm that Waved retries rather
+  than losing recordings and uploads automatically when the route becomes
+  reachable again. Do not persist a test-only BSSID lock.
 
-### SP#5 follow-ups (not blockers)
-- ~~**MBAGC `knee_db` is dead.**~~ **RESOLVED (cd82180).** `band_gain_linear` now applies a quadratic soft knee that meets the hard curve tangentially at `raw = knee/2` and reaches zero at `raw = -knee/2` (`playback/dsp/mbagc.rs:154-182`, covered by `soft_knee_quadratic_transition` test). Voice preset matches the stock knee behaviour.
-- ~~**Preset switch cosine ramp not implemented.**~~ **RESOLVED (cd82180).** `PlaybackDspChain` now arms a 5 ms raised-cosine envelope on `set_preset` and crossfades `last_output` → new chain output across the ramp (`playback/dsp/chain.rs:10,69,106`), per spec §2.8.
-- ~~**`limiter_reduction_db` snapshot is last-block, not peak-hold.**~~ **RESOLVED (cd82180).** `Limiter` now keeps a peak-hold-with-decay reduction (`PEAK_HOLD_DECAY_DB_PER_S`, `playback/dsp/limiter.rs:131-132`) so the stat reflects recent limiter activity rather than the instantaneous last block.
-- **`scripts/cpu_delta.py` baseline (11.5%) is pre-SP#4.** With DFN3 enabled by default, the post-SP#4 baseline at silence is ~43%. Re-baseline once SP#4's pre-build-at-startup follow-up lands; until then test 5 will fire on outdated numbers.
-- ~~**`AudioConfig::validate()` doesn't shape-check the EQ array.**~~ Resolved by inspection on 2026-05-02. The `[[BiquadParams; 4]; 2]` field type already enforces spec §5.1 shape at deserialization; serde rejects any other shape with a clear message before `validate()` even runs. Classifying as `Parse` rather than `Invalid` is correct (structurally malformed, not policy-violating). Test `rejects_wrong_shape_eq_array` documents the path.
-- ~~**No unit-level test for mid-playback preset switch.**~~ **RESOLVED.** `playback/dsp/chain.rs:167-204` exercises a hot-signal preset switch and asserts the limiter `reduction_db` resets to 0 on rebuild and the cosine ramp + limiter recovery behave across the following batch.
-- **Replace `speaker_mixer::amixer` shell-outs with a proper playback pipeline.** Originally listed pre-implementation; descoped per the SP#5 spec §4 non-goals (the amixer path manages the unused TDMOUT_A; cleanup belongs alongside SP#6 once the new pipeline owns volume control end-to-end).
+## Stock-parity matrix
 
-### SP#6 follow-ups (not blockers)
+| Capability | Status | Evidence or remaining gap |
+|---|---|---|
+| Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture harness passes on-device; capture-producer health recovery and explicit downstream-drop handling remain P0. |
+| AEC and processed USB microphone | **Unknown** | Waved measures 22.7–26.6 dB ERLE and passes its acceptance bar, but needs the same-fixture stock comparison. |
+| Beamforming modes and horizontal DOA | **Partial** | Directional modes and GCC-PHAT work; exact stock beam patterns and close/simultaneous-speaker behavior are not yet compared. |
+| Neural noise suppression | **Unknown** | DFN3 works on CPU; stock-vs-Waved speech quality and sustained-load behavior remain unmeasured. |
+| Playback EQ, gain staging, and limiter | **Matched** | Voice EQ matches the recovered stock configuration; media bypass, soft knee, preset ramp, and peak-hold stats are implemented. |
+| Standard UAC2 playback/capture | **Matched** | Generic macOS applications play and record through the device; host-played AEC acceptance passes. |
+| HID consumer and telephony controls | **Matched** | Stock report IDs and UI/MCU bridges are implemented and covered by `scripts/test-hid-control.sh`. |
+| Official Wave Controller vendor controls | **Unknown** | Run the official application against Waved, then capture stock USB control traffic only if a missing control is observed. |
+| macOS UAC2 master-volume control | **Partial** | Consumer keys and mute work; the kernel playback Feature Unit does not expose the stock-equivalent master-volume control. |
+| Local WAV meeting recording | **Partial** | Finalization, metadata, bookmarks, diarization, reconciliation, and real uploads work; long-session and interruption acceptance remain P0. |
+| Generic multipart recording webhook | **Better** | Durable streaming upload, retry, retention, idempotency, setup configuration, status UI, and toasts are open-firmware capabilities; the full failure matrix remains P1. |
+| Wi-Fi provisioning and saved-network reconnect | **Better** | Waved provides a WPA2 setup AP, QR/manual credentials, a captive configuration form, saved-network fallback, and live connection status; stock setup AP was open. |
+| Device configuration through setup portal | **Better** | Versioned `config.toml` fields can be edited and validated without exposing stored secrets. |
+| Raw eight-channel microphone over USB | **Not planned** | Internal eight-channel capture exists; expose it to a host only when a real application requests it. |
+| VIP9000 NPU inference | **Not planned** | DFN3 on Cortex-A55 meets the current CPU budget; revisit only if a supported toolchain or measured CPU blocker appears. |
 
-(All landed. Symmetric mute mirror, pre-attach upstream skip, relaxed Mac grep, `/tmp/waved-volume` SIGHUP source — done. Wave Controller protocol probe and multichannel UAC2 upstream graduated to SP#7 below.)
+## Deferred, trigger-based work
 
-### SP#7 scope — Wave Controller native compatibility (deferred)
-- [x] **SP#7d — HID Consumer/Telephony control surface** (`crates/waved-hid/`: `HidEvent` enum + `report.rs` matching stock Report IDs (Consumer=0x01, Telephony=0x02); `HidReader` mirrors host Off-hook/Mute/Ring LED writes into `AudioState.call_*`; `watch.rs` emits Consumer Volume/Mute keys from touch-UI-driven `AudioState` changes; existing MCU button bridge preserved. `scripts/patch-stock-usbgadget.sh` installs the stock Vendor+Telephony_V4+Consumer report descriptor; verified via `scripts/test-hid-control.sh`. The original SP#7(d) `f_uac2` Master Volume kernel patch is **deferred indefinitely** — Consumer Volume keys (device→host) are the stock-equivalent path and ship without a kernel build.)
-- **Wave Controller protocol probe.** Stock firmware likely exposes a vendor-specific UAC2 control surface (sidetone level, mic-gain table, telephony class units) that the official Wave Controller app drives. Capture with `usbmon` + Wireshark vs stock firmware to enumerate the descriptor set. Trigger: a host-side test reveals the official app cannot configure the device.
-- **Multichannel UAC2 upstream (raw 8-ch mics).** A second UAC2 vendor-specific interface descriptor + `c_chmask=0xff` configfs entry, exposing the raw eight-mic array for host-side beamforming experiments. Trigger: a host application requests the raw streams.
-- **Upstream EQ / gain.** Stock had `Insta360_UplinkAsr*` paths suggesting upstream signal shaping (probably mic-FR compensation). One biquad in the upstream sink would suffice. Trigger: a host listening test reveals an audible difference vs stock.
-- **`f_uac2` Master Volume patch (host volume keys → speaker).** Kernel 5.4 `f_uac2` doesn't advertise a Master channel control in the playback Feature Unit's `bmaControls`, so macOS USBAudio.kext silently no-ops F11/F12 / Output slider — and macOS does *not* fall back to software-side attenuation either. F10 mute path works (stock uses capture FU; we redirect to speaker via `host_mute_target=Speaker`). Hammerspoon shim at `scripts/wave-volume-mac.lua` is a per-Mac escape hatch but not the real fix. Real fix: ~10–20 lines in `drivers/usb/gadget/function/f_uac2.c` to add a Master volume control to the playback FU descriptor. Blocker: need the vendor kernel source — likely available via the public eYs3D SDK (`github.com/eYs3D/eCV5546_*`, mentioned in `docs/COMPUTE_HARDWARE.md`). Steps: (1) clone the eYs3D tree, locate the kernel source matching `uname -r` 5.4.242-ab575, (2) diff `f_uac2.c` against upstream 5.10+ which has Master support (commit history will identify the exact patch), (3) cross-compile as out-of-tree module using the device's Build_id headers if available, (4) deploy via `/lib/modules/$(uname -r)/`, (5) rebind gadget. Once shipped, every host (Mac/Linux/Windows/iOS) gets working UAC2 volume — single fix, no per-host install.
+- **Wave Controller protocol probe.** Trigger: the official application fails
+  to configure an observable feature. Capture `usbmon`/Wireshark traffic on
+  stock and Waved, then implement only the missing controls.
+- **Raw eight-channel UAC2 upstream.** Trigger: a host-side beamforming or
+  research application requests the raw array.
+- **`f_uac2` playback master-volume patch.** Trigger: stock-equivalent host
+  volume-slider behavior becomes a release requirement and matching vendor
+  kernel source is available.
+- **Vendor `libmodel_infer.so` binding.** Trigger: real meetings show
+  close-speaker merging that the Rust DOA implementations cannot solve.
+- **Multi-source DOA.** Trigger: simultaneous speakers become a required
+  diarization case.
+- **Runtime DOA backend switching and configurable SRP grid resolution.**
+  Trigger: same-run A/B tuning demonstrates a need.
+- **NPU DFN3 backend.** Trigger: CPU profiling exceeds the budget or a usable
+  VIP9000nano-di+ compiler/runtime becomes available.
 
-## SP#1 v1 → v2 minor items (follow-ups, not blocking)
+## Completed foundation
 
-- `_frame_tx` in `AudioService` keeps the frame channel open even if the capture thread dies silently — add a health watch once SP#2 lands (context exists there to react).
-- `stats_collector` does not actively reap stale `/tmp/audio_stats.json.tmp` on rename failure — self-corrects on next write; low priority.
-- ALSA device / sample-rate / period values are fully in `AudioConfig`; no follow-up required.
-- Re-verify `snd_pcm_link` kernel alignment using a known playback signal; if drift > 1 period, force timestamp-fallback path via config. (Deferred: software-reference path is the default — only matters if/when hardware-loopback is re-enabled.)
+- [x] **SP#1 — Capture foundation and measurement harness.**
+- [x] **SP#2 — AEC and playback reference path.**
+- [x] **SP#3 — Beamforming and DOA.**
+- [x] **SP#4 — DeepFilterNet 3 CPU noise suppression with Speex fallback.**
+- [x] **SP#5 — Playback EQ, multiband gain control, and limiter.**
+- [x] **SP#6 — Bidirectional UAC2 routing and mixer state.**
+- [x] **SP#7d — HID consumer/telephony control surface.**
+- [x] **Wi-Fi — WPA2 QR/captive provisioning, saved-network fallback,
+  automatic reconnect, and live connection status.**
+- [x] **Device setup — versioned `config.toml` form, validation, secret
+  preservation, apply/reconnect/restart status, and webhook test.**
+- [x] **Meetings — WAV recording, metadata, bookmarks, diarization,
+  reconciliation, upload modes, durable retry, safe retention, and status UI.**
+- [x] **Webhook delivery — generic multipart contract, streamed WAV, JSON
+  metadata, bearer authentication, idempotency, receiver tooling, and two-stage
+  Stop/upload notifications.**
+
+Authoritative detail:
+
+- `docs/AUDIO_HARDWARE.md`
+- `docs/COMPUTE_HARDWARE.md`
+- `docs/WIFI.md`
+- `docs/WEBHOOKS.md`
+- `docs/superpowers/specs/2026-07-17-webhook-setup-and-upload-design.md`
+- `docs/superpowers/specs/2026-07-20-recording-upload-toasts-design.md`
+
+ASR models and transcription remain out of scope. The device produces
+recordings and metadata for downstream systems to transcribe or analyze.
