@@ -2,6 +2,33 @@
 
 The Insta360 Wave uses an **Amlogic A5 SoC** with an integrated **VeriSilicon VIPNanoQi NPU** for hardware-accelerated neural network inference. All data in this document is verified from the **live device** via ADB root shell.
 
+## Live Custom-Process Inference Result (2026-07-23)
+
+NPU access from code we control is now proven beyond context creation.
+The Rust `waved-npu-probe` loads the device's stock `libnnsdk.so`,
+queries NBG tensor metadata, submits an input, runs an existing
+Wave-targeted CTC graph, retrieves its output, and destroys the graph.
+
+Three deterministic runs returned the same nonzero 332,800-byte output
+(SHA-256
+`e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4`)
+in 3.501, 2.184, and 2.263 ms. A second complete invocation also passed.
+The stock `waved` process and NPU parameters were unchanged.
+
+The current custom add graph does **not** run because its host compiler
+emits product target `0x10000020`; the Wave's stock graphs target
+`0x1000000e`. `libnnsdk` reports `hardware version is not in product
+list` during graph creation. Thus:
+
+- Direct NPU inference from our process: **working**.
+- Loading a correctly targeted external NBG: **working**.
+- Compiling arbitrary ONNX models with the repository's current host
+  SDK: **blocked by the missing Wave/VIP9000 archmodel and compiler
+  target**.
+
+The PoC source is under `waved/crates/waved-npu-probe/`; the full
+reproduction record is in `waved/docs/COMPUTE_HARDWARE.md`.
+
 ---
 
 ## 1. NPU Hardware (Verified from Live Device)

@@ -59,17 +59,17 @@ host tests for every relied-upon size and offset.
 - Create: `waved/crates/waved-npu-probe/src/nnsdk.rs`
 - Modify: `waved/crates/waved-npu-probe/src/main.rs`
 
-- [ ] Define only the NN SDK enums and structures the probe needs.
-- [ ] Represent the unused tail of `aml_config` as reserved zeroed
+- [x] Define only the NN SDK enums and structures the probe needs.
+- [x] Represent the unused tail of `aml_config` as reserved zeroed
       bytes so the complete object is exactly 2272 bytes.
-- [ ] Represent the unused tail of `aml_output_config_t` so it is
+- [x] Represent the unused tail of `aml_output_config_t` so it is
       exactly 56 bytes.
-- [ ] Define the current `outBuf_t` ordering (`size`, `name`, `buf`,
+- [x] Define the current `outBuf_t` ordering (`size`, `name`, `buf`,
       `param`, `out_format`) confirmed by the stock caller's load from
       return pointer offset `0x50`.
-- [ ] Add tests using `size_of` and `offset_of` for all ABI facts
+- [x] Add tests using `size_of` and `offset_of` for all ABI facts
       listed above.
-- [ ] Add a pure output-verification function and tests for the pass,
+- [x] Add a pure output-verification function and tests for the pass,
       wrong-value, null-buffer, wrong-count, and short-buffer cases.
 
 Run:
@@ -90,24 +90,28 @@ Expected: all host tests pass without requiring an NPU or loading
 - Modify: `waved/crates/waved-npu-probe/Cargo.toml`
 - Modify: `waved/Cargo.lock`
 
-- [ ] Add `sha2` for deterministic model validation.
-- [ ] Load `/usr/lib/libnnsdk.so` and resolve the four exact direct
+- [x] Add `sha2` for deterministic model validation.
+- [x] Load `/usr/lib/libnnsdk.so` and resolve the four exact direct
       function exports.
-- [ ] Keep the `Library` alive for the full lifetime of every resolved
+- [x] Keep the `Library` alive for the full lifetime of every resolved
       symbol and graph handle.
-- [ ] Read the model, validate the expected SHA-256
+- [x] Read the model, validate the expected SHA-256
       `9bef0c0f2271ad534cb975b386be8428e973dc7ee4c71c04854c95eeac1fea5c`,
       and validate the `VPMN` header before entering native code.
-- [ ] Create the graph using the firmware-confirmed NBG-memory config.
-- [ ] Submit `[1, 2]` at input index 0 and `[3, 4]` at input index 1
+- [x] Create the graph using the firmware-confirmed NBG-memory config.
+      The call correctly rejects the host graph's incompatible product
+      target before returning a context.
+- [x] Implement submission of `[1, 2]` at input index 0 and `[3, 4]` at input index 1
       using `BINARY_RAW_DATA (3)`.
-- [ ] Execute with output `perfMode = 1`, retrieve raw output with
+- [x] Implement execution with output `perfMode = 1`, retrieval with
       `perfMode = 2` and `AML_OUTDATA_RAW (1)`, then verify `[4, 6]`.
-- [ ] Repeat execution/retrieval ten times and record each elapsed
-      duration.
-- [ ] Expose optional, read-only hardware status when
-      `aml_util_getHardwareStatus` is exported.
-- [ ] Make explicit destruction report the native status; retain a
+- [x] Implement ten execution/retrieval iterations and elapsed-duration
+      recording. The add graph cannot enter this phase until it is
+      recompiled for the Wave target.
+- [x] Read the hardware status through existing read-only sysfs values.
+      Do not call the optional `aml_util_getHardwareStatus`: testing
+      showed that export is unsafe through this firmware's direct ABI.
+- [x] Make explicit destruction report the native status; retain a
       best-effort `Drop` fallback for every error path.
 
 Run:
@@ -127,22 +131,23 @@ Expected: tests pass and the wrapper introduces no warnings.
 - Modify: `waved/crates/waved-npu-probe/src/main.rs`
 - Modify: `waved/crates/waved-npu-probe/src/nnsdk.rs`
 
-- [ ] Preserve the no-argument OpenVX context probe byte-for-byte in
+- [x] Preserve the no-argument OpenVX context probe in
       behavior and exit status.
-- [ ] Recognize only `--run-add`; reject unknown or combined arguments
+- [x] Recognize `--run-add` and the firmware-graph control
+      `--run-stock-ctc`; reject unknown or combined arguments
       before opening the driver.
-- [ ] Use `/data/waved/lib/add_graph.nb` as the fixed accepted model.
-- [ ] Print a concise boundary line for driver access, checksum,
+- [x] Use `/data/waved/lib/add_graph.nb` as the fixed accepted custom model.
+- [x] Print a concise boundary line for driver access, checksum,
       runtime load, symbol resolution, graph creation, both inputs,
       every execution/output, and cleanup.
-- [ ] Read and print `nanoqFreq` and `enableNN` without writing them.
-- [ ] Run the native PoC on a monitored thread and terminate the probe
+- [x] Read and print `nanoqFreq` and `enableNN` without writing them.
+- [x] Run the native PoC on a monitored thread and terminate the probe
       with a distinct error after 15 seconds. Do not reset the driver
       or alter sysfs on timeout.
-- [ ] Use distinct exit codes for argument, driver, checksum, runtime,
+- [x] Use distinct exit codes for argument, driver, checksum, runtime,
       symbol, create, input, execution, output, verification, cleanup,
       and timeout failures.
-- [ ] On a driver/runtime conflict, scan `/proc/*/fd` best-effort and
+- [x] On a driver/runtime conflict, scan `/proc/*/fd` best-effort and
       report processes holding `/dev/galcore`; never kill them.
 
 Run:
@@ -162,14 +167,14 @@ device access.
 
 - No source changes expected.
 
-- [ ] Build the release binary for the Wave.
-- [ ] Confirm it is AArch64 and dynamically linked as expected.
-- [ ] Record the current device's NPU parameters and running
+- [x] Build the release binary for the Wave.
+- [x] Confirm it is AArch64 and dynamically linked as expected.
+- [x] Record the current device's NPU parameters and running
       `waved` PID.
-- [ ] Confirm no process currently holds `/dev/galcore`.
-- [ ] Push to `/data/waved/waved-npu-probe.poc-new`, mark executable,
+- [x] Confirm no process currently holds `/dev/galcore`.
+- [x] Push to `/data/waved/waved-npu-probe.poc-new`, mark executable,
       then rename it to `/data/waved/waved-npu-probe.poc`.
-- [ ] Do not replace the currently deployed default probe until the
+- [x] Do not replace the currently deployed default probe until the
       staged binary passes its original context check.
 
 Run:
@@ -195,14 +200,18 @@ firmware, model, sysfs value, boot setting, or clock is changed.
 
 - No source changes expected unless diagnostics reveal a bounded bug.
 
-- [ ] Run the original context proof with the staged binary.
-- [ ] Run `--run-add` with
+- [x] Run the original context proof with the staged binary.
+- [x] Run `--run-add` with
       `LD_LIBRARY_PATH=/data/waved/lib:/usr/lib`.
 - [ ] Require ten exact `[4, 6]` results and successful destruction.
-- [ ] Run the complete `--run-add` command a second time.
-- [ ] Confirm `waved` is still running with the same PID.
-- [ ] Confirm `nanoqFreq` and `enableNN` are unchanged.
-- [ ] Confirm ADB and the device remain responsive.
+      Blocked: the host graph targets product `0x10000020`; the Wave
+      requires `0x1000000e`, so the runtime rejects it at graph creation.
+- [x] Add and run `--run-stock-ctc` twice as a firmware-matched control;
+      require correct tensor sizes, nonzero output, identical output
+      digests, and successful destruction.
+- [x] Confirm `waved` is still running with the same PID.
+- [x] Confirm `nanoqFreq` and `enableNN` are unchanged.
+- [x] Confirm ADB and the device remain responsive.
 
 Run:
 
@@ -215,7 +224,8 @@ adb shell 'LD_LIBRARY_PATH=/data/waved/lib:/usr/lib \
   /data/waved/waved-npu-probe.poc --run-add'
 ```
 
-Expected: both inference invocations pass all ten iterations and the
+Observed: the custom add invocation is rejected for an NBG product
+target mismatch. Both firmware-graph control invocations pass and the
 post-run device state matches the pre-run snapshot.
 
 ## Task 6: Record the result
@@ -226,13 +236,23 @@ post-run device state matches the pre-run snapshot.
 - Modify: `docs/REPORT_NPU.md` only if its existing conclusions need
   correction.
 
-- [ ] Record the exact runtime route, graph hash, output, iteration
+- [x] Record the exact runtime route, graph hash, output, iteration
       count, latency summary, and cleanup/repeatability result.
-- [ ] Separate what the PoC proves (custom process can execute a
+- [x] Separate what the PoC proves (custom process can execute a
       compiled NBG) from what remains blocked (reproducible arbitrary
       ONNX-to-NBG compilation for this chip).
-- [ ] Run formatting/tests once more and inspect the final diff,
+- [x] Run formatting/tests once more and inspect the final diff,
       excluding all unrelated pre-existing audio changes.
+
+## Final Outcome
+
+The implementation proves direct NPU inference from a process we
+control using an unmodified Wave-targeted firmware graph. It also
+pinpoints why the custom add acceptance criterion cannot pass with the
+current artifacts: the available host SDK emits a different
+hardware-product target. No runtime wrapper change can make that NBG
+safe or compatible; a compiler/archmodel for product `0x1000000e` is
+required.
 
 Final verification:
 

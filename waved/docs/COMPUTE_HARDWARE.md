@@ -215,6 +215,74 @@ Expected output (on this unit, firmware build Nov 28 2025):
 RESULT: OK — NPU reachable from waved's process.
 ```
 
+### Direct inference proof through stock libnnsdk (validated 2026-07-23)
+
+The context proof above now has a full inference control. The
+`waved-npu-probe --run-stock-ctc` path calls the exact Wave
+`libnnsdk.so` exports recovered from the stock `libasr_reverb.so`
+caller:
+
+```text
+aml_module_create
+aml_module_input_set
+aml_module_output_get  (perfMode 1 = run, 2 = retrieve)
+aml_module_destroy
+```
+
+It uses the unmodified firmware graph
+`/model/asr_de/de_online/ctc_online.nb` (SHA-256
+`5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66`).
+The graph header identifies product `0x1000000e`, matching this Wave.
+Runtime tensor metadata and the observed result were:
+
+```text
+input:  input/output[0], FP16 [256, 16, 1], 8,192 bytes
+output: uid_20000_sub_uid_1_out_0, FP32 [5200, 16, 1], 332,800 bytes
+
+iteration 1: 3.501 ms
+iteration 2: 2.184 ms
+iteration 3: 2.263 ms
+output sha256 (all runs):
+e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4
+aml_module_destroy: 0
+```
+
+The input is deterministic and zero-filled. The probe validates the
+retrieved tensor count and byte length against NBG metadata, rejects an
+all-zero output, and requires the full output hash to match across all
+iterations. Two complete invocations passed. The existing `waved`
+process remained PID `14049`; the observed `nanoqFreq` (`838860800`) and
+`enableNN` (`255`) values were unchanged.
+
+This proves that our own process can load, execute, and retrieve output
+from a Wave-targeted NBG through the stock NPU stack. It does **not**
+prove that the available host SDK can compile a custom graph for this
+chip.
+
+The custom two-input add graph makes the remaining boundary explicit:
+
+| NBG | Version | Product field | Device result |
+|-----|---------|---------------|---------------|
+| host `sample-add.nb` | `0x0001001e` | `0x10000020` | rejected |
+| stock `ctc_online.nb` | `0x00020000` | `0x1000000e` | executes |
+
+Direct loading of the add graph reaches `aml_module_create` but fails
+with `hardware version is not in product list`. Therefore the runtime
+FFI and device access are solved; the custom-model blocker is the lack
+of a Wave-targeted VIP9000 compiler/archmodel.
+
+Reproduce without replacing a service or model:
+
+```bash
+cross build -p waved-npu-probe --release \
+  --target aarch64-unknown-linux-gnu
+adb push target/aarch64-unknown-linux-gnu/release/waved-npu-probe \
+  /data/waved/waved-npu-probe.poc
+adb shell 'LD_LIBRARY_PATH=/data/waved/lib:/usr/lib \
+  VIVANTE_SDK_DIR=/usr \
+  /data/waved/waved-npu-probe.poc --run-stock-ctc'
+```
+
 ### Host prebuilt SDK is simulator-only (2026-04-23)
 
 Pursuing the AoT path (compile on host, load on device via `ops::NBG`)

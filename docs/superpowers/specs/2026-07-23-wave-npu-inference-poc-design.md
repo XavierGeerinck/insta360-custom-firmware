@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-23
 
-**Status:** Approved for implementation
+**Status:** Implemented; NPU execution proven with a stock graph, custom
+add graph blocked by compiler target mismatch
 
 ## Objective
 
@@ -202,3 +203,55 @@ diagnostic evidence but does not satisfy acceptance.
 Once this PoC passes, the next independent design can target arbitrary
 models: first establish a reproducible ONNX-to-NBG compiler path, then
 run a small custom audio classifier before attempting CAM++ or ASR.
+
+## Execution Result (2026-07-23)
+
+The runtime wrapper and safety boundaries were implemented as designed.
+Analysis of the exact firmware caller confirmed every relied-upon ABI
+layout before the native functions were called.
+
+The custom add graph did not meet the original acceptance criteria.
+`aml_module_create` rejected it with:
+
+```text
+hardware version is not in product list
+set_graph_inoutputs fail
+aml_module_create returned NULL
+```
+
+The failure is a compiler-target mismatch, not an inability to access the
+NPU:
+
+| Graph | NBG version | Product target | Result |
+|---|---:|---:|---|
+| Host-generated `add_graph.nb` | `0x0001001e` | `0x10000020` | Rejected |
+| Firmware `ctc_online.nb` | `0x00020000` | `0x1000000e` | Executes |
+
+To isolate runtime access from compilation, the probe gained a
+`--run-stock-ctc` control using the existing, unmodified
+`/model/asr_de/de_online/ctc_online.nb`. It queries the graph's metadata,
+submits one deterministic zero-filled FP16 input, executes three
+iterations, validates the retrieved FP32 output shape, requires nonzero
+output bytes, requires an identical output digest on every iteration,
+and destroys the graph.
+
+Observed result on the connected Wave:
+
+```text
+input:  FP16 [256, 16, 1] = 8,192 bytes
+output: FP32 [5200, 16, 1] = 332,800 bytes
+sha256: e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4
+latency: 3.501 ms, 2.184 ms, 2.263 ms
+cleanup: aml_module_destroy status=0
+```
+
+The complete control invocation passed twice. `waved` remained PID
+`14049`; `nanoqFreq` remained `838860800`; `enableNN` remained `255`;
+ADB remained responsive. No service, model, firmware, boot setting,
+clock, or sysfs value was changed.
+
+This proves that a process we control can execute and retrieve results
+from a Wave-targeted NBG through the stock NPU runtime. It does not prove
+that the repository's current host SDK can compile custom Wave-targeted
+graphs. Custom models require a compiler/archmodel that emits product
+`0x1000000e` and the NBG version accepted by this runtime.
