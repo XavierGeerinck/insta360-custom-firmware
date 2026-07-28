@@ -45,6 +45,7 @@ RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 EXPERIMENT_ID_RE = RUN_ID_RE
 CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
+ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 ROOT_KEYS = frozenset({"schema_version", "experiments"})
 EXPERIMENT_KEYS = frozenset(
@@ -542,7 +543,7 @@ def _shell_value(
         if not optional:
             errors.append(f"{label}: adb exit {response.returncode}")
         return None
-    return response.stdout.strip()
+    return ANSI_CSI_RE.sub("", response.stdout.strip())
 
 
 def _parameter_snapshot(

@@ -128,7 +128,10 @@ def snapshot_handler(
         if "/sys/module/galcore/parameters/recovery" in command:
             return result("__UNAVAILABLE__\n")
         if "ls -ln /dev/galcore" in command:
-            return result("crw-rw---- 1 0 0 199, 0 Jan 1 00:00 /dev/galcore\n")
+            return result(
+                "crw-rw---- 1 0 0 199, 0 Jan 1 00:00 "
+                "\x1b[1;35m/dev/galcore\x1b[m\n"
+            )
         if command.startswith("ps ") or "\nps " in command:
             return result(
                 "  330 root     {S60waved} /bin/sh /etc/init.d/S60waved start\n"
@@ -354,6 +357,7 @@ class SnapshotTests(unittest.TestCase):
             {"status": "unavailable", "value": None},
         )
         self.assertEqual(snapshot["artifact_hashes"], ARTIFACT_HASHES)
+        self.assertNotIn("\x1b", snapshot["galcore_device"]["metadata"])
         self.assertEqual(
             snapshot["galcore_holders"],
             [
