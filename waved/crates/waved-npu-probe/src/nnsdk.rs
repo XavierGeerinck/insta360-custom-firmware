@@ -1112,14 +1112,23 @@ mod tests {
         assert_eq!(offset_of!(AmlConfig, data), 16);
         assert_eq!(offset_of!(AmlConfig, model_type), 24);
         assert_eq!(offset_of!(AmlConfig, nbg_type), 28);
+        assert_eq!(offset_of!(AmlConfig, reserved), 32);
     }
 
     #[test]
     fn nn_input_layout_matches_firmware_caller() {
         assert_eq!(size_of::<InputInfo>(), 32);
+        assert_eq!(offset_of!(InputInfo, valid), 0);
+        assert_eq!(offset_of!(InputInfo, int16_type), 4);
+        assert_eq!(offset_of!(InputInfo, preprocess_debug), 8);
+        assert_eq!(offset_of!(InputInfo, mean), 12);
+        assert_eq!(offset_of!(InputInfo, scale), 24);
+        assert_eq!(offset_of!(InputInfo, input_format), 28);
         assert_eq!(size_of::<NnInput>(), 64);
+        assert_eq!(offset_of!(NnInput, type_size), 0);
         assert_eq!(offset_of!(NnInput, input_index), 4);
         assert_eq!(offset_of!(NnInput, size), 8);
+        assert_eq!(offset_of!(NnInput, padding), 12);
         assert_eq!(offset_of!(NnInput, input), 16);
         assert_eq!(offset_of!(NnInput, input_type), 24);
         assert_eq!(offset_of!(NnInput, info), 28);
@@ -1128,13 +1137,26 @@ mod tests {
     #[test]
     fn output_layout_matches_firmware_caller() {
         assert_eq!(size_of::<AmlOutputConfig>(), 56);
+        assert_eq!(offset_of!(AmlOutputConfig, type_size), 0);
+        assert_eq!(offset_of!(AmlOutputConfig, module_type), 4);
         assert_eq!(offset_of!(AmlOutputConfig, perf_mode), 8);
         assert_eq!(offset_of!(AmlOutputConfig, format), 12);
+        assert_eq!(offset_of!(AmlOutputConfig, order), 16);
+        assert_eq!(offset_of!(AmlOutputConfig, reserved), 20);
+        assert_eq!(size_of::<NnBufferParams>(), 36);
+        assert_eq!(offset_of!(NnBufferParams, num_of_dims), 0);
+        assert_eq!(offset_of!(NnBufferParams, sizes), 4);
+        assert_eq!(offset_of!(NnBufferParams, data_format), 20);
+        assert_eq!(offset_of!(NnBufferParams, quant_format), 24);
+        assert_eq!(offset_of!(NnBufferParams, quant_data), 28);
         assert_eq!(size_of::<OutBuffer>(), 96);
         assert_eq!(offset_of!(OutBuffer, size), 0);
         assert_eq!(offset_of!(OutBuffer, name), 4);
         assert_eq!(offset_of!(OutBuffer, buffer), 72);
         assert_eq!(offset_of!(OutBuffer, params), 80);
+        assert_eq!(offset_of!(OutBuffer, output_format), 88);
+        assert_eq!(size_of::<NnOutput>(), 3080);
+        assert_eq!(offset_of!(NnOutput, type_size), 0);
         assert_eq!(offset_of!(NnOutput, num), 4);
         assert_eq!(offset_of!(NnOutput, outputs), 8);
         assert_eq!(8 + offset_of!(OutBuffer, buffer), 0x50);
@@ -1153,6 +1175,8 @@ mod tests {
         assert_eq!(offset_of!(TensorInfoEntry, tf_zero_point), 48);
         assert_eq!(offset_of!(TensorInfoEntry, name), 52);
         assert_eq!(size_of::<TensorInfoList>(), 16);
+        assert_eq!(offset_of!(TensorInfoList, valid), 0);
+        assert_eq!(offset_of!(TensorInfoList, count), 4);
         assert_eq!(offset_of!(TensorInfoList, entries), 8);
     }
 
