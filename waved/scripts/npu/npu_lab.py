@@ -34,6 +34,7 @@ DEFAULT_EXPERIMENTS_PATH = Path(__file__).with_name("experiments.json")
 ALLOWED_ENVIRONMENT_KEYS = frozenset({"LD_LIBRARY_PATH", "VIVANTE_SDK_DIR"})
 GRANDFATHERED_EXECUTABLE = "/data/waved/waved-npu-probe.poc"
 EXPERIMENT_EXECUTABLE_ROOT = "/data/waved/npu-lab/"
+EPHEMERAL_TRACE_EXECUTABLE = "/tmp/wave-npu-lab/stock-ctc-trace"
 
 MAX_CAPTURE_BYTES = 1024 * 1024
 MAX_SNAPSHOT_LINES = 32
@@ -243,15 +244,16 @@ def _require_sha256(value: Any, context: str) -> str:
 
 
 def _validate_executable(path: str) -> None:
-    if path == GRANDFATHERED_EXECUTABLE:
+    if path in {GRANDFATHERED_EXECUTABLE, EPHEMERAL_TRACE_EXECUTABLE}:
         return
     if path.startswith(EXPERIMENT_EXECUTABLE_ROOT):
         relative = path[len(EXPERIMENT_EXECUTABLE_ROOT) :]
         if relative and not relative.startswith("/") and "/../" not in f"/{relative}/":
             return
     raise SchemaError(
-        "experiment executable must be the grandfathered probe or reside "
-        f"under {EXPERIMENT_EXECUTABLE_ROOT}"
+        "experiment executable must be the grandfathered probe, the exact "
+        "ephemeral PoC 3 trace wrapper, or reside under "
+        f"{EXPERIMENT_EXECUTABLE_ROOT}"
     )
 
 

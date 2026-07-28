@@ -237,6 +237,24 @@ class DefinitionTests(unittest.TestCase):
             "/data/waved/npu-lab/probe",
         )
 
+    def test_exact_ephemeral_trace_executable_is_narrowly_allowed(self):
+        document = valid_document()
+        document["experiments"]["stock-ctc"]["remote_argv"][0] = (
+            "/tmp/wave-npu-lab/stock-ctc-trace"
+        )
+        registry = self.load(document)
+        self.assertEqual(
+            registry.get("stock-ctc").remote_argv[0],
+            "/tmp/wave-npu-lab/stock-ctc-trace",
+        )
+
+        document = valid_document()
+        document["experiments"]["stock-ctc"]["remote_argv"][0] = (
+            "/tmp/wave-npu-lab/another-program"
+        )
+        with self.assertRaisesRegex(npu_lab.SchemaError, "executable"):
+            self.load(document)
+
     def test_empty_artifacts_invalid_hash_and_timeout_are_rejected(self):
         document = valid_document()
         document["experiments"]["stock-ctc"]["required_artifacts"] = {}

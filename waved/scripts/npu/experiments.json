@@ -26,6 +26,37 @@
         "output_sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4",
         "cleanup": 0
       }
+    },
+    "stock-ctc-trace": {
+      "description": "Metadata-only strace and GAL ioctl trace of the firmware-matched CTC control",
+      "remote_argv": [
+        "/tmp/wave-npu-lab/stock-ctc-trace"
+      ],
+      "environment": {},
+      "timeout_ms": 30000,
+      "expected_remote_exit": 0,
+      "required_artifacts": {
+        "/bin/sh": "6350ce539100969ca9f54b7098d70699e20c8be422958f2f3b23d78f7e97b6f9",
+        "/data/waved/waved-npu-probe.poc": "fe8da5702032c397023acebd1a4bdf40ce086f6e86277a52c4f059f409552db0",
+        "/lib/libc.so.6": "cfc6aa042a880a87e4f0adbfb74b55c9ba9607561905b20f58da96fcb2d3bb86",
+        "/lib/libgcc_s.so.1": "859408230bf4baf943d0c7985870488683b6e61c0cb5725ed8934d8c45ea0ab1",
+        "/lib64/ld-2.31.so": "912002c930f3096d98fc32e0897466049d6e5182cbb606b456b2ebcc99551366",
+        "/model/asr_de/de_online/ctc_online.nb": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66",
+        "/tmp/wave-npu-lab/libwave-gal-trace.so": "dccaedd13812c161949905efecf7aa19fe74712b75de8d80211924e286e68601",
+        "/tmp/wave-npu-lab/stock-ctc-trace": "7799626fcad221088a109740022e93ca5b7652d7589c9e79347ec92a1b1ac866",
+        "/usr/bin/sha256sum": "6350ce539100969ca9f54b7098d70699e20c8be422958f2f3b23d78f7e97b6f9",
+        "/usr/bin/strace": "2046787af2bec0edd5c3483b59bcbd870e5a0fb68cc3c618e9e464e61ee62aa2",
+        "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+        "/usr/lib/libnnsdk.so": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+        "/usr/lib/libovxlib.so": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9"
+      },
+      "expected_result": {
+        "status": "PASS",
+        "iterations": 3,
+        "output_bytes": 332800,
+        "output_sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4",
+        "cleanup": 0
+      }
     }
   }
 }

@@ -120,10 +120,15 @@ No probe rebuild is required for this PoC.
 
 ### 4.2 Fixed `strace` wrapper
 
-A source-controlled shell wrapper is cross-independent and staged only as:
+A source-controlled shell wrapper is cross-independent. The originally
+planned persistent path was
+`/data/waved/npu-lab/stock-ctc-trace`. Live pre-staging found `/data` at
+100% with zero available blocks, and directory creation failed before either
+artifact could be written. No existing data was deleted or moved. The safer
+execution path is therefore the exact ephemeral path:
 
 ```text
-/data/waved/npu-lab/stock-ctc-trace
+/tmp/wave-npu-lab/stock-ctc-trace
 ```
 
 It has no arguments and hard-codes:
@@ -131,16 +136,21 @@ It has no arguments and hard-codes:
 - exact probe and interposer paths;
 - `LD_LIBRARY_PATH=/data/waved/lib:/usr/lib`;
 - `VIVANTE_SDK_DIR=/usr`;
-- `LD_PRELOAD=/data/waved/npu-lab/libwave-gal-trace.so`;
+- `LD_PRELOAD=/tmp/wave-npu-lab/libwave-gal-trace.so`;
 - `strace -f -qq -ttt -T -yy`;
 - a fixed syscall allowlist;
 - `/data/waved/waved-npu-probe.poc --run-stock-ctc`.
 
 The syscall allowlist covers process/thread creation, dynamic-loader file
 access, `/dev/galcore` open/close, mapping, synchronization, polling, ioctl,
-and process exit. `strace` writes to the process stderr already captured by
-the PoC 0 harness. It does not use `-s` to enlarge string capture and does
-not request memory dumps.
+and process exit. A first instrumented pilot proved that this firmware's ADB
+shell uses a PTY that merges trace stderr into probe stdout. Although native
+inference passed, that byte-level interleaving split the `RESULT` line and
+caused the host parser to reject the run. The corrected wrapper writes
+`strace` and GAL diagnostics to two exact mode-0600 files under the same
+ephemeral directory, emits them in named frames only after the clean probe
+result, then deletes both files. It does not use `-s` to enlarge string
+capture and does not request memory dumps.
 
 `ioctl` is requested in raw numeric form. The wrapper never asks `strace` to
 dereference the request envelope or print pointed-to memory.
@@ -148,7 +158,10 @@ dereference the request envelope or print pointed-to memory.
 ### 4.3 Metadata-only ioctl interposer
 
 `libwave-gal-trace.so` interposes only `ioctl(2)`. Other syscall boundaries
-come from `strace`, avoiding a broad and fragile preload surface.
+come from `strace`, avoiding a broad and fragile preload surface. The fixed
+syscall list includes `write(2)` solely so the probe's existing `[N/8]`
+diagnostic markers retain ordering in the raw trace; no write buffer is
+decoded into the tracked report.
 
 For request `30000` only, the interposer:
 
@@ -169,6 +182,14 @@ request.
 Trace lines are short ASCII records written directly to stderr with one
 `write(2)` call. A thread-local reentrancy guard prevents recursive tracing.
 An atomic sequence counter gives an order independent of timestamps.
+
+The pilot also observed that the probe's detached worker can begin one final
+successful unlock ioctl while the main thread calls `exit_group`. The entry
+record and successful `strace` result are present, but process exit can
+preempt the interposer's post-call record. The normalizer permits this only
+for exactly the final contiguous call and only when the strace ioctl count
+matches and every syscall result is zero. It remains a documented teardown
+race, not silently synthesized status.
 
 The C implementation has compile-time assertions for the 32-byte envelope
 and 16-byte prefix. A host unit test exercises the parser/normalizer against
@@ -226,13 +247,18 @@ guessing. It never emits raw pointers or raw ioctl argument text.
 ### Phase B — reversible staging
 
 1. Verify ADB state and the live exact artifact hashes.
-2. Create only `/data/waved/npu-lab/` if absent.
-3. Push the two new files under that directory.
-4. Set executable/read permissions only on those two paths.
-5. Read back both hashes from the Wave.
-6. Add the exact staged hashes to the source-controlled experiment registry.
+2. Attempt the preferred `/data/waved/npu-lab/` path without deleting or
+   moving existing data.
+3. If `/data` has no free blocks, create only `/tmp/wave-npu-lab/` in the
+   device's executable tmpfs and allowlist the exact wrapper path rather than
+   the directory.
+4. Push the two new files under the selected research directory.
+5. Set executable/read permissions only on those two paths.
+6. Read back both hashes from the Wave.
+7. Add the exact staged hashes to the source-controlled experiment registry.
 
 Nothing is placed under `/usr`, `/lib`, `/model`, `/etc`, or a boot path.
+The `/tmp` fallback is cleared by reboot and must be explicitly restaged.
 
 ### Phase C — first trace
 
@@ -267,6 +293,7 @@ waved/tools/npu-trace/
   gal_trace.c                 bounded ioctl metadata interposer
   stock-ctc-trace.sh          fixed no-argument device wrapper
   build.sh                    pinned cross-container build
+  stage.sh                    hash-checking, non-overwriting tmpfs staging
 
 waved/scripts/npu/
   trace_normalize.py          strict raw-to-normalized report generator
@@ -316,7 +343,8 @@ practical and then confirmed indirectly on the live successful control.
 
 ### Harness checks
 
-- schema accepts the fixed wrapper under `/data/waved/npu-lab/`;
+- schema accepts only the exact fixed `/tmp/wave-npu-lab/stock-ctc-trace`
+  fallback in addition to the existing `/data/waved/npu-lab/` policy;
 - all staged and stock dependencies are required artifacts;
 - missing or changed tracer/wrapper/strace/libGAL hashes reject preflight;
 - only the stock result shape and output digest satisfy success.
