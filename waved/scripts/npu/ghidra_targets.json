@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "business-model-infer": {
+      "firmware": "fw_business_v1.0.2.6",
+      "path": "firmwares/fw_business_v1.0.2.6/extracted/rootfs/usr/lib/libmodel_infer.so",
+      "sha256": "7eb162d3f4ff665822baffd3ebd6159460df4c51a6b913dfaa2de34c95d862a7",
+      "roles": [
+        "audio-model-loader",
+        "firmware-comparison"
+      ],
+      "functions": [
+        "model_infer_aes_destroy",
+        "model_infer_aes_load_from_buf",
+        "model_infer_aes_load_from_file",
+        "model_infer_aes_run",
+        "model_infer_ans_destroy",
+        "model_infer_ans_load_from_buf",
+        "model_infer_ans_load_from_file",
+        "model_infer_ans_run"
+      ],
+      "string_filters": [
+        "backend",
+        "navie rnn",
+        "nnapi",
+        "onnx",
+        "opencl",
+        "opengles"
+      ]
+    },
+    "live-asr-caller": {
+      "firmware": "fw_v1.1.6.6",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libasr_reverb.so",
+      "sha256": "9097f2aaffcab1982c77ea0caa82aabc891db67a603283e0d03132a10085c392",
+      "roles": [
+        "caller",
+        "live-matched",
+        "stock-asr"
+      ],
+      "functions": [
+        "aml_module_create",
+        "aml_module_destroy",
+        "aml_module_input_set",
+        "aml_module_output_get",
+        "aml_util_flushTensorHandle",
+        "aml_util_freeBuffer",
+        "aml_util_mallocBuffer"
+      ],
+      "string_filters": [
+        "nbg",
+        "output",
+        "tensor"
+      ]
+    },
+    "live-libnnsdk": {
+      "firmware": "fw_v1.1.6.6",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libnnsdk.so",
+      "sha256": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+      "roles": [
+        "live-matched",
+        "model-api",
+        "provider",
+        "runtime"
+      ],
+      "functions": [
+        "aml_adla_create_network_common",
+        "aml_adla_create_network_off",
+        "aml_adla_destroy_off",
+        "aml_adla_inputs_set_off",
+        "aml_adla_outputs_get_off",
+        "aml_adla_run_network_off",
+        "aml_adla_wait",
+        "aml_get_hardware_type",
+        "aml_module_create",
+        "aml_module_destroy",
+        "aml_module_input_set",
+        "aml_module_output_get",
+        "aml_util_freeTensorInfo",
+        "aml_util_getInputTensorInfo",
+        "aml_util_getOutputTensorInfo",
+        "aml_viplite_create_network_off",
+        "aml_viplite_destroy_network",
+        "aml_viplite_get_output",
+        "aml_viplite_runnetwork",
+        "aml_vipunify_create_network",
+        "aml_vipunify_destroy",
+        "aml_vipunify_destroy_ovxlib",
+        "aml_vipunify_inputs_set",
+        "aml_vipunify_inputs_set_ovxlib",
+        "aml_vipunify_outputs_get",
+        "aml_vipunify_outputs_get_ovxlib",
+        "aml_vipunify_run_network",
+        "aml_vipunify_run_network_ovxlib",
+        "get_product_ID",
+        "init_model_ctx",
+        "read_nbg_binary_file",
+        "read_nbg_from_memory",
+        "vipunify_create_network_off",
+        "vipunify_create_network_on",
+        "vipunify_create_network_on_ovx",
+        "vipunify_load_hw_config"
+      ],
+      "string_filters": [
+        "/dev/adla0",
+        "/dev/galcore",
+        "driver version",
+        "hardware version",
+        "nbg",
+        "network creating",
+        "product list",
+        "quant_type"
+      ]
+    },
+    "live-ovxlib": {
+      "firmware": "fw_v1.1.6.6",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libovxlib.so",
+      "sha256": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9",
+      "roles": [
+        "live-matched",
+        "neural-network",
+        "runtime"
+      ],
+      "functions": [
+        "vsi_nn_AsyncRunGraph",
+        "vsi_nn_CreateContext",
+        "vsi_nn_CreateGraph",
+        "vsi_nn_CreateTensor",
+        "vsi_nn_GenerateNBG",
+        "vsi_nn_ReleaseContext",
+        "vsi_nn_ReleaseGraph",
+        "vsi_nn_RunGraph",
+        "vsi_nn_SetupGraph",
+        "vsi_nn_VerifyGraph"
+      ],
+      "string_filters": [
+        "nbg",
+        "run graph",
+        "setup graph",
+        "verify graph"
+      ]
+    },
+    "v3-audio-caller": {
+      "firmware": "fw_v3.0.0.1",
+      "path": "firmwares/fw_v3.0.0.1/extracted/rootfs/usr/lib/libspai_mic_sigp.so",
+      "sha256": "8045da803d71ec3ea3e1c058340745ba2bd878eb28557300eba5cf65d8e5af1c",
+      "roles": [
+        "audio-model-caller",
+        "stock-audio"
+      ],
+      "functions": [
+        "model_infer_aes_get_version",
+        "model_infer_aes_load_from_buf",
+        "model_infer_aes_run",
+        "model_infer_ans_get_delay",
+        "model_infer_ans_get_mask",
+        "model_infer_ans_get_snr_db",
+        "model_infer_ans_get_version",
+        "model_infer_ans_load_from_buf",
+        "model_infer_ans_run",
+        "model_infer_ans_set_post_filter"
+      ],
+      "string_filters": [
+        "aes",
+        "ans",
+        "model",
+        "noise"
+      ]
+    },
+    "v3-model-infer": {
+      "firmware": "fw_v3.0.0.1",
+      "path": "firmwares/fw_v3.0.0.1/extracted/rootfs/usr/lib/libmodel_infer.so",
+      "sha256": "78b9ddba32f608dd6771b3300fd4f7ce5f2808a1a52b05cdf618348db608bbe5",
+      "roles": [
+        "audio-model-loader",
+        "provider"
+      ],
+      "functions": [
+        "model_infer_aes_destroy",
+        "model_infer_aes_get_delay",
+        "model_infer_aes_get_version",
+        "model_infer_aes_load_from_buf",
+        "model_infer_aes_load_from_file",
+        "model_infer_aes_load_vdcrn_16k_0_07m_from_buf",
+        "model_infer_aes_run",
+        "model_infer_ans_destroy",
+        "model_infer_ans_get_delay",
+        "model_infer_ans_get_mask",
+        "model_infer_ans_get_snr_db",
+        "model_infer_ans_get_version",
+        "model_infer_ans_load_from_buf",
+        "model_infer_ans_load_from_file",
+        "model_infer_ans_load_vdf2_16k_0_25m_from_buf",
+        "model_infer_ans_run",
+        "model_infer_ans_set_post_filter"
+      ],
+      "string_filters": [
+        "backend",
+        "navie rnn",
+        "nnapi",
+        "onnx",
+        "opencl",
+        "opengles"
+      ]
+    }
+  }
+}
