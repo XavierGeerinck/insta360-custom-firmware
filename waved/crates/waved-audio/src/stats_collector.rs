@@ -3,14 +3,14 @@
 //! atomic rename. Never in the capture hot path.
 
 use crate::callbacks::AudioFrame;
-use crate::capture::{ChannelMapSource, CaptureStats};
+use crate::capture::{CaptureStats, ChannelMapSource};
 use crate::metrics::{clipping_rate, correlation_matrix, dc_offset, rms_per_channel};
 use crate::playback::DspMetrics;
-use crate::processed_frame::ProcessedAudioFrame;
+use crate::processed_frame::{AecFrameMetrics, ProcessedAudioFrame};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 use waved_state::{AudioMode, AudioState};
@@ -33,10 +33,16 @@ pub struct AudioStats {
     pub last_write_error: Option<String>,
     pub reference_rms: Vec<f32>,
     pub alignment: String,
-    /// RMS of the post-AEC mono signal, scaled to i16 units so it's directly
-    /// comparable to `rms_per_channel`. `None` when no processed frame has
-    /// been seen yet (AEC disabled or collector just started).
+    /// Legacy name for the final processed/uplink RMS after noise suppression,
+    /// user microphone gain, and limiting. Kept for compatibility.
     pub mic_post_aec_rms: Option<f32>,
+    /// Unambiguous name for the same final processed/uplink RMS.
+    pub mic_uplink_rms: Option<f32>,
+    /// Same-frame metrics captured inside the DSP pipeline. Unlike the legacy
+    /// raw/processed broadcasts, every stage in this snapshot belongs to the
+    /// same audio frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aec: Option<AecFrameMetrics>,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
     pub doa_active: bool,
@@ -72,14 +78,14 @@ pub async fn run(
     period: std::time::Duration,
     alignment: String,
     dsp_metrics: Option<Arc<DspMetrics>>,
-    #[cfg(feature = "capture-alsa")]
-    uac_stats: Option<Arc<crate::uac::UacStats>>,
+    #[cfg(feature = "capture-alsa")] uac_stats: Option<Arc<crate::uac::UacStats>>,
     hid_stats: Option<Arc<waved_hid::stats::HidStats>>,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
     let mut latest_frame: Option<AudioFrame> = None;
     let mut latest_post_aec_rms: Option<f32> = None;
+    let mut latest_aec_metrics: Option<AecFrameMetrics> = None;
     let mut last_write_error: Option<String> = None;
     loop {
         tokio::select! {
@@ -94,7 +100,14 @@ pub async fn run(
                 }
             },
             processed = processed_rx.recv() => match processed {
-                Ok(p) => { latest_post_aec_rms = Some(processed_mono_rms(&p)); }
+                Ok(p) => {
+                    let uplink_rms = processed_mono_rms(&p);
+                    let mut metrics = p.aec_metrics.clone();
+                    metrics.mic_uplink_rms = uplink_rms;
+                    metrics.update_suppression();
+                    latest_post_aec_rms = Some(uplink_rms);
+                    latest_aec_metrics = Some(metrics);
+                }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     warn!("stats_collector lagged {n} processed frames");
                 }
@@ -107,7 +120,8 @@ pub async fn run(
                     let state = audio_state_rx.borrow().clone();
                     let s = compute_stats_with_processed(
                         frame, &stats, map_source, last_write_error.clone(), &alignment,
-                        latest_post_aec_rms, &state, dsp_metrics.as_deref(),
+                        latest_post_aec_rms, latest_aec_metrics.clone(),
+                        &state, dsp_metrics.as_deref(),
                         #[cfg(feature = "capture-alsa")]
                         uac_stats.as_deref(),
                         hid_stats.as_deref(),
@@ -124,9 +138,8 @@ pub async fn run(
     }
 }
 
-/// RMS of a ProcessedAudioFrame's mono post-AEC signal, scaled to the same
-/// i16 unit basis as `rms_per_channel` so the ERLE calculation is a single
-/// `20 * log10(raw / post)` with both operands in the same domain.
+/// RMS of the final ProcessedAudioFrame uplink signal, after all DSP, user
+/// gain, and limiting, scaled to the i16 domain.
 pub fn processed_mono_rms(p: &ProcessedAudioFrame) -> f32 {
     if p.mic_mono_f32.is_empty() {
         return 0.0;
@@ -148,7 +161,15 @@ pub fn compute_stats(
     alignment: &str,
 ) -> AudioStats {
     compute_stats_with_processed(
-        frame, cap_stats, map_source, last_write_error, alignment, None, &AudioState::default(), None,
+        frame,
+        cap_stats,
+        map_source,
+        last_write_error,
+        alignment,
+        None,
+        None,
+        &AudioState::default(),
+        None,
         #[cfg(feature = "capture-alsa")]
         None,
         None,
@@ -163,10 +184,10 @@ pub fn compute_stats_with_processed(
     last_write_error: Option<String>,
     alignment: &str,
     mic_post_aec_rms: Option<f32>,
+    aec_metrics: Option<AecFrameMetrics>,
     audio_state: &AudioState,
     dsp_metrics: Option<&DspMetrics>,
-    #[cfg(feature = "capture-alsa")]
-    uac_stats: Option<&crate::uac::UacStats>,
+    #[cfg(feature = "capture-alsa")] uac_stats: Option<&crate::uac::UacStats>,
     hid_stats: Option<&waved_hid::stats::HidStats>,
 ) -> AudioStats {
     let ch = frame.channels as usize;
@@ -186,7 +207,11 @@ pub fn compute_stats_with_processed(
     let corr = correlation_matrix(&frame.data, ch);
     let ref_rms = if let Some(ref_data) = &frame.reference {
         let ref_ch = frame.reference_channels as usize;
-        if ref_ch > 0 { rms_per_channel(ref_data, ref_ch) } else { vec![] }
+        if ref_ch > 0 {
+            rms_per_channel(ref_data, ref_ch)
+        } else {
+            vec![]
+        }
     } else {
         vec![]
     };
@@ -203,7 +228,10 @@ pub fn compute_stats_with_processed(
                 m.mbagc_gain_db_x100[3].load(Ordering::Relaxed) as f32 / 100.0,
             ];
             let limiter = m.limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
-            let rec_limiter = m.recording_limiter_reduction_db_x100.load(Ordering::Relaxed) as f32 / 100.0;
+            let rec_limiter = m
+                .recording_limiter_reduction_db_x100
+                .load(Ordering::Relaxed) as f32
+                / 100.0;
             (gains, limiter, rec_limiter)
         } else {
             ([0.0_f32; 4], 0.0_f32, 0.0_f32)
@@ -242,6 +270,11 @@ pub fn compute_stats_with_processed(
         reference_rms: ref_rms,
         alignment: alignment.to_string(),
         mic_post_aec_rms,
+        mic_uplink_rms: aec_metrics
+            .as_ref()
+            .map(|m| m.mic_uplink_rms)
+            .or(mic_post_aec_rms),
+        aec: aec_metrics,
         doa_horizontal: audio_state.doa_horizontal,
         doa_pitch: audio_state.doa_pitch,
         doa_active: audio_state.doa_active,
@@ -341,7 +374,11 @@ mod tests {
         let cs = CaptureStats::new();
         let s = compute_stats(&frame, &cs, ChannelMapSource::File, None, "kernel-linked");
         assert_eq!(s.reference_rms.len(), 2);
-        assert!((s.reference_rms[0] - 16384.0).abs() < 1.0, "expected ~16384, got {}", s.reference_rms[0]);
+        assert!(
+            (s.reference_rms[0] - 16384.0).abs() < 1.0,
+            "expected ~16384, got {}",
+            s.reference_rms[0]
+        );
         assert_eq!(s.alignment, "kernel-linked");
     }
 
@@ -359,6 +396,7 @@ mod tests {
             timestamp_ms: 0,
             raw_mic_i16: vec![],
             raw_mic_channels: 0,
+            aec_metrics: Default::default(),
         };
         let rms = processed_mono_rms(&p);
         let expected = 0.5 / 2f32.sqrt() * i16::MAX as f32;
@@ -373,12 +411,56 @@ mod tests {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
         let s = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &AudioState::default(), None,
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            Some(123.4),
+            None,
+            &AudioState::default(),
+            None,
             #[cfg(feature = "capture-alsa")]
             None,
             None,
         );
         assert_eq!(s.mic_post_aec_rms, Some(123.4));
+        assert_eq!(s.mic_uplink_rms, Some(123.4));
+    }
+
+    #[test]
+    fn same_frame_aec_metrics_override_legacy_uplink_name() {
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let cs = CaptureStats::new();
+        let mut metrics = AecFrameMetrics {
+            reference_rms: 100.0,
+            mic_pre_aec_rms: 1000.0,
+            mic_post_linear_aec_rms: 100.0,
+            mic_post_residual_echo_rms: 20.0,
+            mic_post_noise_suppression_rms: 20.0,
+            mic_uplink_rms: 40.0,
+            ..Default::default()
+        };
+        metrics.update_suppression();
+        let s = compute_stats_with_processed(
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "software-reference",
+            Some(39.0),
+            Some(metrics),
+            &AudioState::default(),
+            None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+            None,
+        );
+        assert_eq!(s.mic_post_aec_rms, Some(39.0));
+        assert_eq!(s.mic_uplink_rms, Some(40.0));
+        let aec = s.aec.expect("same-frame AEC metrics");
+        assert!((aec.linear_erle_db.unwrap() - 20.0).abs() < 0.01);
+        assert!((aec.effective_echo_suppression_db.unwrap() - 27.9588).abs() < 0.01);
     }
 
     #[test]
@@ -396,7 +478,15 @@ mod tests {
             ..Default::default()
         };
         let s = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            None,
+            &state,
+            None,
             #[cfg(feature = "capture-alsa")]
             None,
             None,
@@ -426,13 +516,29 @@ mod tests {
         let mut state = AudioState::default();
         state.mic_volume = 200; // 2× linear, +6 dB
         let stats = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", Some(123.4), &state, None,
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            Some(123.4),
+            None,
+            &state,
+            None,
             #[cfg(feature = "capture-alsa")]
             None,
             None,
         );
-        assert!((stats.mic_gain_linear - 2.0).abs() < 1e-6, "expected 2.0, got {}", stats.mic_gain_linear);
-        assert!((stats.mic_gain_db - 6.0205994).abs() < 0.01, "expected ~6.02 dB, got {}", stats.mic_gain_db);
+        assert!(
+            (stats.mic_gain_linear - 2.0).abs() < 1e-6,
+            "expected 2.0, got {}",
+            stats.mic_gain_linear
+        );
+        assert!(
+            (stats.mic_gain_db - 6.0205994).abs() < 0.01,
+            "expected ~6.02 dB, got {}",
+            stats.mic_gain_db
+        );
     }
 
     #[test]
@@ -444,7 +550,15 @@ mod tests {
         let mut state = AudioState::default();
         state.mic_volume = 0;
         let stats = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none", None, &state, None,
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            None,
+            &state,
+            None,
             #[cfg(feature = "capture-alsa")]
             None,
             None,
@@ -461,8 +575,15 @@ mod tests {
         let cs = CaptureStats::new();
         let state = AudioState::default();
         let stats = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none",
-            Some(123.4), &state, None,
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            Some(123.4),
+            None,
+            &state,
+            None,
             #[cfg(feature = "capture-alsa")]
             None,
             None,
@@ -479,16 +600,27 @@ mod tests {
         let state = AudioState::default();
         let m = crate::playback::DspMetrics::default();
         // Limiter pulled signal down by 3.5 dB → store as -350 (×100).
-        m.recording_limiter_reduction_db_x100.store(-350, Ordering::Relaxed);
+        m.recording_limiter_reduction_db_x100
+            .store(-350, Ordering::Relaxed);
         let stats = compute_stats_with_processed(
-            &frame, &cs, ChannelMapSource::File, None, "none",
-            None, &state, Some(&m),
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            None,
+            &state,
+            Some(&m),
             #[cfg(feature = "capture-alsa")]
             None,
             None,
         );
-        assert!((stats.recording_limiter_reduction_db - (-3.5)).abs() < 1e-6,
-            "got {}", stats.recording_limiter_reduction_db);
+        assert!(
+            (stats.recording_limiter_reduction_db - (-3.5)).abs() < 1e-6,
+            "got {}",
+            stats.recording_limiter_reduction_db
+        );
     }
 }
 
@@ -500,7 +632,9 @@ mod tests_hid_wiring {
     #[test]
     fn audio_stats_serializes_hid_when_present() {
         let stats = HidStats::default();
-        stats.events_volume_step.fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+        stats
+            .events_volume_step
+            .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
         let snap = stats.snapshot();
 
         let mut audio = sample_audio_stats();
@@ -514,7 +648,10 @@ mod tests_hid_wiring {
     fn audio_stats_omits_hid_when_none() {
         let audio = sample_audio_stats();
         let json = serde_json::to_value(&audio).unwrap();
-        assert!(json.get("hid").is_none(), "expected hid field absent when None");
+        assert!(
+            json.get("hid").is_none(),
+            "expected hid field absent when None"
+        );
     }
 
     fn sample_audio_stats() -> AudioStats {
@@ -536,6 +673,8 @@ mod tests_hid_wiring {
             reference_rms: vec![],
             alignment: String::new(),
             mic_post_aec_rms: None,
+            mic_uplink_rms: None,
+            aec: None,
             doa_horizontal: 0.0,
             doa_pitch: 0.0,
             doa_active: false,

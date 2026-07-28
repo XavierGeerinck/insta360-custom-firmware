@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "capture": {
     "mic_device": "hw:0,2",
     "mic_channels": 8,
@@ -14,6 +14,10 @@
     "format": "S16_LE",
     "period_frames": 1024,
     "buffer_periods": 4
+  },
+  "aec": {
+    "residual_echo_suppress_db": 40,
+    "residual_echo_suppress_active_db": 15
   },
   "period_frames": 1024,
   "buffer_periods": 8

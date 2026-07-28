@@ -7,9 +7,11 @@
 //! - `NoiseSuppressor` — spectral noise reduction, with optional linkage to
 //!   an echo canceller for residual-echo suppression.
 //!
-//! Both come in a speexdsp-backed implementation (`speex::SpeexEchoCanceller`,
-//! `speex::SpeexNoiseSuppressor`) plus a no-op `passthrough::PassthroughCanceller`
-//! for the DSP-disabled code path and tests.
+//! Both come in a speexdsp-backed implementation. Production conferencing
+//! uses `speex::SpeexAecStage`, which couples linear cancellation and the
+//! linked residual-echo preprocessor with safe native drop ordering. The
+//! no-op `passthrough::PassthroughCanceller` remains for tests and DSP-disabled
+//! paths.
 
 pub mod deep_filter;
 pub mod passthrough;

@@ -2,7 +2,7 @@
 # SP#2 conferencing AEC test.
 #
 # Simulates a Microsoft Teams / Zoom scenario:
-#   - Far-end (remote participants): a multi-tone speech-band signal played
+#   - Far-end (remote participants): a required real-speech fixture played
 #     through waved's own PlaybackService via SIGUSR2.
 #   - Near-end (local speaker): the human running the test is encouraged to
 #     speak into the device mic during the playback window.
@@ -13,24 +13,56 @@
 #
 # Verifies:
 #   1. reference_rms[0] rises during playback.
-#   2. mic_post_aec_rms stays near baseline (far-end echo cancelled).
-#   3. ERLE >= ERLE_THRESHOLD_DB.
-#   4. reference_rms decays after playback stops.
+#   2. same-frame linear ERLE and final effective suppression pass.
+#   3. residual echo suppression is active.
+#   4. reference_rms decays after playback stops and integrity remains clean.
 #
 # Artifacts saved to OUT_DIR:
-#   speech_band.s16le   — generated far-end test signal
+#   far_end_speech.s16le — normalized far-end speech fixture
 #   mic_capture.pcm     — raw S16LE 48 kHz mono post-AEC output
 #   mic_capture.wav     — same, wrapped in WAV for easy playback
 set -euo pipefail
 
 SIGNAL_DURATION_S="${SIGNAL_DURATION_S:-5}"
 SIGNAL_AMPLITUDE="${SIGNAL_AMPLITUDE:-0.25}"
-ERLE_THRESHOLD_DB="${ERLE_THRESHOLD_DB:-15}"
+LINEAR_ERLE_THRESHOLD_DB="${LINEAR_ERLE_THRESHOLD_DB:-20}"
+EFFECTIVE_SUPPRESSION_THRESHOLD_DB="${EFFECTIVE_SUPPRESSION_THRESHOLD_DB:-25}"
 DEVICE_SPEAKER_VOL_PCT="${DEVICE_SPEAKER_VOL_PCT:-50}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 OUT_DIR="${OUT_DIR:-/tmp/waved-conferencing-test}"
+: "${SPEECH_FIXTURE:?Set SPEECH_FIXTURE to a WAV/FLAC/MP3 file containing real conversational speech}"
+
+if [ ! -f "${SPEECH_FIXTURE}" ]; then
+    echo "ERROR: SPEECH_FIXTURE does not exist: ${SPEECH_FIXTURE}" >&2
+    exit 1
+fi
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "ERROR: ffmpeg is required to normalize SPEECH_FIXTURE" >&2
+    exit 1
+fi
 
 mkdir -p "${OUT_DIR}"
+
+waved_pids() {
+    adb shell 'for p in /proc/[0-9]*; do
+        if [ -f "$p/comm" ] && [ "$(cat "$p/comm" 2>/dev/null)" = waved ]; then
+            echo "${p#/proc/}"
+        fi
+    done' | tr -d '\r'
+}
+
+stop_waved() {
+    adb shell "killall -TERM waved 2>/dev/null || true"
+    for _ in $(seq 1 10); do
+        if [ -z "$(waved_pids)" ]; then
+            return
+        fi
+        sleep 1
+    done
+    echo "WARN: waved did not stop within 10s; forcing shutdown" >&2
+    adb shell "killall -KILL waved 2>/dev/null || true"
+    sleep 1
+}
 
 # ---------------------------------------------------------------------------
 # Build + Deploy
@@ -45,35 +77,15 @@ if [ "${SKIP_BUILD}" = "0" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Generate speech-band multi-tone test signal
+# Normalize the real-speech fixture to the PlaybackService format
 # ---------------------------------------------------------------------------
 
-echo "==> Generating speech-band test signal (${SIGNAL_DURATION_S}s, amplitude=${SIGNAL_AMPLITUDE})"
-SIGNAL_FILE="${OUT_DIR}/speech_band.s16le"
-python3 - "${SIGNAL_DURATION_S}" "${SIGNAL_AMPLITUDE}" "${SIGNAL_FILE}" <<'PY'
-import sys, struct, math
-
-dur_s  = float(sys.argv[1])
-amp    = float(sys.argv[2])
-out    = sys.argv[3]
-sr     = 48000
-n      = int(sr * dur_s)
-
-# Six tones spanning the speech band (300–3000 Hz).
-freqs = [300, 500, 800, 1200, 2000, 3000]
-a = amp / len(freqs)
-
-data = []
-for i in range(n):
-    t = i / sr
-    v = sum(a * math.sin(2 * math.pi * f * t) for f in freqs)
-    s = max(-32768, min(32767, int(v * 32767)))
-    data.extend([s, s])   # stereo — PlaybackService is 2-ch
-
-with open(out, 'wb') as f:
-    f.write(struct.pack(f'<{len(data)}h', *data))
-print(f"  {out}: {dur_s}s, freqs={freqs}, amplitude={amp:.3f}")
-PY
+echo "==> Preparing real-speech fixture (${SIGNAL_DURATION_S}s, target peak=${SIGNAL_AMPLITUDE})"
+SIGNAL_FILE="${OUT_DIR}/far_end_speech.s16le"
+ffmpeg -hide_banner -loglevel error -stream_loop -1 -i "${SPEECH_FIXTURE}" \
+    -t "${SIGNAL_DURATION_S}" -af "alimiter=limit=${SIGNAL_AMPLITUDE}:attack=5:release=50" \
+    -ar 48000 -ac 2 -f s16le -y "${SIGNAL_FILE}"
+echo "  ${SIGNAL_FILE}: source=${SPEECH_FIXTURE}"
 
 echo "==> Pushing test signal to device"
 adb push "${SIGNAL_FILE}" /data/waved/playback.s16le
@@ -83,10 +95,11 @@ adb push "${SIGNAL_FILE}" /data/waved/playback.s16le
 # ---------------------------------------------------------------------------
 
 echo "==> Restarting waved"
-adb shell "killall waved 2>/dev/null; sleep 2; (setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &); sleep 5"
+stop_waved
+adb shell "(setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &); sleep 5"
 
 echo "==> Confirming waved is up"
-WAVED_PID=$(adb shell "for p in /proc/[0-9]*; do if [ -f \$p/comm ]; then n=\$(cat \$p/comm 2>/dev/null); if [ \"\$n\" = \"waved\" ]; then echo \${p#/proc/}; break; fi; fi; done" | tr -d '\r\n')
+WAVED_PID=$(waved_pids | head -1 | tr -d '\n')
 if [ -z "$WAVED_PID" ]; then
     echo "ERROR: waved did not start. Log:"
     adb shell "cat /tmp/waved.log 2>/dev/null | head -40" || true
@@ -98,22 +111,34 @@ echo "==> Setting speaker volume to ${DEVICE_SPEAKER_VOL_PCT}%"
 adb shell "amixer sset '5707_A Master' ${DEVICE_SPEAKER_VOL_PCT}% 2>/dev/null || amixer sset 'Master' ${DEVICE_SPEAKER_VOL_PCT}% 2>/dev/null || true" | tail -3
 
 # ---------------------------------------------------------------------------
-# Helper: read a Python expression from /tmp/audio_stats.json
+# Helper: read one internally consistent /tmp/audio_stats.json snapshot.
 # ---------------------------------------------------------------------------
 
-read_stats_field() {
-    local expr="$1"
-    adb shell "cat /tmp/audio_stats.json 2>/dev/null" | python3 -c "
+read_stats_snapshot() {
+    adb shell "cat /tmp/audio_stats.json 2>/dev/null" | python3 -c '
 import json, sys
-try:
-    s = json.load(sys.stdin)
-except Exception:
-    print('null'); sys.exit(0)
-try:
-    print(${expr})
-except Exception:
-    print('null')
-"
+s = json.load(sys.stdin)
+a = s.get("aec") or {}
+values = [
+    s.get("mic_post_aec_rms"),
+    (s.get("rms_per_channel") or [0])[0],
+    (s.get("reference_rms") or [0])[0],
+    a.get("mic_pre_aec_rms"),
+    a.get("mic_post_linear_aec_rms"),
+    a.get("mic_post_residual_echo_rms"),
+    a.get("mic_post_noise_suppression_rms"),
+    a.get("mic_uplink_rms"),
+    a.get("linear_erle_db"),
+    a.get("effective_echo_suppression_db"),
+    1 if a.get("residual_echo_suppression_active") else 0,
+    s.get("mic_gain_db"),
+    s.get("recording_limiter_reduction_db"),
+    s.get("xrun_count", 0),
+    s.get("raw_frames_dropped", 0),
+    s.get("processed_frames_dropped", 0),
+]
+print("\t".join("null" if value is None else str(value) for value in values))
+'
 }
 
 # ---------------------------------------------------------------------------
@@ -123,10 +148,9 @@ except Exception:
 echo "==> Baseline (2 s of room noise)"
 echo "   >>> You may start speaking into the mic now (near-end). <<<"
 sleep 2
-BASELINE_POST=$(read_stats_field "s.get('mic_post_aec_rms', 'null')")
-BASELINE_MIC0=$(read_stats_field "s['rms_per_channel'][0]")
-BASELINE_REF=$(read_stats_field "s['reference_rms'][0] if s.get('reference_rms') else 0")
-echo "  mic_rms[0]=${BASELINE_MIC0}  mic_post_aec_rms=${BASELINE_POST}  reference_rms[0]=${BASELINE_REF}"
+IFS=$'\t' read -r BASELINE_POST BASELINE_MIC0 BASELINE_REF BASELINE_PRE _ \
+    <<<"$(read_stats_snapshot)"
+echo "  raw_mic[0]=${BASELINE_MIC0}  pre_aec=${BASELINE_PRE}  legacy_uplink=${BASELINE_POST}  reference=${BASELINE_REF}"
 
 # ---------------------------------------------------------------------------
 # Trigger SIGUSR2 — waved plays the speech-band file through its speaker
@@ -140,10 +164,13 @@ adb shell "kill -USR2 ${WAVED_PID}"
 sleep 2
 
 echo "==> Sampling during playback (t+2 s)"
-PLAY_POST=$(read_stats_field "s.get('mic_post_aec_rms', 'null')")
-PLAY_MIC0=$(read_stats_field "s['rms_per_channel'][0]")
-PLAY_REF=$(read_stats_field "s['reference_rms'][0] if s.get('reference_rms') else 0")
-echo "  mic_rms[0]=${PLAY_MIC0}  mic_post_aec_rms=${PLAY_POST}  reference_rms[0]=${PLAY_REF}"
+IFS=$'\t' read -r PLAY_POST PLAY_MIC0 PLAY_REF PLAY_PRE PLAY_LINEAR \
+    PLAY_RESIDUAL PLAY_NS PLAY_UPLINK PLAY_LINEAR_ERLE PLAY_EFFECTIVE \
+    RESIDUAL_ACTIVE MIC_GAIN_DB LIMITER_DB XRUNS RAW_DROPS PROCESSED_DROPS \
+    <<<"$(read_stats_snapshot)"
+echo "  pre=${PLAY_PRE} linear=${PLAY_LINEAR} residual=${PLAY_RESIDUAL} ns=${PLAY_NS} uplink=${PLAY_UPLINK} ref=${PLAY_REF}"
+echo "  linear_erle=${PLAY_LINEAR_ERLE}dB effective=${PLAY_EFFECTIVE}dB residual_active=${RESIDUAL_ACTIVE}"
+echo "  mic_gain=${MIC_GAIN_DB}dB limiter=${LIMITER_DB}dB xruns=${XRUNS} raw_drops=${RAW_DROPS} processed_drops=${PROCESSED_DROPS}"
 
 # Wait for the signal to finish + 2 s for decay.
 REMAINING=$(( SIGNAL_DURATION_S - 2 + 2 ))
@@ -151,8 +178,7 @@ echo "==> Waiting ${REMAINING}s for playback to finish and speaker to decay..."
 sleep ${REMAINING}
 
 echo "==> Post-decay sample"
-DECAY_POST=$(read_stats_field "s.get('mic_post_aec_rms', 'null')")
-DECAY_REF=$(read_stats_field "s['reference_rms'][0] if s.get('reference_rms') else 0")
+IFS=$'\t' read -r DECAY_POST _ DECAY_REF _ <<<"$(read_stats_snapshot)"
 echo "  mic_post_aec_rms=${DECAY_POST}  reference_rms[0]=${DECAY_REF}"
 
 # ---------------------------------------------------------------------------
@@ -172,26 +198,31 @@ fi
 
 echo "==> Evaluating"
 python3 - \
-    "${BASELINE_POST}" "${BASELINE_MIC0}" "${BASELINE_REF}" \
-    "${PLAY_POST}" "${PLAY_MIC0}" "${PLAY_REF}" \
-    "${DECAY_REF}" "${ERLE_THRESHOLD_DB}" \
+    "${BASELINE_PRE}" "${BASELINE_REF}" \
+    "${PLAY_PRE}" "${PLAY_REF}" "${PLAY_LINEAR_ERLE}" "${PLAY_EFFECTIVE}" \
+    "${RESIDUAL_ACTIVE}" "${DECAY_REF}" \
+    "${LINEAR_ERLE_THRESHOLD_DB}" "${EFFECTIVE_SUPPRESSION_THRESHOLD_DB}" \
+    "${XRUNS}" "${RAW_DROPS}" "${PROCESSED_DROPS}" \
     "${SIGNAL_DURATION_S}" "${OUT_DIR}" <<'PY'
 import sys, math, struct, os
 
 def f(x):
     return float(x) if x not in ('null', 'None', '') else 0.0
 
-(bl_post, bl_mic0, bl_ref,
- pl_post, pl_mic0, pl_ref,
- dc_ref,  thresh,
+(bl_pre, bl_ref, pl_pre, pl_ref, linear_erle, effective,
+ residual_active, dc_ref, linear_thresh, effective_thresh,
+ xruns, raw_drops, processed_drops,
  sig_dur, out_dir) = sys.argv[1:]
 
-bl_post, bl_mic0, bl_ref = f(bl_post), f(bl_mic0), f(bl_ref)
-pl_post, pl_mic0, pl_ref = f(pl_post), f(pl_mic0), f(pl_ref)
-dc_ref, thresh = f(dc_ref), f(thresh)
+bl_pre, bl_ref = f(bl_pre), f(bl_ref)
+pl_pre, pl_ref = f(pl_pre), f(pl_ref)
+linear_erle, effective = f(linear_erle), f(effective)
+residual_active, dc_ref = f(residual_active), f(dc_ref)
+linear_thresh, effective_thresh = f(linear_thresh), f(effective_thresh)
+xruns, raw_drops, processed_drops = f(xruns), f(raw_drops), f(processed_drops)
 
-print(f"\n  baseline: mic0={bl_mic0:.2f}  post={bl_post:.3f}  ref={bl_ref:.2f}")
-print(f"  play:     mic0={pl_mic0:.2f}  post={pl_post:.3f}  ref={pl_ref:.2f}")
+print(f"\n  baseline: pre={bl_pre:.2f}  ref={bl_ref:.2f}")
+print(f"  play:     pre={pl_pre:.2f}  ref={pl_ref:.2f}")
 print(f"  decay:    ref={dc_ref:.2f}")
 
 errors = []
@@ -201,18 +232,21 @@ if pl_ref <= max(bl_ref + 10.0, 10.0):
     errors.append(f"reference_rms did not rise (baseline={bl_ref:.2f}, play={pl_ref:.2f})")
 
 # 2. Mic heard the echo (speaker was loud enough to test AEC).
-if pl_mic0 < bl_mic0 + 5.0:
+if pl_pre < bl_pre + 5.0:
     errors.append(
-        f"mic_rms[0] did not rise appreciably "
-        f"(baseline={bl_mic0:.2f}, play={pl_mic0:.2f}) — "
+        f"pre-AEC mic did not rise appreciably "
+        f"(baseline={bl_pre:.2f}, play={pl_pre:.2f}) — "
         f"speaker too quiet for ERLE measurement; try higher DEVICE_SPEAKER_VOL_PCT"
     )
-else:
-    # 3. ERLE: far-end echo was cancelled from post-AEC signal.
-    erle = 20.0 * math.log10(pl_mic0 / max(pl_post, 0.01))
-    print(f"\n  ERLE = {erle:.1f} dB  (threshold {thresh:.1f} dB)")
-    if erle < thresh:
-        errors.append(f"ERLE {erle:.1f} dB < threshold {thresh:.1f} dB")
+
+print(f"\n  linear ERLE = {linear_erle:.1f} dB (threshold {linear_thresh:.1f} dB)")
+print(f"  effective suppression = {effective:.1f} dB (threshold {effective_thresh:.1f} dB)")
+if linear_erle < linear_thresh:
+    errors.append(f"linear ERLE {linear_erle:.1f} dB < threshold {linear_thresh:.1f} dB")
+if effective < effective_thresh:
+    errors.append(f"effective suppression {effective:.1f} dB < threshold {effective_thresh:.1f} dB")
+if residual_active != 1.0:
+    errors.append("residual echo suppression is not active")
 
 # 4. Reference decayed after playback.
 if dc_ref > max(pl_ref * 0.3, 20.0):
@@ -220,6 +254,8 @@ if dc_ref > max(pl_ref * 0.3, 20.0):
         f"reference_rms did not decay after playback "
         f"(play={pl_ref:.2f}, decay={dc_ref:.2f})"
     )
+if xruns or raw_drops or processed_drops:
+    errors.append(f"integrity counters non-zero: xruns={xruns:g} raw={raw_drops:g} processed={processed_drops:g}")
 
 # 5. PCM file analysis: verify post-AEC level stayed near baseline.
 pcm_path = os.path.join(out_dir, "mic_capture.pcm")

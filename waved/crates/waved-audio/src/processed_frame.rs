@@ -1,15 +1,85 @@
-//! DSP boundary frame: mic signal after AEC + NS in float, paired with the
-//! raw 8-ch mic the meeting recorder / stats still want.
+//! DSP boundary frame: mic signal after linear AEC, residual echo suppression,
+//! environmental NS, user gain, and limiting, paired with the raw 8-ch mic
+//! the meeting recorder / stats still want.
 //!
 //! See spec §4 for why we carry both the processed mono and the raw 8-ch
 //! buffer: stats want per-channel RMS on raw mic, meeting replay wants raw
 //! for future reprocessing, and the uplink wants the processed mono.
 
 use crate::callbacks::AudioFrame;
+use serde::Serialize;
+
+/// Reference activity floor in the i16 RMS domain. ERLE is not meaningful
+/// below this level, so derived suppression fields stay absent.
+pub const AEC_REFERENCE_ACTIVITY_RMS: f32 = 10.0;
+
+/// Metrics captured at exact boundaries of one processed audio frame.
+///
+/// All RMS fields use the i16 scale even though some intermediate buffers are
+/// f32. Pre-gain fields therefore remain directly comparable without the
+/// software microphone gain corrupting ERLE.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AecFrameMetrics {
+    pub reference_rms: f32,
+    pub mic_pre_aec_rms: f32,
+    pub mic_post_linear_aec_rms: f32,
+    pub mic_post_residual_echo_rms: f32,
+    pub mic_post_noise_suppression_rms: f32,
+    pub mic_uplink_rms: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub linear_erle_db: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_echo_suppression_db: Option<f32>,
+    pub residual_echo_suppression_active: bool,
+    pub residual_echo_suppress_db: u8,
+    pub residual_echo_suppress_active_db: u8,
+    pub noise_suppression_backend: String,
+}
+
+impl Default for AecFrameMetrics {
+    fn default() -> Self {
+        Self {
+            reference_rms: 0.0,
+            mic_pre_aec_rms: 0.0,
+            mic_post_linear_aec_rms: 0.0,
+            mic_post_residual_echo_rms: 0.0,
+            mic_post_noise_suppression_rms: 0.0,
+            mic_uplink_rms: 0.0,
+            linear_erle_db: None,
+            effective_echo_suppression_db: None,
+            residual_echo_suppression_active: false,
+            residual_echo_suppress_db: 0,
+            residual_echo_suppress_active_db: 0,
+            noise_suppression_backend: "off".to_string(),
+        }
+    }
+}
+
+impl AecFrameMetrics {
+    pub fn update_suppression(&mut self) {
+        self.linear_erle_db = None;
+        self.effective_echo_suppression_db = None;
+        if self.reference_rms < AEC_REFERENCE_ACTIVITY_RMS {
+            return;
+        }
+        self.linear_erle_db = attenuation_db(self.mic_pre_aec_rms, self.mic_post_linear_aec_rms);
+        self.effective_echo_suppression_db =
+            attenuation_db(self.mic_pre_aec_rms, self.mic_uplink_rms);
+    }
+}
+
+fn attenuation_db(input_rms: f32, output_rms: f32) -> Option<f32> {
+    if !input_rms.is_finite() || !output_rms.is_finite() || input_rms <= 0.0 || output_rms < 0.0 {
+        return None;
+    }
+    let db = 20.0 * (input_rms / output_rms.max(0.01)).log10();
+    Some(db.clamp(-120.0, 120.0))
+}
 
 #[derive(Debug, Clone)]
 pub struct ProcessedAudioFrame {
-    /// Post-AEC, post-NS mono signal in [-1.0, 1.0].
+    /// Final uplink mono signal after all AEC, optional environmental NS,
+    /// user gain, and limiting, in [-1.0, 1.0].
     pub mic_mono_f32: Vec<f32>,
     /// Optional stereo pair produced by Stereo beam mode (L, R).
     /// Same length as `mic_mono_f32` when present.
@@ -23,6 +93,7 @@ pub struct ProcessedAudioFrame {
     /// recording (diagnostic sidecar) and stats.
     pub raw_mic_i16: Vec<i16>,
     pub raw_mic_channels: u16,
+    pub aec_metrics: AecFrameMetrics,
 }
 
 impl ProcessedAudioFrame {
@@ -44,6 +115,7 @@ impl ProcessedAudioFrame {
             timestamp_ms: frame.timestamp_ms,
             raw_mic_i16: frame.data.clone(),
             raw_mic_channels: frame.channels,
+            aec_metrics: AecFrameMetrics::default(),
         }
     }
 
@@ -127,7 +199,13 @@ mod tests {
         // expected and matches conventional DSP scaling.
         for (orig, rt) in src.iter().zip(back.iter()) {
             let diff = (*orig as i32 - *rt as i32).abs();
-            assert!(diff <= 1, "i16 {} roundtripped to {} (diff {})", orig, rt, diff);
+            assert!(
+                diff <= 1,
+                "i16 {} roundtripped to {} (diff {})",
+                orig,
+                rt,
+                diff
+            );
         }
     }
 
@@ -222,5 +300,42 @@ mod tests {
         assert_eq!(p.reference_f32.len(), 4);
         // f32 scaled exactly
         assert!((p.mic_mono_f32[0] - 1000.0 / 32768.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn aec_metrics_compute_same_frame_suppression() {
+        let mut metrics = AecFrameMetrics {
+            reference_rms: 100.0,
+            mic_pre_aec_rms: 1000.0,
+            mic_post_linear_aec_rms: 100.0,
+            mic_post_residual_echo_rms: 10.0,
+            mic_post_noise_suppression_rms: 10.0,
+            mic_uplink_rms: 40.0,
+            ..AecFrameMetrics::default()
+        };
+        metrics.update_suppression();
+        assert!((metrics.linear_erle_db.unwrap() - 20.0).abs() < 0.01);
+        assert!((metrics.effective_echo_suppression_db.unwrap() - 27.9588).abs() < 0.01);
+    }
+
+    #[test]
+    fn aec_metrics_omit_suppression_below_reference_floor() {
+        let mut metrics = AecFrameMetrics {
+            reference_rms: AEC_REFERENCE_ACTIVITY_RMS - 0.1,
+            mic_pre_aec_rms: 1000.0,
+            mic_post_linear_aec_rms: 10.0,
+            mic_uplink_rms: 10.0,
+            ..AecFrameMetrics::default()
+        };
+        metrics.update_suppression();
+        assert_eq!(metrics.linear_erle_db, None);
+        assert_eq!(metrics.effective_echo_suppression_db, None);
+    }
+
+    #[test]
+    fn from_raw_initializes_empty_aec_metrics() {
+        let frame = AudioFrame::mic_only(vec![1, 2], 1, 48_000, 0);
+        let p = ProcessedAudioFrame::from_raw(&frame, &[1, 2], &[0, 0]);
+        assert_eq!(p.aec_metrics, AecFrameMetrics::default());
     }
 }

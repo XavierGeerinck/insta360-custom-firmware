@@ -38,10 +38,42 @@ pub struct AudioConfig {
     pub uac: Option<UacConfig>,
     #[serde(default)]
     pub hid: Option<HidConfig>,
+    /// Conferencing echo-control tuning. This is device DSP calibration,
+    /// separate from user-facing noise reduction and microphone volume.
+    #[serde(default)]
+    pub aec: AecConfig,
 }
 
 fn default_mic_geometry() -> Option<MicGeometry> {
     Some(MicGeometry::default())
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct AecConfig {
+    /// Far-end-only residual echo attenuation magnitude in dB. Speex stores
+    /// the value as negative dB internally.
+    #[serde(default = "default_residual_echo_suppress_db")]
+    pub residual_echo_suppress_db: u8,
+    /// Residual echo attenuation magnitude while near-end speech is active.
+    /// Lower than the far-end-only value to preserve double-talk.
+    #[serde(default = "default_residual_echo_suppress_active_db")]
+    pub residual_echo_suppress_active_db: u8,
+}
+
+fn default_residual_echo_suppress_db() -> u8 {
+    40
+}
+fn default_residual_echo_suppress_active_db() -> u8 {
+    15
+}
+
+impl Default for AecConfig {
+    fn default() -> Self {
+        Self {
+            residual_echo_suppress_db: default_residual_echo_suppress_db(),
+            residual_echo_suppress_active_db: default_residual_echo_suppress_active_db(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -110,11 +142,21 @@ pub struct UacConfig {
     pub host_mute_target: HostMuteTarget,
 }
 
-fn default_uac_enabled() -> bool { true }
-fn default_uac_dev() -> String { "hw:1,0".to_string() }
-fn default_uac_period() -> usize { 1024 }
-fn default_uac_periods() -> u32 { 4 }
-fn default_uac_mixer_card() -> String { "hw:1".to_string() }
+fn default_uac_enabled() -> bool {
+    true
+}
+fn default_uac_dev() -> String {
+    "hw:1,0".to_string()
+}
+fn default_uac_period() -> usize {
+    1024
+}
+fn default_uac_periods() -> u32 {
+    4
+}
+fn default_uac_mixer_card() -> String {
+    "hw:1".to_string()
+}
 
 impl Default for UacConfig {
     fn default() -> Self {
@@ -142,10 +184,18 @@ pub struct HidConfig {
     pub volume_step_rate_hz: u32,
 }
 
-fn default_hid_enabled() -> bool { true }
-fn default_hid_device() -> String { "/dev/hidg0".to_string() }
-fn default_hid_press_release_gap_ms() -> u64 { 10 }
-fn default_hid_volume_step_rate_hz() -> u32 { 40 }
+fn default_hid_enabled() -> bool {
+    true
+}
+fn default_hid_device() -> String {
+    "/dev/hidg0".to_string()
+}
+fn default_hid_press_release_gap_ms() -> u64 {
+    10
+}
+fn default_hid_volume_step_rate_hz() -> u32 {
+    40
+}
 
 impl Default for HidConfig {
     fn default() -> Self {
@@ -181,8 +231,12 @@ pub struct CaptureConfig {
     pub pdm_gain: u8,
 }
 
-fn default_sample_rate() -> u32 { 48000 }
-fn default_pdm_gain() -> u8 { 24 }
+fn default_sample_rate() -> u32 {
+    48000
+}
+fn default_pdm_gain() -> u8 {
+    24
+}
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[allow(non_camel_case_types)] // intentional: matches ALSA format string names
@@ -222,21 +276,47 @@ impl AudioConfig {
             Ok(s) => match Self::from_json(&s) {
                 Ok(cfg) => (cfg, ConfigSource::File),
                 Err(e) => {
-                    warn!("audio config at {} invalid ({e}), using fallback", path.display());
+                    warn!(
+                        "audio config at {} invalid ({e}), using fallback",
+                        path.display()
+                    );
                     (Self::default_embedded(), ConfigSource::Fallback)
                 }
             },
             Err(e) => {
-                warn!("audio config at {} unreadable ({e}), using fallback", path.display());
+                warn!(
+                    "audio config at {} unreadable ({e}), using fallback",
+                    path.display()
+                );
                 (Self::default_embedded(), ConfigSource::Fallback)
             }
         }
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.version != 3 && self.version != 4 {
+        if self.version != 3 && self.version != 4 && self.version != 5 {
             return Err(ConfigError::Invalid(format!(
-                "unsupported config version {}, expected 3 or 4", self.version
+                "unsupported config version {}, expected 3, 4, or 5",
+                self.version
+            )));
+        }
+        if self.aec.residual_echo_suppress_db > 60 {
+            return Err(ConfigError::Invalid(format!(
+                "aec.residual_echo_suppress_db must be in [0, 60], got {}",
+                self.aec.residual_echo_suppress_db
+            )));
+        }
+        if self.aec.residual_echo_suppress_active_db > 60 {
+            return Err(ConfigError::Invalid(format!(
+                "aec.residual_echo_suppress_active_db must be in [0, 60], got {}",
+                self.aec.residual_echo_suppress_active_db
+            )));
+        }
+        if self.aec.residual_echo_suppress_active_db > self.aec.residual_echo_suppress_db {
+            return Err(ConfigError::Invalid(format!(
+                "aec.residual_echo_suppress_active_db ({}) must not exceed \
+                 aec.residual_echo_suppress_db ({})",
+                self.aec.residual_echo_suppress_active_db, self.aec.residual_echo_suppress_db
             )));
         }
         if self.capture.mic_channels == 0 {
@@ -247,7 +327,8 @@ impl AudioConfig {
         }
         if self.capture.pdm_gain > 48 {
             return Err(ConfigError::Invalid(format!(
-                "pdm_gain must be in [0, 48], got {}", self.capture.pdm_gain
+                "pdm_gain must be in [0, 48], got {}",
+                self.capture.pdm_gain
             )));
         }
         if self.period_frames == 0 {
@@ -273,25 +354,33 @@ impl AudioConfig {
                 return Err(ConfigError::Invalid("playback.channels must be > 0".into()));
             }
             if p.sample_rate == 0 {
-                return Err(ConfigError::Invalid("playback.sample_rate must be > 0".into()));
+                return Err(ConfigError::Invalid(
+                    "playback.sample_rate must be > 0".into(),
+                ));
             }
             if p.period_frames == 0 {
-                return Err(ConfigError::Invalid("playback.period_frames must be > 0".into()));
+                return Err(ConfigError::Invalid(
+                    "playback.period_frames must be > 0".into(),
+                ));
             }
             if p.buffer_periods < 2 {
-                return Err(ConfigError::Invalid("playback.buffer_periods must be >= 2".into()));
+                return Err(ConfigError::Invalid(
+                    "playback.buffer_periods must be >= 2".into(),
+                ));
             }
             if let Some(dsp) = &p.dsp {
                 for (name, t) in [("voice", &dsp.voice), ("media", &dsp.media)] {
                     if let Some(t) = t {
                         if !(20.0..=200.0).contains(&t.hpf_cutoff_hz) {
                             return Err(ConfigError::Invalid(format!(
-                                "{name}.hpf_cutoff_hz must be in [20, 200], got {}", t.hpf_cutoff_hz
+                                "{name}.hpf_cutoff_hz must be in [20, 200], got {}",
+                                t.hpf_cutoff_hz
                             )));
                         }
                         if !(-3.0..=0.0).contains(&t.limiter.ceiling_dbfs) {
                             return Err(ConfigError::Invalid(format!(
-                                "{name}.limiter.ceiling_dbfs must be in [-3, 0], got {}", t.limiter.ceiling_dbfs
+                                "{name}.limiter.ceiling_dbfs must be in [-3, 0], got {}",
+                                t.limiter.ceiling_dbfs
                             )));
                         }
                         let cf = t.mbagc.crossover_freq_hz;
@@ -316,11 +405,17 @@ impl AudioConfig {
                 return Err(ConfigError::Invalid("uac.period_frames must be > 0".into()));
             }
             if u.buffer_periods < 2 {
-                return Err(ConfigError::Invalid("uac.buffer_periods must be >= 2".into()));
+                return Err(ConfigError::Invalid(
+                    "uac.buffer_periods must be >= 2".into(),
+                ));
             }
-            if u.downstream_device.is_empty() || u.upstream_device.is_empty()
-               || u.mixer_card.is_empty() {
-                return Err(ConfigError::Invalid("uac device strings must be non-empty".into()));
+            if u.downstream_device.is_empty()
+                || u.upstream_device.is_empty()
+                || u.mixer_card.is_empty()
+            {
+                return Err(ConfigError::Invalid(
+                    "uac device strings must be non-empty".into(),
+                ));
             }
         }
         Ok(())
@@ -340,9 +435,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn embedded_default_parses_and_is_version_4() {
+    fn embedded_default_parses_and_is_version_5() {
         let cfg = AudioConfig::default_embedded();
-        assert_eq!(cfg.version, 4);
+        assert_eq!(cfg.version, 5);
         assert_eq!(cfg.capture.mic_device, "hw:0,2");
         assert_eq!(cfg.capture.mic_channels, 8);
         assert!(cfg.capture.reference_device.is_none());
@@ -355,10 +450,13 @@ mod tests {
     }
 
     #[test]
-    fn embedded_default_is_v4_with_wave_geometry() {
+    fn embedded_default_is_v5_with_wave_geometry() {
         let cfg = AudioConfig::default_embedded();
-        assert_eq!(cfg.version, 4);
-        let geom = cfg.mic_geometry.as_ref().expect("default includes geometry");
+        assert_eq!(cfg.version, 5);
+        let geom = cfg
+            .mic_geometry
+            .as_ref()
+            .expect("default includes geometry");
         assert_eq!(geom.positions_mm.len(), 8);
         assert_eq!(geom.positions_mm[0].z, 0.0);
         assert_eq!(geom.positions_mm[4].z, -78.2);
@@ -373,14 +471,20 @@ mod tests {
             "period_frames":1024,"buffer_periods":8
         }"#;
         let cfg = AudioConfig::from_json(json).unwrap();
-        assert!(cfg.mic_geometry.is_some(), "missing geometry should default");
+        assert!(
+            cfg.mic_geometry.is_some(),
+            "missing geometry should default"
+        );
         assert_eq!(cfg.mic_geometry.unwrap().positions_mm[0].z, 0.0);
     }
 
     #[test]
     fn rejects_v2_version_now() {
         let json = r#"{"version":2,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -391,7 +495,10 @@ mod tests {
             "playback":{"device":"hw:0,1","channels":2,"sample_rate":48000,"format":"S16_LE","period_frames":1024,"buffer_periods":4},
             "period_frames":1024,"buffer_periods":8
         }"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -409,20 +516,29 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version() {
-        let json = r#"{"version":5,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        let json = r#"{"version":6,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
     fn rejects_zero_mic_channels() {
         let json = r#"{"version":3,"capture":{"mic_device":"hw:0,2","mic_channels":0,"mic_sample_rate":48000,"mic_format":"S32_LE"},"period_frames":256,"buffer_periods":4}"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
     fn rejects_partial_reference_config() {
         let json = r#"{"version":3,"capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE","reference_device":"hw:0,3"},"period_frames":256,"buffer_periods":4}"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -434,7 +550,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_json() {
-        assert!(matches!(AudioConfig::from_json("{not json"), Err(ConfigError::Parse(_))));
+        assert!(matches!(
+            AudioConfig::from_json("{not json"),
+            Err(ConfigError::Parse(_))
+        ));
     }
 
     #[test]
@@ -468,15 +587,17 @@ mod tests {
             }
         }"#;
         let err = AudioConfig::from_json(bad).expect_err("wrong-shape eq must fail");
-        assert!(matches!(err, ConfigError::Parse(_)),
-                "expected Parse error for malformed eq array, got {err:?}");
+        assert!(
+            matches!(err, ConfigError::Parse(_)),
+            "expected Parse error for malformed eq array, got {err:?}"
+        );
     }
 
     #[test]
     fn load_or_default_missing_file_uses_fallback() {
         let (cfg, src) = AudioConfig::load_or_default(Path::new("/definitely/not/here.json"));
         assert_eq!(src, ConfigSource::Fallback);
-        assert_eq!(cfg.version, 4);
+        assert_eq!(cfg.version, 5);
     }
 
     #[test]
@@ -676,7 +797,10 @@ mod tests {
             "period_frames": 1024,
             "buffer_periods": 8
         }"#;
-        assert!(matches!(AudioConfig::from_json(json), Err(ConfigError::Invalid(_))));
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -840,5 +964,79 @@ mod tests {
         json = json.replace("\"hpf_cutoff_hz\":5.0", "\"hpf_cutoff_hz\":80.0");
         let cfg = AudioConfig::from_json(&json).expect("80 Hz should validate");
         assert_eq!(cfg.version, 4);
+    }
+
+    #[test]
+    fn embedded_default_is_v5_with_residual_echo_tuning() {
+        let cfg = AudioConfig::default_embedded();
+        assert_eq!(cfg.version, 5);
+        assert_eq!(cfg.aec, AecConfig::default());
+        assert_eq!(cfg.aec.residual_echo_suppress_db, 40);
+        assert_eq!(cfg.aec.residual_echo_suppress_active_db, 15);
+    }
+
+    #[test]
+    fn v3_and_v4_without_aec_use_residual_echo_defaults() {
+        for version in [3, 4] {
+            let json = format!(
+                r#"{{"version":{version},"capture":{{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"}},"period_frames":256,"buffer_periods":4}}"#
+            );
+            let cfg = AudioConfig::from_json(&json).expect("legacy config should parse");
+            assert_eq!(cfg.aec, AecConfig::default());
+        }
+    }
+
+    #[test]
+    fn v5_aec_overrides_parse() {
+        let json = r#"{
+            "version":5,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames":256,
+            "buffer_periods":4,
+            "aec":{"residual_echo_suppress_db":50,"residual_echo_suppress_active_db":20}
+        }"#;
+        let cfg = AudioConfig::from_json(json).expect("v5 AEC config should parse");
+        assert_eq!(cfg.aec.residual_echo_suppress_db, 50);
+        assert_eq!(cfg.aec.residual_echo_suppress_active_db, 20);
+    }
+
+    #[test]
+    fn aec_attenuation_boundaries_are_accepted() {
+        for (far, active) in [(0, 0), (60, 60)] {
+            let json = format!(
+                r#"{{"version":5,"capture":{{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"}},"period_frames":256,"buffer_periods":4,"aec":{{"residual_echo_suppress_db":{far},"residual_echo_suppress_active_db":{active}}}}}"#
+            );
+            AudioConfig::from_json(&json).expect("AEC attenuation boundary should parse");
+        }
+    }
+
+    #[test]
+    fn aec_attenuation_above_60_is_rejected() {
+        let json = r#"{
+            "version":5,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames":256,
+            "buffer_periods":4,
+            "aec":{"residual_echo_suppress_db":61,"residual_echo_suppress_active_db":15}
+        }"#;
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn active_aec_attenuation_cannot_exceed_far_end_attenuation() {
+        let json = r#"{
+            "version":5,
+            "capture":{"mic_device":"hw:0,2","mic_channels":8,"mic_sample_rate":48000,"mic_format":"S32_LE"},
+            "period_frames":256,
+            "buffer_periods":4,
+            "aec":{"residual_echo_suppress_db":20,"residual_echo_suppress_active_db":21}
+        }"#;
+        assert!(matches!(
+            AudioConfig::from_json(json),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 }

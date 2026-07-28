@@ -445,6 +445,87 @@ promotion to `AudioConfig` only if tuning evidence demands.
 **On-device test:** test 6 of `scripts/test-doa-improvements.sh`
 (subjective — operator listens to moving-source recording).
 
+## Full-duplex AEC pipeline
+
+The conferencing uplink runs the following order for every microphone frame:
+
+```
+8-channel capture → beamforming → Speex linear AEC
+    → linked Speex residual-echo suppression
+    → optional environmental noise suppression
+    → user mic gain → recording limiter → UAC2 / meeting recording
+```
+
+Residual echo suppression is independent of the user-facing noise-reduction
+setting and remains active for `NrLevel::Off`. In residual-only mode, Speex's
+spectral engine stays enabled because that switch also gates echo suppression,
+while environmental noise attenuation is explicitly set to 0 dB. If DFN3 is
+unavailable for Low/Med/High, the already-linked Speex preprocessor enables its
+15 dB environmental denoise path instead of constructing a second echo-linked
+native state.
+
+Audio-config version 5 adds:
+
+```json
+"aec": {
+  "residual_echo_suppress_db": 40,
+  "residual_echo_suppress_active_db": 15
+}
+```
+
+Both values are positive attenuation magnitudes, limited to 0–60 dB, with the
+active/double-talk value no greater than the far-end-only value. Versions 3
+and 4 remain accepted and receive the 40/15 defaults.
+
+Speex preprocessing has one analysis-frame of inherent delay. The production
+candidate preserves the proven 1024-sample/200 ms primary linear echo state
+and runs the residual estimator plus its linked preprocessor at 128 samples
+with a 128 ms shadow tail. Host cross-correlation measures a fixed 2.67 ms
+shift at 48 kHz, with no Rust-side queue. The preprocessor is primed with
+silence at construction. Host tests require silent-reference near-end loss
+≤0.5 dB and synthetic double-talk loss ≤3 dB.
+
+Native alternatives were rejected rather than weakening those gates. Linking
+a 128-sample preprocessor directly to the 1024-sample echo state corrupted
+native memory because Speex requires matching linked frame sizes. One matched
+1024-sample state was CPU-efficient but shifted output by a full 21.33 ms
+frame and broke first-frame service tests. One matched 512-sample state cut
+that delay to 10.67 ms but used more CPU because it ran twice as many
+transforms. A 200 ms shadow tail passed quality but was needlessly expensive;
+128 ms is the shortest tested tail that still keeps synthetic double-talk loss
+within 3 dB.
+
+`/tmp/audio_stats.json` contains an `aec` object captured from the exact
+processed frame:
+
+- `mic_pre_aec_rms`
+- `mic_post_linear_aec_rms`
+- `mic_post_residual_echo_rms`
+- `mic_post_noise_suppression_rms`
+- `mic_uplink_rms`
+- `linear_erle_db` and `effective_echo_suppression_db`
+- residual-stage active/tuning fields and `noise_suppression_backend`
+
+Derived suppression values are omitted when the same frame's reference is
+below the activity floor. The legacy top-level `mic_post_aec_rms` name is kept
+for compatibility but means the **final uplink after all DSP, user gain, and
+limiting**. It must not be compared with a raw mic channel to calculate ERLE.
+
+Use `scripts/test-aec-on-device.sh` for the quick tone convergence check.
+`scripts/test-aec-conferencing.sh` requires `SPEECH_FIXTURE=/path/to/speech.wav`
+and is the real full-duplex gate. Both scripts read the same-frame metrics.
+
+On device `PSP_0000000000000000` at 100% speaker volume, an eight-second
+speech-shaped far-end fixture measured 27.0 dB linear ERLE and 36.1 dB final
+effective suppression after the configured 4× microphone gain. Reference RMS
+decayed to zero and all XRUN/raw/processed/UAC drop counters stayed at zero.
+An identical six-second playback CPU sample measured 1,894 process ticks
+versus 1,717 for the saved pre-residual build (+177 ticks, approximately
++29.5 percentage points of one core with USER_HZ=100). This exceeds the
+original +5-point provisional delta target, although the four-core device
+retained real-time integrity. Sustained bidirectional load and the live
+listener echo/delay report remain acceptance gates.
+
 ## Playback DSP Chain (SP#5)
 
 `PlaybackService::run_playback_loop` (in `crates/waved-audio/src/playback.rs`)
@@ -478,7 +559,8 @@ Switched at runtime via `Command::SetPlaybackPreset` or
   20.7 dB). The post-DSP tap actually delivers a *more* accurate reference
   than the pre-DSP tap — AEC sees what the speaker emits including EQ and
   limiting, so cancellation tightens slightly. Test: `scripts/test-aec-on-device.sh`
-  with `ERLE_THRESHOLD_DB=20.7`.
+  with `LINEAR_ERLE_THRESHOLD_DB=20.7`. This historical result predates the
+  residual stage; rerun the current same-frame acceptance after deployment.
 - **Bit-exact biquad regression**: `cargo test -p waved-audio --test biquad_regression`
   pins direct-form-1 + RBJ peaking against a Python f64 reference impulse
   response within 1e-6.

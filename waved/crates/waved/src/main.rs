@@ -215,6 +215,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             cfg.mic_geometry.clone().unwrap_or_default(),
             cfg.doa_backend,
         );
+        audio_svc.set_aec_config(cfg.aec.clone());
         audio_svc.set_recording_integrity(
             Arc::clone(&recording_integrity),
             integrity_tx.clone(),

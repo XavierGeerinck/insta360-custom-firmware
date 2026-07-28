@@ -20,7 +20,9 @@ pub struct SpeexPreprocessState {
 // we use are named.
 pub const SPEEX_PREPROCESS_SET_ECHO_STATE: c_int = 24;
 pub const SPEEX_PREPROCESS_SET_DENOISE: c_int = 0;
-pub const SPEEX_PREPROCESS_SET_NOISE_SUPPRESS: c_int = 6;
+pub const SPEEX_PREPROCESS_SET_NOISE_SUPPRESS: c_int = 18;
+pub const SPEEX_PREPROCESS_SET_ECHO_SUPPRESS: c_int = 20;
+pub const SPEEX_PREPROCESS_SET_ECHO_SUPPRESS_ACTIVE: c_int = 22;
 
 extern "C" {
     pub fn speex_echo_state_init(frame_size: c_int, filter_length: c_int) -> *mut SpeexEchoState;

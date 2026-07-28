@@ -2,16 +2,16 @@ pub mod aec;
 pub mod audio_config;
 pub mod beam;
 pub mod callbacks;
-pub mod doa;
 pub mod capture;
-pub mod mic_check;
-pub mod playback;
-pub mod processed_frame;
-pub mod stats_collector;
-pub mod spectrum;
+pub mod doa;
 pub mod fixtures;
 pub mod integrity;
 pub mod metrics;
+pub mod mic_check;
+pub mod playback;
+pub mod processed_frame;
+pub mod spectrum;
+pub mod stats_collector;
 
 #[cfg(feature = "simulate")]
 pub mod simulate;
@@ -25,12 +25,13 @@ use tracing::{info, warn};
 use waved_state::{AudioState, Command, NrLevel};
 
 use crate::aec::{speex, EchoCanceller, NoiseSuppressor};
+use crate::audio_config::AecConfig;
 use crate::beam::{steered::SteeredBeam, Beamformer, MicGeometry};
 use crate::callbacks::AudioFrame;
 use crate::doa::{DoaBackend, DoaEstimator, DoaFrame, DoaPublisher, SrpPhatEstimator};
 use crate::integrity::{AudioServiceExit, IntegritySignal, RecordingIntegrity};
 use crate::playback::dsp::limiter::{LimiterParams, LookaheadLimiter};
-use crate::processed_frame::{mix_to_mono, ProcessedAudioFrame};
+use crate::processed_frame::{mix_to_mono, AecFrameMetrics, ProcessedAudioFrame};
 
 /// Backend dispatch — owns one impl, not a trait object (only two impls,
 /// no value in dyn). GccPhat is the existing DoaEstimator; SrpPhat wraps
@@ -103,7 +104,11 @@ impl DoaBackendImpl {
                             let sx = alpha * p.cos() + (1.0 - alpha) * n.cos();
                             let sy = alpha * p.sin() + (1.0 - alpha) * n.sin();
                             let smoothed = sy.atan2(sx).to_degrees();
-                            *smoothed_az = if smoothed < 0.0 { smoothed + 360.0 } else { smoothed };
+                            *smoothed_az = if smoothed < 0.0 {
+                                smoothed + 360.0
+                            } else {
+                                smoothed
+                            };
                             *smoothed_el = alpha * *smoothed_el + (1.0 - alpha) * r.elevation_deg;
                         } else {
                             *smoothed_az = r.azimuth_deg;
@@ -164,28 +169,99 @@ pub fn compute_vu(samples: &[i16], bands: usize) -> Vec<f32> {
         .collect()
 }
 
+enum AecProcessor {
+    Coupled(speex::SpeexAecStage),
+    LinearOnly {
+        echo: speex::SpeexEchoCanceller,
+        config: AecConfig,
+    },
+}
+
+impl AecProcessor {
+    fn process_linear(&mut self, mic: &[i16], reference: &[i16], out: &mut [i16]) {
+        match self {
+            Self::Coupled(stage) => stage.process_linear(mic, reference, out),
+            Self::LinearOnly { echo, .. } => echo.process(mic, reference, out),
+        }
+    }
+
+    fn process_residual(&mut self, samples: &mut [i16]) {
+        if let Self::Coupled(stage) = self {
+            stage.process_residual(samples);
+        }
+    }
+
+    fn enable_speex_denoise(&mut self) -> Result<(), speex::SpeexInitError> {
+        match self {
+            Self::Coupled(stage) => stage.set_denoise(true),
+            Self::LinearOnly { .. } => Err(speex::SpeexInitError::PreprocessorAllocation),
+        }
+    }
+
+    fn residual_active(&self) -> bool {
+        matches!(self, Self::Coupled(_))
+    }
+
+    fn config(&self) -> &AecConfig {
+        match self {
+            Self::Coupled(stage) => stage.config(),
+            Self::LinearOnly { config, .. } => config,
+        }
+    }
+}
+
+struct DspChain {
+    aec: AecProcessor,
+    environmental_ns: Option<Box<dyn NoiseSuppressor>>,
+    environmental_ns_backend: &'static str,
+}
+
 /// Build the DSP chain for a given NR level.
 ///
-/// - `NrLevel::Off` → Speex AEC + no NS.
-/// - `NrLevel::{Low, Med, High}` → Speex AEC + DeepFilterNet 3 (CPU). The
+/// - Every level → Speex linear AEC + linked residual-echo suppression.
+/// - `NrLevel::Off` → no environmental noise suppression.
+/// - `NrLevel::{Low, Med, High}` → residual AEC + DeepFilterNet 3 (CPU). The
 ///   level maps to a DFN3 attenuation-limit cap: gentler levels mix more
 ///   of the original noisy signal back in, so the dereverb/NS becomes a
 ///   subtle tone-shaping rather than a hard mask.
 ///   On DFN3 init failure (e.g. tract couldn't load the bundled model on
-///   this target) we fall back to `SpeexNoiseSuppressor`. SP#4 keeps the
-///   speex path compiled in as a safety net.
+///   this target) we enable denoise on the already-linked Speex preprocessor.
 fn build_dsp_chain(
     frame_size: usize,
     sample_rate: u32,
     nr: NrLevel,
-) -> (Box<dyn EchoCanceller>, Option<Box<dyn NoiseSuppressor>>) {
-    let ec = speex::SpeexEchoCanceller::new(frame_size, sample_rate);
-    let ns: Option<Box<dyn NoiseSuppressor>> = if matches!(nr, NrLevel::Off) {
-        None
-    } else {
-        Some(build_noise_suppressor(frame_size, sample_rate, &nr, &ec))
+    aec_config: AecConfig,
+) -> DspChain {
+    let aec = match speex::SpeexAecStage::try_new(frame_size, sample_rate, aec_config.clone()) {
+        Ok(stage) => {
+            tracing::info!(
+                residual_echo_suppress_db = aec_config.residual_echo_suppress_db,
+                residual_echo_suppress_active_db = aec_config.residual_echo_suppress_active_db,
+                "Speex linear AEC and residual echo suppression active"
+            );
+            AecProcessor::Coupled(stage)
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "residual echo suppressor unavailable; retaining linear AEC"
+            );
+            AecProcessor::LinearOnly {
+                echo: speex::SpeexEchoCanceller::new(frame_size, sample_rate),
+                config: aec_config,
+            }
+        }
     };
-    (Box::new(ec), ns)
+    let mut chain = DspChain {
+        aec,
+        environmental_ns: None,
+        environmental_ns_backend: "off",
+    };
+
+    if !matches!(nr, NrLevel::Off) {
+        build_noise_suppressor(frame_size, sample_rate, &nr, &mut chain);
+    }
+    chain
 }
 
 /// DFN3 attenuation cap per NR level (in dB).
@@ -197,9 +273,9 @@ fn build_dsp_chain(
 /// noise-floor.
 fn nr_to_atten_lim_db(nr: &NrLevel) -> f32 {
     match nr {
-        NrLevel::Off  => 0.0,   // bypass anyway, but a sane number for logging
-        NrLevel::Low  => 12.0,
-        NrLevel::Med  => 24.0,
+        NrLevel::Off => 0.0, // bypass anyway, but a sane number for logging
+        NrLevel::Low => 12.0,
+        NrLevel::Med => 24.0,
         NrLevel::High => 100.0,
     }
 }
@@ -209,12 +285,7 @@ fn nr_to_atten_lim_db(nr: &NrLevel) -> f32 {
 /// internally buffers to bridge ALSA's period (1024) and DFN3's 10 ms hop
 /// (480). Init failure (e.g. tract couldn't load the bundled model on this
 /// target) falls back cleanly.
-fn build_noise_suppressor(
-    frame_size: usize,
-    sample_rate: u32,
-    nr: &NrLevel,
-    ec: &speex::SpeexEchoCanceller,
-) -> Box<dyn NoiseSuppressor> {
+fn build_noise_suppressor(frame_size: usize, sample_rate: u32, nr: &NrLevel, chain: &mut DspChain) {
     if sample_rate == 48_000 {
         let atten_lim_db = nr_to_atten_lim_db(nr);
         match aec::deep_filter::DeepFilterNs::with_atten_lim_db(atten_lim_db) {
@@ -226,7 +297,9 @@ fn build_noise_suppressor(
                     atten_lim_db,
                     "neural NS active"
                 );
-                return Box::new(ns);
+                chain.environmental_ns = Some(Box::new(ns));
+                chain.environmental_ns_backend = "deep_filter_cpu";
+                return;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "DFN3 init failed; falling back to speex NS");
@@ -235,11 +308,23 @@ fn build_noise_suppressor(
     } else {
         tracing::info!(sample_rate, "DFN3 needs 48 kHz; using speex NS");
     }
-    Box::new(speex::SpeexNoiseSuppressor::new(
-        frame_size,
-        sample_rate,
-        Some(ec),
-    ))
+    match chain.aec.enable_speex_denoise() {
+        Ok(()) => {
+            chain.environmental_ns_backend = "speex";
+            tracing::info!("Speex environmental denoise active on linked AEC preprocessor");
+        }
+        Err(error) => {
+            // The residual stage already failed to construct. Keep linear AEC
+            // and provide standalone denoise rather than silencing the mic.
+            tracing::warn!(%error, "linked Speex denoise unavailable; using standalone preprocessor");
+            chain.environmental_ns = Some(Box::new(speex::SpeexNoiseSuppressor::new(
+                frame_size,
+                sample_rate,
+                None,
+            )));
+            chain.environmental_ns_backend = "speex_standalone";
+        }
+    }
 }
 
 /// Apply user mic volume to a slice of mono f32 samples in-place.
@@ -266,10 +351,12 @@ pub struct AudioService {
     processed_tx: broadcast::Sender<ProcessedAudioFrame>,
     frame_size: usize,
     sample_rate: u32,
-    echo_canceller: Box<dyn EchoCanceller>,
-    noise_suppressor: Option<Box<dyn NoiseSuppressor>>,
+    dsp_chain: DspChain,
+    aec_config: AecConfig,
     mic_mono_scratch: Vec<i16>,
     ref_mono_scratch: Vec<i16>,
+    aec_linear_scratch: Vec<i16>,
+    aec_residual_scratch: Vec<i16>,
     beamformer: Beamformer,
     doa: DoaBackendImpl,
     /// When `Some((az, el))`, the beamformer steers to this fixed direction
@@ -325,12 +412,14 @@ impl AudioService {
             let s = audio_tx.borrow();
             (s.nr_level.clone(), s.mode.clone())
         };
-        let (echo_canceller, noise_suppressor) =
-            build_dsp_chain(frame_size, sample_rate, initial_nr);
+        let aec_config = AecConfig::default();
+        let dsp_chain = build_dsp_chain(frame_size, sample_rate, initial_nr, aec_config.clone());
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
         beamformer.set_mode(initial_mode.clone());
         let steered = match &initial_mode {
-            waved_state::AudioMode::Steered { initial_az_deg } => Some(SteeredBeam::new(*initial_az_deg)),
+            waved_state::AudioMode::Steered { initial_az_deg } => {
+                Some(SteeredBeam::new(*initial_az_deg))
+            }
             _ => None,
         };
         let (doa, doa_backend, _fallback) =
@@ -346,10 +435,12 @@ impl AudioService {
             processed_tx,
             frame_size,
             sample_rate,
-            echo_canceller,
-            noise_suppressor,
+            dsp_chain,
+            aec_config,
             mic_mono_scratch: vec![0; frame_size],
             ref_mono_scratch: vec![0; frame_size],
+            aec_linear_scratch: vec![0; frame_size],
+            aec_residual_scratch: vec![0; frame_size],
             beamformer,
             doa,
             doa_override: None,
@@ -358,10 +449,14 @@ impl AudioService {
             ref_spectrum: spectrum::Spectrum::new(sample_rate),
             mic_spectrum_input: vec![0i16; frame_size],
             recording_limiter_mono: LookaheadLimiter::new(
-                LimiterParams::DEFAULT, 1, sample_rate as f32,
+                LimiterParams::DEFAULT,
+                1,
+                sample_rate as f32,
             ),
             recording_limiter_stereo: LookaheadLimiter::new(
-                LimiterParams::DEFAULT, 2, sample_rate as f32,
+                LimiterParams::DEFAULT,
+                2,
+                sample_rate as f32,
             ),
             dsp_metrics: None,
             doa_publisher,
@@ -404,6 +499,14 @@ impl AudioService {
     /// `PlaybackService` is constructed (since playback owns the Arc).
     pub fn set_dsp_metrics(&mut self, metrics: Arc<crate::playback::DspMetrics>) {
         self.dsp_metrics = Some(metrics);
+    }
+
+    /// Apply static AEC calibration loaded from the versioned hardware audio
+    /// configuration. Production calls this before the service starts.
+    pub fn set_aec_config(&mut self, config: AecConfig) {
+        let nr = self.audio_tx.borrow().nr_level.clone();
+        self.dsp_chain = build_dsp_chain(self.frame_size, self.sample_rate, nr, config.clone());
+        self.aec_config = config;
     }
 
     /// Replace the standalone test integrity state with the production-shared
@@ -452,6 +555,43 @@ impl AudioService {
         svc
     }
 
+    fn process_mono_dsp(&mut self) -> AecFrameMetrics {
+        self.dsp_chain.aec.process_linear(
+            &self.mic_mono_scratch,
+            &self.ref_mono_scratch,
+            &mut self.aec_linear_scratch,
+        );
+
+        self.aec_residual_scratch
+            .copy_from_slice(&self.aec_linear_scratch);
+        self.dsp_chain
+            .aec
+            .process_residual(&mut self.aec_residual_scratch);
+        let post_residual_rms = rms_i16(&self.aec_residual_scratch);
+
+        if let Some(ns) = self.dsp_chain.environmental_ns.as_mut() {
+            ns.process(&mut self.aec_residual_scratch);
+        }
+
+        let config = self.dsp_chain.aec.config();
+        let mut metrics = AecFrameMetrics {
+            reference_rms: rms_i16(&self.ref_mono_scratch),
+            mic_pre_aec_rms: rms_i16(&self.mic_mono_scratch),
+            mic_post_linear_aec_rms: rms_i16(&self.aec_linear_scratch),
+            mic_post_residual_echo_rms: post_residual_rms,
+            mic_post_noise_suppression_rms: rms_i16(&self.aec_residual_scratch),
+            mic_uplink_rms: 0.0,
+            linear_erle_db: None,
+            effective_echo_suppression_db: None,
+            residual_echo_suppression_active: self.dsp_chain.aec.residual_active(),
+            residual_echo_suppress_db: config.residual_echo_suppress_db,
+            residual_echo_suppress_active_db: config.residual_echo_suppress_active_db,
+            noise_suppression_backend: self.dsp_chain.environmental_ns_backend.to_string(),
+        };
+        metrics.update_suppression();
+        metrics
+    }
+
     /// Run the DSP pipeline on a single `AudioFrame`. Separate method so the
     /// async `run` loop can invoke it with a bounded borrow of `self` (calling
     /// a free function with split borrows inside `tokio::select!` triggers a
@@ -496,8 +636,16 @@ impl AudioService {
             let doa_frame = DoaFrame {
                 frame_idx,
                 timestamp_ms: frame.timestamp_ms,
-                azimuth_deg: if doa.vad_active && doa.fresh { doa.azimuth_deg } else { f32::NAN },
-                elevation_deg: if doa.vad_active && doa.fresh { doa.elevation_deg } else { f32::NAN },
+                azimuth_deg: if doa.vad_active && doa.fresh {
+                    doa.azimuth_deg
+                } else {
+                    f32::NAN
+                },
+                elevation_deg: if doa.vad_active && doa.fresh {
+                    doa.elevation_deg
+                } else {
+                    f32::NAN
+                },
                 confidence: doa.confidence,
                 vad: doa.vad_active,
                 backend: self.doa_backend,
@@ -524,14 +672,13 @@ impl AudioService {
                 *dst = (src.clamp(-1.0, 1.0) * 32768.0) as i16;
             }
 
-            let mut aec_out = vec![0i16; frame_size];
-            self.echo_canceller
-                .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
-            if let Some(ns) = self.noise_suppressor.as_mut() {
-                ns.process(&mut aec_out);
-            }
-
-            let mut p = ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch);
+            let metrics = self.process_mono_dsp();
+            let mut p = ProcessedAudioFrame::from_raw(
+                frame,
+                &self.aec_residual_scratch,
+                &self.ref_mono_scratch,
+            );
+            p.aec_metrics = metrics;
             if let Some((l, r)) = beam_out.stereo {
                 p = p.with_stereo(l, r);
             }
@@ -548,22 +695,18 @@ impl AudioService {
                 self.mic_mono_scratch[copy_len..].fill(0);
             }
 
-            let mut aec_out = vec![0i16; frame_size];
-            self.echo_canceller
-                .process(&self.mic_mono_scratch, &self.ref_mono_scratch, &mut aec_out);
-            if let Some(ns) = self.noise_suppressor.as_mut() {
-                ns.process(&mut aec_out);
-            }
-
-            let p = ProcessedAudioFrame::from_raw(frame, &aec_out, &self.ref_mono_scratch);
+            let metrics = self.process_mono_dsp();
+            let mut p = ProcessedAudioFrame::from_raw(
+                frame,
+                &self.aec_residual_scratch,
+                &self.ref_mono_scratch,
+            );
+            p.aec_metrics = metrics;
             apply_gain(self, p)
         }
     }
 
-    pub async fn run(
-        mut self,
-        mut cmd_rx: broadcast::Receiver<Command>,
-    ) -> AudioServiceExit {
+    pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) -> AudioServiceExit {
         info!(
             "audio_srv starting (DSP on: frame_size={} sample_rate={})",
             self.frame_size, self.sample_rate
@@ -656,9 +799,12 @@ impl AudioService {
                         }
                         Ok(Command::SetNrLevel(level)) => {
                             info!("NR level -> {level:?}; rebuilding DSP chain");
-                            let (ec, ns) = build_dsp_chain(self.frame_size, self.sample_rate, level.clone());
-                            self.echo_canceller = ec;
-                            self.noise_suppressor = ns;
+                            self.dsp_chain = build_dsp_chain(
+                                self.frame_size,
+                                self.sample_rate,
+                                level.clone(),
+                                self.aec_config.clone(),
+                            );
                             self.audio_tx.send_modify(|s| s.nr_level = level);
                         }
                         Ok(Command::SetPlaybackPreset(p)) => {
@@ -698,10 +844,7 @@ impl AudioService {
         }
     }
 
-    fn publish_integrity_fault(
-        &self,
-        fault: waved_state::RecordingIntegrityFault,
-    ) {
+    fn publish_integrity_fault(&self, fault: waved_state::RecordingIntegrityFault) {
         self.integrity.record_fault(fault);
         let snapshot = self.integrity.snapshot();
         self.audio_tx.send_modify(|state| {
@@ -762,7 +905,8 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
     let mic_vol = svc.audio_tx.borrow().mic_volume;
     // Mono: gain → limiter.
     apply_mic_volume(&mut processed.mic_mono_f32, mic_vol);
-    svc.recording_limiter_mono.process_interleaved(&mut processed.mic_mono_f32);
+    svc.recording_limiter_mono
+        .process_interleaved(&mut processed.mic_mono_f32);
     // Stereo (rare; only Stereo beam mode): gain on each channel, then
     // shared-gain limiter on the interleaved pair to preserve image.
     if let Some((l, r)) = processed.mic_stereo_f32.as_mut() {
@@ -773,7 +917,8 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
             interleaved.push(l[i]);
             interleaved.push(r[i]);
         }
-        svc.recording_limiter_stereo.process_interleaved(&mut interleaved);
+        svc.recording_limiter_stereo
+            .process_interleaved(&mut interleaved);
         for (i, chunk) in interleaved.chunks_exact(2).enumerate() {
             l[i] = chunk[0];
             r[i] = chunk[1];
@@ -790,12 +935,41 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
             0.0
         };
         let worst = mono.min(stereo);
-        metrics.recording_limiter_reduction_db_x100.store(
-            (worst * 100.0) as i32,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        metrics
+            .recording_limiter_reduction_db_x100
+            .store((worst * 100.0) as i32, std::sync::atomic::Ordering::Relaxed);
     }
+    processed.aec_metrics.mic_uplink_rms = rms_f32_i16_scale(&processed.mic_mono_f32);
+    processed.aec_metrics.update_suppression();
     processed
+}
+
+fn rms_i16(samples: &[i16]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f64 = samples
+        .iter()
+        .map(|&sample| {
+            let sample = sample as f64;
+            sample * sample
+        })
+        .sum();
+    (sum_sq / samples.len() as f64).sqrt() as f32
+}
+
+fn rms_f32_i16_scale(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_sq: f64 = samples
+        .iter()
+        .map(|&sample| {
+            let sample = sample as f64;
+            sample * sample
+        })
+        .sum();
+    (sum_sq / samples.len() as f64).sqrt() as f32 * i16::MAX as f32
 }
 
 #[cfg(test)]
@@ -939,6 +1113,65 @@ mod tests {
     }
 
     #[test]
+    fn process_frame_metrics_capture_stage_order_before_user_gain() {
+        let frame_size = 480;
+        let sample_rate = 48_000;
+        let state = AudioState {
+            nr_level: NrLevel::Off,
+            mic_volume: 200,
+            ..AudioState::default()
+        };
+        let (audio_tx, _audio_rx) = tokio::sync::watch::channel(state);
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel(4);
+        let (meeting_tx, _meeting_rx) = tokio::sync::mpsc::channel(4);
+        let mut service = AudioService::new(
+            Arc::new(audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            frame_size,
+            sample_rate,
+            MicGeometry::default(),
+        );
+        let frame = AudioFrame::mic_only(
+            (0..frame_size)
+                .map(|sample| {
+                    let phase =
+                        2.0 * std::f32::consts::PI * 1_000.0 * sample as f32 / sample_rate as f32;
+                    (phase.sin() * 500.0) as i16
+                })
+                .collect(),
+            1,
+            sample_rate,
+            0,
+        );
+
+        let mut processed = service.process_frame(&frame);
+        for _ in 0..4 {
+            processed = service.process_frame(&frame);
+        }
+        let metrics = &processed.aec_metrics;
+
+        assert!(metrics.residual_echo_suppression_active);
+        assert_eq!(metrics.residual_echo_suppress_db, 40);
+        assert_eq!(metrics.residual_echo_suppress_active_db, 15);
+        assert_eq!(metrics.noise_suppression_backend, "off");
+        assert!((metrics.mic_pre_aec_rms - 353.2).abs() < 1.0);
+        assert!(
+            (metrics.mic_post_residual_echo_rms - metrics.mic_post_noise_suppression_rms).abs()
+                < 1.0,
+            "NR Off must not add an environmental denoise stage"
+        );
+        let gain_ratio = metrics.mic_uplink_rms / metrics.mic_post_noise_suppression_rms.max(0.01);
+        assert!(
+            (gain_ratio - 2.0).abs() < 0.05,
+            "pre-gain metric must exclude 2x user gain; got ratio {gain_ratio:.3}"
+        );
+        assert!(metrics.linear_erle_db.is_none());
+        assert!(metrics.effective_echo_suppression_db.is_none());
+    }
+
+    #[test]
     fn audio_service_applies_beamformer_before_aec() {
         use crate::beam::MicGeometry;
         use waved_state::AudioMode;
@@ -984,7 +1217,10 @@ mod tests {
             let sq: f32 = processed.mic_mono_f32.iter().map(|x| x * x).sum();
             (sq / processed.mic_mono_f32.len() as f32).sqrt()
         };
-        assert!(rms_front > 0.05, "beamformer produced silence: rms={rms_front}");
+        assert!(
+            rms_front > 0.05,
+            "beamformer produced silence: rms={rms_front}"
+        );
     }
 
     #[test]
@@ -1016,7 +1252,11 @@ mod tests {
         let mut b = vec![0.001];
         apply_mic_volume(&mut a, 900);
         apply_mic_volume(&mut b, 800);
-        assert!(a[0] > 0.005, "expected ~0.008 (pct=900 capped to 800), got {}", a[0]);
+        assert!(
+            a[0] > 0.005,
+            "expected ~0.008 (pct=900 capped to 800), got {}",
+            a[0]
+        );
         assert_eq!(a, b, "pct above 800 should produce same output as 800");
     }
 
@@ -1043,8 +1283,13 @@ mod tests {
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
-            256, 48_000, crate::beam::MicGeometry::default(),
+            Arc::new(audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            256,
+            48_000,
+            crate::beam::MicGeometry::default(),
         );
 
         // Push enough frames through to flush the 96-sample lookahead.
@@ -1053,7 +1298,8 @@ mod tests {
             let mut raw = vec![0i16; 256];
             for (i, s) in raw.iter_mut().enumerate() {
                 let phase = (frame_idx as usize * 256 + i) as f32;
-                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin())
+                    as i16;
             }
             let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
             let processed = svc.process_frame(&frame);
@@ -1093,8 +1339,13 @@ mod tests {
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
-            256, 48_000, crate::beam::MicGeometry::default(),
+            Arc::new(audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            256,
+            48_000,
+            crate::beam::MicGeometry::default(),
         );
 
         // Push enough frames through to flush the 96-sample lookahead, then
@@ -1108,7 +1359,8 @@ mod tests {
             let mut raw = vec![0i16; 256];
             for (i, s) in raw.iter_mut().enumerate() {
                 let phase = (frame_idx as usize * 256 + i) as f32;
-                *s = (200.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+                *s =
+                    (200.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
             }
             let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
             let processed = svc.process_frame(&frame);
@@ -1161,13 +1413,21 @@ mod tests {
         let mut svc_unity = make_svc(100);
         let frame_unity = AudioFrame::mic_only(raw.clone(), 1, 48_000, 0);
         let out_unity = svc_unity.process_frame(&frame_unity);
-        let max_unity = out_unity.mic_mono_f32.iter().cloned().fold(0.0_f32, f32::max);
+        let max_unity = out_unity
+            .mic_mono_f32
+            .iter()
+            .cloned()
+            .fold(0.0_f32, f32::max);
 
         // Double gain (200) — same DSP chain, fresh service, identical input.
         let mut svc_double = make_svc(200);
         let frame_double = AudioFrame::mic_only(raw, 1, 48_000, 0);
         let out_double = svc_double.process_frame(&frame_double);
-        let max_double = out_double.mic_mono_f32.iter().cloned().fold(0.0_f32, f32::max);
+        let max_double = out_double
+            .mic_mono_f32
+            .iter()
+            .cloned()
+            .fold(0.0_f32, f32::max);
 
         // The ratio should be exactly 2× regardless of AEC attenuation,
         // since both services see the same input and the gain is applied
@@ -1186,8 +1446,8 @@ mod tests {
     #[test]
     fn process_frame_writes_recording_limiter_reduction_to_dsp_metrics() {
         use crate::callbacks::AudioFrame;
-        use std::sync::Arc;
         use std::sync::atomic::Ordering;
+        use std::sync::Arc;
         use tokio::sync::{mpsc, watch};
         use waved_state::AudioState;
 
@@ -1199,8 +1459,13 @@ mod tests {
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
-            256, 48_000, crate::beam::MicGeometry::default(),
+            Arc::new(audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            256,
+            48_000,
+            crate::beam::MicGeometry::default(),
         );
         let metrics = Arc::new(crate::playback::DspMetrics::default());
         svc.set_dsp_metrics(Arc::clone(&metrics));
@@ -1210,13 +1475,16 @@ mod tests {
             let mut raw = vec![0i16; 256];
             for (i, s) in raw.iter_mut().enumerate() {
                 let phase = (frame_idx as usize * 256 + i) as f32;
-                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin()) as i16;
+                *s = (16384.0 * (2.0 * std::f32::consts::PI * 1000.0 * phase / 48_000.0).sin())
+                    as i16;
             }
             let frame = AudioFrame::mic_only(raw, 1, 48_000, frame_idx as u64);
             let _ = svc.process_frame(&frame);
         }
 
-        let reduction_x100 = metrics.recording_limiter_reduction_db_x100.load(Ordering::Relaxed);
+        let reduction_x100 = metrics
+            .recording_limiter_reduction_db_x100
+            .load(Ordering::Relaxed);
         assert!(
             reduction_x100 < 0,
             "expected negative reduction (limiter engaged), got {reduction_x100}"
@@ -1225,9 +1493,9 @@ mod tests {
 
     #[tokio::test]
     async fn srp_backend_with_zero_frame_size_falls_back_to_gcc_phat() {
+        use std::sync::Arc;
         use tokio::sync::{mpsc, watch};
         use waved_state::AudioState;
-        use std::sync::Arc;
 
         let (audio_tx_inner, _audio_rx) = watch::channel(AudioState::default());
         let audio_tx = Arc::new(audio_tx_inner);
@@ -1257,22 +1525,29 @@ mod tests {
     #[tokio::test]
     async fn audio_service_emits_one_doa_frame_per_process_call() {
         use crate::AudioFrame;
+        use std::sync::Arc;
         use tokio::sync::{mpsc, watch};
         use waved_state::AudioState;
-        use std::sync::Arc;
 
         let (audio_tx_inner, _audio_rx) = watch::channel(AudioState::default());
         let audio_tx = Arc::new(audio_tx_inner);
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            audio_tx, frame_tx, frame_rx, meeting_tx, 480, 48000,
+            audio_tx,
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            480,
+            48000,
             crate::beam::MicGeometry::default(),
         );
         let mut rx = svc.subscribe_doa();
         let frame = AudioFrame {
-            data: vec![0i16; 480 * 8], channels: 8,
-            reference: None, reference_channels: 0,
+            data: vec![0i16; 480 * 8],
+            channels: 8,
+            reference: None,
+            reference_channels: 0,
             sample_rate: 48000,
             timestamp_ms: 1_000,
         };
@@ -1288,27 +1563,39 @@ mod tests {
     #[tokio::test]
     async fn steered_mode_tracks_doa_override() {
         use crate::AudioFrame;
+        use std::sync::Arc;
         use tokio::sync::{mpsc, watch};
         use waved_state::{AudioMode, AudioState};
-        use std::sync::Arc;
 
         let mut initial = AudioState::default();
-        initial.mode = AudioMode::Steered { initial_az_deg: 0.0 };
+        initial.mode = AudioMode::Steered {
+            initial_az_deg: 0.0,
+        };
         let (audio_tx_inner, _audio_rx) = watch::channel(initial);
         let audio_tx = Arc::new(audio_tx_inner);
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            audio_tx, frame_tx, frame_rx, meeting_tx, 480, 48000,
+            audio_tx,
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            480,
+            48000,
             crate::beam::MicGeometry::default(),
         );
         // Verify the steered wrapper is constructed.
-        assert!(svc.steered.is_some(), "Steered mode should construct SteeredBeam");
+        assert!(
+            svc.steered.is_some(),
+            "Steered mode should construct SteeredBeam"
+        );
 
         // Feed silence — direction holds, omni_mix doesn't immediately ramp.
         let frame = AudioFrame {
-            data: vec![0i16; 480 * 8], channels: 8,
-            reference: None, reference_channels: 0,
+            data: vec![0i16; 480 * 8],
+            channels: 8,
+            reference: None,
+            reference_channels: 0,
             sample_rate: 48000,
             timestamp_ms: 1_000,
         };
@@ -1331,8 +1618,13 @@ mod tests {
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, _meeting_rx) = mpsc::channel(8);
         let mut svc = AudioService::new(
-            Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx,
-            256, 48_000, crate::beam::MicGeometry::default(),
+            Arc::new(audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            256,
+            48_000,
+            crate::beam::MicGeometry::default(),
         );
 
         let raw = vec![16000i16; 256];
@@ -1368,13 +1660,10 @@ mod tests {
             .unwrap();
         let handle = tokio::spawn(svc.run(cmd_rx));
 
-        let signal = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            integrity_rx.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let signal = tokio::time::timeout(std::time::Duration::from_secs(1), integrity_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             signal.fault,
             waved_state::RecordingIntegrityFault::ProcessedFrameDropped

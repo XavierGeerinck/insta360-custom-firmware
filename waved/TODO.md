@@ -1,6 +1,6 @@
 # Waved — whole-device roadmap
 
-Last reviewed: 2026-07-20
+Last reviewed: 2026-07-23
 
 Waved replaces the stock Insta360 Wave firmware with an open device stack for
 audio capture and processing, local meeting recording, USB audio, Wi-Fi
@@ -83,6 +83,14 @@ Priority:
 
 ### P1 — Audio quality and stock comparison
 
+- [ ] **Complete live full-duplex AEC acceptance.** The low-delay residual
+  candidate passes the 100%-speaker speech fixture at 27.0 dB linear ERLE and
+  36.1 dB final suppression with zero integrity/UAC drops. Complete
+  the listener echo/double-talk/no-perceptible-delay gate, capture total
+  capture-to-USB latency, and run sustained bidirectional load. Its measured
+  +29.5 percentage points of one-core CPU exceeds the provisional +5-point
+  target, so record an explicit headroom decision or replace the residual
+  backend before calling this production-complete.
 - [ ] **Build a repeatable stock-vs-Waved audio fixture.** Capture the same
   microphone, speaker-loopback, USB playback, and USB microphone material on
   stock and open firmware at fixed hardware gain. Compare level, frequency
@@ -107,11 +115,11 @@ Priority:
   and then re-baseline `scripts/cpu_delta.py`.
 - [ ] **Profile neural suppression under sustained speech and playback.**
   Existing acceptance used a mostly quiet room where DFN3 gating skipped work.
-  Repeat with `scripts/test-aec-conferencing.sh` playback and publish sustained
-  CPU, memory, underrun, and frame-drop results.
-- [ ] **Expose noise-suppression observability.** Add `ns_backend` and
-  `ns_frame_ms` to `/tmp/audio_stats.json` so device tests can distinguish
-  DFN3 from the Speex fallback.
+  Repeat with `SPEECH_FIXTURE=... scripts/test-aec-conferencing.sh` and publish
+  sustained CPU, memory, underrun, and frame-drop results.
+- [ ] **Finish noise-suppression observability.** The same-frame `aec` stats
+  now expose `noise_suppression_backend`; add `ns_frame_ms` so device tests can
+  also distinguish backend processing cadence.
 - [ ] **Reap stale stats temporary files.** Remove stale
   `/tmp/audio_stats.json.tmp` after a failed atomic rename. The next successful
   write already self-corrects, so this remains low priority.
@@ -132,7 +140,7 @@ Priority:
 | Capability | Status | Evidence or remaining gap |
 |---|---|---|
 | Two-stream ALSA capture and aligned frames | **Partial** | SP#1 capture, fail-closed recovery, shortened endurance, storage pressure, and three reboot boundaries pass on-device; literal one-hour and physical power-loss certification remain P0. |
-| AEC and processed USB microphone | **Unknown** | Waved measures 22.7–26.6 dB ERLE and passes its acceptance bar, but needs the same-fixture stock comparison. |
+| AEC and processed USB microphone | **Unknown** | The residual candidate measures 27.0 dB speech ERLE and 36.1 dB final suppression at 100% speaker volume with zero drops. Live-call, sustained-load, total-latency, and same-fixture stock comparison remain. |
 | Beamforming modes and horizontal DOA | **Partial** | Directional modes and GCC-PHAT work; exact stock beam patterns and close/simultaneous-speaker behavior are not yet compared. |
 | Neural noise suppression | **Unknown** | DFN3 works on CPU; stock-vs-Waved speech quality and sustained-load behavior remain unmeasured. |
 | Playback EQ, gain staging, and limiter | **Matched** | Voice EQ matches the recovered stock configuration; media bypass, soft knee, preset ramp, and peak-hold stats are implemented. |
@@ -170,6 +178,9 @@ Priority:
 
 - [x] **SP#1 — Capture foundation and measurement harness.**
 - [x] **SP#2 — AEC and playback reference path.**
+- [x] **Residual echo stage and same-frame AEC metrics.** The safe shadow
+  topology adds one measured 2.67 ms analysis frame; final live-call,
+  total-latency, and sustained-CPU acceptance remain tracked above.
 - [x] **SP#3 — Beamforming and DOA.**
 - [x] **SP#4 — DeepFilterNet 3 CPU noise suppression with Speex fallback.**
 - [x] **SP#5 — Playback EQ, multiband gain control, and limiter.**

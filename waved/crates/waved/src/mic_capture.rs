@@ -116,6 +116,7 @@ mod tests {
             timestamp_ms: 0,
             raw_mic_i16: Vec::new(),
             raw_mic_channels: 8,
+            aec_metrics: Default::default(),
         }
     }
 

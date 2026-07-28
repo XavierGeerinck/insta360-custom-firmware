@@ -992,6 +992,7 @@ mod wiring_tests {
             timestamp_ms,
             raw_mic_i16: vec![0; 480],
             raw_mic_channels: 1,
+            aec_metrics: Default::default(),
         }
     }
 
