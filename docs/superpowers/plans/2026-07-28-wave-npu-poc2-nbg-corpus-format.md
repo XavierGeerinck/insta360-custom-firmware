@@ -1,10 +1,19 @@
 # Wave NPU PoC 2 — NBG Corpus and Format Explorer Plan
 
 **Date:** 2026-07-28  
-**Status:** Approved program, PoC 2 execution plan  
+**Status:** Executed; exit gate passed 2026-07-28
 **Depends on:** PoC 0 pass, PoC 1 pass at commit `f68708d`  
 **Safety class:** Host-only binary parsing and comparison  
 **Program design:** `docs/superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md`
+
+**Execution record:** `docs/npu/lab-notebook/2026-07-28-poc2-nbg-corpus-format.md`
+
+During execution, a public VIPLite 2.0.0 `nbg_fmt_v2.h` was found at exact
+commit `b83b89f3842cf2938c8ce8adec9dee1864b7d72a`. It independently resolves
+the provisional neutral fields in sections 12 and 13 below. The original
+tables remain useful as the pre-correlation hypothesis; the final
+source-backed interpretation is authoritative in
+`docs/npu/format/field-map.md`.
 
 ## 1. Goal
 
@@ -157,6 +166,28 @@ output   FP32 [5200, 16, 1], 332800 bytes
 ```
 
 Parser output for that hash must match the recorded runtime result.
+
+### 4.4 Pinned public VIPLite v2 format
+
+Execution added a third independent source:
+
+```text
+repository Ameba-AIoT/ameba-arduino-pro2
+commit     b83b89f3842cf2938c8ce8adec9dee1864b7d72a
+driver     VIPLiteDrv_2.0.0
+header     nbg_linker/inc/nbg_fmt_v2.h
+SHA-256    6af06536a70b2534c96ba384e775a19d2e9ef73acfb6817bd7975d4fd9cdc35b
+```
+
+The public structures exactly match the 48-byte v2 header, 12-byte
+sub-header, 44-byte section header, 112-byte I/O record, and 220-byte
+network-info record observed in the Wave corpus. The header also supplies
+the complete section enum through ID 40. A supporting `vip_lite.h` at the
+same commit supplies buffer formats through INT4, UINT4, and BOOL8.
+
+The parser pins repository commit, path, and content hash. Public hosting
+does not by itself settle redistribution rights, so no vendor header is
+copied into this repository.
 
 ## 5. Exact Corpus
 
@@ -352,7 +383,9 @@ Rules:
 - no negative values enter range calculations;
 - no count controls an allocation before its bounded byte range is validated;
 - maximum directory records: 256;
-- maximum IO records per direction: 64;
+- maximum IO records per direction: 256. The initial 64-record assumption was
+  falsified by the stock `asr_ch/online_zipformer/zf_fixmean.nb`, which has
+  75 input and 75 output records;
 - maximum dimensions per tensor: 6;
 - maximum emitted name bytes: 64;
 - minimum NBG size for runtime-compatible files: 513 bytes;
@@ -379,9 +412,15 @@ Supported evidence-backed prefix:
 - pool and SRAM words;
 - public fixed-section entry pairs through the version-supported prefix;
 - input and output table descriptors;
-- 116-byte v1 IO entries for version `>=0x0001000b`;
-- 120-byte transitional IO entries for versions `0x00010004..0x0001000a`;
-- 56-byte oldest IO entries for earlier versions.
+- modern public/runtime v1 IO strides of 116 or 128 bytes for version
+  `>=0x0001000b`;
+- transitional public/runtime strides of 108 or 120 bytes for versions
+  `0x00010004..0x0001000a`;
+- oldest public/runtime strides of 44 or 56 bytes for earlier versions.
+
+The dual sizes are an important ABI distinction: the pinned public TIM-VX
+layout and the private Wave normalizer do not use identical record widths.
+PoC 2 semantically decodes only the modern six-dimension named prefix.
 
 PoC 2 must not invent semantics for newer fixed-header words in
 `0x0001001e`. It records:
@@ -457,9 +496,11 @@ For every directory record:
 - permit repeated zero-sized ranges but label them;
 - fingerprint payloads without emitting them.
 
-Section types 1 and 2 are parsed as IO. All other types remain
-`opaque_section_type_N` until independent code/source evidence supplies a
-name.
+Section types 1 and 2 are parsed as IO. The pinned public v2 header now
+supplies exact names for IDs 0 through 40. PoC 2 additionally decodes the
+network-info, memory-pool, VIP/AXI-SRAM, and checksum metadata structures.
+Named accelerator payloads remain opaque and fingerprinted unless a bounded
+decoder is explicitly implemented.
 
 ## 13. v2 IO Records
 

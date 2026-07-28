@@ -421,6 +421,78 @@ checkout used for those experiments; they must not be read as the identity
 of the current tree. A later PoC must rerun any TIM-VX claim against the exact
 current commit before graduating it.
 
+### NBG v2 format and stock corpus (PoC 2, 2026-07-28)
+
+A strict host-only parser now classifies every available stock graph without
+calling a firmware library or executing model bytes. The configured corpus
+contains 137 stock files, the exact live-tested CTC reference, and one
+foreign-target legacy add negative control:
+
+```text
+139 files
+3,785,683,152 bytes
+
+138 × version 0x00020000, target 0x1000000e
+  1 × version 0x0001001e, target 0x10000020
+```
+
+A public VIPLite 2.0.0 linker header at Ameba Pro2 BSP commit
+`b83b89f3842cf2938c8ce8adec9dee1864b7d72a` independently matches the exact
+Wave v2 accesses recovered in PoC 1. The Wave envelope is:
+
+```text
+48-byte nbg_format_header
+12-byte nbg_sub_header
+18 or 20 × 44-byte nbg_section_header
+typed section payloads
+final 512-byte runtime connection region
+```
+
+Every v2 graph uses format class 0, one core, 32-bit patch addresses,
+192-byte NN commands, 192-byte TP commands, and 262,144 bytes of VIP SRAM.
+Serialized memory-pool requirements range from 161,280 to 57,445,376 bytes.
+No graph contains an AXI-SRAM section.
+
+The 20 observed section types include input/output descriptors, layer and
+operation metadata, NN/TP command sections, patches, PPU instructions,
+dynamic I/O, load state, coefficient data, their tables, network info,
+memory metadata, and checksums. Public names are now known, but PoC 2
+semantically decodes only bounded tensor/network/memory/checksum metadata.
+Accelerator commands, coefficients, relocations, state, and connection data
+remain opaque and fingerprinted.
+
+Tensor metadata across all configured graphs is:
+
+```text
+FP32   21 records
+FP16  421 records
+UINT8   3 records (foreign v1 negative control)
+INT32  42 records
+```
+
+All 487 I/O records are public type `TENSOR`. All 484 v2 records use
+quantization format `NONE`; this does not describe internal activation or
+weight precision.
+
+Each v2 graph stores five section checksums for NN, TP, coefficient data,
+PPU instructions, and load state. All 690 values exactly equal standard
+CRC-32 of their referenced section bytes. The separate header `crc_sum`
+field is preserved but its coverage/algorithm is not yet reproduced.
+
+For the exact live CTC hash, the static parser recovers the same FP16
+`[256,16,1]` input and FP32 `[5200,16,1]` output sizes observed through
+`libnnsdk.so`, plus a 167,680-byte memory-pool requirement and 256 KiB VIP
+SRAM requirement.
+
+This closes the stock-format inventory gate. It does not produce a
+Wave-targeted graph, decode NPU instructions, or make target-byte patching
+valid. Full evidence:
+
+- [PoC 2 format result](../../docs/npu/format/README.md)
+- [field map and confidence ledger](../../docs/npu/format/field-map.md)
+- [generated corpus summary](../../docs/npu/format/corpus-summary.md)
+- [PoC 2 notebook](../../docs/npu/lab-notebook/2026-07-28-poc2-nbg-corpus-format.md)
+
 ### Host prebuilt SDK is simulator-only (2026-04-23)
 
 Pursuing the AoT path (compile on host, load on device via `ops::NBG`)

@@ -1,10 +1,10 @@
 # Wave NPU Research Tools
 
-This directory contains two deliberately separate tool classes:
+This directory contains two deliberately separate security domains:
 
 - `npu_lab.py` is the allowlisted device-experiment boundary;
-- `abi_inventory.py` and `ghidra_abi.py` are host-only, deterministic static
-  evidence generators.
+- `abi_inventory.py`, `ghidra_abi.py`, and `nbg_format.py` are host-only,
+  deterministic static evidence tools.
 
 The static tools never invoke ADB or execute a firmware binary. The lab
 harness is intentionally not a general ADB wrapper: it accepts no arbitrary
@@ -301,6 +301,60 @@ executable layout tests agree.
 This makes repeated experiments comparable without treating natural timing
 or allocator variation as a failure.
 
+## Strict NBG format explorer
+
+[`nbg_corpus.json`](nbg_corpus.json) pins the available 137-file Wave model
+corpus, the foreign-target legacy add negative control, and the exact
+live-tested CTC reference. `nbg_format.py` is a host-only parser: it does not
+invoke ADB, load a firmware library, or execute a graph.
+
+Commands:
+
+```bash
+python3 waved/scripts/npu/nbg_format.py parse \
+  waved/third_party/stock-npu-stack/sample-ctc.nb
+
+python3 waved/scripts/npu/nbg_format.py inventory
+python3 waved/scripts/npu/nbg_format.py summary
+python3 waved/scripts/npu/nbg_format.py verify-generated
+```
+
+Canonical outputs:
+
+```text
+docs/npu/format/stock-nbg-inventory.json
+docs/npu/format/corpus-summary.md
+```
+
+The parser supports:
+
+- the evidence-backed compatible prefix of legacy fixed-layout v1 NBG;
+- exact Wave v2 version `0x00020000`;
+- public v2 headers, sub-headers, and section headers;
+- input/output tensor metadata and public format/type/quantization enums;
+- network-info and memory metadata;
+- public section IDs 0 through 40;
+- streaming SHA-256, CRC-32, entropy, edge, and chunk fingerprints;
+- validation of the five stored section checksums in every Wave v2 graph;
+- a separately fingerprinted final 512-byte runtime connection region.
+
+It deliberately does not emit command, coefficient, state, patch, or
+connection payloads. Unknown or unsupported structure fails with a stable
+`NbgParseError`; it is not accepted as a best-effort partial result.
+
+Current corpus gate:
+
+```text
+139 configured files
+138 Wave v2 files at target 0x1000000e
+1 foreign v1 negative control at target 0x10000020
+690 / 690 stored section CRC-32 values match
+```
+
+Format evidence and non-claims are documented in
+[`docs/npu/format/README.md`](../../../docs/npu/format/README.md) and
+[`docs/npu/format/field-map.md`](../../../docs/npu/format/field-map.md).
+
 ## Test contracts
 
 The test suite covers:
@@ -319,6 +373,11 @@ The test suite covers:
 - environment redaction;
 - non-overwrite behavior;
 - semantic comparison and volatile-field exclusion.
+
+The format tests additionally cover strict corpus discovery, v1/v2 bounds,
+all decoded metadata records, sub-byte tensor sizing, checksum mismatch,
+header and section corruption, prefix truncation, seeded random inputs,
+source-relative deterministic output, and exact live-CTC metadata.
 
 Do not weaken a contract merely to make a new probe run. Update the design and
 evidence model first.

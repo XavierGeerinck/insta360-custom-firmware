@@ -53,6 +53,9 @@ compiler constraint, not a failed research session.
   — two live, allowlisted stock-CTC controls and unchanged-state evidence.
 - [`2026-07-28-poc1-runtime-abi.md`](2026-07-28-poc1-runtime-abi.md)
   — host-only runtime ABI, call graph, backend, and error recovery.
+- [`2026-07-28-poc2-nbg-corpus-format.md`](2026-07-28-poc2-nbg-corpus-format.md)
+  — host-only NBG v1/v2 parser, 139-file corpus, decoded metadata, and
+  690/690 section-checksum validation.
 
 ## Review checklist
 

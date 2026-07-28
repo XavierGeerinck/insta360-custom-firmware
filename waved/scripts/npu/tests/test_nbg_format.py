@@ -11,6 +11,7 @@ import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -84,6 +85,29 @@ def v1_io(
     )
 
 
+def v2_network_info(
+    name: str = "synthetic-network",
+    *,
+    input_count: int = 1,
+    output_count: int = 1,
+    address_width: int = 32,
+    attribute: int = 0,
+) -> bytes:
+    return struct.pack(
+        "<64s8I31I",
+        padded_name(name),
+        input_count,
+        output_count,
+        3,
+        5,
+        7,
+        1,
+        address_width,
+        attribute,
+        *(0,) * 31,
+    )
+
+
 def set_u32(data: bytearray, offset: int, value: int) -> None:
     struct.pack_into("<I", data, offset, value)
 
@@ -93,6 +117,7 @@ def make_v2(
     input_record: bytes | None = None,
     output_record: bytes | None = None,
     opaque: bytes | None = b"opaque-data",
+    extra_sections: list[tuple[int, bytes, int]] | None = None,
 ) -> bytes:
     input_record = input_record or v2_io("input", (4, 2))
     output_record = output_record or v2_io(
@@ -102,6 +127,7 @@ def make_v2(
         (1, input_record, nbg_format.V2_IO_RECORD_BYTES),
         (2, output_record, nbg_format.V2_IO_RECORD_BYTES),
     ]
+    section_payloads.extend(extra_sections or [])
     if opaque is not None:
         section_payloads.append((24, opaque, 1))
 
@@ -140,6 +166,8 @@ def make_v2(
     set_u32(data, 8, 0x1000000E)
     set_u32(data, 12, 0x12345678)
     set_u32(data, 24, directory_locator)
+    set_u32(data, 28, nbg_format.V2_SUB_HEADER_BYTES)
+    set_u32(data, 32, 1)
     data.extend(
         struct.pack(
             "<III",
@@ -537,12 +565,20 @@ class V2ParserTests(unittest.TestCase):
         result = nbg_format.parse_bytes(make_v2(), display_path="v2.nb")
         self.assertEqual(result["format_family"], "v2-directory")
         self.assertEqual(result["product"], 0x1000000E)
-        self.assertEqual(result["directory"]["record_count"], 3)
+        self.assertEqual(result["target"], 0x1000000E)
+        self.assertEqual(result["directory"]["section_header_count"], 3)
+        self.assertEqual(result["header"]["crc32"], 0x12345678)
+        self.assertEqual(result["header"]["sub_header_size"], 12)
         self.assertEqual(result["inputs"][0]["dimensions"], [4, 2])
         self.assertEqual(result["inputs"][0]["byte_size"], 16)
         self.assertEqual(result["outputs"][0]["byte_size"], 32)
+        self.assertEqual(result["inputs"][0]["data_type_name"], "tensor")
         self.assertEqual(
-            result["inputs"][0]["quantization"]["scale"], 1.0
+            result["inputs"][0]["quantization"]["interpretation"], "none"
+        )
+        self.assertEqual(
+            result["sections"][2]["type_name"],
+            "NBG_SECTION_COEF_DATA",
         )
         self.assertEqual(
             result["connection_tail"]["fingerprint"]["chunk_count"], 1
@@ -565,11 +601,90 @@ class V2ParserTests(unittest.TestCase):
         self.assertEqual(quantization["fixed_position"], -3)
         self.assertEqual(quantization["interpretation"], "fixed-point")
 
+        affine = make_v2(
+            input_record=v2_io(
+                "affine",
+                (4,),
+                quantization_format=2,
+                word_0=float_word(0.25),
+                word_1=13,
+            )
+        )
+        parsed_affine = nbg_format.parse_bytes(affine)
+        quantization = parsed_affine["inputs"][0]["quantization"]
+        self.assertEqual(quantization["format_name"], "affine-asymmetric")
+        self.assertEqual(quantization["scale"], 0.25)
+        self.assertEqual(quantization["zero_point"], 13)
+
+    def test_public_v2_types_and_decoded_metadata(self):
+        result = nbg_format.parse_bytes(
+            make_v2(
+                input_record=v2_io(
+                    "state",
+                    (3,),
+                    data_format=8,
+                    data_type=3,
+                ),
+                output_record=v2_io(
+                    "packed",
+                    (3,),
+                    data_format=13,
+                ),
+                extra_sections=[
+                    (
+                        35,
+                        v2_network_info(
+                            "metadata-test",
+                            address_width=40,
+                            attribute=0b10_01_1,
+                        ),
+                        nbg_format.V2_NETWORK_INFO_BYTES,
+                    ),
+                    (37, struct.pack("<II", 0x1234, 1), 8),
+                    (38, struct.pack("<I", 8192), 4),
+                    (39, struct.pack("<I", 4096), 4),
+                    (
+                        40,
+                        struct.pack(
+                            "<II",
+                            24,
+                            zlib.crc32(b"opaque-data") & 0xFFFFFFFF,
+                        ),
+                        8,
+                    ),
+                ],
+            )
+        )
+        self.assertEqual(result["inputs"][0]["data_format_name"], "int32")
+        self.assertEqual(result["inputs"][0]["data_type_name"], "scalar")
+        self.assertEqual(result["inputs"][0]["byte_size"], 12)
+        self.assertEqual(result["outputs"][0]["data_format_name"], "int4")
+        self.assertEqual(result["outputs"][0]["element_bits"], 4)
+        self.assertIsNone(result["outputs"][0]["element_bytes"])
+        self.assertEqual(result["outputs"][0]["byte_size"], 2)
+        self.assertEqual(result["network_info"]["name"], "metadata-test")
+        self.assertEqual(result["network_info"]["address_width"], 40)
+        self.assertEqual(result["memory"]["memory_pool_bytes"], 0x100001234)
+        self.assertEqual(result["memory"]["vip_sram_bytes"], 8192)
+        self.assertEqual(result["memory"]["axi_sram_bytes"], 4096)
+        self.assertEqual(result["checksums"][0]["section_type"], 24)
+        self.assertTrue(result["checksums"][0]["matches"])
+        self.assertEqual(
+            result["checksums"][0]["section_type_name"],
+            "NBG_SECTION_COEF_DATA",
+        )
+
     def test_declared_size_locator_record_size_and_count_fail(self):
         base = bytearray(make_v2())
         cases: list[tuple[int, int, str]] = [
             (16, len(base) - 1, "invalid-header-field"),
+            (20, 1, "invalid-header-field"),
             (24, 12, "invalid-directory-locator"),
+            (28, 11, "invalid-header-field"),
+            (32, 2, "invalid-header-field"),
+            (36, 2, "invalid-header-field"),
+            (40, 1, "invalid-header-field"),
+            (44, 1, "invalid-header-field"),
             (52, 43, "invalid-directory-record-size"),
             (56, 0, "directory-count-limit"),
             (56, 257, "directory-count-limit"),
@@ -581,6 +696,48 @@ class V2ParserTests(unittest.TestCase):
                 with self.assertRaises(nbg_format.NbgParseError) as caught:
                     nbg_format.parse_bytes(bytes(data))
                 self.assertEqual(caught.exception.code, code)
+
+    def test_unknown_section_and_bad_decoded_metadata_fail(self):
+        unknown = bytearray(make_v2())
+        third_record = 60 + 2 * nbg_format.V2_DIRECTORY_RECORD_BYTES
+        set_u32(unknown, third_record, 41)
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bytes(unknown))
+        self.assertEqual(caught.exception.code, "invalid-section-type")
+
+        bad_stride = make_v2(
+            extra_sections=[(35, v2_network_info(), 219)]
+        )
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bad_stride)
+        self.assertEqual(caught.exception.code, "invalid-section-record-size")
+
+        bad_counts = make_v2(
+            extra_sections=[
+                (
+                    35,
+                    v2_network_info(input_count=2),
+                    nbg_format.V2_NETWORK_INFO_BYTES,
+                )
+            ]
+        )
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bad_counts)
+        self.assertEqual(caught.exception.code, "metadata-count-mismatch")
+
+        bad_checksum = make_v2(
+            extra_sections=[(40, struct.pack("<II", 24, 0), 8)]
+        )
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bad_checksum)
+        self.assertEqual(caught.exception.code, "checksum-mismatch")
+
+        empty_checksums = make_v2(
+            extra_sections=[(40, b"", 8)]
+        )
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(empty_checksums)
+        self.assertEqual(caught.exception.code, "section-count-limit")
 
     def test_directory_range_and_section_overlap_fail(self):
         base = bytearray(make_v2())
@@ -627,18 +784,12 @@ class V2ParserTests(unittest.TestCase):
             nbg_format.parse_bytes(bytes(bad_size))
         self.assertEqual(caught.exception.code, "invalid-io-record-size")
 
-        too_many = bytearray(base)
-        set_u32(
-            too_many,
-            first_record + 12,
-            65 * nbg_format.V2_IO_RECORD_BYTES,
+        too_many = make_v2(
+            input_record=v2_io("input", (1,)) * 257,
         )
         with self.assertRaises(nbg_format.NbgParseError) as caught:
-            nbg_format.parse_bytes(bytes(too_many))
-        self.assertIn(
-            caught.exception.code,
-            {"section-range-overflow", "section-overlap", "io-count-limit"},
-        )
+            nbg_format.parse_bytes(too_many)
+        self.assertEqual(caught.exception.code, "io-count-limit")
 
         bad_dimension_count = bytearray(base)
         set_u32(bad_dimension_count, first_data_offset, 0)
@@ -650,6 +801,21 @@ class V2ParserTests(unittest.TestCase):
         set_u32(zero_dimension, first_data_offset + 4, 0)
         with self.assertRaises(nbg_format.NbgParseError) as caught:
             nbg_format.parse_bytes(bytes(zero_dimension))
+        self.assertEqual(caught.exception.code, "invalid-dimension")
+
+        unknown_format_zero_dimension = bytearray(base)
+        set_u32(
+            unknown_format_zero_dimension,
+            first_data_offset + 28,
+            0xFFFFFFFF,
+        )
+        set_u32(
+            unknown_format_zero_dimension,
+            first_data_offset + 4,
+            0,
+        )
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bytes(unknown_format_zero_dimension))
         self.assertEqual(caught.exception.code, "invalid-dimension")
 
         bad_name = bytearray(base)

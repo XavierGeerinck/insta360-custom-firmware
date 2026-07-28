@@ -16,6 +16,9 @@ The immediate result is concrete:
   required artifact hashes were unchanged;
 - PoC 1 recovered and test-locked the private runtime ABI, backend dispatch,
   NBG loader lifecycle, and cleanup/error boundaries;
+- PoC 2 classified all 139 configured graphs, resolved the public v2 section
+  schema, recovered tensor/network/memory metadata, and verified all 690
+  stored section CRC-32 records;
 - the available host simulator still emits the wrong NBG product target, but
   PoC 1 also found a separate private export-data graph-construction route;
 - arbitrary custom models are **not yet unlocked**: neither route has yet
@@ -28,6 +31,9 @@ PoC 0's implementation plan is in
 PoC 1's ABI evidence starts at [`abi/README.md`](abi/README.md), and its
 implementation plan is
 [`2026-07-28-wave-npu-poc1-runtime-abi.md`](../superpowers/plans/2026-07-28-wave-npu-poc1-runtime-abi.md).
+PoC 2's format evidence starts at
+[`format/README.md`](format/README.md), and its implementation plan is
+[`2026-07-28-wave-npu-poc2-nbg-corpus-format.md`](../superpowers/plans/2026-07-28-wave-npu-poc2-nbg-corpus-format.md).
 
 ## Why this is a staged program
 
@@ -84,7 +90,7 @@ transfer.
 |---|---|---|---|
 | 0 — Reproducible lab | Can every later experiment be hash-pinned, bounded, and compared? | **Passed 2026-07-28** | Two stock CTC controls are semantically equivalent and leave captured state unchanged. |
 | 1 — Runtime ABI and call graph | What are the exact loader, tensor, execution, and cleanup contracts? | **Passed 2026-07-28** | Recovered ABI map is backed by exact function bytes, callers, focused decompilation, public-header deltas, and layout tests. |
-| 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | In progress | A strict parser describes a representative stock corpus without executing modified graphs. |
+| 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | **Passed 2026-07-28** | The strict host parser classifies all 139 configured graphs, agrees with live CTC metadata, and validates 690/690 section checksums. |
 | 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | Pending | Bounded traces correlate lifecycle phases without raw mutation fuzzing. |
 | 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | **Static backend gate passed in PoC 1** | It is classified as a CPU/MNN-style reference; dynamic format/quality characterization remains optional. |
 | 5 — Wave custom-graph gate | Can a minimal add/identity graph be represented for this runtime and target? | Two research routes | A genuinely Wave-targeted compiled NBG or fully reconstructed export-data graph passes create, execute, verify, and destroy. |
@@ -98,6 +104,11 @@ lab required to make every later claim reproducible.
 
 PoC 1 also remains host-only. It proves the ABI and code paths present in
 specific hashed binaries; it does not make a new graph safe to execute.
+
+PoC 2 is also host-only. It names sections from pinned public source and
+decodes bounded metadata, but it leaves accelerator commands, coefficients,
+patches, load states, dynamic I/O, and the connection region opaque. Format
+knowledge and valid checksums do not make a mutated or foreign graph safe.
 
 ## PoC 0 evidence summary
 
@@ -143,6 +154,7 @@ docs/npu/
     000-template.md                 required experiment record
     2026-07-28-poc0-...md           PoC 0 evidence
     2026-07-28-poc1-...md           PoC 1 evidence
+    2026-07-28-poc2-...md           PoC 2 evidence
   abi/
     README.md                       PoC 1 result and reproduction
     prototypes.md                   recovered FFI and layouts
@@ -152,6 +164,11 @@ docs/npu/
     runtime-abi-inventory.json       generated exact ELF evidence
     firmware-matrix.md              generated cross-firmware matrix
     ghidra-evidence.json             generated focused call/decompile evidence
+  format/
+    README.md                       PoC 2 result and reproduction
+    field-map.md                    byte layout and confidence ledger
+    corpus-summary.md               generated corpus distributions
+    stock-nbg-inventory.json        generated per-file evidence
 
 waved/scripts/npu/
   README.md                         harness developer guide
@@ -161,6 +178,8 @@ waved/scripts/npu/
   abi_inventory.py                  deterministic ELF inventory
   ghidra_targets.json               bounded decompiler targets
   ghidra_abi.py                     deterministic Ghidra export
+  nbg_corpus.json                   exact NBG corpus definition
+  nbg_format.py                     strict non-executing NBG parser
   tests/                             host contract tests
 
 artifacts/npu/                       raw, local, gitignored run evidence
@@ -247,8 +266,9 @@ audio capture fragile.
 
 ## Start here
 
-1. Read [`reproduction.md`](reproduction.md) and
-   [`abi/README.md`](abi/README.md).
+1. Read [`reproduction.md`](reproduction.md),
+   [`abi/README.md`](abi/README.md), and
+   [`format/README.md`](format/README.md).
 2. Run the host-only unit and ABI-layout tests.
 3. Regenerate or verify static evidence before changing a recovered
    declaration.

@@ -11,6 +11,7 @@ import re
 import struct
 import sys
 import tempfile
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,11 +46,16 @@ MINIMUM_RUNTIME_NBG_BYTES = 513
 V1_MIN_VERSION = 0x00010000
 V2_VERSION = 0x00020000
 V2_HEADER_BYTES = 48
+V2_SUB_HEADER_BYTES = 12
 V2_DIRECTORY_RECORD_BYTES = 44
 V2_IO_RECORD_BYTES = 112
+V2_NETWORK_INFO_BYTES = 220
+V2_MEMORY_POOL_BYTES = 8
+V2_SRAM_BYTES = 4
+V2_CHECKSUM_RECORD_BYTES = 8
 CONNECTION_TAIL_BYTES = 512
 MAX_DIRECTORY_RECORDS = 256
-MAX_IO_RECORDS = 64
+MAX_IO_RECORDS = 256
 MAX_DIMENSIONS = 6
 MAX_LAYER_OR_OPERATION_COUNT = 1_000_000
 MAX_TENSOR_BYTES = 1 << 40
@@ -58,13 +64,126 @@ FINGERPRINT_CHUNK_BYTES = 64 * 1024
 EDGE_FINGERPRINT_BYTES = 4096
 
 DATA_FORMATS: Mapping[int, tuple[str, int]] = {
-    0: ("fp32", 4),
-    1: ("fp16", 2),
-    2: ("uint8", 1),
-    3: ("int8", 1),
-    4: ("uint16", 2),
-    5: ("int16", 2),
+    0: ("fp32", 32),
+    1: ("fp16", 16),
+    2: ("uint8", 8),
+    3: ("int8", 8),
+    4: ("uint16", 16),
+    5: ("int16", 16),
+    6: ("char", 8),
+    7: ("bfp16", 16),
+    8: ("int32", 32),
+    9: ("uint32", 32),
+    10: ("int64", 64),
+    11: ("uint64", 64),
+    12: ("fp64", 64),
+    13: ("int4", 4),
+    14: ("uint4", 4),
+    16: ("bool8", 8),
 }
+
+DATA_TYPES: Mapping[int, str] = {
+    0: "tensor",
+    1: "image",
+    2: "array",
+    3: "scalar",
+}
+
+QUANTIZATION_FORMATS: Mapping[int, str] = {
+    0: "none",
+    1: "dynamic-fixed-point",
+    2: "affine-asymmetric",
+}
+
+V2_SECTION_TYPES: Mapping[int, str] = {
+    0: "NBG_SECTION_NONE",
+    1: "NBG_SECTION_INPUT",
+    2: "NBG_SECTION_OUTPUT",
+    3: "NBG_SECTION_LAYER",
+    4: "NBG_SECTION_OPERATIONS",
+    5: "NBG_SECTION_COEF_HEADER_TABLE",
+    6: "NBG_SECTION_COEF_HEADER",
+    7: "NBG_SECTION_NN",
+    8: "NBG_SECTION_TP",
+    9: "NBG_SECTION_SH",
+    10: "NBG_SECTION_PATCH",
+    11: "NBG_SECTION_LAYER_PARAM",
+    12: "NBG_SECTION_SW",
+    13: "NBG_SECTION_HWINITOPERATIONS",
+    14: "NBG_SECTION_ICDT",
+    15: "NBG_SECTION_ICD",
+    16: "NBG_SECTION_PPU_PARAM",
+    17: "NBG_SECTION_OPSYNC",
+    18: "NBG_SECTION_DMA_SBI_INFO",
+    19: "NBG_SECTION_PPU_INSTR",
+    20: "NBG_SECTION_DYNAIO",
+    21: "NBG_SECTION_LOADSTATE",
+    22: "NBG_SECTION_DMA_SBI_ADDITION",
+    23: "NBG_SECTION_COEF_DATA_TABLE",
+    24: "NBG_SECTION_COEF_DATA",
+    25: "NBG_SECTION_PPU_INSTR_TABLE",
+    26: "NBG_SECTION_DYNAIO_TABLE",
+    27: "NBG_SECTION_LOADSTATE_TABLE",
+    28: "NBG_SECTION_LAYER_DUMP_OPERATION",
+    29: "NBG_SECTION_LAYER_DUMP_OUTPUTS",
+    30: "NBG_SECTION_LAYER_DUMP_PATCH_DATA",
+    31: "NBG_SECTION_LAYER_DUMP_INSTR_TABLE",
+    32: "NBG_SECTION_LAYER_DUMP_INSTR",
+    33: "NBG_SECTION_LAYER_DUMP_LOADSTATE_TABLE",
+    34: "NBG_SECTION_LAYER_DUMP_LOADSTATE",
+    35: "NBG_SECTION_NETWORK_INFO",
+    36: "NBG_SECTION_CUSTOMER_DATA",
+    37: "NBG_SECTION_MEMORY_POOL",
+    38: "NBG_SECTION_VIP_SRAM",
+    39: "NBG_SECTION_AXI_SRAM",
+    40: "NBG_SECTION_CHECKSUM",
+}
+
+FORMAT_REFERENCES: tuple[dict[str, Any], ...] = (
+    {
+        "commit": "b83b89f3842cf2938c8ce8adec9dee1864b7d72a",
+        "files": [
+            {
+                "path": (
+                    "Arduino_package/hardware/system/project/"
+                    "realtek_amebapro2_v0_example/src/VIPLiteDrv_2.0.0/"
+                    "nbg_linker/inc/nbg_fmt_v2.h"
+                ),
+                "sha256": (
+                    "6af06536a70b2534c96ba384e775a19d2e9ef73acfb6817bd"
+                    "7975d4fd9cdc35b"
+                ),
+            },
+            {
+                "path": (
+                    "Arduino_package/hardware/system/project/"
+                    "realtek_amebapro2_v0_example/src/VIPLiteDrv_2.0.0/"
+                    "include/nbg_linker/vip_lite.h"
+                ),
+                "sha256": (
+                    "d0fd4ea3c98a032f7e8c3045d1d27972b6f1745c1b1e377a"
+                    "effcc16cc9eb138f"
+                ),
+            },
+        ],
+        "id": "ameba-viplite-2.0.0",
+        "repository": "https://github.com/Ameba-AIoT/ameba-arduino-pro2",
+    },
+    {
+        "commit": "702715d714277376d7ff466b7b72833ff57564c1",
+        "files": [
+            {
+                "path": "include/tim/utils/nbg_parser/nbg_parser.h",
+                "sha256": (
+                    "ef2e3eef354150f2643dad5ce0fa4c330dfb221389feba02c"
+                    "64eecc6cb81b5c8"
+                ),
+            }
+        ],
+        "id": "tim-vx-nbg-parser-api",
+        "repository": "https://github.com/VeriSilicon/TIM-VX",
+    },
+)
 
 V1_SECTION_NAMES = (
     "input_table",
@@ -868,12 +987,14 @@ def _fingerprint_range(
     chunk_digest = hashlib.sha256()
     counts = [0] * 256
     chunk_count = 0
+    crc32 = 0
     try:
         for chunk in reader.source.chunks(
             offset, size, FINGERPRINT_CHUNK_BYTES
         ):
             digest.update(chunk)
             chunk_digest.update(hashlib.sha256(chunk).digest())
+            crc32 = zlib.crc32(chunk, crc32)
             for value, count in Counter(chunk).items():
                 counts[value] += count
             chunk_count += 1
@@ -915,6 +1036,8 @@ def _fingerprint_range(
         "chunk_count": chunk_count,
         "chunk_hashes_sha256": chunk_digest.hexdigest(),
         "chunk_size": FINGERPRINT_CHUNK_BYTES,
+        "crc32": crc32 & 0xFFFFFFFF,
+        "crc32_hex": _hex32(crc32 & 0xFFFFFFFF),
         "entropy_bits_per_byte": round(entropy, 6),
         "first_sha256": hashlib.sha256(first).hexdigest(),
         "last_sha256": hashlib.sha256(last).hexdigest(),
@@ -927,10 +1050,6 @@ def _fingerprint_range(
 def _tensor_size(
     dimensions: Sequence[int], data_format: int, context: str
 ) -> tuple[str | None, int | None, int | None]:
-    format_spec = DATA_FORMATS.get(data_format)
-    if format_spec is None:
-        return None, None, None
-    format_name, element_bytes = format_spec
     elements = 1
     for dimension in dimensions:
         if dimension <= 0:
@@ -948,7 +1067,12 @@ def _tensor_size(
                 "tensor element product exceeds parser limit",
                 context=context,
             )
-    byte_size = elements * element_bytes
+    format_spec = DATA_FORMATS.get(data_format)
+    if format_spec is None:
+        return None, None, None
+    format_name, element_bits = format_spec
+    storage_bits = elements * element_bits
+    byte_size = (storage_bits + 7) // 8
     if byte_size > MAX_TENSOR_BYTES:
         raise NbgParseError(
             "tensor-size-overflow",
@@ -956,7 +1080,7 @@ def _tensor_size(
             "derived tensor storage exceeds parser limit",
             context=context,
         )
-    return format_name, element_bytes, byte_size
+    return format_name, element_bits, byte_size
 
 
 def _quantization(
@@ -969,6 +1093,7 @@ def _quantization(
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "format": quantization_format,
+        "format_name": QUANTIZATION_FORMATS.get(quantization_format),
         "word_0": word_0,
         "word_0_hex": _hex32(word_0),
         "word_1": word_1,
@@ -976,19 +1101,21 @@ def _quantization(
     }
     if has_explicit_fixed_word:
         assert fixed_word is not None
-        result["fixed_position"] = _signed_u32(fixed_word)
-        result["interpretation"] = (
-            "fixed-point" if quantization_format == 1 else "affine-or-none"
-        )
-        result["scale"] = _float_u32(word_0)
-        result["zero_point"] = _signed_u32(word_1)
+        result["fixed_word"] = fixed_word
+        result["fixed_word_hex"] = _hex32(fixed_word)
+    if quantization_format == 0:
+        result["interpretation"] = "none"
     elif quantization_format == 1:
-        result["fixed_position"] = _signed_u32(word_0)
+        result["fixed_position"] = _signed_u32(
+            fixed_word if has_explicit_fixed_word else word_0
+        )
         result["interpretation"] = "fixed-point"
-    else:
-        result["interpretation"] = "affine-or-none"
+    elif quantization_format == 2:
         result["scale"] = _float_u32(word_0)
         result["zero_point"] = _signed_u32(word_1)
+        result["interpretation"] = "affine-asymmetric"
+    else:
+        result["interpretation"] = "unknown"
     return result
 
 
@@ -1063,7 +1190,7 @@ def _parse_io_record_v1(
         stage="v1-io",
         allow_empty=True,
     )
-    format_name, element_bytes, byte_size = _tensor_size(
+    format_name, element_bits, byte_size = _tensor_size(
         dimensions, data_format, context
     )
     return {
@@ -1071,9 +1198,15 @@ def _parse_io_record_v1(
         "data_format": data_format,
         "data_format_name": format_name,
         "data_type": data_type,
+        "data_type_name": DATA_TYPES.get(data_type),
         "dimension_count": dimension_count,
         "dimensions": dimensions,
-        "element_bytes": element_bytes,
+        "element_bits": element_bits,
+        "element_bytes": (
+            element_bits // 8
+            if element_bits is not None and element_bits % 8 == 0
+            else None
+        ),
         "index": index,
         "name": name,
         "quantization": _quantization(
@@ -1151,7 +1284,7 @@ def _parse_io_record_v2(
         stage="v2-io",
         allow_empty=True,
     )
-    format_name, element_bytes, byte_size = _tensor_size(
+    format_name, element_bits, byte_size = _tensor_size(
         dimensions, data_format, context
     )
     return {
@@ -1159,9 +1292,15 @@ def _parse_io_record_v2(
         "data_format": data_format,
         "data_format_name": format_name,
         "data_type": data_type,
+        "data_type_name": DATA_TYPES.get(data_type),
         "dimension_count": dimension_count,
         "dimensions": dimensions,
-        "element_bytes": element_bytes,
+        "element_bits": element_bits,
+        "element_bytes": (
+            element_bits // 8
+            if element_bits is not None and element_bits % 8 == 0
+            else None
+        ),
         "index": index,
         "name": name,
         "quantization": _quantization(
@@ -1434,6 +1573,246 @@ def _parse_v1(
     }
 
 
+def _one_v2_section(
+    sections: Sequence[dict[str, Any]], section_type: int
+) -> dict[str, Any] | None:
+    matches = [
+        section for section in sections if section["type"] == section_type
+    ]
+    if len(matches) > 1:
+        raise NbgParseError(
+            "duplicate-section-type",
+            "v2-section",
+            f"section type {section_type} occurs {len(matches)} times",
+            context=V2_SECTION_TYPES[section_type],
+        )
+    return matches[0] if matches else None
+
+
+def _require_v2_section_shape(
+    section: Mapping[str, Any],
+    *,
+    entry_size: int,
+    record_count: int | None = None,
+) -> None:
+    observed_entry_size = section["entry_size"]
+    if observed_entry_size != entry_size:
+        raise NbgParseError(
+            "invalid-section-record-size",
+            "v2-section",
+            f"expected entry size {entry_size}, observed "
+            f"{observed_entry_size}",
+            offset=section["offset"],
+            context=section["type_name"],
+        )
+    observed_count = section["record_count"]
+    if observed_count is None:
+        raise NbgParseError(
+            "invalid-section-record-size",
+            "v2-section",
+            "section size is not divisible by its entry size",
+            offset=section["offset"],
+            context=section["type_name"],
+        )
+    if record_count is not None and observed_count != record_count:
+        raise NbgParseError(
+            "invalid-section-record-size",
+            "v2-section",
+            f"expected {record_count} record(s), observed "
+            f"{observed_count}",
+            offset=section["offset"],
+            context=section["type_name"],
+        )
+
+
+def _parse_v2_network_info(
+    reader: CheckedReader, section: Mapping[str, Any]
+) -> dict[str, Any]:
+    _require_v2_section_shape(
+        section, entry_size=V2_NETWORK_INFO_BYTES, record_count=1
+    )
+    offset = section["offset"]
+    context = "network_info"
+    name = reader.cstring(
+        offset,
+        64,
+        f"{context}.name",
+        stage="v2-network-info",
+        allow_empty=True,
+    )
+    fields = [
+        reader.u32(
+            offset + 64 + index * 4,
+            f"{context}.word_{index}",
+            code="invalid-section-record-size",
+            stage="v2-network-info",
+        )
+        for index in range(8)
+    ]
+    input_count, output_count = fields[0], fields[1]
+    layer_count, absolute_operation_count = fields[2], fields[3]
+    operation_count, core_count = fields[4], fields[5]
+    address_width, attribute_word = fields[6], fields[7]
+    if input_count > MAX_IO_RECORDS or output_count > MAX_IO_RECORDS:
+        raise NbgParseError(
+            "io-count-limit",
+            "v2-network-info",
+            f"network metadata declares {input_count} inputs and "
+            f"{output_count} outputs",
+            offset=offset + 64,
+        )
+    if (
+        layer_count > MAX_LAYER_OR_OPERATION_COUNT
+        or absolute_operation_count > MAX_LAYER_OR_OPERATION_COUNT
+        or operation_count > MAX_LAYER_OR_OPERATION_COUNT
+    ):
+        raise NbgParseError(
+            "invalid-header-field",
+            "v2-network-info",
+            "network layer or operation count exceeds parser limit",
+            offset=offset + 72,
+        )
+    reserved_bytes = reader.bytes(
+        offset + 96,
+        31 * 4,
+        f"{context}.vsi_reserved",
+        code="invalid-section-record-size",
+        stage="v2-network-info",
+    )
+    reserved_words = struct.unpack("<31I", reserved_bytes)
+    return {
+        "absolute_operation_count": absolute_operation_count,
+        "address_width": address_width,
+        "attribute": {
+            "change_ppu_param": attribute_word & 0x1,
+            "nn_command_size_code": (attribute_word >> 1) & 0x3,
+            "raw": attribute_word,
+            "raw_hex": _hex32(attribute_word),
+            "reserved_bits": attribute_word >> 7,
+            "support_dma_code": (attribute_word >> 5) & 0x3,
+            "tp_command_size_code": (attribute_word >> 3) & 0x3,
+            "vsi_reserved_nonzero_words": sum(
+                value != 0 for value in reserved_words
+            ),
+            "vsi_reserved_sha256": hashlib.sha256(
+                reserved_bytes
+            ).hexdigest(),
+        },
+        "core_count": core_count,
+        "input_count": input_count,
+        "layer_count": layer_count,
+        "name": name,
+        "operation_count": operation_count,
+        "output_count": output_count,
+    }
+
+
+def _parse_v2_memory_metadata(
+    reader: CheckedReader, sections: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    memory_pool = _one_v2_section(sections, 37)
+    if memory_pool is not None:
+        _require_v2_section_shape(
+            memory_pool, entry_size=V2_MEMORY_POOL_BYTES, record_count=1
+        )
+        low = reader.u32(
+            memory_pool["offset"],
+            "memory_pool.used_size_low",
+            stage="v2-memory-info",
+        )
+        high = reader.u32(
+            memory_pool["offset"] + 4,
+            "memory_pool.used_size_high",
+            stage="v2-memory-info",
+        )
+        result["memory_pool_bytes"] = _checked_u64(
+            low, high, "memory_pool.used_size"
+        )
+    for section_type, key in ((38, "vip_sram_bytes"), (39, "axi_sram_bytes")):
+        section = _one_v2_section(sections, section_type)
+        if section is None:
+            continue
+        _require_v2_section_shape(
+            section, entry_size=V2_SRAM_BYTES, record_count=1
+        )
+        result[key] = reader.u32(
+            section["offset"],
+            key,
+            stage="v2-memory-info",
+        )
+    return result
+
+
+def _parse_v2_checksums(
+    reader: CheckedReader, sections: Sequence[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    section = _one_v2_section(sections, 40)
+    if section is None:
+        return []
+    _require_v2_section_shape(
+        section, entry_size=V2_CHECKSUM_RECORD_BYTES
+    )
+    count = section["record_count"]
+    assert isinstance(count, int)
+    if not 1 <= count <= MAX_DIRECTORY_RECORDS:
+        raise NbgParseError(
+            "section-count-limit",
+            "v2-checksum",
+            f"expected 1..{MAX_DIRECTORY_RECORDS} checksum records, "
+            f"observed {count}",
+            offset=section["offset"],
+        )
+    checksums: list[dict[str, Any]] = []
+    for index in range(count):
+        offset = section["offset"] + index * V2_CHECKSUM_RECORD_BYTES
+        checked_type = reader.u32(
+            offset,
+            f"checksums[{index}].section_type",
+            stage="v2-checksum",
+        )
+        checksum = reader.u32(
+            offset + 4,
+            f"checksums[{index}].checksum",
+            stage="v2-checksum",
+        )
+        checked_sections = [
+            candidate
+            for candidate in sections
+            if candidate["type"] == checked_type
+        ]
+        if len(checked_sections) != 1:
+            raise NbgParseError(
+                "checksum-section-mismatch",
+                "v2-checksum",
+                f"checksum references section type {checked_type}, "
+                f"which occurs {len(checked_sections)} times",
+                offset=offset,
+            )
+        computed = checked_sections[0]["fingerprint"]["crc32"]
+        if checksum != computed:
+            raise NbgParseError(
+                "checksum-mismatch",
+                "v2-checksum",
+                f"recorded {_hex32(checksum)} does not match computed "
+                f"{_hex32(computed)}",
+                offset=offset + 4,
+                context=V2_SECTION_TYPES.get(checked_type),
+            )
+        checksums.append(
+            {
+                "checksum": checksum,
+                "checksum_hex": _hex32(checksum),
+                "computed_crc32": computed,
+                "matches": True,
+                "index": index,
+                "section_type": checked_type,
+                "section_type_name": V2_SECTION_TYPES.get(checked_type),
+            }
+        )
+    return checksums
+
+
 def _parse_v2(
     reader: CheckedReader, version: int
 ) -> dict[str, Any]:
@@ -1453,7 +1832,10 @@ def _parse_v2(
         )
         for index in range(9)
     ]
-    declared_size = words[1]
+    header_checksum = words[0]
+    declared_size = _checked_u64(
+        words[1], words[2], "header.total_size"
+    )
     if declared_size != reader.size:
         raise NbgParseError(
             "invalid-header-field",
@@ -1463,36 +1845,66 @@ def _parse_v2(
             offset=16,
             context="declared_file_size",
         )
-    directory_locator = words[3]
-    if directory_locator < V2_HEADER_BYTES:
+    sub_header_offset = words[3]
+    sub_header_size = words[4]
+    sub_header_count = words[5]
+    format_class = words[6] & 0x1
+    header_reserved_1 = words[6] >> 1
+    if sub_header_size != V2_SUB_HEADER_BYTES:
+        raise NbgParseError(
+            "invalid-header-field",
+            "v2-header",
+            f"expected sub-header size {V2_SUB_HEADER_BYTES}, observed "
+            f"{sub_header_size}",
+            offset=28,
+            context="sub_header_size",
+        )
+    if sub_header_count != 1:
+        raise NbgParseError(
+            "invalid-header-field",
+            "v2-header",
+            f"host parser supports exactly one sub-header, observed "
+            f"{sub_header_count}",
+            offset=32,
+            context="sub_header_count",
+        )
+    if header_reserved_1 or words[7] or words[8]:
+        raise NbgParseError(
+            "invalid-header-field",
+            "v2-header",
+            "reserved v2 header fields must be zero",
+            offset=36,
+            context="reserved",
+        )
+    if sub_header_offset < V2_HEADER_BYTES:
         raise NbgParseError(
             "invalid-directory-locator",
             "directory",
-            "directory preamble begins inside the v2 header",
-            offset=directory_locator,
+            "sub-header begins inside the v2 header",
+            offset=sub_header_offset,
         )
     reader.checked_range(
-        directory_locator,
-        12,
-        "directory_preamble",
+        sub_header_offset,
+        sub_header_size,
+        "sub_header",
         code="invalid-directory-locator",
         stage="directory",
     )
     records_offset = reader.u32(
-        directory_locator,
-        "directory.records_offset",
+        sub_header_offset,
+        "sub_header.section_headers_offset",
         code="invalid-directory-locator",
         stage="directory",
     )
     record_size = reader.u32(
-        directory_locator + 4,
-        "directory.record_size",
+        sub_header_offset + 4,
+        "sub_header.section_header_size",
         code="invalid-directory-locator",
         stage="directory",
     )
     record_count = reader.u32(
-        directory_locator + 8,
-        "directory.record_count",
+        sub_header_offset + 8,
+        "sub_header.section_header_count",
         code="invalid-directory-locator",
         stage="directory",
     )
@@ -1502,7 +1914,7 @@ def _parse_v2(
             "directory",
             f"expected {V2_DIRECTORY_RECORD_BYTES}, observed "
             f"{record_size}",
-            offset=directory_locator + 4,
+            offset=sub_header_offset + 4,
         )
     if not 1 <= record_count <= MAX_DIRECTORY_RECORDS:
         raise NbgParseError(
@@ -1510,7 +1922,7 @@ def _parse_v2(
             "directory",
             f"expected 1..{MAX_DIRECTORY_RECORDS}, observed "
             f"{record_count}",
-            offset=directory_locator + 8,
+            offset=sub_header_offset + 8,
         )
     directory_bytes = record_count * record_size
     if directory_bytes > MAX_U64:
@@ -1527,11 +1939,11 @@ def _parse_v2(
         code="directory-range-overflow",
         stage="directory",
     )
-    if records_offset < directory_locator + 12:
+    if records_offset < sub_header_offset + sub_header_size:
         raise NbgParseError(
             "section-overlap",
             "directory",
-            "directory records overlap their preamble",
+            "section headers overlap the sub-header",
             offset=records_offset,
         )
 
@@ -1549,6 +1961,15 @@ def _parse_v2(
             for word_index in range(11)
         ]
         section_type = directory_words[0]
+        type_name = V2_SECTION_TYPES.get(section_type)
+        if type_name is None:
+            raise NbgParseError(
+                "invalid-section-type",
+                "v2-section",
+                f"section type {section_type} is outside the pinned v2 enum",
+                offset=record_offset,
+                context=f"directory[{index}]",
+            )
         data_offset = _checked_u64(
             directory_words[1],
             directory_words[2],
@@ -1559,7 +1980,13 @@ def _parse_v2(
             directory_words[4],
             f"directory[{index}].data_size",
         )
-        stride = directory_words[8]
+        load_address = _checked_u64(
+            directory_words[5],
+            directory_words[6],
+            f"directory[{index}].load_address",
+        )
+        alignment = directory_words[7]
+        entry_size = directory_words[8]
         reader.checked_range(
             data_offset,
             data_size,
@@ -1579,8 +2006,8 @@ def _parse_v2(
             nonempty_ranges.append(
                 (data_offset, data_offset + data_size, index)
             )
-        if stride and data_size % stride == 0:
-            section_record_count: int | None = data_size // stride
+        if entry_size and data_size % entry_size == 0:
+            section_record_count: int | None = data_size // entry_size
         else:
             section_record_count = None
         section = {
@@ -1590,10 +2017,16 @@ def _parse_v2(
                 else (
                     "output-metadata"
                     if section_type == 2
-                    else f"opaque-section-type-{section_type}"
+                    else (
+                        "decoded-metadata"
+                        if section_type in {35, 37, 38, 39, 40}
+                        else "opaque"
+                    )
                 )
             ),
+            "alignment": alignment,
             "directory_words": directory_words,
+            "entry_size": entry_size,
             "fingerprint": _fingerprint_range(
                 reader,
                 data_offset,
@@ -1601,11 +2034,14 @@ def _parse_v2(
                 f"directory[{index}].section",
             ),
             "index": index,
+            "load_address": load_address,
             "offset": data_offset,
             "record_count": section_record_count,
+            "reserved_words": directory_words[9:11],
             "size": data_size,
-            "stride": stride,
+            "stride": entry_size,
             "type": section_type,
+            "type_name": type_name,
         }
         sections.append(section)
 
@@ -1679,42 +2115,78 @@ def _parse_v2(
             "v2 graph must contain one input and one output section",
         )
 
+    network_section = _one_v2_section(sections, 35)
+    network_info = (
+        _parse_v2_network_info(reader, network_section)
+        if network_section is not None
+        else None
+    )
+    if network_info is not None and (
+        network_info["input_count"] != len(inputs)
+        or network_info["output_count"] != len(outputs)
+    ):
+        raise NbgParseError(
+            "metadata-count-mismatch",
+            "v2-network-info",
+            "network-info IO counts do not match input/output sections",
+            offset=network_section["offset"] + 64,
+        )
+    memory_info = _parse_v2_memory_metadata(reader, sections)
+    checksums = _parse_v2_checksums(reader, sections)
+
     io_bytes = sum(
         section["size"]
         for section in sections
         if section["type"] in {1, 2}
     )
+    decoded_metadata_types = {35, 37, 38, 39, 40}
+    decoded_metadata_bytes = sum(
+        section["size"]
+        for section in sections
+        if section["type"] in decoded_metadata_types
+    )
     opaque_bytes = sum(
         section["size"]
         for section in sections
-        if section["type"] not in {1, 2}
+        if section["type"] not in {1, 2, *decoded_metadata_types}
     )
     return {
         "coverage": {
             "directory_bytes": directory_bytes + 12,
+            "decoded_metadata_bytes": decoded_metadata_bytes,
             "header_bytes": V2_HEADER_BYTES,
             "io_metadata_bytes": io_bytes,
             "opaque_section_bytes": opaque_bytes,
         },
+        "checksums": checksums,
         "directory": {
             "end": directory_end,
-            "locator": directory_locator,
-            "record_count": record_count,
-            "record_size": record_size,
-            "records_offset": records_offset,
+            "section_header_count": record_count,
+            "section_header_size": record_size,
+            "section_headers_offset": records_offset,
+            "sub_header_offset": sub_header_offset,
         },
         "format_family": "v2-directory",
         "header": {
+            "class": format_class,
+            "crc32": header_checksum,
+            "crc32_hex": _hex32(header_checksum),
             "declared_file_size": declared_size,
-            "directory_locator": directory_locator,
-            "flags": {
-                "bit_0": words[6] & 1,
-                "bits_1_through_4": (words[6] >> 1) & 0xF,
-                "raw": words[6],
+            "declared_file_size_high": words[2],
+            "declared_file_size_low": words[1],
+            "reserved": {
+                "class_word_reserved_bits": header_reserved_1,
+                "reserved2": words[7],
+                "reserved3": words[8],
             },
+            "sub_header_count": sub_header_count,
+            "sub_header_offset": sub_header_offset,
+            "sub_header_size": sub_header_size,
             "words_0_through_8": words,
         },
         "inputs": inputs,
+        "memory": memory_info,
+        "network_info": network_info,
         "outputs": outputs,
         "sections": sections,
         "warnings": [],
@@ -1749,7 +2221,11 @@ def _structural_signature(result: Mapping[str, Any]) -> str:
                 "size": section["size"],
                 "stride": section.get("stride")
                 or section.get("record_stride"),
-                "type": section.get("type") or section.get("name"),
+                "type": (
+                    section["type"]
+                    if "type" in section
+                    else section.get("name")
+                ),
             }
             for section in result["sections"]
         ],
@@ -1817,6 +2293,8 @@ def parse_source(
         "product_hex": _hex32(product),
         "sha256": _sha256_range(source, 0, reader.size),
         "size": reader.size,
+        "target": product,
+        "target_hex": _hex32(product),
         "version": version,
         "version_hex": _hex32(version),
     }
@@ -1925,6 +2403,7 @@ def build_inventory(
             "sha256": corpus.source_sha256,
         },
         "files": files,
+        "format_references": list(FORMAT_REFERENCES),
         "generator": _source_identity(Path(__file__).resolve()),
         "limits": {
             "connection_tail_bytes": CONNECTION_TAIL_BYTES,
@@ -1934,6 +2413,8 @@ def build_inventory(
             "maximum_tensor_bytes": MAX_TENSOR_BYTES,
             "v2_directory_record_bytes": V2_DIRECTORY_RECORD_BYTES,
             "v2_io_record_bytes": V2_IO_RECORD_BYTES,
+            "v2_network_info_bytes": V2_NETWORK_INFO_BYTES,
+            "v2_sub_header_bytes": V2_SUB_HEADER_BYTES,
         },
         "schema_version": INVENTORY_SCHEMA_VERSION,
     }
@@ -1994,14 +2475,24 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
     section_types: dict[str, dict[str, Any]] = {}
     io_shapes: Counter[str] = Counter()
     io_formats: Counter[str] = Counter()
-    quantization_formats: Counter[int] = Counter()
+    io_data_types: Counter[str] = Counter()
+    io_count_pairs: Counter[str] = Counter()
+    quantization_formats: Counter[str] = Counter()
+    network_names: Counter[str] = Counter()
+    address_widths: Counter[int] = Counter()
     for item in files:
         full_hash_groups.setdefault(item["sha256"], []).append(item["path"])
         structural_groups.setdefault(
             item["structural_signature"], []
         ).append(item["path"])
         for section in item["sections"]:
-            section_key = str(section.get("type", section.get("name")))
+            if "type" in section:
+                section_key = (
+                    f"{section['type']} / "
+                    f"{section.get('type_name') or 'unknown'}"
+                )
+            else:
+                section_key = str(section.get("name"))
             stats = section_types.setdefault(
                 section_key,
                 {"bytes": 0, "files": set(), "records": 0, "strides": set()},
@@ -2013,6 +2504,14 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
             stride = section.get("stride") or section.get("record_stride")
             if stride is not None:
                 stats["strides"].add(stride)
+        io_count_pairs[
+            f"{len(item['inputs'])} input(s) / "
+            f"{len(item['outputs'])} output(s)"
+        ] += 1
+        network_info = item.get("network_info")
+        if isinstance(network_info, dict):
+            network_names[network_info["name"] or "<empty>"] += 1
+            address_widths[network_info["address_width"]] += 1
         for direction in ("inputs", "outputs"):
             for tensor in item[direction]:
                 io_shapes[
@@ -2022,8 +2521,14 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
                     f"{direction[:-1]} "
                     f"{tensor['data_format_name'] or tensor['data_format']}"
                 ] += 1
+                io_data_types[
+                    f"{direction[:-1]} "
+                    f"{tensor.get('data_type_name') or tensor['data_type']}"
+                ] += 1
+                quantization = tensor["quantization"]
                 quantization_formats[
-                    tensor["quantization"]["format"]
+                    f"{quantization['format']} / "
+                    f"{quantization.get('format_name') or 'unknown'}"
                 ] += 1
 
     duplicate_groups = sorted(
@@ -2062,9 +2567,30 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
         f"- Unique full-file SHA-256 values: {len(full_hash_groups)}",
         f"- Unique structural signatures: {len(structural_groups)}",
         "",
-        "## Roles",
+        "## Pinned format references",
         "",
     ]
+    references = inventory.get("format_references", [])
+    lines.extend(
+        _markdown_table(
+            ("ID", "Repository", "Commit"),
+            (
+                (
+                    reference["id"],
+                    reference["repository"],
+                    reference["commit"],
+                )
+                for reference in references
+            ),
+        )
+    )
+    lines.extend(
+        [
+        "",
+        "## Roles",
+        "",
+        ]
+    )
     lines.extend(
         _markdown_table(
             ("Role", "Files"), _counter_rows(role_counts)
@@ -2116,6 +2642,18 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
             ("Direction/format", "Records"), _counter_rows(io_formats)
         )
     )
+    lines.extend(["", "## Tensor data types", ""])
+    lines.extend(
+        _markdown_table(
+            ("Direction/type", "Records"), _counter_rows(io_data_types)
+        )
+    )
+    lines.extend(["", "## Per-graph IO counts", ""])
+    lines.extend(
+        _markdown_table(
+            ("Inputs/outputs", "Files"), _counter_rows(io_count_pairs)
+        )
+    )
     lines.extend(["", "## Tensor shapes", ""])
     lines.extend(
         _markdown_table(
@@ -2125,10 +2663,24 @@ def render_summary(inventory: Mapping[str, Any]) -> str:
     lines.extend(["", "## Quantization formats", ""])
     lines.extend(
         _markdown_table(
-            ("Raw format", "Records"),
+            ("Format", "Records"),
             _counter_rows(quantization_formats),
         )
     )
+    lines.extend(["", "## Decoded network metadata", ""])
+    if network_names:
+        lines.extend(
+            _markdown_table(
+                ("Network name", "Files"), _counter_rows(network_names)
+            )
+        )
+        lines.extend(["", "Address widths:"])
+        lines.extend(
+            f"- `{width}` bits: {count} file(s)"
+            for width, count in sorted(address_widths.items())
+        )
+    else:
+        lines.append("No v2 network-info sections were decoded.")
     lines.extend(["", "## Exact duplicate groups", ""])
     if duplicate_groups:
         for digest, paths in duplicate_groups:
