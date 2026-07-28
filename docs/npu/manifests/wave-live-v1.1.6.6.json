@@ -1,0 +1,242 @@
+{
+  "schema_version": 1,
+  "manifest_id": "wave-live-v1.1.6.6",
+  "title": "Insta360 Wave live NPU baseline, v1.1.6.6-compatible runtime",
+  "evidence_cutoff_utc": "2026-07-28T08:36:00Z",
+  "device": {
+    "alias": "wave-lab-unit-a",
+    "adb_serial_tracked": false,
+    "marketing_model": {
+      "value": "Insta360 Wave",
+      "evidence": "observed-live"
+    },
+    "firmware_identity": {
+      "value": "v1.1.6.6-compatible rootfs",
+      "evidence": "inferred",
+      "basis": "The live NPU runtime library hashes exactly match the local fw_v1.1.6.6 extraction. No product-release file on the live rootfs reported v1.1.6.6 during the bounded collection."
+    },
+    "os_release": {
+      "name": "Buildroot",
+      "version": "2020.02.1-00822-g022c5748b-dirty",
+      "version_id": "2020.02.1",
+      "evidence": "observed-live",
+      "source": "/etc/os-release"
+    },
+    "kernel": {
+      "uname": "Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux",
+      "evidence": "observed-live",
+      "source": "uname -a"
+    }
+  },
+  "npu": {
+    "device_node": {
+      "path": "/dev/galcore",
+      "type": "character",
+      "major": 199,
+      "minor": 0,
+      "evidence": "observed-live"
+    },
+    "device_tree_compatible": {
+      "value": "amlogic, galcore",
+      "evidence": "observed-live",
+      "source": "/proc/device-tree/galcore/compatible"
+    },
+    "hardware_family": {
+      "value": "VeriSilicon VIP9000Nano-class NPU",
+      "evidence": "static-verified",
+      "basis": "Runtime and driver inventories plus exact public VIP9000 SDK comparison; PoC 0 does not independently query a canonical marketing name."
+    },
+    "nbg_product_target": {
+      "value_hex": "0x1000000e",
+      "evidence": "observed-and-static-verified",
+      "basis": "Parsed from the stock CTC NBG and printed by both live control runs."
+    },
+    "read_only_parameters": {
+      "nanoqFreq": {
+        "value": "838860800",
+        "evidence": "observed-live",
+        "source": "/sys/module/galcore/parameters/nanoqFreq"
+      },
+      "enableNN": {
+        "value": "255",
+        "evidence": "observed-live",
+        "source": "/sys/module/galcore/parameters/enableNN"
+      },
+      "recovery": {
+        "value": "1",
+        "evidence": "observed-live",
+        "source": "/sys/module/galcore/parameters/recovery"
+      }
+    },
+    "module_version_sysfs": {
+      "value": null,
+      "evidence": "observed-live",
+      "note": "/sys/module/galcore/version was unavailable on this rootfs."
+    },
+    "holders_during_poc0": {
+      "value": [],
+      "evidence": "observed-live",
+      "note": "The bounded /proc fd scan found no /dev/galcore holder immediately before or after either control. This is a point-in-time observation, not a claim that normal services never use the NPU."
+    }
+  },
+  "artifacts": [
+    {
+      "path": "/data/waved/waved-npu-probe.poc",
+      "role": "allowlisted native stock-CTC control probe",
+      "size_bytes": 721696,
+      "sha256": "fe8da5702032c397023acebd1a4bdf40ce086f6e86277a52c4f059f409552db0",
+      "evidence": "observed-and-static-verified",
+      "local_match": "waved/target/aarch64-unknown-linux-gnu/release/waved-npu-probe"
+    },
+    {
+      "path": "/usr/lib/libnnsdk.so",
+      "role": "Amlogic model lifecycle and tensor API used by the probe",
+      "size_bytes": 288448,
+      "sha256": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+      "evidence": "observed-and-static-verified",
+      "local_match": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libnnsdk.so"
+    },
+    {
+      "path": "/usr/lib/libovxlib.so",
+      "role": "VeriSilicon neural-network runtime dependency",
+      "size_bytes": 5838160,
+      "sha256": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9",
+      "evidence": "observed-and-static-verified",
+      "local_match": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libovxlib.so"
+    },
+    {
+      "path": "/usr/lib/libArchModelSw.so",
+      "role": "VeriSilicon architecture-model component; not loaded directly by PoC 0",
+      "size_bytes": 457080,
+      "sha256": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f",
+      "evidence": "observed-and-static-verified",
+      "local_match": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libArchModelSw.so",
+      "execution_gate": false
+    },
+    {
+      "path": "/model/asr_de/de_online/ctc_online.nb",
+      "role": "unmodified firmware-targeted NBG control graph",
+      "size_bytes": 2810984,
+      "sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66",
+      "evidence": "observed-and-static-verified",
+      "local_match": "models/ai-models/asr-models/model/asr_de/de_online/ctc_online.nb"
+    }
+  ],
+  "control_graph": {
+    "path": "/model/asr_de/de_online/ctc_online.nb",
+    "nbg_version_hex": "0x00020000",
+    "product_target_hex": "0x1000000e",
+    "evidence": "observed-and-static-verified",
+    "input": {
+      "name": "input/output[0]",
+      "dtype": "FP16",
+      "dimensions": [
+        256,
+        16,
+        1
+      ],
+      "bytes": 8192,
+      "test_value": "deterministic zero-filled tensor"
+    },
+    "output": {
+      "name": "uid_20000_sub_uid_1_out_0",
+      "dtype": "FP32",
+      "dimensions": [
+        5200,
+        16,
+        1
+      ],
+      "bytes": 332800,
+      "sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4"
+    },
+    "lifecycle_exports": [
+      "aml_module_create",
+      "aml_module_input_set",
+      "aml_module_output_get",
+      "aml_module_destroy"
+    ],
+    "metadata_exports": [
+      "aml_util_getInputTensorInfo",
+      "aml_util_getOutputTensorInfo",
+      "aml_util_freeTensorInfo"
+    ]
+  },
+  "poc0": {
+    "experiment_id": "stock-ctc",
+    "definition_sha256": "9cf0a286874a1f2062383977b9a26136efba12e768ac14f4e26eef9b47e1df6a",
+    "runner_commit": "68fcd874a7e45c972c1328d4237085269c3185f0",
+    "runs": [
+      {
+        "run_id": "poc0-first-control-20260728",
+        "timestamp_utc": "2026-07-28T08:35:37.094Z",
+        "classification": "success",
+        "host_adb_duration_ms": 340,
+        "native_iteration_ms": [
+          8.198,
+          2.241,
+          2.29
+        ],
+        "native_average_ms": 4.243,
+        "stdout_sha256": "2951562950f7a2b9f96da610345998e094682cc20ab194cefd6ac564188566ea",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "run_id": "poc0-second-control-20260728",
+        "timestamp_utc": "2026-07-28T08:35:57.813Z",
+        "classification": "success",
+        "host_adb_duration_ms": 182,
+        "native_iteration_ms": [
+          3.539,
+          2.155,
+          2.16
+        ],
+        "native_average_ms": 2.618,
+        "stdout_sha256": "6a96dc765c6aa87c506a931ca3bf4fd7498fe382d4b6afcac922be3daab20fb8",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "semantic_comparison": {
+      "result": "equivalent",
+      "exit_status": 0
+    },
+    "descriptive_timing": {
+      "sample_count": 6,
+      "median_ms": 2.266,
+      "minimum_ms": 2.155,
+      "maximum_ms": 8.198,
+      "benchmark_claim": false
+    },
+    "result": {
+      "status": "PASS",
+      "iterations_per_run": 3,
+      "output_bytes": 332800,
+      "output_sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4",
+      "cleanup": 0
+    },
+    "postconditions": {
+      "adb_responsive": true,
+      "galcore_present": true,
+      "npu_parameters_unchanged": true,
+      "required_artifacts_unchanged": true,
+      "post_snapshot_complete": true
+    }
+  },
+  "collection": {
+    "harness": "waved/scripts/npu/npu_lab.py",
+    "experiment_definitions": "waved/scripts/npu/experiments.json",
+    "snapshot_artifact": "artifacts/npu/poc0-snapshot.json",
+    "raw_run_root": "artifacts/npu/",
+    "tracked_notebook": "docs/npu/lab-notebook/2026-07-28-poc0-reproducible-lab.md",
+    "privacy_note": "ADB serial and unrelated device data were not added to this manifest."
+  },
+  "non_claims_and_unknowns": [
+    "PoC 0 does not prove arbitrary custom graphs can be compiled for product 0x1000000e.",
+    "PoC 0 does not prove libmodel_infer.so uses the NPU or accepts arbitrary ONNX.",
+    "PoC 0 does not identify every NBG section or driver ioctl.",
+    "The product-level firmware release string was not observed directly on the live rootfs.",
+    "The descriptive CTC timing is not a neural-noise-suppression benchmark.",
+    "No claim is made that /dev/galcore is always unheld; the holder scan was point-in-time.",
+    "No stock service, model, system library, sysfs value, module, firmware, or boot setting was changed."
+  ]
+}
+

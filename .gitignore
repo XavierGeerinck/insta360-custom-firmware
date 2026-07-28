@@ -57,3 +57,6 @@ waved/rust_out
 # include shadow/passwd).
 backups/**
 !backups/README.md
+
+# Raw Wave NPU lab runs (envelopes are summarized in tracked notebooks).
+/artifacts/npu/

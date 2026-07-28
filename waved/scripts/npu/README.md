@@ -1,0 +1,265 @@
+# Wave NPU Lab Harness
+
+`npu_lab.py` is a host-side safety and reproducibility boundary for NPU
+experiments on a connected Insta360 Wave.
+
+It is intentionally not a general ADB wrapper. There is no option for a shell
+command, an extra remote argument, an environment override, a remote path, or
+a timeout override. The only executable definitions come from the adjacent
+tracked [`experiments.json`](experiments.json).
+
+## Requirements
+
+- Python 3.10 or newer;
+- `adb` on the host `PATH`;
+- one authorized Wave visible as `device`;
+- the exact probe and firmware artifacts named by the selected definition;
+- no need for third-party Python packages.
+
+Unit tests use a fake transport and do not require ADB:
+
+```bash
+python3 -m unittest discover -s waved/scripts/npu/tests -v
+python3 -m py_compile waved/scripts/npu/npu_lab.py
+```
+
+## Commands
+
+List definitions without touching ADB:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py list
+```
+
+Capture the bounded preflight state without executing a graph:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py snapshot \
+  --experiment stock-ctc \
+  --output artifacts/npu/poc0-snapshot.json
+```
+
+Run one exact definition:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py run stock-ctc \
+  --artifact-root artifacts/npu \
+  --run-id poc0-first-control-20260728
+```
+
+Compare semantic invariants from two runs:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py compare \
+  artifacts/npu/poc0-first-control-20260728/envelope.json \
+  artifacts/npu/poc0-second-control-20260728/envelope.json
+```
+
+## What a run does
+
+1. Loads and strictly validates schema version 1.
+2. Resolves an experiment by exact key.
+3. Creates a new run directory and refuses to reuse one.
+4. Captures bounded pre-run state.
+5. Compares every required artifact SHA-256 with the tracked definition.
+6. Refuses before native execution if any required fact is missing or
+   different.
+7. Builds a fixed, quoted remote wrapper from validated tokens.
+8. Executes through `adb` with a host timeout.
+9. Recovers the remote exit status from a unique internal sentinel.
+10. Parses exactly one stock result line.
+11. Checks the semantic result against the definition.
+12. Captures post-run state even after native failure or timeout.
+13. Writes bounded stdout, stderr, and an atomic JSON envelope.
+
+No step writes the device. The existing PoC 0 probe and model are preconditions
+and are not installed by the harness.
+
+## Bounded snapshot
+
+The snapshot contains only:
+
+- `adb get-state`;
+- `uname -a`;
+- `/proc/uptime`;
+- the read-only galcore parameters `nanoqFreq`, `enableNN`, and `recovery`;
+- `/dev/galcore` metadata;
+- at most 32 selected process lines for `waved`, `audioserver`, or `pspapp`;
+- at most 32 `/dev/galcore` file-descriptor holders;
+- hashes for required artifacts.
+
+It does not collect environment variables, arbitrary process command lines,
+audio data, full kernel logs, unrelated files, or secrets. ANSI color
+sequences are removed from normalized snapshot values.
+
+## Output envelope
+
+Each run produces:
+
+```text
+artifacts/npu/RUN_ID/
+  envelope.json
+  stdout.txt
+  stderr.txt
+```
+
+The directory is created exclusively. A run ID must match
+`[a-z0-9][a-z0-9-]{0,63}`. An existing directory is never overwritten.
+
+The envelope preserves:
+
+- timestamp and git identity, including a dirty marker;
+- host platform, Python version, and first ADB version line;
+- canonical experiment-definition digest;
+- expected and observed artifact hashes;
+- the exact fixed remote argv and allowlisted environment;
+- pre- and post-device snapshots;
+- host ADB exit, remote exit, timeout, and classification;
+- parsed semantic result;
+- post-run health invariants;
+- hashes and byte sizes of the bounded raw logs.
+
+Only `LD_LIBRARY_PATH` and `VIVANTE_SDK_DIR` may appear in an experiment
+environment. The host and device environments are never captured.
+
+## Failure classifications
+
+| Classification | Meaning |
+|---|---|
+| `success` | Native exit, parsed result, expected result, and post-state all passed. |
+| `preflight-rejected` | Device state or an artifact hash differed before execution. |
+| `native-failure` | The probe exited unexpectedly or returned a valid but unexpected result. |
+| `native-timeout` | The host ADB boundary exceeded the tracked timeout. |
+| `adb-unavailable` | No device was available for the pre-run snapshot. |
+| `adb-failure` | ADB transport failed or the remote exit sentinel was not recovered. |
+| `result-parse-failure` | Native exit was expected but the machine result was missing, duplicate, or malformed. |
+| `post-snapshot-failure` | Native work passed but required post-run evidence was incomplete. |
+| `internal-error` | An unexpected host-harness error occurred after the run directory was created. |
+
+Every classification after directory creation gets an envelope. A failing
+classification is evidence, not permission to retry with fewer checks.
+
+## Timeout limitation
+
+The tested Wave rootfs has no `timeout` command. The known PoC probe has its
+own 15-second worker watchdog and the tracked host timeout is 20 seconds.
+
+If the host timeout fires, the harness:
+
+- terminates only its local `adb` client;
+- records `native-timeout`;
+- attempts the bounded post-state and holder scan;
+- does not send `kill`, reset the driver, write sysfs, stop a service, or
+  reboot.
+
+Terminating a host ADB client does not prove a remote process has stopped.
+Therefore a timeout is a stop condition for manual evidence review. New
+native probes must provide their own bounded-execution behavior before being
+allowlisted.
+
+## Definition schema and policy
+
+Schema version 1 requires these exact keys:
+
+```json
+{
+  "description": "human purpose",
+  "remote_argv": ["/data/waved/npu-lab/example", "--fixed-mode"],
+  "environment": {
+    "LD_LIBRARY_PATH": "/data/waved/lib:/usr/lib",
+    "VIVANTE_SDK_DIR": "/usr"
+  },
+  "timeout_ms": 20000,
+  "expected_remote_exit": 0,
+  "required_artifacts": {
+    "/data/waved/npu-lab/example": "lowercase-sha256"
+  },
+  "expected_result": {
+    "status": "PASS",
+    "iterations": 3,
+    "output_bytes": 1234,
+    "output_sha256": "lowercase-sha256",
+    "cleanup": 0
+  }
+}
+```
+
+Executable policy:
+
+- the original `/data/waved/waved-npu-probe.poc` is grandfathered for the
+  stock control;
+- new executables must be under `/data/waved/npu-lab/`;
+- `..`, control characters, empty arrays, unknown keys, duplicate JSON keys,
+  uppercase/invalid digests, nonpositive timeouts, and exit codes outside
+  `0..255` are rejected.
+
+Artifact paths can name firmware files outside the disposable lab directory
+because they are read-only preconditions. An executable cannot.
+
+## Adding an experiment
+
+Adding an experiment is a code-reviewed change, not an operator CLI action:
+
+1. Write a bounded native probe with an internal watchdog and deterministic
+   cleanup.
+2. Test its parser and failure behavior on the host.
+3. Stage it under `/data/waved/npu-lab/` only after that device mutation has
+   been explicitly reviewed.
+4. Record its exact live SHA-256 and all runtime/model dependencies.
+5. Add a complete definition to `experiments.json`.
+6. Add fake-transport tests for success, refusal, timeout, parse failure, and
+   cleanup.
+7. Run `list`, then `snapshot`.
+8. Review preflight evidence before the first native execution.
+9. Repeat and compare.
+10. Publish a notebook with both positive and negative findings.
+
+Never make the CLI accept “temporary” arguments. A new behavior belongs in
+the source-controlled probe and definition so that its hash and intent remain
+reviewable.
+
+## Semantic comparison
+
+Comparison includes:
+
+- experiment ID and definition digest;
+- expected and preflight artifact hashes;
+- kernel identity;
+- pre- and post-NPU parameter values;
+- native classification and remote exit;
+- status, iteration count, output bytes, output digest, and cleanup;
+- post-run ADB and state-health invariants.
+
+Comparison ignores:
+
+- timestamp and run ID;
+- uptime and PIDs;
+- graph pointer values in raw stdout;
+- host/remote duration and average native latency;
+- raw artifact host paths.
+
+This makes repeated experiments comparable without treating natural timing
+or allocator variation as a failure.
+
+## Test contracts
+
+The test suite covers:
+
+- strict schema and duplicate/unknown-key refusal;
+- environment and executable policy;
+- hash, timeout, and run-ID validation;
+- no mutable CLI remote arguments;
+- bounded snapshots and unavailable optional fields;
+- exact preflight refusal with no native call;
+- holder normalization;
+- exit-sentinel and result parsing;
+- all nine failure/success classifications;
+- post-snapshot after native failure and timeout;
+- bounded raw outputs;
+- environment redaction;
+- non-overwrite behavior;
+- semantic comparison and volatile-field exclusion.
+
+Do not weaken a contract merely to make a new probe run. Update the design and
+evidence model first.
+

@@ -283,6 +283,52 @@ adb shell 'LD_LIBRARY_PATH=/data/waved/lib:/usr/lib \
   /data/waved/waved-npu-probe.poc --run-stock-ctc'
 ```
 
+### Reproducible NPU lab baseline (validated 2026-07-28)
+
+The direct-inference control now runs through a source-controlled host
+harness rather than an ad-hoc ADB command. The harness pins the probe,
+`libnnsdk.so`, `libovxlib.so`, and model hashes; records bounded pre/post
+state; refuses mismatches before execution; recovers the native exit status;
+and compares semantic results while ignoring timing, PID, uptime, and pointer
+variation.
+
+Two new process lifecycles passed with definition SHA-256
+`9cf0a286874a1f2062383977b9a26136efba12e768ac14f4e26eef9b47e1df6a`.
+All six iterations returned the same 332,800-byte output digest shown above,
+and both `aml_module_destroy` calls returned zero. The observed iteration
+times were:
+
+```text
+control 1: 8.198, 2.241, 2.290 ms
+control 2: 3.539, 2.155, 2.160 ms
+median: 2.266 ms (descriptive, not a benchmark)
+```
+
+On this boot the read-only galcore values were:
+
+```text
+nanoqFreq=838860800
+enableNN=255
+recovery=1
+```
+
+They were identical before and after both controls. ADB remained responsive,
+the required hashes were unchanged, `/dev/galcore` remained present, and the
+bounded holder scan found no holder at either snapshot point. The empty
+holder result is point-in-time evidence, not a claim that stock services
+never use the NPU.
+
+The full reproducibility procedure, exact artifact sizes and hashes, raw-log
+digests, non-claims, and safety boundary are tracked in:
+
+- [`docs/npu/README.md`](../../docs/npu/README.md)
+- [`docs/npu/reproduction.md`](../../docs/npu/reproduction.md)
+- [PoC 0 lab notebook](../../docs/npu/lab-notebook/2026-07-28-poc0-reproducible-lab.md)
+- [live device manifest](../../docs/npu/manifests/wave-live-v1.1.6.6.json)
+
+This strengthens the inference proof; it does not change the custom-compiler
+blocker described below.
+
 ### Host prebuilt SDK is simulator-only (2026-04-23)
 
 Pursuing the AoT path (compile on host, load on device via `ops::NBG`)
