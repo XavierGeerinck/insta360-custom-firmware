@@ -51,6 +51,17 @@ python3 waved/scripts/npu/npu_lab.py run stock-ctc \
   --run-id poc0-first-control-20260728
 ```
 
+PoC 3 adds a separately built and staged trace definition:
+
+```bash
+waved/tools/npu-trace/build.sh
+waved/tools/npu-trace/stage.sh
+
+python3 waved/scripts/npu/npu_lab.py run stock-ctc-trace \
+  --artifact-root artifacts/npu/runs \
+  --run-id poc3-local-trace-1
+```
+
 Compare semantic invariants from two runs:
 
 ```bash
@@ -76,8 +87,9 @@ python3 waved/scripts/npu/npu_lab.py compare \
 12. Captures post-run state even after native failure or timeout.
 13. Writes bounded stdout, stderr, and an atomic JSON envelope.
 
-No step writes the device. The existing PoC 0 probe and model are preconditions
-and are not installed by the harness.
+No harness step writes the device. The existing PoC 0 probe and model are
+preconditions and are not installed by the harness. A separate, explicitly
+invoked staging script owns PoC 3's disposable tmpfs files.
 
 ## Bounded snapshot
 
@@ -146,7 +158,8 @@ classification is evidence, not permission to retry with fewer checks.
 ## Timeout limitation
 
 The tested Wave rootfs has no `timeout` command. The known PoC probe has its
-own 15-second worker watchdog and the tracked host timeout is 20 seconds.
+own 15-second worker watchdog. The tracked host timeout is 20 seconds for the
+stock control and 30 seconds for the bounded tracing wrapper.
 
 If the host timeout fires, the harness:
 
@@ -193,6 +206,9 @@ Executable policy:
 - the original `/data/waved/waved-npu-probe.poc` is grandfathered for the
   stock control;
 - new executables must be under `/data/waved/npu-lab/`;
+- because `/data` was full during PoC 3, exactly
+  `/tmp/wave-npu-lab/stock-ctc-trace` is also accepted; sibling `/tmp`
+  executables remain rejected;
 - `..`, control characters, empty arrays, unknown keys, duplicate JSON keys,
   uppercase/invalid digests, nonpositive timeouts, and exit codes outside
   `0..255` are rejected.
@@ -208,7 +224,8 @@ Adding an experiment is a code-reviewed change, not an operator CLI action:
    cleanup.
 2. Test its parser and failure behavior on the host.
 3. Stage it under `/data/waved/npu-lab/` only after that device mutation has
-   been explicitly reviewed.
+   been explicitly reviewed. An ephemeral path needs an equally narrow
+   executable-policy change; do not allowlist `/tmp` as a directory.
 4. Record its exact live SHA-256 and all runtime/model dependencies.
 5. Add a complete definition to `experiments.json`.
 6. Add fake-transport tests for success, refusal, timeout, parse failure, and
@@ -355,6 +372,67 @@ Format evidence and non-claims are documented in
 [`docs/npu/format/README.md`](../../../docs/npu/format/README.md) and
 [`docs/npu/format/field-map.md`](../../../docs/npu/format/field-map.md).
 
+## Metadata-only runtime trace
+
+PoC 3 uses:
+
+```text
+waved/tools/npu-trace/gal_trace.c
+waved/tools/npu-trace/build.sh
+waved/tools/npu-trace/stage.sh
+waved/tools/npu-trace/stock-ctc-trace.sh
+waved/scripts/npu/trace_normalize.py
+```
+
+Build and stage:
+
+```bash
+waved/tools/npu-trace/build.sh
+waved/tools/npu-trace/stage.sh
+```
+
+The build script uses the repository's pinned AArch64 cross image. The stage
+script requires exact local hashes, uses only `/tmp/wave-npu-lab/`, skips an
+identical target, refuses an unexpected existing target, and verifies remote
+read-back hashes.
+
+Run and normalize:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py run stock-ctc-trace \
+  --artifact-root artifacts/npu/runs \
+  --run-id poc3-local-trace-1
+
+python3 waved/scripts/npu/trace_normalize.py normalize \
+  --run-directory artifacts/npu/runs/poc3-local-trace-1 \
+  --output artifacts/npu/poc3-local-normalized-1.json
+```
+
+Compare two normalized reports:
+
+```bash
+python3 waved/scripts/npu/trace_normalize.py compare \
+  --left artifacts/npu/poc3-local-normalized-1.json \
+  --right artifacts/npu/poc3-local-normalized-2.json
+```
+
+The interposer forwards request 30000 unchanged and records only:
+
+- command;
+- hardware type;
+- core index;
+- interface byte size;
+- syscall result and errno;
+- returned HAL status.
+
+It never logs the 32-byte envelope's pointers or reads the command-specific
+union. The normalizer rejects pointer-shaped output, invalid records,
+nonzero results/statuses, count mismatch, phase mismatch, sequence gaps, and
+unknown framing.
+
+Canonical results and limits are in
+[`docs/npu/trace/README.md`](../../../docs/npu/trace/README.md).
+
 ## Test contracts
 
 The test suite covers:
@@ -378,6 +456,11 @@ The format tests additionally cover strict corpus discovery, v1/v2 bounds,
 all decoded metadata records, sub-byte tensor sizing, checksum mismatch,
 header and section corruption, prefix truncation, seeded random inputs,
 source-relative deterministic output, and exact live-CTC metadata.
+
+The trace tests additionally cover framing, volatile-value redaction,
+pointer-token rejection, metadata bounds, command/status pairing, phase
+correlation, the narrow final-thread exception, strace/GAL count agreement,
+repeatability, and exact ephemeral executable policy.
 
 Do not weaken a contract merely to make a new probe run. Update the design and
 evidence model first.

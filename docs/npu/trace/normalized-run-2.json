@@ -1,0 +1,1090 @@
+{
+  "control_result": {
+    "cleanup": 0,
+    "iterations": 3,
+    "output_bytes": 332800,
+    "output_sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4",
+    "status": "PASS"
+  },
+  "driver_events": [
+    {
+      "operation": "open",
+      "path": "/dev/galcore",
+      "phase": 1,
+      "result": "success"
+    },
+    {
+      "operation": "close",
+      "path": "/dev/galcore",
+      "phase": 1,
+      "result": "success"
+    },
+    {
+      "operation": "open",
+      "path": "/dev/galcore",
+      "phase": 5,
+      "result": "success"
+    },
+    {
+      "operation": "open",
+      "path": "/dev/galcore1",
+      "phase": 5,
+      "result": "missing"
+    }
+  ],
+  "experiment_id": "stock-ctc-trace",
+  "gal": {
+    "adjacent_label_source": "eCV5546 GAL 6.4.18.5 at 946d2c841fd82b916bdd2168033906bfec89db61",
+    "call_count": 73,
+    "calls": [
+      {
+        "command": 1,
+        "command_name_adjacent": "VERSION",
+        "core": 0,
+        "hardware": 0,
+        "hardware_name_adjacent": "INVALID",
+        "interface_bytes": 376,
+        "ordinal": 1,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 0,
+        "command_name_adjacent": "CHIP_INFO",
+        "core": 0,
+        "hardware": 0,
+        "hardware_name_adjacent": "INVALID",
+        "interface_bytes": 376,
+        "ordinal": 2,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 5,
+        "command_name_adjacent": "QUERY_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 2,
+        "hardware_name_adjacent": "3D",
+        "interface_bytes": 376,
+        "ordinal": 3,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 2,
+        "command_name_adjacent": "QUERY_CHIP_IDENTITY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 4,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 3,
+        "command_name_adjacent": "QUERY_CHIP_OPTION",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 5,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 15,
+        "command_name_adjacent": "ATTACH",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 6,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 7,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 32,
+        "command_name_adjacent": "GET_BASE_ADDRESS",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 8,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 9,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 10,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 11,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 12,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 13,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 14,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 15,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 16,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 17,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 2,
+        "command_name_adjacent": "QUERY_CHIP_IDENTITY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 18,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 3,
+        "command_name_adjacent": "QUERY_CHIP_OPTION",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 19,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 15,
+        "command_name_adjacent": "ATTACH",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 20,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 21,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 32,
+        "command_name_adjacent": "GET_BASE_ADDRESS",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 22,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 23,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 24,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 25,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 26,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 27,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 28,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 29,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 30,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 31,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 3,
+        "command_name_adjacent": "QUERY_CHIP_OPTION",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 32,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 33,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 34,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 35,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 36,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 37,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 38,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 39,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 40,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 41,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 42,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 43,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 44,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 6,
+        "command_name_adjacent": "ALLOCATE_LINEAR_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 45,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 9,
+        "command_name_adjacent": "LOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 46,
+        "phase": 5,
+        "request": 30000
+      },
+      {
+        "command": 18,
+        "command_name_adjacent": "COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 47,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 17,
+        "command_name_adjacent": "EVENT_COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 48,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 49,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 18,
+        "command_name_adjacent": "COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 50,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 17,
+        "command_name_adjacent": "EVENT_COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 51,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 52,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 18,
+        "command_name_adjacent": "COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 53,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 17,
+        "command_name_adjacent": "EVENT_COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 54,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 55,
+        "phase": 7,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 56,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 57,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 58,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 59,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 60,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 61,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 62,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 63,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 64,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 65,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 66,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 67,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 68,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 8,
+        "command_name_adjacent": "RELEASE_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 69,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 18,
+        "command_name_adjacent": "COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 70,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 17,
+        "command_name_adjacent": "EVENT_COMMIT",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 71,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 20,
+        "command_name_adjacent": "USER_SIGNAL",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 72,
+        "phase": 8,
+        "request": 30000
+      },
+      {
+        "command": 10,
+        "command_name_adjacent": "UNLOCK_VIDEO_MEMORY",
+        "core": 0,
+        "hardware": 4,
+        "hardware_name_adjacent": "VIP",
+        "interface_bytes": 376,
+        "ordinal": 73,
+        "phase": 8,
+        "request": 30000
+      }
+    ],
+    "command_counts": {
+      "0": 1,
+      "1": 1,
+      "10": 8,
+      "15": 2,
+      "17": 4,
+      "18": 4,
+      "2": 2,
+      "20": 16,
+      "3": 3,
+      "32": 2,
+      "5": 1,
+      "6": 11,
+      "8": 7,
+      "9": 11
+    },
+    "completion": {
+      "all_strace_ioctl_results_zero": true,
+      "entry_only_process_exit_ordinals": [],
+      "metadata_and_status_count": 73,
+      "strace_ioctl_results": {
+        "success": 73
+      }
+    },
+    "phase_command_counts": {
+      "1": {},
+      "2": {},
+      "3": {},
+      "4": {},
+      "5": {
+        "0": 1,
+        "1": 1,
+        "15": 2,
+        "2": 2,
+        "20": 12,
+        "3": 3,
+        "32": 2,
+        "5": 1,
+        "6": 11,
+        "9": 11
+      },
+      "6": {},
+      "7": {
+        "17": 3,
+        "18": 3,
+        "20": 3
+      },
+      "8": {
+        "10": 8,
+        "17": 1,
+        "18": 1,
+        "20": 1,
+        "8": 7
+      }
+    },
+    "request": 30000,
+    "sequence_sha256": "33b93229efcf7258253d2124129ac24f107de63b1742d6666db2e674cbb1c226"
+  },
+  "health": {
+    "adb_responsive": true,
+    "galcore_present": true,
+    "npu_parameters_unchanged": true,
+    "post_snapshot_complete": true,
+    "required_artifacts_unchanged": true,
+    "timeout_requires_manual_holder_review": false
+  },
+  "ignored_strace_events": {
+    "resumed": 5
+  },
+  "lifecycle": {
+    "phases": [
+      {
+        "description": "open /dev/galcore O_RDWR",
+        "phase": 1
+      },
+      {
+        "description": "read NPU status (read-only)",
+        "phase": 2
+      },
+      {
+        "description": "read and validate /model/asr_de/de_online/ctc_online.nb",
+        "phase": 3
+      },
+      {
+        "description": "load libnnsdk.so and query NBG tensor metadata",
+        "phase": 4
+      },
+      {
+        "description": "create graph from firmware NBG memory",
+        "phase": 5
+      },
+      {
+        "description": "submit deterministic zero-filled inputs",
+        "phase": 6
+      },
+      {
+        "description": "execute and hash 3 deterministic iterations",
+        "phase": 7
+      },
+      {
+        "description": "destroy graph and release runtime resources",
+        "phase": 8
+      }
+    ],
+    "traced_phase_order": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ]
+  },
+  "paths": [
+    {
+      "kind": "shared-library",
+      "name": "libdl.so.2"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libgcc_s.so.1"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libpthread.so.0"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libc.so.6"
+    },
+    {
+      "kind": "device",
+      "name": "/dev/galcore"
+    },
+    {
+      "kind": "npu-parameter",
+      "name": "nanoqFreq"
+    },
+    {
+      "kind": "npu-parameter",
+      "name": "enableNN"
+    },
+    {
+      "kind": "model",
+      "name": "ctc_online.nb"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libnnsdk.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "librt.so.1"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libovxlib.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libOpenVX.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libVSC_Lite.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libm.so.6"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libVSC.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libGAL.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libArchModelSw.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libNNArchPerf.so"
+    },
+    {
+      "kind": "shared-library",
+      "name": "libstdc++.so.6"
+    },
+    {
+      "kind": "device-alternate-missing",
+      "name": "/dev/galcore1"
+    }
+  ],
+  "schema_version": 1,
+  "source": {
+    "definition_sha256": "dcc6efe65182a9a8ded2f1c1f96fbf403098a51d414f2f48da4f9f029ac19992",
+    "raw_artifacts": [
+      {
+        "bytes": 83657,
+        "kind": "stdout",
+        "path": "stdout.txt",
+        "sha256": "03d8f835cd5f0e10a8aeff2bdcfbc859255f0d5ad6c82213c469e3c4dccffeac"
+      },
+      {
+        "bytes": 0,
+        "kind": "stderr",
+        "path": "stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "required_artifacts": {
+      "/bin/sh": "6350ce539100969ca9f54b7098d70699e20c8be422958f2f3b23d78f7e97b6f9",
+      "/data/waved/waved-npu-probe.poc": "fe8da5702032c397023acebd1a4bdf40ce086f6e86277a52c4f059f409552db0",
+      "/lib/libc.so.6": "cfc6aa042a880a87e4f0adbfb74b55c9ba9607561905b20f58da96fcb2d3bb86",
+      "/lib/libgcc_s.so.1": "859408230bf4baf943d0c7985870488683b6e61c0cb5725ed8934d8c45ea0ab1",
+      "/lib64/ld-2.31.so": "912002c930f3096d98fc32e0897466049d6e5182cbb606b456b2ebcc99551366",
+      "/model/asr_de/de_online/ctc_online.nb": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66",
+      "/tmp/wave-npu-lab/libwave-gal-trace.so": "dccaedd13812c161949905efecf7aa19fe74712b75de8d80211924e286e68601",
+      "/tmp/wave-npu-lab/stock-ctc-trace": "7799626fcad221088a109740022e93ca5b7652d7589c9e79347ec92a1b1ac866",
+      "/usr/bin/sha256sum": "6350ce539100969ca9f54b7098d70699e20c8be422958f2f3b23d78f7e97b6f9",
+      "/usr/bin/strace": "2046787af2bec0edd5c3483b59bcbd870e5a0fb68cc3c618e9e464e61ee62aa2",
+      "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+      "/usr/lib/libnnsdk.so": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+      "/usr/lib/libovxlib.so": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9"
+    }
+  },
+  "syscall_counts": {
+    "brk": 3,
+    "clone": 1,
+    "close": 22,
+    "execve": 1,
+    "exit_group": 1,
+    "futex": 4,
+    "ioctl": 73,
+    "mmap": 69,
+    "mprotect": 181,
+    "munmap": 10,
+    "openat": 66,
+    "ppoll": 1,
+    "write": 178
+  },
+  "trace_frame_channel": "stdout"
+}

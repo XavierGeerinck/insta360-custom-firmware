@@ -1,10 +1,12 @@
 # Wave NPU PoC 3 — Runtime and Driver Trace Plan
 
 **Date:** 2026-07-28  
-**Status:** Approved for execution; implementation in progress  
+**Status:** Executed; exit gate passed 2026-07-28
 **Depends on:** PoC 0 pass, PoC 1 pass at commit `f68708d`, PoC 2 pass at commit `9f8c035`  
 **Safety class:** Hash-pinned, bounded observation of the already-validated stock CTC graph  
 **Program design:** `docs/superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md`
+
+**Execution record:** `docs/npu/lab-notebook/2026-07-28-poc3-runtime-driver-trace.md`
 
 ## 1. Goal
 
@@ -404,3 +406,45 @@ The next compiler/custom-graph PoC may use the trace only to:
 - define additional allowlisted telemetry.
 
 Any first custom graph remains a separate plan and approval gate.
+
+## 12. Execution Result
+
+The gate passed with two successful framed traces under final definition
+SHA-256
+`dcc6efe65182a9a8ded2f1c1f96fbf403098a51d414f2f48da4f9f029ac19992`.
+
+Both runs observed:
+
+```text
+8 lifecycle phases
+73 request-30000 GAL calls
+73 syscall results zero
+73 returned HAL statuses zero
+376-byte interface in every call
+33b93229efcf7258253d2124129ac24f107de63b1742d6666db2e674cbb1c226
+  normalized command-sequence SHA-256
+332800 output bytes
+e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4
+  output SHA-256
+cleanup 0
+```
+
+All required comparison checks passed, including driver events, loaded paths,
+phase sequence, GAL sequence, semantic output, and health. Selected syscall
+counts also matched exactly.
+
+The initial direct-to-PTY pilot was retained as a negative framing result.
+Its native inference passed, but trace/probe byte interleaving prevented the
+strict result parser from finding a standalone `RESULT` line. The accepted
+wrapper separates raw trace streams into exact tmpfs files during execution,
+appends framed evidence after the clean result, and deletes those files.
+
+See:
+
+- `docs/npu/trace/README.md`;
+- `docs/npu/trace/galcore-interface.md`;
+- `docs/npu/trace/runtime-sequence.md`;
+- `docs/npu/trace/repeatability.md`;
+- `docs/npu/trace/normalized-run-1.json`;
+- `docs/npu/trace/normalized-run-2.json`;
+- `docs/npu/trace/repeatability.json`.

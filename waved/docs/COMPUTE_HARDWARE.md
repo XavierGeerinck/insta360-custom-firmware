@@ -45,6 +45,39 @@ The normal inference entry point is **ovxlib**: you call `vxCreateContext()`
 / `vxCreateGraph()` and feed tensors. Models are shipped as pre-compiled
 `.nb` binary graphs.
 
+### Runtime-to-driver trace (validated 2026-07-28)
+
+Two metadata-only traces of the exact stock CTC control observed the same
+software-visible transaction:
+
+```text
+ioctl request:       30000
+HAL interface:       376 bytes
+hardware type:       4 = VIP (adjacent public enum)
+core:                0
+calls per run:       73
+syscall/HAL failures: 0
+```
+
+Graph creation produced 46 initialization/allocation calls. Each of three
+executions produced exactly:
+
+```text
+COMMIT → EVENT_COMMIT → USER_SIGNAL
+```
+
+Graph teardown produced 18 unlock/release/event calls. The runtime opened
+`/dev/galcore`, probed absent `/dev/galcore1`, and retained the primary
+descriptor until normal process exit. Both runs preserved the known
+332,800-byte output digest, returned cleanup zero, and left captured NPU
+parameters and artifact hashes unchanged.
+
+The tracer reads only the fixed driver envelope/interface prefix. It does
+not capture addresses, command unions, buffers, model data, tensors, or
+audio. See the
+[`PoC 3 trace report`](../../docs/npu/trace/README.md) and
+[`runtime sequence`](../../docs/npu/trace/runtime-sequence.md).
+
 ### Model format: `.nb`
 
 `.nb` = "Network Binary" — VeriSilicon's compiled graph format produced by

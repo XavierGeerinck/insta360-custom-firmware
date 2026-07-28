@@ -19,6 +19,9 @@ The immediate result is concrete:
 - PoC 2 classified all 139 configured graphs, resolved the public v2 section
   schema, recovered tensor/network/memory metadata, and verified all 690
   stored section CRC-32 records;
+- PoC 3 captured two equivalent stock runtime/driver traces: 73 successful
+  galcore calls per run, a stable phase-correlated command sequence, and the
+  unchanged stock output digest;
 - the available host simulator still emits the wrong NBG product target, but
   PoC 1 also found a separate private export-data graph-construction route;
 - arbitrary custom models are **not yet unlocked**: neither route has yet
@@ -34,6 +37,9 @@ implementation plan is
 PoC 2's format evidence starts at
 [`format/README.md`](format/README.md), and its implementation plan is
 [`2026-07-28-wave-npu-poc2-nbg-corpus-format.md`](../superpowers/plans/2026-07-28-wave-npu-poc2-nbg-corpus-format.md).
+PoC 3's dynamic evidence starts at [`trace/README.md`](trace/README.md), and
+its implementation plan is
+[`2026-07-28-wave-npu-poc3-runtime-driver-trace.md`](../superpowers/plans/2026-07-28-wave-npu-poc3-runtime-driver-trace.md).
 
 ## Why this is a staged program
 
@@ -91,7 +97,7 @@ transfer.
 | 0 — Reproducible lab | Can every later experiment be hash-pinned, bounded, and compared? | **Passed 2026-07-28** | Two stock CTC controls are semantically equivalent and leave captured state unchanged. |
 | 1 — Runtime ABI and call graph | What are the exact loader, tensor, execution, and cleanup contracts? | **Passed 2026-07-28** | Recovered ABI map is backed by exact function bytes, callers, focused decompilation, public-header deltas, and layout tests. |
 | 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | **Passed 2026-07-28** | The strict host parser classifies all 139 configured graphs, agrees with live CTC metadata, and validates 690/690 section checksums. |
-| 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | Pending | Bounded traces correlate lifecycle phases without raw mutation fuzzing. |
+| 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | **Passed 2026-07-28** | Two bounded traces have the same 73-call phase-correlated GAL sequence, output digest, loaded paths, driver events, syscall counts, cleanup, and health. |
 | 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | **Static backend gate passed in PoC 1** | It is classified as a CPU/MNN-style reference; dynamic format/quality characterization remains optional. |
 | 5 — Wave custom-graph gate | Can a minimal add/identity graph be represented for this runtime and target? | Two research routes | A genuinely Wave-targeted compiled NBG or fully reconstructed export-data graph passes create, execute, verify, and destroy. |
 | 6 — Operation characterization | Which operations, shapes, dtypes, and state patterns work? | Pending | An allowlisted compatibility matrix covers the needs of candidate audio models. |
@@ -109,6 +115,12 @@ PoC 2 is also host-only. It names sections from pinned public source and
 decodes bounded metadata, but it leaves accelerator commands, coefficients,
 patches, load states, dynamic I/O, and the connection region opaque. Format
 knowledge and valid checksums do not make a mutated or foreign graph safe.
+
+PoC 3 is dynamic but observational. It identifies the 32-byte request
+envelope, 376-byte live interface, command/hardware/status prefix, lifecycle
+sequence, and runtime libraries without capturing command-union payloads.
+It does not turn those observations into a direct-driver programming API or
+authorize replay.
 
 ## PoC 0 evidence summary
 
@@ -155,6 +167,7 @@ docs/npu/
     2026-07-28-poc0-...md           PoC 0 evidence
     2026-07-28-poc1-...md           PoC 1 evidence
     2026-07-28-poc2-...md           PoC 2 evidence
+    2026-07-28-poc3-...md           PoC 3 live trace evidence
   abi/
     README.md                       PoC 1 result and reproduction
     prototypes.md                   recovered FFI and layouts
@@ -169,6 +182,13 @@ docs/npu/
     field-map.md                    byte layout and confidence ledger
     corpus-summary.md               generated corpus distributions
     stock-nbg-inventory.json        generated per-file evidence
+  trace/
+    README.md                       PoC 3 result and reproduction
+    galcore-interface.md            ioctl envelope and command ledger
+    runtime-sequence.md             phase-correlated transaction map
+    repeatability.md                live acceptance analysis
+    normalized-run-{1,2}.json       pointer-free generated evidence
+    repeatability.json              machine comparison
 
 waved/scripts/npu/
   README.md                         harness developer guide
@@ -180,7 +200,14 @@ waved/scripts/npu/
   ghidra_abi.py                     deterministic Ghidra export
   nbg_corpus.json                   exact NBG corpus definition
   nbg_format.py                     strict non-executing NBG parser
+  trace_normalize.py                strict pointer-free trace normalizer
   tests/                             host contract tests
+
+waved/tools/npu-trace/
+  gal_trace.c                       metadata-only ioctl interposer
+  build.sh                          reproducible AArch64 build
+  stage.sh                          exact non-overwriting tmpfs staging
+  stock-ctc-trace.sh                fixed framed trace wrapper
 
 artifacts/npu/                       raw, local, gitignored run evidence
 ```
@@ -224,7 +251,9 @@ Allowed without a new device-mutation review:
 - execution of a source-controlled experiment whose executable, arguments,
   environment, timeout, artifact hashes, and expected result are pinned;
 - staging disposable research artifacts only under `/data/waved/npu-lab/`
-  after that staging action is explicitly reviewed.
+  after that staging action is explicitly reviewed;
+- the exact PoC 3 wrapper at `/tmp/wave-npu-lab/stock-ctc-trace` when `/data`
+  has no free blocks, with both staged files hash-pinned and reboot-cleared.
 
 Requires explicit approval before the specific action:
 
@@ -247,9 +276,10 @@ Never part of this program:
 
 ## Noise-cancellation target
 
-The first useful custom workload is neural noise suppression, but only after
-PoCs 2, 3, 5, and 6 prove a custom graph route and the required operation
-surface. Candidate models must:
+The first useful custom workload is neural noise suppression. PoCs 2 and 3
+now supply the format and runtime/driver controls; PoCs 5 and 6 must still
+prove a custom graph route and the required operation surface. Candidate
+models must:
 
 - operate on bounded streaming frames;
 - have a CPU quality/reference implementation;
@@ -268,7 +298,8 @@ audio capture fragile.
 
 1. Read [`reproduction.md`](reproduction.md),
    [`abi/README.md`](abi/README.md), and
-   [`format/README.md`](format/README.md).
+   [`format/README.md`](format/README.md), then
+   [`trace/README.md`](trace/README.md).
 2. Run the host-only unit and ABI-layout tests.
 3. Regenerate or verify static evidence before changing a recovered
    declaration.

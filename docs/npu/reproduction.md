@@ -1,7 +1,8 @@
-# Reproducing Wave NPU PoC 0
+# Reproducing Wave NPU Controls
 
-This procedure reproduces the safe control experiment proving that code we
-control can execute a firmware-targeted NBG on the Insta360 Wave NPU.
+The first procedure reproduces PoC 0, proving that code we control can
+execute a firmware-targeted NBG on the Insta360 Wave NPU. The PoC 3 section
+then reproduces the bounded metadata-only runtime/driver trace.
 
 It does **not** install a probe, alter firmware, stop services, write sysfs,
 replace a model, or compile a custom model. The exact probe and stock graph
@@ -319,6 +320,143 @@ rm -r -- artifacts/npu/poc0-disposable-rerun
 Never remove `artifacts/npu/` broadly during active research, and never point
 cleanup at a workspace root, home directory, or unresolved variable.
 
+## Reproducing PoC 3
+
+PoC 3 executes the same stock graph and expected result as PoC 0. It adds a
+fixed syscall trace and a metadata-only `ioctl` interposer.
+
+It does not capture addresses in tracked output, read command payloads,
+mutate/replay a request, or execute a new graph.
+
+### 1. Build the AArch64 interposer
+
+Docker must be available:
+
+```bash
+waved/tools/npu-trace/build.sh
+```
+
+Expected output digest:
+
+```text
+dccaedd13812c161949905efecf7aa19fe74712b75de8d80211924e286e68601
+```
+
+The build uses the pinned cross image in `build.sh`, targets GLIBC 2.17, and
+is reproducible byte-for-byte on the documented host setup.
+
+### 2. Stage the disposable files
+
+The live unit had no available `/data` blocks, so PoC 3 uses a dedicated
+tmpfs directory:
+
+```bash
+waved/tools/npu-trace/stage.sh
+```
+
+Expected read-back:
+
+```text
+dccaedd13812c161949905efecf7aa19fe74712b75de8d80211924e286e68601  /tmp/wave-npu-lab/libwave-gal-trace.so
+7799626fcad221088a109740022e93ca5b7652d7589c9e79347ec92a1b1ac866  /tmp/wave-npu-lab/stock-ctc-trace
+```
+
+The script:
+
+- validates the host files;
+- creates only `/tmp/wave-npu-lab/`;
+- skips an already-identical file;
+- refuses to overwrite an unexpected file;
+- sets 0444/0555 permissions;
+- verifies remote hashes.
+
+Reboot clears the directory. The experiment harness allows only the exact
+wrapper path, not arbitrary `/tmp` executables.
+
+### 3. Preflight all 13 dependencies
+
+Use a new output path:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py snapshot \
+  --experiment stock-ctc-trace \
+  --output artifacts/npu/poc3-local-preflight.json
+```
+
+Do not continue unless:
+
+- ADB state is `device`;
+- `/dev/galcore` is present;
+- all 13 hashes match;
+- NPU parameters are observed;
+- errors are empty;
+- holder state is understood.
+
+### 4. Capture two runs
+
+Use unique run IDs:
+
+```bash
+python3 waved/scripts/npu/npu_lab.py run stock-ctc-trace \
+  --artifact-root artifacts/npu/runs \
+  --run-id poc3-local-trace-1
+
+python3 waved/scripts/npu/npu_lab.py run stock-ctc-trace \
+  --artifact-root artifacts/npu/runs \
+  --run-id poc3-local-trace-2
+```
+
+Both must classify as `success`. Stop after the first timeout, state drift,
+hash drift, output mismatch, nonzero cleanup, or post-snapshot failure.
+
+### 5. Normalize without pointers
+
+```bash
+python3 waved/scripts/npu/trace_normalize.py normalize \
+  --run-directory artifacts/npu/runs/poc3-local-trace-1 \
+  --output artifacts/npu/poc3-local-normalized-1.json
+
+python3 waved/scripts/npu/trace_normalize.py normalize \
+  --run-directory artifacts/npu/runs/poc3-local-trace-2 \
+  --output artifacts/npu/poc3-local-normalized-2.json
+```
+
+The normalizer accepts only successful `stock-ctc-trace` envelopes and exact
+trace framing. It fails on malformed metadata, unknown trace forms, pointer
+retention, nonzero ioctl/HAL status, sequence gaps, phase mismatches, or
+strace/GAL count disagreement.
+
+### 6. Compare
+
+```bash
+python3 waved/scripts/npu/trace_normalize.py compare \
+  --left artifacts/npu/poc3-local-normalized-1.json \
+  --right artifacts/npu/poc3-local-normalized-2.json
+```
+
+Expected JSON includes:
+
+```json
+{
+  "equivalent": true
+}
+```
+
+The 2026-07-28 accepted baseline contains:
+
+```text
+73 GAL calls
+73 syscall results zero
+73 returned HAL statuses zero
+376 interface bytes
+33b93229efcf7258253d2124129ac24f107de63b1742d6666db2e674cbb1c226
+  normalized sequence SHA-256
+```
+
+See [`trace/README.md`](trace/README.md) for the complete interpretation and
+[`trace/repeatability.md`](trace/repeatability.md) for the retained negative
+PTY-framing pilot.
+
 ## Creating a new allowlisted experiment
 
 The runner has no dynamic command feature by design. A new experiment
@@ -326,7 +464,9 @@ requires:
 
 1. an approved PoC design and safety gate;
 2. a native probe with internal bounded execution and cleanup;
-3. explicit review before staging under `/data/waved/npu-lab/`;
+3. explicit review before staging under `/data/waved/npu-lab/`; an ephemeral
+   fallback must be an exact executable allowlist entry, not a broad `/tmp`
+   root;
 4. exact hashes for the probe, runtimes, and models;
 5. a strict `experiments.json` entry;
 6. fake-transport tests for every relevant classification;
@@ -336,4 +476,3 @@ requires:
 
 See [`waved/scripts/npu/README.md`](../../waved/scripts/npu/README.md) for
 schema details.
-

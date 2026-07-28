@@ -1,0 +1,25 @@
+{
+  "checks": {
+    "control_result_equal": true,
+    "driver_events_equal": true,
+    "gal_completion_equal": true,
+    "gal_sequence_equal": true,
+    "gal_sequence_sha256_equal": true,
+    "health_equal": true,
+    "lifecycle_equal": true,
+    "path_observations_equal": true,
+    "syscall_counts_equal": true
+  },
+  "equivalent": true,
+  "note": "syscall count and final-thread GAL completion equality are reported but are not required repeatability gates because thread scheduling around process exit can vary them",
+  "required_checks": [
+    "control_result_equal",
+    "lifecycle_equal",
+    "path_observations_equal",
+    "driver_events_equal",
+    "gal_sequence_equal",
+    "gal_sequence_sha256_equal",
+    "health_equal"
+  ],
+  "schema_version": 1
+}

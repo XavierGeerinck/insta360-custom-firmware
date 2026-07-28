@@ -56,6 +56,9 @@ compiler constraint, not a failed research session.
 - [`2026-07-28-poc2-nbg-corpus-format.md`](2026-07-28-poc2-nbg-corpus-format.md)
   — host-only NBG v1/v2 parser, 139-file corpus, decoded metadata, and
   690/690 section-checksum validation.
+- [`2026-07-28-poc3-runtime-driver-trace.md`](2026-07-28-poc3-runtime-driver-trace.md)
+  — two live metadata-only traces, stable 73-call GAL sequence, exact output
+  control, unchanged state, and the retained PTY-framing negative pilot.
 
 ## Review checklist
 
