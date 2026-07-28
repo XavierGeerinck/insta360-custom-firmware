@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "experiments": {
+    "stock-ctc": {
+      "description": "Firmware-matched CTC inference control",
+      "remote_argv": [
+        "/data/waved/waved-npu-probe.poc",
+        "--run-stock-ctc"
+      ],
+      "environment": {
+        "LD_LIBRARY_PATH": "/data/waved/lib:/usr/lib",
+        "VIVANTE_SDK_DIR": "/usr"
+      },
+      "timeout_ms": 20000,
+      "expected_remote_exit": 0,
+      "required_artifacts": {
+        "/data/waved/waved-npu-probe.poc": "fe8da5702032c397023acebd1a4bdf40ce086f6e86277a52c4f059f409552db0",
+        "/usr/lib/libnnsdk.so": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+        "/usr/lib/libovxlib.so": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9",
+        "/model/asr_de/de_online/ctc_online.nb": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66"
+      },
+      "expected_result": {
+        "status": "PASS",
+        "iterations": 3,
+        "output_bytes": 332800,
+        "output_sha256": "e621b2134934ab94ab83049b4b56e5bb410831de41d9727aaf95384d413b52d4",
+        "cleanup": 0
+      }
+    }
+  }
+}
