@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "collections": [
+    {
+      "id": "wave-stock-models",
+      "root": "models/ai-models/asr-models/model",
+      "glob": "**/*.nb",
+      "role": "stock",
+      "required": true,
+      "expected_count": 137
+    }
+  ],
+  "files": [
+    {
+      "id": "foreign-sample-add",
+      "path": "waved/third_party/stock-npu-stack/sample-add.nb",
+      "role": "negative_control",
+      "required": true,
+      "expected_sha256": "9bef0c0f2271ad534cb975b386be8428e973dc7ee4c71c04854c95eeac1fea5c"
+    },
+    {
+      "id": "live-stock-ctc-reference",
+      "path": "waved/third_party/stock-npu-stack/sample-ctc.nb",
+      "role": "reference",
+      "required": true,
+      "expected_sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66"
+    }
+  ]
+}
