@@ -1,12 +1,16 @@
-# Wave NPU Lab Harness
+# Wave NPU Research Tools
 
-`npu_lab.py` is a host-side safety and reproducibility boundary for NPU
-experiments on a connected Insta360 Wave.
+This directory contains two deliberately separate tool classes:
 
-It is intentionally not a general ADB wrapper. There is no option for a shell
-command, an extra remote argument, an environment override, a remote path, or
-a timeout override. The only executable definitions come from the adjacent
-tracked [`experiments.json`](experiments.json).
+- `npu_lab.py` is the allowlisted device-experiment boundary;
+- `abi_inventory.py` and `ghidra_abi.py` are host-only, deterministic static
+  evidence generators.
+
+The static tools never invoke ADB or execute a firmware binary. The lab
+harness is intentionally not a general ADB wrapper: it accepts no arbitrary
+shell command, remote argument, environment override, remote path, or timeout
+override. Its only executable definitions come from the adjacent tracked
+[`experiments.json`](experiments.json).
 
 ## Requirements
 
@@ -23,7 +27,7 @@ python3 -m unittest discover -s waved/scripts/npu/tests -v
 python3 -m py_compile waved/scripts/npu/npu_lab.py
 ```
 
-## Commands
+## Device-lab commands
 
 List definitions without touching ADB:
 
@@ -238,6 +242,62 @@ Comparison ignores:
 - host/remote duration and average native latency;
 - raw artifact host paths.
 
+## Runtime ABI inventory
+
+[`abi_corpus.json`](abi_corpus.json) pins four extracted firmware roots and
+the logical NPU/runtime libraries to inspect. `abi_inventory.py` validates the
+configuration strictly, hashes every selected ELF, extracts imports, exports,
+relocations, diagnostics, exact function bytes, and bounded caller
+discoveries, then emits:
+
+```text
+docs/npu/abi/runtime-abi-inventory.json
+docs/npu/abi/firmware-matrix.md
+```
+
+Generate or verify:
+
+```bash
+python3 waved/scripts/npu/abi_inventory.py inventory \
+  --output docs/npu/abi/runtime-abi-inventory.json
+
+python3 waved/scripts/npu/abi_inventory.py matrix \
+  --inventory docs/npu/abi/runtime-abi-inventory.json \
+  --output docs/npu/abi/firmware-matrix.md
+
+python3 waved/scripts/npu/abi_inventory.py verify-generated
+```
+
+Requirements are Python 3.10 or newer, `rz-bin` 0.8.2, and the exact extracted
+firmware roots. Verification fails on any byte drift.
+
+## Focused Ghidra evidence
+
+[`ghidra_targets.json`](ghidra_targets.json) is a bounded list of exact ELF
+targets and symbols. `ghidra_abi.py` validates each input hash, creates a
+temporary Ghidra project, runs
+[`scripts/ghidra/ExportNpuAbi.java`](../../../scripts/ghidra/ExportNpuAbi.java),
+and writes deterministic call, caller, diagnostic, and decompilation evidence
+to `docs/npu/abi/ghidra-evidence.json`.
+
+Generate or verify:
+
+```bash
+python3 waved/scripts/npu/ghidra_abi.py generate \
+  --output docs/npu/abi/ghidra-evidence.json
+
+python3 waved/scripts/npu/ghidra_abi.py verify-generated
+```
+
+Requirements are Ghidra 12.0.4 and Java 21. Set
+`GHIDRA_ANALYZE_HEADLESS` only when the executable is not at a detected
+Homebrew path. Inputs are read-only and temporary projects are removed.
+
+Static evidence is documented in
+[`docs/npu/abi/README.md`](../../../docs/npu/abi/README.md). Decompiled types
+are hypotheses until exact callers, provider bytes, public headers, and
+executable layout tests agree.
+
 This makes repeated experiments comparable without treating natural timing
 or allocator variation as a failure.
 
@@ -262,4 +322,3 @@ The test suite covers:
 
 Do not weaken a contract merely to make a new probe run. Update the design and
 evidence model first.
-

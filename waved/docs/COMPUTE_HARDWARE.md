@@ -89,20 +89,31 @@ one of:
    onnxruntime against TIM-VX, which calls into the same `libovxlib.so`
    / `libGAL.so` / `/dev/galcore` stack already on-device. Trade-off:
    op coverage vs. Acuity is incomplete for bleeding-edge architectures.
-3. Reverse-engineer `.nb` (don't — it's versioned against the galcore
-   driver and schema-shifts between NPU generations).
+3. Recover only the bounded format and loader contracts needed to validate
+   stock graphs and investigate alternate graph representations. This is now
+   an evidence-gated research program under
+   [`docs/npu/`](../../docs/npu/README.md), not product-ID patching or raw
+   command mutation.
 
 ### Integration path for waved (SP#4 target)
 
-Recommended default: build **onnxruntime + VSI-NPU execution provider**
-against the on-device `libovxlib.so` / `libGAL.so`, cross-compiled for
-aarch64. Expose it via a Rust wrapper crate in `crates/waved-audio/src/ns/`.
-Model candidate: **DeepFilterNet 3** — ships a cleanly-exportable ONNX
-and is explicitly designed for edge inference (int8 quantisable, ~2M
-params, 10 ms frames).
+The production target remains a Rust-owned inference wrapper with a CPU
+fallback, but no arbitrary-ONNX NPU route is proven yet. The active research
+order is:
 
-If the VSI-NPU EP lacks an op DFN3 needs, fall back to the Acuity path
-(needs toolkit access) or `tract` CPU inference (eats 1–2 A55 cores).
+1. recover and validate the exact stock runtime and NBG contracts;
+2. determine whether the private export-data graph path can represent a
+   minimal safe graph;
+3. obtain or identify a genuine Wave-targeted compiler if compiled NBG is
+   required;
+4. characterize only the operations needed by a streaming denoiser;
+5. integrate after quality, deadline, stability, cleanup, and fallback gates
+   pass.
+
+DeepFilterNet remains a CPU/reference candidate, not a promise that its full
+ONNX graph maps to this NPU. ONNX Runtime with VSI-NPU and direct TIM-VX are
+candidate front ends only after their target/compiler and operation coverage
+are demonstrated on the Wave.
 
 ## Audio DSP (`/dev/audiodsp0`)
 
@@ -142,10 +153,14 @@ Model-to-backend mapping:
 | `/model/diarization/campp_118_cn_en_fp16.nb` | fp16 `.nb` | `libnnsdk` → NPU |
 | `/model/punc_model/*.nb`, `/model/punc_mino/*.nb` | `.nb` | `libnnsdk` → NPU |
 
-**There is no dedicated NS/dereverb model in `/model/`.** Stock noise
-suppression almost certainly lives inside `libTEAProcessSdk.so` (Tencent
-TEA), running on the A55 cores. The NPU is reserved for ASR, punctuation,
-and diarization.
+The live-reference v1.1.6.6 image has no dedicated NS/dereverb model in
+`/model/`. Firmware v3 adds AES/ANS model-loading APIs in
+`libmodel_infer.so`, but PoC 1 static analysis shows that DSO is a
+CPU/MNN-style interpreter: it has no NPU/OpenVX/GAL dependencies or imports,
+and the signal-processing caller consumes a 513-float ANS mask in its CPU
+audio pipeline. It is a useful workload and quality reference, not an NPU
+access path. See the
+[`backend map`](../../docs/npu/abi/backend-map.md#firmware-v3-audio-api).
 
 ### What this means for waved SP#4
 
@@ -328,6 +343,83 @@ digests, non-claims, and safety boundary are tracked in:
 
 This strengthens the inference proof; it does not change the custom-compiler
 blocker described below.
+
+### Runtime ABI and backend map (PoC 1, 2026-07-28)
+
+Host-only analysis of four exact firmware families recovered the narrow
+Wave-facing runtime contract and locked every relied-upon AArch64 structure
+size and offset in Rust tests. The exact bytes of the seven project-facing
+wrapper functions are identical across the corpus:
+
+```text
+aml_module_create
+aml_module_destroy
+aml_module_input_set
+aml_module_output_get
+aml_util_getInputTensorInfo
+aml_util_getOutputTensorInfo
+aml_util_freeTensorInfo
+```
+
+The public Amlogic header is not layout-compatible with the private Wave
+create/input/output ABI. In particular, stock callers allocate a
+`0x8e0`-byte create configuration; the first fields are:
+
+```text
++0x00 typeSize = 0x8e0
++0x04 model byte length
++0x08 file path pointer
++0x10 in-memory model pointer
++0x18 model type
++0x1c NBG source/type
+```
+
+The active hardware dispatch is:
+
+```text
+/dev/galcore -> VIPUNIFY (this Wave)
+/dev/vipcore -> VIPLITE
+/dev/adla0   -> ADLA
+/dev/mali0   -> eligible TFLite GPU/CPU delegate fallback
+```
+
+VIPUNIFY has two graph families:
+
+| `nbgType` | Source | Construction |
+|---:|---|---|
+| 0 | NBG file | Parse compiled NBG, create one OpenVX NBG node, bind IO, verify |
+| 1 | NBG memory | Same compiled-NBG path |
+| 2 | private export-data file | Parse nodes/tensors/connections/parameters, construct OpenVX graph, verify |
+| 3 | private export-data memory | Same reconstructed-graph path |
+
+The export-data path is a genuine second custom-model research route. PoC 1
+recovered its section markers and construction lifecycle but not a complete
+safe input grammar, so no handcrafted graph has been executed. The
+compiled-NBG route still requires a real `0x1000000e` target; changing a
+foreign NBG’s product field remains invalid.
+
+One error detail affects every future binding: `aml_module_input_set`
+discards its backend status and returns zero after dispatch, while
+`aml_module_output_get` can encode some invalid-context failures as a
+non-null integer-like pointer. Project code must validate context, tensor
+metadata, returned counts and lengths, output content, cleanup, and the
+external watchdog rather than trusting one wrapper return value.
+
+Full reproducible evidence:
+
+- [PoC 1 ABI index](../../docs/npu/abi/README.md)
+- [recovered prototypes and layouts](../../docs/npu/abi/prototypes.md)
+- [stock CTC call graph](../../docs/npu/abi/stock-ctc-call-graph.md)
+- [backend map](../../docs/npu/abi/backend-map.md)
+- [error taxonomy](../../docs/npu/abi/error-taxonomy.md)
+- [PoC 1 notebook](../../docs/npu/lab-notebook/2026-07-28-poc1-runtime-abi.md)
+
+The repository’s current `third_party/TIM-VX` checkout is exactly commit
+`702715d714277376d7ff466b7b72833ff57564c1` (commit date 2026-03-30).
+Sections below that say “TIM-VX v1.2.22” preserve results from the earlier
+checkout used for those experiments; they must not be read as the identity
+of the current tree. A later PoC must rerun any TIM-VX claim against the exact
+current commit before graduating it.
 
 ### Host prebuilt SDK is simulator-only (2026-04-23)
 

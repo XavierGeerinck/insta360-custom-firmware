@@ -47,6 +47,13 @@ to one of these only after it is stable:
 Negative results graduate too. A cleanly rejected product target is a useful
 compiler constraint, not a failed research session.
 
+## Completed records
+
+- [`2026-07-28-poc0-reproducible-lab.md`](2026-07-28-poc0-reproducible-lab.md)
+  — two live, allowlisted stock-CTC controls and unchanged-state evidence.
+- [`2026-07-28-poc1-runtime-abi.md`](2026-07-28-poc1-runtime-abi.md)
+  — host-only runtime ABI, call graph, backend, and error recovery.
+
 ## Review checklist
 
 Before marking a notebook complete:
@@ -62,4 +69,3 @@ Before marking a notebook complete:
 - [ ] Positive, negative, inferred, and unknown findings are separated.
 - [ ] Raw evidence locations are recorded.
 - [ ] Conclusion says what becomes allowed next—and what does not.
-

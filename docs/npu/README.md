@@ -14,13 +14,20 @@ The immediate result is concrete:
   output digest;
 - the device remained responsive and all captured NPU parameters and
   required artifact hashes were unchanged;
-- the available host simulator still emits the wrong NBG product target, so
-  arbitrary custom models are **not yet unlocked**.
+- PoC 1 recovered and test-locked the private runtime ABI, backend dispatch,
+  NBG loader lifecycle, and cleanup/error boundaries;
+- the available host simulator still emits the wrong NBG product target, but
+  PoC 1 also found a separate private export-data graph-construction route;
+- arbitrary custom models are **not yet unlocked**: neither route has yet
+  produced a verified custom graph on the Wave.
 
 The detailed program design is in
 [`2026-07-28-wave-npu-reverse-engineering-program-design.md`](../superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md).
 PoC 0's implementation plan is in
 [`2026-07-28-wave-npu-poc0-reproducible-lab.md`](../superpowers/plans/2026-07-28-wave-npu-poc0-reproducible-lab.md).
+PoC 1's ABI evidence starts at [`abi/README.md`](abi/README.md), and its
+implementation plan is
+[`2026-07-28-wave-npu-poc1-runtime-abi.md`](../superpowers/plans/2026-07-28-wave-npu-poc1-runtime-abi.md).
 
 ## Why this is a staged program
 
@@ -31,11 +38,13 @@ problem:
 ```text
 audio model or ONNX
         │
-        │ compiler/target selection — not solved
-        ▼
-Wave-targeted NBG (product 0x1000000e)
+        ├── compile to Wave-targeted NBG — compiler/target not solved
         │
-        │ libnnsdk ABI — direct use proven
+        └── reconstruct private export-data graph — format not yet complete
+        ▼
+compiled NBG or verified export-data graph
+        │
+        │ private libnnsdk ABI — recovered and layout-tested
         ▼
 VeriSilicon userspace runtime
         │
@@ -47,12 +56,19 @@ galcore kernel driver
 Wave NPU
 ```
 
-The current blocker is above the runtime: the host SDK available in this
-repository produces NBG target `0x10000020`, while the tested Wave graph
-targets `0x1000000e`. The runtime rejects the former before execution. We do
-not patch that product field and execute the result because the field selects
+The compiled-NBG blocker is above the runtime: the host SDK available in this
+repository produces target `0x10000020`, while the tested Wave graph targets
+`0x1000000e`. The runtime rejects the former before execution. We do not
+patch that product field and execute the result because the field selects
 compiled hardware behavior; changing an identifier cannot make kernels
 correct for different silicon.
+
+PoC 1 found a second branch in the exact stock runtime. `nbgType` 2/3 parses
+a private export-data representation, creates individual OpenVX tensors and
+nodes, then verifies the graph. That branch may avoid a precompiled NBG, but
+its format, operation parameters, ownership rules, and target behavior are
+not yet sufficiently recovered to execute a handcrafted graph. It is a
+research route, not an unlock claim.
 
 This research follows the same evidence-first spirit as Maderix's
 [Apple Neural Engine investigation](https://maderix.substack.com/p/inside-the-m4-apple-neural-engine)
@@ -67,11 +83,11 @@ transfer.
 | PoC | Question | Status | Exit gate |
 |---|---|---|---|
 | 0 — Reproducible lab | Can every later experiment be hash-pinned, bounded, and compared? | **Passed 2026-07-28** | Two stock CTC controls are semantically equivalent and leave captured state unchanged. |
-| 1 — Runtime ABI and call graph | What are the exact loader, tensor, execution, and cleanup contracts? | Next | Recovered ABI map is backed by static callers and host tests. |
-| 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | Pending | Parser describes a representative stock corpus without executing modified graphs. |
+| 1 — Runtime ABI and call graph | What are the exact loader, tensor, execution, and cleanup contracts? | **Passed 2026-07-28** | Recovered ABI map is backed by exact function bytes, callers, focused decompilation, public-header deltas, and layout tests. |
+| 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | In progress | A strict parser describes a representative stock corpus without executing modified graphs. |
 | 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | Pending | Bounded traces correlate lifecycle phases without raw mutation fuzzing. |
-| 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | Pending | Backend and accepted model format are proven, not inferred from strings. |
-| 5 — Wave compiler gate | Can a minimal add/identity graph be compiled for product `0x1000000e`? | Blocked on research | A genuinely Wave-targeted graph passes create, execute, verify, and destroy. |
+| 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | **Static backend gate passed in PoC 1** | It is classified as a CPU/MNN-style reference; dynamic format/quality characterization remains optional. |
+| 5 — Wave custom-graph gate | Can a minimal add/identity graph be represented for this runtime and target? | Two research routes | A genuinely Wave-targeted compiled NBG or fully reconstructed export-data graph passes create, execute, verify, and destroy. |
 | 6 — Operation characterization | Which operations, shapes, dtypes, and state patterns work? | Pending | An allowlisted compatibility matrix covers the needs of candidate audio models. |
 | 7 — Neural noise suppression | Can a useful denoiser meet quality and real-time constraints? | Pending | Quality, deadline, stability, cleanup, and CPU fallback gates all pass. |
 | 8 — Other audio models | Which VAD, echo suppression, dereverb, embedding, or event models are worthwhile? | Pending | Each candidate has an evidence-backed value/cost decision. |
@@ -79,6 +95,9 @@ transfer.
 
 PoC 0 does not claim that custom models run. It establishes the controlled
 lab required to make every later claim reproducible.
+
+PoC 1 also remains host-only. It proves the ABI and code paths present in
+specific hashed binaries; it does not make a new graph safe to execute.
 
 ## PoC 0 evidence summary
 
@@ -123,12 +142,26 @@ docs/npu/
     README.md                       notebook policy
     000-template.md                 required experiment record
     2026-07-28-poc0-...md           PoC 0 evidence
+    2026-07-28-poc1-...md           PoC 1 evidence
+  abi/
+    README.md                       PoC 1 result and reproduction
+    prototypes.md                   recovered FFI and layouts
+    stock-ctc-call-graph.md          live path lifecycle
+    backend-map.md                  runtime and v3 audio backends
+    error-taxonomy.md               failure and recovery contract
+    runtime-abi-inventory.json       generated exact ELF evidence
+    firmware-matrix.md              generated cross-firmware matrix
+    ghidra-evidence.json             generated focused call/decompile evidence
 
 waved/scripts/npu/
   README.md                         harness developer guide
   experiments.json                  sole executable experiment source
   npu_lab.py                        host runner
-  tests/test_npu_lab.py             fake-device contract tests
+  abi_corpus.json                   exact static-analysis corpus
+  abi_inventory.py                  deterministic ELF inventory
+  ghidra_targets.json               bounded decompiler targets
+  ghidra_abi.py                     deterministic Ghidra export
+  tests/                             host contract tests
 
 artifacts/npu/                       raw, local, gitignored run evidence
 ```
@@ -155,7 +188,10 @@ The distinction matters. For example:
 - “The tested stock CTC graph executes” is observed live.
 - “The graph target field is `0x1000000e`” is both statically parsed and
   observed in probe output.
-- “`libmodel_infer.so` uses the NPU for arbitrary ONNX” remains unknown.
+- “The v3 `libmodel_infer.so` AES/ANS path is CPU/MNN-style and does not
+  import the NPU stack” is static verified.
+- “The private export-data branch can run an arbitrary handcrafted graph”
+  remains unknown.
 - “Changing a product ID makes a foreign NBG safe” is unsupported and is not
   tested.
 
@@ -193,7 +229,8 @@ Never part of this program:
 ## Noise-cancellation target
 
 The first useful custom workload is neural noise suppression, but only after
-PoCs 1–6 prove the compiler and operation surface. Candidate models must:
+PoCs 2, 3, 5, and 6 prove a custom graph route and the required operation
+surface. Candidate models must:
 
 - operate on bounded streaming frames;
 - have a CPU quality/reference implementation;
@@ -210,11 +247,12 @@ audio capture fragile.
 
 ## Start here
 
-1. Read [`reproduction.md`](reproduction.md).
-2. Run the host-only unit tests.
-3. List the committed experiments.
-4. Take a read-only snapshot.
-5. Run only when preflight hashes match.
-6. Compare repeated envelopes.
-7. Record the conclusion and its limits in a notebook.
-
+1. Read [`reproduction.md`](reproduction.md) and
+   [`abi/README.md`](abi/README.md).
+2. Run the host-only unit and ABI-layout tests.
+3. Regenerate or verify static evidence before changing a recovered
+   declaration.
+4. List the committed device experiments.
+5. Take a read-only snapshot.
+6. Run only a reviewed definition when preflight hashes match.
+7. Compare repeated envelopes and record the conclusion and limits.
