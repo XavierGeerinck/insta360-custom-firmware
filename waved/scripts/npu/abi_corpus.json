@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "reference_firmware": "fw_v1.1.6.6",
+  "firmwares": {
+    "fw_v1.0.13.6": {
+      "root": "firmwares/fw_v1.0.13.6/extracted/rootfs",
+      "live_match": false
+    },
+    "fw_v1.1.6.6": {
+      "root": "firmwares/fw_v1.1.6.6/extracted/rootfs",
+      "live_match": true
+    },
+    "fw_business_v1.0.2.6": {
+      "root": "firmwares/fw_business_v1.0.2.6/extracted/rootfs",
+      "live_match": false
+    },
+    "fw_v3.0.0.1": {
+      "root": "firmwares/fw_v3.0.0.1/extracted/rootfs",
+      "live_match": false
+    }
+  },
+  "binaries": {
+    "libArchModelSw.so": {
+      "path": "usr/lib/libArchModelSw.so",
+      "required": true,
+      "roles": [
+        "architecture-model",
+        "compiler-support"
+      ]
+    },
+    "libGAL.so": {
+      "path": "usr/lib/libGAL.so",
+      "required": true,
+      "roles": [
+        "kernel-interface",
+        "runtime"
+      ]
+    },
+    "libOpenVX.so": {
+      "path": "usr/lib/libOpenVX.so",
+      "required": true,
+      "roles": [
+        "openvx",
+        "runtime"
+      ]
+    },
+    "libVSC.so": {
+      "path": "usr/lib/libVSC.so",
+      "required": true,
+      "roles": [
+        "compiler-support",
+        "runtime"
+      ]
+    },
+    "libasr_reverb.so": {
+      "path": "usr/lib/libasr_reverb.so",
+      "required": true,
+      "roles": [
+        "caller",
+        "stock-asr"
+      ]
+    },
+    "libmodel_infer.so": {
+      "path": "usr/lib/libmodel_infer.so",
+      "required": false,
+      "roles": [
+        "audio-model-loader",
+        "provider"
+      ]
+    },
+    "libnnsdk.so": {
+      "path": "usr/lib/libnnsdk.so",
+      "required": true,
+      "roles": [
+        "model-api",
+        "provider",
+        "runtime"
+      ]
+    },
+    "libovxlib.so": {
+      "path": "usr/lib/libovxlib.so",
+      "required": true,
+      "roles": [
+        "neural-network",
+        "runtime"
+      ]
+    }
+  },
+  "symbol_filters": {
+    "exact": [
+      "aml_module_create",
+      "aml_module_destroy",
+      "aml_module_input_set",
+      "aml_module_output_get",
+      "aml_util_freeTensorInfo",
+      "aml_util_getInputTensorInfo",
+      "aml_util_getOutputTensorInfo"
+    ],
+    "prefixes": [
+      "aml_adla_",
+      "aml_delegate_",
+      "aml_module_",
+      "aml_util_",
+      "aml_viplite_",
+      "aml_vipunify_",
+      "get_hardware_",
+      "get_product_",
+      "model_infer_aes_",
+      "model_infer_ans_",
+      "read_nbg_",
+      "vipunify_",
+      "vsi_nn_"
+    ],
+    "contains": [
+      "Adla"
+    ]
+  },
+  "string_filters": [
+    "/dev/adla0",
+    "/dev/galcore",
+    "adla",
+    "archmodel",
+    "backend",
+    "cleanup",
+    "driver version",
+    "hardware version",
+    "nbg",
+    "nnapi",
+    "onnx",
+    "opencl",
+    "opengles",
+    "output tensor",
+    "product list",
+    "quant_type",
+    "read binary",
+    "run network",
+    "vip lite",
+    "vipunify"
+  ],
+  "caller_scan": {
+    "directories": [
+      "usr/bin",
+      "usr/lib",
+      "usr/sbin"
+    ],
+    "needles": [
+      "aml_module_",
+      "aml_util_",
+      "model_infer_aes_",
+      "model_infer_ans_"
+    ],
+    "maximum_file_bytes": 268435456
+  },
+  "project_ffi": [
+    "aml_module_create",
+    "aml_module_destroy",
+    "aml_module_input_set",
+    "aml_module_output_get",
+    "aml_util_freeTensorInfo",
+    "aml_util_getInputTensorInfo",
+    "aml_util_getOutputTensorInfo"
+  ]
+}
