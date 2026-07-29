@@ -132,7 +132,8 @@ operation sweep.
 - a general NBG serializer;
 - PReLU, Multiply, Add, Conv, MatrixMul, or any operation sweep;
 - the quarantined version-adjacent `libCLC.so`;
-- simulator or container execution;
+- simulator execution;
+- containers on the Wave or any unapproved host container;
 - replacing firmware libraries;
 - changing kernel modules or galcore parameters;
 - reset, reboot, service stop, or privileged recovery;
@@ -285,6 +286,10 @@ waved/tools/npu-compiler/stage-device-erf-constant-diff.sh
 
 The build reuses the pinned AArch64 toolchain and exact external ovxlib
 configuration already proven for the Erf compile path.
+
+Exactly one hash-pinned, network-disabled host build-container invocation is
+allowed. It is build provenance, not a model/compiler runtime experiment.
+No container is loaded or run on the Wave.
 
 The policy checker binds:
 
@@ -549,7 +554,7 @@ There is no automatic alternate operation or relaxed retry.
 
 ```text
 hash reviewed files
-build one fixed AArch64 probe
+build one fixed AArch64 probe in one pinned network-disabled host container
 read device identity and health
 create one exact temporary staging directory
 push exact manifest-listed files
@@ -580,11 +585,17 @@ compiler_retries:            0
 alternate_operation_calls:   0
 quarantined_clc_calls:       0
 simulator_calls:             0
-container_runs:              0
+device_container_runs:       0
+unapproved_container_runs:   0
 persistent_mutated_nbgs:     0
 ```
 
 Any nonzero prohibited-action counter invalidates the PoC.
+
+The separate allowed build-provenance ledger records exactly one
+`pinned_offline_build_container_run`. It must name the immutable image
+digest, use `--network=none`, mount only the repository/build inputs, and
+exit before device staging begins.
 
 ### 13.3 Environment allowlist
 
