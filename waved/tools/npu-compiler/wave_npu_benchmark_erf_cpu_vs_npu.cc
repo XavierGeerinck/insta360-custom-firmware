@@ -74,16 +74,17 @@ constexpr size_t kExpectedTimingBytes =
     kTimingHeaderBytes + kMeasuredFrames * kTimingRecordBytes;
 
 constexpr char kExpectedLibraryPath[] =
-    "/tmp/wave-npu-poc13g/lib:/usr/lib";
+    "/tmp/wave-npu-poc13g-r2/lib:/usr/lib";
 constexpr char kExpectedSdkDirectory[] = "/usr";
+constexpr char kExpectedLogLevel[] = "2";
 constexpr char kNbgPath[] =
-    "/tmp/wave-npu-poc13g/model/erf-mask.nbg";
+    "/tmp/wave-npu-poc13g-r2/model/erf-mask.nbg";
 constexpr char kForbiddenClcPath[] =
-    "/tmp/wave-npu-poc13g/lib/libCLC.so";
+    "/tmp/wave-npu-poc13g-r2/lib/libCLC.so";
 constexpr char kTimingPath[] =
-    "/tmp/wave-npu-poc13g/result/erf-cpu-npu-timings-v1.bin";
+    "/tmp/wave-npu-poc13g-r2/result/erf-cpu-npu-timings-v1.bin";
 constexpr char kPartialTimingPath[] =
-    "/tmp/wave-npu-poc13g/result/erf-cpu-npu-timings-v1.partial";
+    "/tmp/wave-npu-poc13g-r2/result/erf-cpu-npu-timings-v1.partial";
 
 constexpr std::array<uint8_t, 256> kErfLut = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -188,10 +189,13 @@ bool PathIsAbsent(const char* path) {
 bool EnvironmentIsFixed() {
     const char* const library_path = std::getenv("LD_LIBRARY_PATH");
     const char* const sdk_directory = std::getenv("VIVANTE_SDK_DIR");
+    const char* const log_level = std::getenv("VSI_NN_LOG_LEVEL");
     if (library_path == nullptr ||
         std::strcmp(library_path, kExpectedLibraryPath) != 0 ||
         sdk_directory == nullptr ||
-        std::strcmp(sdk_directory, kExpectedSdkDirectory) != 0) {
+        std::strcmp(sdk_directory, kExpectedSdkDirectory) != 0 ||
+        log_level == nullptr ||
+        std::strcmp(log_level, kExpectedLogLevel) != 0) {
         std::fprintf(
             stderr,
             "wave_npu_benchmark_erf_cpu_vs_npu: "
@@ -303,6 +307,15 @@ bool Duration(uint64_t started, uint64_t finished, uint64_t* elapsed) {
     return true;
 }
 
+bool DurationAllowZero(
+    uint64_t started, uint64_t finished, uint64_t* elapsed) {
+    if (finished < started) {
+        return false;
+    }
+    *elapsed = finished - started;
+    return true;
+}
+
 template <size_t BufferBytes>
 bool CanariesAreIntact(
     const std::array<uint8_t, BufferBytes>& buffer) {
@@ -322,23 +335,43 @@ bool CanariesAreIntact(
 bool RunCpu(
     const std::array<uint8_t, kFrameWidth>& input,
     uint8_t* cpu_output,
-    CpuTiming* timing) {
+    CpuTiming* timing,
+    const char** failure) {
     uint64_t wall_started = 0;
     uint64_t thread_started = 0;
     uint64_t thread_finished = 0;
     uint64_t wall_finished = 0;
-    if (!ReadClock(CLOCK_MONOTONIC_RAW, &wall_started) ||
-        !ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_started)) {
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &wall_started)) {
+        *failure = "cpu-wall-start";
+        return false;
+    }
+    if (!ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_started)) {
+        *failure = "cpu-thread-start";
         return false;
     }
     for (size_t index = 0; index < input.size(); ++index) {
         cpu_output[index] = kErfLut[input[index]];
     }
-    return ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_finished) &&
-           ReadClock(CLOCK_MONOTONIC_RAW, &wall_finished) &&
-           Duration(wall_started, wall_finished, &timing->wall_ns) &&
-           Duration(
-               thread_started, thread_finished, &timing->thread_ns);
+    if (!ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_finished)) {
+        *failure = "cpu-thread-finish";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &wall_finished)) {
+        *failure = "cpu-wall-finish";
+        return false;
+    }
+    if (!Duration(wall_started, wall_finished, &timing->wall_ns)) {
+        *failure = "cpu-wall-duration";
+        return false;
+    }
+    if (!DurationAllowZero(
+            thread_started,
+            thread_finished,
+            &timing->thread_ns)) {
+        *failure = "cpu-thread-duration";
+        return false;
+    }
+    return true;
 }
 
 bool RunNpu(
@@ -347,7 +380,8 @@ bool RunNpu(
     const std::shared_ptr<tim::vx::Tensor>& output,
     const std::shared_ptr<tim::vx::Graph>& graph,
     uint8_t* output_bytes,
-    NpuTiming* timing) {
+    NpuTiming* timing,
+    const char** failure) {
     uint64_t total_started = 0;
     uint64_t thread_started = 0;
     uint64_t copy_in_started = 0;
@@ -358,39 +392,92 @@ bool RunNpu(
     uint64_t copy_out_finished = 0;
     uint64_t thread_finished = 0;
     uint64_t total_finished = 0;
-    if (!ReadClock(CLOCK_MONOTONIC_RAW, &total_started) ||
-        !ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_started) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &copy_in_started) ||
-        !input->CopyDataToTensor(
-            input_bytes.data(), input_bytes.size()) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &copy_in_finished) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &run_started) ||
-        !graph->Run() ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &run_finished) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &copy_out_started) ||
-        !output->CopyDataFromTensor(output_bytes) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &copy_out_finished) ||
-        !ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_finished) ||
-        !ReadClock(CLOCK_MONOTONIC_RAW, &total_finished)) {
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &total_started)) {
+        *failure = "npu-total-start";
         return false;
     }
-    return Duration(
-               copy_in_started,
-               copy_in_finished,
-               &timing->copy_in_ns) &&
-           Duration(run_started, run_finished, &timing->run_ns) &&
-           Duration(
-               copy_out_started,
-               copy_out_finished,
-               &timing->copy_out_ns) &&
-           Duration(
-               total_started,
-               total_finished,
-               &timing->total_wall_ns) &&
-           Duration(
-               thread_started,
-               thread_finished,
-               &timing->thread_ns);
+    if (!ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_started)) {
+        *failure = "npu-thread-start";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &copy_in_started)) {
+        *failure = "npu-copy-in-start";
+        return false;
+    }
+    if (!input->CopyDataToTensor(
+            input_bytes.data(), input_bytes.size())) {
+        *failure = "npu-copy-in";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &copy_in_finished)) {
+        *failure = "npu-copy-in-finish";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &run_started)) {
+        *failure = "npu-run-start";
+        return false;
+    }
+    if (!graph->Run()) {
+        *failure = "npu-run";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &run_finished)) {
+        *failure = "npu-run-finish";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &copy_out_started)) {
+        *failure = "npu-copy-out-start";
+        return false;
+    }
+    if (!output->CopyDataFromTensor(output_bytes)) {
+        *failure = "npu-copy-out";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &copy_out_finished)) {
+        *failure = "npu-copy-out-finish";
+        return false;
+    }
+    if (!ReadClock(CLOCK_THREAD_CPUTIME_ID, &thread_finished)) {
+        *failure = "npu-thread-finish";
+        return false;
+    }
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &total_finished)) {
+        *failure = "npu-total-finish";
+        return false;
+    }
+    if (!Duration(
+            copy_in_started,
+            copy_in_finished,
+            &timing->copy_in_ns)) {
+        *failure = "npu-copy-in-duration";
+        return false;
+    }
+    if (!Duration(run_started, run_finished, &timing->run_ns)) {
+        *failure = "npu-run-duration";
+        return false;
+    }
+    if (!Duration(
+            copy_out_started,
+            copy_out_finished,
+            &timing->copy_out_ns)) {
+        *failure = "npu-copy-out-duration";
+        return false;
+    }
+    if (!Duration(
+            total_started,
+            total_finished,
+            &timing->total_wall_ns)) {
+        *failure = "npu-total-duration";
+        return false;
+    }
+    if (!Duration(
+            thread_started,
+            thread_finished,
+            &timing->thread_ns)) {
+        *failure = "npu-thread-duration";
+        return false;
+    }
+    return true;
 }
 
 void AppendLe32(std::vector<uint8_t>* output, uint32_t value) {
@@ -472,7 +559,7 @@ bool PublishTimings(const std::vector<uint8_t>& payload) {
         return false;
     }
     const int directory_fd = open(
-        "/tmp/wave-npu-poc13g/result",
+        "/tmp/wave-npu-poc13g-r2/result",
         O_RDONLY | O_CLOEXEC | O_DIRECTORY);
     if (directory_fd < 0) {
         return false;
@@ -505,7 +592,7 @@ bool CalibrateWallTimer(uint64_t* total, uint64_t* minimum) {
 void PrintDefinition() {
     std::puts(
         "{\"schema_version\":1,\"mode\":\"benchmark\","
-        "\"model\":\"/tmp/wave-npu-poc13g/model/erf-mask.nbg\","
+        "\"model\":\"/tmp/wave-npu-poc13g-r2/model/erf-mask.nbg\","
         "\"model_bytes\":5840,\"model_sha256\":"
         "\"96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94\","
         "\"cpu\":{\"implementation\":\"embedded-u8-lut\","
@@ -519,6 +606,8 @@ void PrintDefinition() {
         "\"npu_run_count\":10101,\"alternating_order\":true,"
         "\"wall_clock\":\"CLOCK_MONOTONIC_RAW\","
         "\"thread_clock\":\"CLOCK_THREAD_CPUTIME_ID\","
+        "\"cpu_thread_zero_semantics\":\"resolution-limited\","
+        "\"runtime_log_level\":2,"
         "\"timing_schema\":\"ECN1-v1\",\"timing_bytes\":640036,"
         "\"output_canary_bytes\":32,\"executes_graph\":true}");
 }
@@ -703,16 +792,22 @@ int main(int argc, char** argv) {
             ? sequence & 1U
             : static_cast<uint32_t>(frame_index & 1U);
         bool paths_passed = false;
+        const char* failure = "unknown";
         if (order == 0) {
             paths_passed =
-                RunCpu(input_bytes, cpu_output, &cpu_timing) &&
+                RunCpu(
+                    input_bytes,
+                    cpu_output,
+                    &cpu_timing,
+                    &failure) &&
                 RunNpu(
                     input_bytes,
                     input,
                     output,
                     graph,
                     npu_output,
-                    &npu_timing);
+                    &npu_timing,
+                    &failure);
         } else {
             paths_passed =
                 RunNpu(
@@ -721,15 +816,21 @@ int main(int argc, char** argv) {
                     output,
                     graph,
                     npu_output,
-                    &npu_timing) &&
-                RunCpu(input_bytes, cpu_output, &cpu_timing);
+                    &npu_timing,
+                    &failure) &&
+                RunCpu(
+                    input_bytes,
+                    cpu_output,
+                    &cpu_timing,
+                    &failure);
         }
         if (!paths_passed) {
             std::fprintf(
                 stderr,
                 "wave_npu_benchmark_erf_cpu_vs_npu: "
-                "timed path failed at %zu\n",
-                frame_index);
+                "timed path failed at %zu stage=%s\n",
+                frame_index,
+                failure);
             return 7;
         }
         if (!CanariesAreIntact(cpu_observed) ||
@@ -833,6 +934,13 @@ int main(int argc, char** argv) {
     graph.reset();
     context.reset();
     alarm(0);
+    const size_t cpu_thread_zero_count = static_cast<size_t>(
+        std::count_if(
+            records.begin(),
+            records.end(),
+            [](const TimingRecord& record) {
+                return record.cpu_thread_ns == 0;
+            }));
     std::printf(
         "PROCESS_CPU frames=10101 total_ns=%llu\n",
         static_cast<unsigned long long>(process_elapsed));
@@ -841,11 +949,13 @@ int main(int argc, char** argv) {
         "cold_frames=1 warmup_frames=100 measured_frames=10000 "
         "cpu_count=10101 npu_run_count=10101 compile_count=1 "
         "canaries=PASS timing_bytes=640036 "
+        "cpu_thread_zero_count=%zu "
         "timing_fnv1a64=0x%016llx "
         "input_fnv1a64=0x%016llx "
         "cpu_output_fnv1a64=0x%016llx "
         "npu_output_fnv1a64=0x%016llx "
         "final_state=0x%08x\n",
+        cpu_thread_zero_count,
         static_cast<unsigned long long>(timing_fnv),
         static_cast<unsigned long long>(input_fnv),
         static_cast<unsigned long long>(cpu_output_fnv),

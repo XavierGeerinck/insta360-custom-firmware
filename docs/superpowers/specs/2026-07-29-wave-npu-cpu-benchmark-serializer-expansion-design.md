@@ -323,6 +323,45 @@ docs/npu/performance/erf-wave-cpu-vs-npu.json
 docs/npu/lab-notebook/2026-07-29-poc13g-wave-cpu-vs-npu.md
 ```
 
+### 6.8 PoC 13G-R1 negative and R2 measurement correction
+
+The first sealed implementation, commit `7b08f61`, was executed once from
+`/tmp/wave-npu-poc13g` and failed closed at paired frame 4,833 with native
+exit 7. It produced one valid cold pair, no timing artifact, no partial
+artifact, no health difference, no kernel alert, and no holder leak. The
+retained stdout contains 4,833 normal post-cold TIM-VX run markers before
+the failure. Frame 4,833 was NPU-first, and no TIM-VX error was emitted.
+This supports a resolution-limited zero tick from the sub-microsecond CPU
+`CLOCK_THREAD_CPUTIME_ID` interval as the failure mechanism; R1 did not
+identify individual clock/copy/run stages, so the inference is not promoted
+to a directly observed fact.
+
+R1 is not rerun, removed, or overwritten. PoC 13G-R2 is a distinct sealed
+artifact under `/tmp/wave-npu-poc13g-r2` with these reviewed corrections:
+
+- `VSI_NN_LOG_LEVEL=2` retains warnings and errors but removes the
+  per-inference debug print that would contaminate timing;
+- CPU thread-clock equality is encoded as a resolution-limited zero rather
+  than a runtime failure;
+- CPU wall time and every NPU wall/thread interval must still be positive;
+- the raw file and native summary both report the CPU thread-zero count and
+  the host requires equality;
+- every clock, copy, run, and duration failure has a stage-specific native
+  diagnostic;
+- all numerical, canary, digest, output, health, and no-retry gates remain
+  unchanged.
+
+The device-call ledger is amended for observed R1 work plus one R2 attempt:
+
+| Variant | Graph executions | Disposition |
+|---|---:|---|
+| 13G-R1 | at most 4,834 | consumed; failed closed; never replayed |
+| 13G-R2 | at most 10,101 | one separately sealed attempt |
+| 13G family | at most 14,935 | hard cumulative ceiling |
+
+This amendment does not authorize any reset, recovery, cleanup replay,
+runtime replacement, clock change, or broader graph.
+
 Raw:
 
 ```text

@@ -5,14 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 EXPECTED_SERIAL="PSP_0000000000000000"
 EXPECTED_KERNEL="Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux"
-REMOTE_ROOT="/tmp/wave-npu-poc13g"
+REMOTE_ROOT="/tmp/wave-npu-poc13g-r2"
 
-LOCAL_EXECUTABLE="$REPOSITORY_ROOT/artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+LOCAL_EXECUTABLE="$REPOSITORY_ROOT/artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v2"
 LOCAL_SOURCE="$SCRIPT_DIR/wave_npu_benchmark_erf_cpu_vs_npu.cc"
 LOCAL_TIM_VX="$REPOSITORY_ROOT/waved/target/tim-vx/libtim-vx.so"
 LOCAL_NBG="$REPOSITORY_ROOT/artifacts/npu/runs/poc13b-erf-mask-a1-20260729/a1.nbg"
-EXECUTABLE_SHA256="dfe6e51d8b2aa9251d95fbff69a6252654d52e653741417dd4a79fe7b135cb11"
-SOURCE_SHA256="f984a269bbc20b956922cd913d56f998136d461a584a4efd34d77025ab6cd4e4"
+EXECUTABLE_SHA256="cc9154961833124c138553e15e572442033bd3c40b26ca302cd32aed40715799"
+SOURCE_SHA256="07feee816c2c5958b38f4965a076d061ae7bca9fb8d381f5d1010fe109c8be91"
 TIM_VX_SHA256="d2c8fc7aaf0ad0b86f02fcd54bb1cdca9f04967b5cd9efa61a211565b453375b"
 NBG_SHA256="96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94"
 
@@ -117,7 +117,7 @@ adb -s "$EXPECTED_SERIAL" shell "
 "
 adb -s "$EXPECTED_SERIAL" push \
     "$LOCAL_EXECUTABLE" \
-    "$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+    "$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2"
 adb -s "$EXPECTED_SERIAL" push \
     "$LOCAL_TIM_VX" \
     "$REMOTE_ROOT/lib/libtim-vx.so"
@@ -126,7 +126,7 @@ adb -s "$EXPECTED_SERIAL" push \
     "$REMOTE_ROOT/model/erf-mask.nbg"
 adb -s "$EXPECTED_SERIAL" shell "
     chmod 0555 \
-        '$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v1'
+        '$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2'
     chmod 0444 \
         '$REMOTE_ROOT/lib/libtim-vx.so' \
         '$REMOTE_ROOT/model/erf-mask.nbg'
@@ -134,7 +134,7 @@ adb -s "$EXPECTED_SERIAL" shell "
 remote_hashes="$(
     adb -s "$EXPECTED_SERIAL" shell "
         sha256sum \
-            '$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v1' \
+            '$REMOTE_ROOT/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2' \
             '$REMOTE_ROOT/lib/libtim-vx.so' \
             '$REMOTE_ROOT/model/erf-mask.nbg'
     " | tr -d '\r'
@@ -148,4 +148,4 @@ for expected in \
         exit 17
     fi
 done
-echo "stage: PoC 13G fixed CPU/NPU benchmark payload is ready"
+echo "stage: PoC 13G-R2 fixed CPU/NPU benchmark payload is ready"

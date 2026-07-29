@@ -10,7 +10,7 @@ BINARY_INPUT="$1"
 SOURCE_INPUT="$2"
 IMAGE="ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-EXPECTED_BINARY="$REPOSITORY_ROOT/artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+EXPECTED_BINARY="$REPOSITORY_ROOT/artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v2"
 EXPECTED_SOURCE="$REPOSITORY_ROOT/waved/tools/npu-compiler/wave_npu_benchmark_erf_cpu_vs_npu.cc"
 
 if [[ ! -f "$BINARY_INPUT" || ! -f "$SOURCE_INPUT" ||
@@ -46,11 +46,11 @@ for required in \
     'UINT64_C(0x367c7eaad959d707)' \
     'UINT64_C(0x742e3a62d58acd0d)' \
     'constexpr uint32_t kExpectedFinalState = 0x6ae16fe0U;' \
-    '/tmp/wave-npu-poc13g/model/erf-mask.nbg' \
-    '/tmp/wave-npu-poc13g/result/erf-cpu-npu-timings-v1.bin' \
-    '/tmp/wave-npu-poc13g/result/erf-cpu-npu-timings-v1.partial' \
-    '/tmp/wave-npu-poc13g/lib:/usr/lib' \
-    '/tmp/wave-npu-poc13g/lib/libCLC.so' \
+    '/tmp/wave-npu-poc13g-r2/model/erf-mask.nbg' \
+    '/tmp/wave-npu-poc13g-r2/result/erf-cpu-npu-timings-v1.bin' \
+    '/tmp/wave-npu-poc13g-r2/result/erf-cpu-npu-timings-v1.partial' \
+    '/tmp/wave-npu-poc13g-r2/lib:/usr/lib' \
+    '/tmp/wave-npu-poc13g-r2/lib/libCLC.so' \
     '96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94' \
     'c9525963e022d4a4aea0814845119b37488f3727ec8d96684f52e1e2ad776296' \
     'const tim::vx::ShapeType shape{481};' \
@@ -59,12 +59,15 @@ for required in \
     'CLOCK_MONOTONIC_RAW' \
     'CLOCK_THREAD_CPUTIME_ID' \
     'CLOCK_PROCESS_CPUTIME_ID' \
+    'constexpr char kExpectedLogLevel[] = "2";' \
+    'DurationAllowZero(' \
     'PR_SET_PDEATHSIG' \
     'O_EXCL' \
     'frame_index < kTotalFrames' \
     'sequence & 1U' \
     'cpu_output[index] = kErfLut[input[index]]' \
     'ERF_CPU_NPU_BENCH status=PASS mode=benchmark' \
+    'cpu_thread_zero_count=%zu' \
     'cpu_count=10101 npu_run_count=10101 compile_count=1' \
     '--benchmark' \
     '--describe'; do
@@ -111,7 +114,7 @@ docker run --rm \
     --workdir /work \
     "$IMAGE" \
     bash -euo pipefail -c '
-        binary="artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+        binary="artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v2"
         header="$(aarch64-linux-gnu-readelf -h "$binary")"
         dynamic="$(aarch64-linux-gnu-readelf -d "$binary")"
         imports="$(
@@ -125,7 +128,7 @@ docker run --rm \
         grep -Fq "Shared library: [libtim-vx.so]" <<<"$dynamic"
         grep -Fq "Shared library: [libGAL.so]" <<<"$dynamic"
         grep -Fq \
-            "Library runpath: [/tmp/wave-npu-poc13g/lib:/usr/lib]" \
+            "Library runpath: [/tmp/wave-npu-poc13g-r2/lib:/usr/lib]" \
             <<<"$dynamic"
         grep -Fq "BIND_NOW" <<<"$dynamic"
         grep -Fq "gcoHAL_QueryChipIdentityEx" <<<"$imports"

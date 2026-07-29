@@ -248,6 +248,13 @@ On failure:
 - perform only known cleanup through normal process teardown;
 - do not replay or reset.
 
+Observed execution note: R1 failed closed at frame 4,833 on a
+resolution-limited per-frame CPU thread-clock gate. It is retained and will
+not be replayed. The reviewed R2 successor uses a fresh binary, manifest,
+result directory, and remote root, warning-only runtime logging, explicit
+stage diagnostics, and recorded resolution-limited CPU thread zeroes. See
+design section 6.8 for the amended cumulative call ceiling.
+
 ### Task 9 — Publish PoC 13G
 
 Create:

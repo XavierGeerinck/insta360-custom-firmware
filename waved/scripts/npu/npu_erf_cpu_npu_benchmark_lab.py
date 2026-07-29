@@ -28,13 +28,13 @@ DEFAULT_MANIFEST = Path(__file__).with_name(
 )
 DEFAULT_RUN_ROOT = REPOSITORY_ROOT / "artifacts/npu/runs"
 EXPECTED_MANIFEST_FILE_SHA256 = (
-    "db41d54d22b81e328a6a2d0032d2ba138"
-    "e9ae4ed36a13f19c0a501a06aeb0e4f"
+    "54cdb3350a10d1e435a62081a648acebe"
+    "f9f82f711b5a789a67c6c88573f167a"
 )
 
-REMOTE_ROOT = "/tmp/wave-npu-poc13g"
+REMOTE_ROOT = "/tmp/wave-npu-poc13g-r2"
 REMOTE_EXECUTABLE = (
-    f"{REMOTE_ROOT}/bin/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+    f"{REMOTE_ROOT}/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2"
 )
 REMOTE_TIM_VX = f"{REMOTE_ROOT}/lib/libtim-vx.so"
 REMOTE_NBG = f"{REMOTE_ROOT}/model/erf-mask.nbg"
@@ -59,13 +59,13 @@ EXPECTED_PARAMETERS = {
 EXPECTED_ENVIRONMENT = {
     "LD_LIBRARY_PATH": f"{REMOTE_ROOT}/lib:/usr/lib",
     "VIVANTE_SDK_DIR": "/usr",
-    "VSI_NN_LOG_LEVEL": "5",
+    "VSI_NN_LOG_LEVEL": "2",
 }
 EXPECTED_IDENTITY = stream_lab.EXPECTED_IDENTITY
 EXPECTED_ARTIFACTS = {
     REMOTE_EXECUTABLE: (
-        "dfe6e51d8b2aa9251d95fbff69a62526"
-        "54d52e653741417dd4a79fe7b135cb11"
+        "cc9154961833124c138553e15e5724420"
+        "33bd3c40b26ca302cd32aed40715799"
     ),
     REMOTE_TIM_VX: stream_lab.EXPECTED_ARTIFACTS[
         stream_lab.REMOTE_TIM_VX
@@ -75,8 +75,8 @@ EXPECTED_ARTIFACTS = {
     ],
 }
 EXPECTED_SOURCE_SHA256 = (
-    "f984a269bbc20b956922cd913d56f9981"
-    "36d461a584a4efd34d77025ab6cd4e4"
+    "07feee816c2c5958b38f4965a076d061"
+    "ae7bca9fb8d381f5d1010fe109c8be91"
 )
 EXPECTED_CPU_TABLE_SHA256 = stream_lab.ERF_TABLE_SHA256
 EXPECTED_ABSENT_ARTIFACTS = (
@@ -126,6 +126,7 @@ SUMMARY_RE = re.compile(
     r"cold_frames=1 warmup_frames=100 measured_frames=10000 "
     r"cpu_count=10101 npu_run_count=10101 compile_count=1 "
     r"canaries=PASS timing_bytes=640036 "
+    r"cpu_thread_zero_count=(?P<cpu_thread_zeros>[0-9]+) "
     r"timing_fnv1a64=(?P<timing>0x[0-9a-f]{16}) "
     r"input_fnv1a64=(?P<input>0x[0-9a-f]{16}) "
     r"cpu_output_fnv1a64=(?P<cpu>0x[0-9a-f]{16}) "
@@ -421,8 +422,15 @@ def parse_timing_payload(payload: bytes) -> TimingPayload:
             raise ResultError("timing sequence is not contiguous")
         if record.order != (expected_sequence & 1):
             raise ResultError("timing alternating order differs")
-        durations = fields[2:]
-        if any(duration == 0 for duration in durations):
+        mandatory_durations = (
+            record.cpu_wall_ns,
+            record.npu_copy_in_ns,
+            record.npu_run_ns,
+            record.npu_copy_out_ns,
+            record.npu_total_wall_ns,
+            record.npu_thread_ns,
+        )
+        if any(duration == 0 for duration in mandatory_durations):
             raise ResultError("timing record contains zero duration")
         if record.npu_total_wall_ns < max(
             record.npu_copy_in_ns,
@@ -449,6 +457,7 @@ def _statistics(values: Sequence[int]) -> dict[str, int | float]:
     total = sum(ordered)
     return {
         "count": len(ordered),
+        "resolution_limited_zeros": ordered.count(0),
         "total": total,
         "mean": total / len(ordered),
         "minimum": ordered[0],
@@ -590,6 +599,7 @@ def parse_native_result(
         "identity": identity,
         "cold": cold_values,
         "process_cpu_total_ns": process_cpu_total_ns,
+        "cpu_thread_zero_count": int(observed["cpu_thread_zeros"]),
         "timing_fnv1a64": observed["timing"],
         "input_fnv1a64": observed["input"],
         "cpu_output_fnv1a64": observed["cpu"],
@@ -621,7 +631,7 @@ def collect_snapshot(
         transport,
         (
             "ps 2>/dev/null | "
-            "grep '[w]ave-npu-benchmark-erf-cpu-vs-npu-v1' | "
+            "grep '[w]ave-npu-benchmark-erf-cpu-vs-npu-v2' | "
             "head -n 8 || true"
         ),
         "benchmark process scan",
@@ -826,7 +836,7 @@ def run_once(
     run_directory = npu_lab.create_run_directory(DEFAULT_RUN_ROOT, run_id)
     envelope: dict[str, Any] = {
         "schema_version": 1,
-        "experiment": "wave-npu-poc13g-erf-cpu-vs-npu",
+        "experiment": "wave-npu-poc13g-r2-erf-cpu-vs-npu",
         "run_id": run_id,
         "started_at": npu_compile_lab._timestamp(),
         "finished_at": None,
@@ -937,6 +947,16 @@ def run_once(
             if timing_fnv != native["timing_fnv1a64"]:
                 raise ResultError("pulled/native timing FNV differs")
             timing = parse_timing_payload(payload)
+            timing_summary = summarize_timings(timing)
+            if (
+                timing_summary["cpu_thread_ns"][
+                    "resolution_limited_zeros"
+                ]
+                != native["cpu_thread_zero_count"]
+            ):
+                raise ResultError(
+                    "native/raw CPU thread zero counts differ"
+                )
             envelope["result"] = {
                 "native": native,
                 "timing_artifact": {
@@ -949,7 +969,7 @@ def run_once(
                     "schema": TIMING_SCHEMA_VERSION,
                     "records": len(timing.records),
                 },
-                "timings": summarize_timings(timing),
+                "timings": timing_summary,
                 "compile_count": 1,
                 "cpu_count": TOTAL_FRAMES,
                 "npu_run_count": TOTAL_FRAMES,

@@ -33,8 +33,10 @@ class BenchmarkManifestAndOracleTests(unittest.TestCase):
         self.assertEqual(self.manifest.remote_argument, "--benchmark")
         self.assertEqual(
             self.manifest.source_sha256,
-            "f984a269bbc20b956922cd913d56f998136d461a584a4efd34d77025ab6cd4e4",
+            "07feee816c2c5958b38f4965a076d061ae7bca9fb8d381f5d1010fe109c8be91",
         )
+        self.assertEqual(self.manifest.environment["VSI_NN_LOG_LEVEL"], "2")
+        self.assertEqual(lab.REMOTE_ROOT, "/tmp/wave-npu-poc13g-r2")
         self.assertEqual(
             self.manifest.cpu_table_sha256,
             "c9525963e022d4a4aea0814845119b37488f3727ec8d96684f52e1e2ad776296",
@@ -66,7 +68,11 @@ class BenchmarkManifestAndOracleTests(unittest.TestCase):
 
 class RawTimingTests(unittest.TestCase):
     @staticmethod
-    def _payload(*, corrupt_order: bool = False) -> bytes:
+    def _payload(
+        *,
+        corrupt_order: bool = False,
+        zero_cpu_thread: bool = False,
+    ) -> bytes:
         records = []
         for sequence in range(lab.MEASURED_FRAMES):
             order = sequence & 1
@@ -77,7 +83,7 @@ class RawTimingTests(unittest.TestCase):
                     sequence,
                     order,
                     100 + sequence,
-                    50 + sequence,
+                    0 if zero_cpu_thread and sequence == 17 else 50 + sequence,
                     10 + sequence,
                     200 + sequence,
                     20 + sequence,
@@ -106,6 +112,14 @@ class RawTimingTests(unittest.TestCase):
         self.assertEqual(summary["cpu_wall_ns"]["p99"], 9_999)
         self.assertEqual(summary["npu_total_wall_ns"]["maximum"], 10_229)
         self.assertGreater(summary["ratios"]["npu_total_over_cpu_wall"], 1.0)
+        limited = lab.parse_timing_payload(
+            self._payload(zero_cpu_thread=True)
+        )
+        limited_summary = lab.summarize_timings(limited)
+        self.assertEqual(
+            limited_summary["cpu_thread_ns"]["resolution_limited_zeros"],
+            1,
+        )
 
     def test_raw_timing_rejects_order_zero_duration_and_trailing_bytes(
         self,
@@ -145,6 +159,7 @@ class NativeResultTests(unittest.TestCase):
                 "cold_frames=1 warmup_frames=100 measured_frames=10000 "
                 "cpu_count=10101 npu_run_count=10101 compile_count=1 "
                 "canaries=PASS timing_bytes=640036 "
+                "cpu_thread_zero_count=17 "
                 "timing_fnv1a64=0x1234567890abcdef "
                 "input_fnv1a64=0x367c7eaad959d707 "
                 "cpu_output_fnv1a64=0x742e3a62d58acd0d "
@@ -158,6 +173,7 @@ class NativeResultTests(unittest.TestCase):
         self.assertEqual(result["run_count"], 10_101)
         self.assertEqual(result["cold"]["npu_total_ns"], 1_570_000)
         self.assertEqual(result["process_cpu_total_ns"], 987_654_321)
+        self.assertEqual(result["cpu_thread_zero_count"], 17)
         self.assertTrue(result["numeric_digest_match"])
 
     def test_changed_digest_or_duplicate_summary_is_rejected(self) -> None:
