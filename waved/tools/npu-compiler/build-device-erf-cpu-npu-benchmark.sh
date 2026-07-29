@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+OUTPUT_DIRECTORY="$REPOSITORY_ROOT/artifacts/npu/build/poc13g"
+OUTPUT_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-erf-cpu-vs-npu-v1"
+SECOND_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-erf-cpu-vs-npu-v1.second"
+SOURCE="$SCRIPT_DIR/wave_npu_benchmark_erf_cpu_vs_npu.cc"
+IMAGE="ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "build: approved immutable offline image is absent" >&2
+    exit 10
+fi
+mkdir -p "$OUTPUT_DIRECTORY"
+
+docker run --rm \
+    --network=none \
+    --platform=linux/amd64 \
+    --volume "$REPOSITORY_ROOT":/work \
+    --workdir /work \
+    "$IMAGE" \
+    bash -euo pipefail -c '
+        export LC_ALL=C
+        export SOURCE_DATE_EPOCH=1785196800
+
+        build_one() {
+            local output="$1"
+            aarch64-linux-gnu-g++ \
+                -std=c++17 \
+                -O2 \
+                -g0 \
+                -Wall \
+                -Wextra \
+                -Werror \
+                -Wformat=2 \
+                -Wshadow \
+                -D_FORTIFY_SOURCE=2 \
+                -fPIE \
+                -fstack-protector-strong \
+                -I waved/third_party/TIM-VX/include \
+                waved/tools/npu-compiler/wave_npu_benchmark_erf_cpu_vs_npu.cc \
+                -L waved/target/tim-vx \
+                -L waved/third_party/device-sdk/lib \
+                -Wl,-rpath-link,/work/waved/third_party/device-sdk/lib \
+                -Wl,--allow-shlib-undefined \
+                -Wl,--as-needed \
+                -Wl,--build-id=sha1 \
+                -Wl,--enable-new-dtags \
+                -Wl,-rpath,/tmp/wave-npu-poc13g/lib:/usr/lib \
+                -Wl,-z,noexecstack \
+                -Wl,-z,now \
+                -Wl,-z,relro \
+                -pie \
+                -ltim-vx \
+                -lGAL \
+                -ldl \
+                -lpthread \
+                -o "$output"
+        }
+
+        build_one \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1
+        build_one \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1.second
+        cmp \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1 \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1.second
+
+        aarch64-linux-gnu-readelf -h \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1
+        aarch64-linux-gnu-readelf -d \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1
+        aarch64-linux-gnu-nm -D --undefined-only \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1 \
+            | c++filt
+        sha256sum \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1 \
+            artifacts/npu/build/poc13g/wave-npu-benchmark-erf-cpu-vs-npu-v1.second \
+            waved/tools/npu-compiler/wave_npu_benchmark_erf_cpu_vs_npu.cc \
+            waved/target/tim-vx/libtim-vx.so \
+            artifacts/npu/runs/poc13b-erf-mask-a1-20260729/a1.nbg
+    '
+
+if ! cmp -s "$OUTPUT_BINARY" "$SECOND_BINARY"; then
+    echo "build: deterministic rebuild differs" >&2
+    exit 11
+fi
+rm -f -- "$SECOND_BINARY"
+
+"$SCRIPT_DIR/verify-device-erf-cpu-npu-benchmark-policy.sh" \
+    "$OUTPUT_BINARY" \
+    "$SOURCE"
