@@ -27,13 +27,13 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = Path(__file__).with_name("ctc_cpu_npu_benchmark_manifest.json")
 DEFAULT_RUN_ROOT = REPOSITORY_ROOT / "artifacts/npu/runs"
 
-REMOTE_ROOT = "/tmp/wave-npu-poc15a"
-REMOTE_EXECUTABLE = f"{REMOTE_ROOT}/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
+REMOTE_ROOT = "/tmp/wave-npu-poc15a-r2"
+REMOTE_EXECUTABLE = f"{REMOTE_ROOT}/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
 REMOTE_ONNX = f"{REMOTE_ROOT}/model/ctc.onnx"
 REMOTE_NBG = f"{REMOTE_ROOT}/model/ctc_online.nb"
 REMOTE_MANIFEST = f"{REMOTE_ROOT}/meta/manifest.json"
-REMOTE_TIMING = f"{REMOTE_ROOT}/result/ctc-cpu-npu-timings-v1.bin"
-REMOTE_PARTIAL_TIMING = f"{REMOTE_ROOT}/result/ctc-cpu-npu-timings-v1.partial"
+REMOTE_TIMING = f"{REMOTE_ROOT}/result/ctc-cpu-npu-timings-v2.bin"
+REMOTE_PARTIAL_TIMING = f"{REMOTE_ROOT}/result/ctc-cpu-npu-timings-v2.partial"
 REMOTE_ARGUMENT = "--benchmark"
 EXPECTED_TIMEOUT_MS = 120_000
 EXPECTED_KERNEL = (
@@ -52,7 +52,7 @@ EXPECTED_ENVIRONMENT = {
 }
 EXPECTED_ARTIFACTS = {
     REMOTE_EXECUTABLE: (
-        "0cd9e4413bc545d4f0fefe9746a00c4cc334ea4e0888d74e44813437c9694635"
+        "d5316b2b45d49edbbc83daf368f32776388580a4e7db3667d0fe4ac88ebccf52"
     ),
     REMOTE_ONNX: ("8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219"),
     REMOTE_NBG: ("3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5"),
@@ -93,13 +93,13 @@ EXPECTED_STAGED = {
 }
 EXPECTED_LOCAL_ARTIFACTS = {
     "binary": {
-        "path": ("artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1"),
+        "path": ("artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2"),
         "sha256": EXPECTED_ARTIFACTS[REMOTE_EXECUTABLE],
         "bytes": 49_848,
     },
     "build_script": {
         "path": ("waved/tools/npu-compiler/build-device-ctc-cpu-npu-benchmark.sh"),
-        "sha256": ("04f09b7cfbbc04703a65fd4db330a945b97a065a6e14dd798fa63925dec562f0"),
+        "sha256": ("06e2fb0852c6043459988d6e6889663e22080a08a3002f6ef3292b407c37fbf5"),
     },
     "onnxruntime_header": {
         "path": (
@@ -112,11 +112,11 @@ EXPECTED_LOCAL_ARTIFACTS = {
         "path": (
             "waved/tools/npu-compiler/verify-device-ctc-cpu-npu-benchmark-policy.sh"
         ),
-        "sha256": ("e7976ae0135355f44b43b9741a02f3329554d732078706d7dd4c471b6e5f4c15"),
+        "sha256": ("728eff19e5ce08432118766eba58db71e6ba834bd2751cf94a882d7317f3ef57"),
     },
     "source": {
         "path": ("waved/tools/npu-compiler/wave_npu_benchmark_ctc_cpu_vs_npu.cc"),
-        "sha256": ("18435fc05207005cf0d553741109cd11fcb775fa9c9aa80982507756d92bdae2"),
+        "sha256": ("6d924c2779f2636e50aab49656d015165dab487a058c73691b857c14692b7d27"),
     },
 }
 
@@ -139,8 +139,8 @@ BRIDGE_RATIO_OF_MEANS_MAX = 0.9
 BRIDGE_PAIRED_RATIO_P50_MAX = 0.9
 BRIDGE_PAIRED_RATIO_P95_MAX_EXCLUSIVE = 1.0
 
-TIMING_MAGIC = b"CCN1"
-TIMING_SCHEMA_VERSION = 1
+TIMING_MAGIC = b"CCN2"
+TIMING_SCHEMA_VERSION = 2
 HEADER_STRUCT = struct.Struct("<4s15I")
 QUALIFICATION_STRUCT = struct.Struct("<IIIIQQQQddddd")
 TIMING_STRUCT = struct.Struct("<II16Q")
@@ -178,7 +178,7 @@ SUMMARY_RE = re.compile(
 
 
 class BenchmarkError(Exception):
-    """Expected PoC 15A failure."""
+    """Expected PoC 15A-R2 failure."""
 
 
 class ManifestError(BenchmarkError):
@@ -334,21 +334,25 @@ def load_manifest(path: Path = DEFAULT_MANIFEST) -> BenchmarkManifest:
         "fp32_bridge_ratio_of_means_max": BRIDGE_RATIO_OF_MEANS_MAX,
         "fp32_bridge_ratio_p50_max": BRIDGE_PAIRED_RATIO_P50_MAX,
         "fp32_bridge_ratio_p95_max_exclusive": (BRIDGE_PAIRED_RATIO_P95_MAX_EXCLUSIVE),
+        "impulse_linear_index": 0,
         "maximum_absolute_error_max": MAXIMUM_ABSOLUTE_ERROR_MAX,
         "mean_absolute_error_max": MEAN_ABSOLUTE_ERROR_MAX,
         "measured_pairs": MEASURED_PAIRS,
         "npu_run_count": 229,
+        "performance_semantics": "finite-materialized-output-only",
+        "qualification_before_timing": True,
         "qualification_record_bytes": QUALIFICATION_STRUCT.size,
         "qualification_seed": "0x573315a1",
+        "random_mapping": "(xorshift32&255)-128 over 256",
         "timing_bytes": TIMING_BYTES,
         "timing_record_bytes": TIMING_STRUCT.size,
-        "timing_schema": "CCN1-v1",
+        "timing_schema": "CCN2-v2",
         "top1_matches_required": 64,
         "warmup_pairs": WARMUP_PAIRS,
     }
     if (
         document["schema_version"] != 1
-        or document["experiment"] != "wave-npu-poc15a-ctc-cpu-vs-npu"
+        or document["experiment"] != "wave-npu-poc15a-r2-ctc-cpu-vs-npu"
         or document["device"] != expected_device
         or document["environment"] != EXPECTED_ENVIRONMENT
         or document["invocation"] != expected_invocation
@@ -410,7 +414,7 @@ def expected_measured_input_fnv() -> str:
         payload = bytearray(INPUT_ELEMENTS * 4)
         for index in range(INPUT_ELEMENTS):
             state = _next_xorshift32(state)
-            quantized = (state & 0x1FF) - 256
+            quantized = (state & 0xFF) - 128
             struct.pack_into("<f", payload, index * 4, quantized / 256.0)
         if pair >= COLD_PAIRS + WARMUP_PAIRS:
             digest = _update_fnv(digest, payload)
@@ -513,7 +517,7 @@ def parse_timing_payload(payload: bytes) -> TimingPayload:
         QUALIFICATION_STRUCT.size,
     )
     if header != expected_header:
-        raise ResultError("timing header differs from CCN1-v1")
+        raise ResultError("timing header differs from CCN2-v2")
     offset = HEADER_STRUCT.size
     qualifications: list[QualificationRecord] = []
     for fixture_id in range(FIXTURE_COUNT):
@@ -660,9 +664,9 @@ def parse_native_result(stdout: str, manifest: BenchmarkManifest) -> dict[str, A
         raise ResultError("native result line is malformed")
     expected_identity = {
         "chip_model": "0x00009000",
-        "chip_revision": "0x00009000",
-        "chip_product_id": "0x05080009",
-        "chip_eco_id": "0x00000000",
+        "chip_revision": "0x00009002",
+        "chip_product_id": "0x05090001",
+        "chip_eco_id": "0x04000000",
         "customer_id": "0x1000000e",
         "reserved": "0x00000000",
         "flags": "0x0000000000000000",
@@ -721,7 +725,7 @@ def collect_snapshot(transport: Any, manifest: BenchmarkManifest) -> dict[str, A
         transport,
         (
             "ps 2>/dev/null | "
-            "grep '[w]ave-npu-benchmark-ctc-cpu-vs-npu-v1' | "
+            "grep '[w]ave-npu-benchmark-ctc-cpu-vs-npu-v2' | "
             "head -n 8 || true"
         ),
         "benchmark process scan",
@@ -780,7 +784,7 @@ def verify_preflight(manifest: BenchmarkManifest, snapshot: Mapping[str, Any]) -
     if snapshot.get("galcore_holders"):
         raise PreflightError("/dev/galcore already has a holder")
     if snapshot.get("benchmark_processes"):
-        raise PreflightError("PoC 15A process is already running")
+        raise PreflightError("PoC 15A-R2 process is already running")
     for path, expected in EXPECTED_ARTIFACTS.items():
         if snapshot.get("artifact_hashes", {}).get(path) != expected:
             raise PreflightError(f"artifact differs: {path}")
@@ -878,7 +882,7 @@ def _report_markdown(result: Mapping[str, Any]) -> str:
     native = timings["native_total_wall_ns"]
     bridge = timings["bridge_total_wall_ns"]
     return (
-        "# Wave PoC 15A — stock CTC CPU versus NPU\n\n"
+        "# Wave PoC 15A-R2 — stock CTC CPU versus NPU\n\n"
         f"Decision: **{timings['decision']}**.\n\n"
         "| Boundary | Mean (ms) | p50 (ms) | p95 (ms) | p99 (ms) |\n"
         "|---|---:|---:|---:|---:|\n"
@@ -906,7 +910,7 @@ def run_once(
     run_directory = npu_lab.create_run_directory(DEFAULT_RUN_ROOT, run_id)
     envelope: dict[str, Any] = {
         "schema_version": 1,
-        "experiment": "wave-npu-poc15a-ctc-cpu-vs-npu",
+        "experiment": "wave-npu-poc15a-r2-ctc-cpu-vs-npu",
         "run_id": run_id,
         "started_at": npu_compile_lab._timestamp(),
         "finished_at": None,
@@ -979,7 +983,7 @@ def run_once(
                 or output_state.get("bytes") != TIMING_BYTES
             ):
                 raise ResultError("remote timing metadata differs")
-            local_timing = run_directory / "ctc-cpu-npu-timings-v1.bin"
+            local_timing = run_directory / "ctc-cpu-npu-timings-v2.bin"
             pull = transport.run(("pull", REMOTE_TIMING, str(local_timing)), 15_000)
             npu_compile_lab._write_text_exclusive(
                 run_directory / "pull.stdout.txt", pull.stdout
@@ -1005,7 +1009,7 @@ def run_once(
                     "bytes": len(payload),
                     "sha256": payload_sha256,
                     "fnv1a64": timing_fnv,
-                    "schema": "CCN1-v1",
+                    "schema": "CCN2-v2",
                     "qualification_records": len(parsed.qualifications),
                     "cold_records": 1,
                     "measured_records": len(parsed.measured),
@@ -1030,7 +1034,7 @@ def run_once(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Fixed Wave PoC 15A stock CTC CPU/NPU benchmark; "
+            "Fixed Wave PoC 15A-R2 stock CTC CPU/NPU benchmark; "
             "no arbitrary inputs, retry, recovery, or target mutation"
         )
     )
@@ -1054,7 +1058,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {
                         "manifest_sha256": manifest.sha256,
                         "manifest_file_sha256": manifest.file_sha256,
-                        "timing_schema": "CCN1-v1",
+                        "timing_schema": "CCN2-v2",
                         "timing_bytes": TIMING_BYTES,
                         "expected_measured_input_fnv": (expected_measured_input_fnv()),
                         "execution_process_cap": 1,

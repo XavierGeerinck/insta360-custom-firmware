@@ -126,8 +126,8 @@ qualification[4]:
   NPU FP16 digest
   top-1 matches
   finite count
-  mean/max absolute error
-  cosine components
+  sum/max absolute error
+  cosine dot product and both squared norms
 
 records[200]:
   sequence/order
@@ -143,6 +143,8 @@ records[200]:
 
 The file contains no addresses, raw model data, tensors, weights, or audio.
 It is installed atomically with exclusive creation and an exact byte count.
+Each qualification record is 88 bytes; the host derives mean absolute error
+and cosine similarity from the stored aggregates.
 
 ## 4. Phase B — PoC 15A native runner
 
@@ -260,7 +262,7 @@ The process:
 1. creates both sessions;
 2. qualifies four fixtures;
 3. stops immediately on semantic failure;
-4. otherwise performs the cold/warm/measured pairs;
+4. otherwise performs the recorded initial/warm/measured pairs;
 5. writes one timing artifact and one result;
 6. destroys both sessions and exits.
 
@@ -281,6 +283,27 @@ The host:
 
 PoC 15A must pass semantics and the bridge-total performance thresholds
 before any PoC 15B/15C device work.
+
+### Live-attempt addendum — 2026-07-30
+
+The first live process, run
+`poc15a-ctc-crossover-20260730-a1`, is an invalid run rather than a
+candidate result. All four emitted qualification summaries passed, but
+source review found that the runner:
+
+- reapplied the strict qualification gate to performance inputs;
+- used a nine-bit `[-1,1)` random mapping instead of the approved eight-bit
+  `[-0.5,0.5)` mapping;
+- placed the impulse at the flat-tensor center instead of index zero;
+- recorded its initial pair before qualification.
+
+It exited 19 before publishing any timing artifact. No retry was attempted,
+postflight was clean, and the fixed remote root was removed after audit.
+
+PoC 15A-R2 corrects those four deviations, uses remote root
+`/tmp/wave-npu-poc15a-r2` and timing schema `CCN2-v2`, and is
+host-qualified. Because the original plan capped PoC 15A at one live
+process, R2 requires explicit authorization before staging or execution.
 
 ## 6. Phase D — PoC 15B Erf residency curve
 

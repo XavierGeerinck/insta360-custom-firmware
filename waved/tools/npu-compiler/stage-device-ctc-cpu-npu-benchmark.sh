@@ -5,20 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 EXPECTED_SERIAL="PSP_0000000000000000"
 EXPECTED_KERNEL="Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux"
-REMOTE_ROOT="/tmp/wave-npu-poc15a"
+REMOTE_ROOT="/tmp/wave-npu-poc15a-r2"
 
-LOCAL_EXECUTABLE="$REPOSITORY_ROOT/artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
+LOCAL_EXECUTABLE="$REPOSITORY_ROOT/artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
 LOCAL_SOURCE="$SCRIPT_DIR/wave_npu_benchmark_ctc_cpu_vs_npu.cc"
 LOCAL_ONNX="$REPOSITORY_ROOT/models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc.onnx"
 LOCAL_NBG="$REPOSITORY_ROOT/models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc_online.nb"
 LOCAL_MANIFEST="$REPOSITORY_ROOT/waved/scripts/npu/ctc_cpu_npu_benchmark_manifest.json"
 LOCAL_CONTROLLER="$REPOSITORY_ROOT/waved/scripts/npu/npu_ctc_cpu_npu_benchmark_lab.py"
 
-EXECUTABLE_SHA256="0cd9e4413bc545d4f0fefe9746a00c4cc334ea4e0888d74e44813437c9694635"
-SOURCE_SHA256="18435fc05207005cf0d553741109cd11fcb775fa9c9aa80982507756d92bdae2"
+EXECUTABLE_SHA256="d5316b2b45d49edbbc83daf368f32776388580a4e7db3667d0fe4ac88ebccf52"
+SOURCE_SHA256="6d924c2779f2636e50aab49656d015165dab487a058c73691b857c14692b7d27"
 ONNX_SHA256="8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219"
 NBG_SHA256="3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5"
-MANIFEST_SHA256="7deb6686e130cb3c7754eed78c9c8baefcc97ff288b81773206ba5fde0cad490"
+MANIFEST_SHA256="ca4470dd272ea44e8461bae10b1cdf232f84c435ec471f0dffdf27d4c388026b"
 
 local_sha256() {
     shasum -a 256 "$1" | awk '{print $1}'
@@ -179,7 +179,7 @@ adb -s "$EXPECTED_SERIAL" shell "
 "
 adb -s "$EXPECTED_SERIAL" push \
     "$LOCAL_EXECUTABLE" \
-    "$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
+    "$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
 adb -s "$EXPECTED_SERIAL" push \
     "$LOCAL_ONNX" \
     "$REMOTE_ROOT/model/ctc.onnx"
@@ -191,7 +191,7 @@ adb -s "$EXPECTED_SERIAL" push \
     "$REMOTE_ROOT/meta/manifest.json"
 adb -s "$EXPECTED_SERIAL" shell "
     chmod 0555 \
-        '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1'
+        '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2'
     chmod 0444 \
         '$REMOTE_ROOT/model/ctc.onnx' \
         '$REMOTE_ROOT/model/ctc_online.nb' \
@@ -200,7 +200,7 @@ adb -s "$EXPECTED_SERIAL" shell "
 remote_hashes="$(
     adb -s "$EXPECTED_SERIAL" shell "
         sha256sum \
-            '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1' \
+            '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2' \
             '$REMOTE_ROOT/model/ctc.onnx' \
             '$REMOTE_ROOT/model/ctc_online.nb' \
             '$REMOTE_ROOT/meta/manifest.json'
@@ -217,4 +217,4 @@ for expected in \
     fi
 done
 
-echo "stage: PoC 15A fixed CTC CPU/NPU benchmark payload is ready"
+echo "stage: PoC 15A-R2 fixed CTC CPU/NPU benchmark payload is ready"

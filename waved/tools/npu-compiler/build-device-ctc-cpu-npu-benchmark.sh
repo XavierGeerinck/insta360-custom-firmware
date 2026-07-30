@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 OUTPUT_DIRECTORY="$REPOSITORY_ROOT/artifacts/npu/build/poc15a"
-OUTPUT_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
-SECOND_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-ctc-cpu-vs-npu-v1.second"
+OUTPUT_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
+SECOND_BINARY="$OUTPUT_DIRECTORY/wave-npu-benchmark-ctc-cpu-vs-npu-v2.second"
 SOURCE="$SCRIPT_DIR/wave_npu_benchmark_ctc_cpu_vs_npu.cc"
 ORT_INCLUDE="$OUTPUT_DIRECTORY/onnxruntime-v1.15.1/include"
 IMAGE="ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
@@ -53,7 +53,7 @@ docker run --rm \
                 -Wl,--as-needed \
                 -Wl,--build-id=sha1 \
                 -Wl,--enable-new-dtags \
-                -Wl,-rpath,/tmp/wave-npu-poc15a/lib:/usr/lib \
+                -Wl,-rpath,/tmp/wave-npu-poc15a-r2/lib:/usr/lib \
                 -Wl,-z,noexecstack \
                 -Wl,-z,now \
                 -Wl,-z,relro \
@@ -65,23 +65,23 @@ docker run --rm \
         }
 
         build_one \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2
         build_one \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1.second
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2.second
         cmp \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1 \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1.second
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2 \
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2.second
 
         aarch64-linux-gnu-readelf -h \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2
         aarch64-linux-gnu-readelf -d \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2
         aarch64-linux-gnu-nm -D --undefined-only \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1 \
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2 \
             | c++filt
         sha256sum \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1 \
-            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1.second \
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2 \
+            artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2.second \
             waved/tools/npu-compiler/wave_npu_benchmark_ctc_cpu_vs_npu.cc \
             artifacts/npu/build/poc15a/onnxruntime-v1.15.1/include/onnxruntime_c_api.h
     '

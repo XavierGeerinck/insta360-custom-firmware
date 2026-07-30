@@ -2,7 +2,7 @@
 set -euo pipefail
 
 EXPECTED_SERIAL="PSP_0000000000000000"
-REMOTE_ROOT="/tmp/wave-npu-poc15a"
+REMOTE_ROOT="/tmp/wave-npu-poc15a-r2"
 
 connected_serials="$(
     adb devices | awk 'NR > 1 && $2 == "device" {print $1}'
@@ -25,7 +25,7 @@ root_state="$(
     " | tr -d '\r'
 )"
 if [[ "$root_state" == "ABSENT" ]]; then
-    echo "cleanup: PoC 15A root is already absent"
+    echo "cleanup: PoC 15A-R2 root is already absent"
     exit 0
 fi
 if [[ "$root_state" != "DIRECTORY" ]]; then
@@ -65,11 +65,11 @@ unexpected="$(
                 '$REMOTE_ROOT/meta'|\
                 '$REMOTE_ROOT/model'|\
                 '$REMOTE_ROOT/result'|\
-                '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1'|\
+                '$REMOTE_ROOT/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2'|\
                 '$REMOTE_ROOT/meta/manifest.json'|\
                 '$REMOTE_ROOT/model/ctc.onnx'|\
                 '$REMOTE_ROOT/model/ctc_online.nb'|\
-                '$REMOTE_ROOT/result/ctc-cpu-npu-timings-v1.bin')
+                '$REMOTE_ROOT/result/ctc-cpu-npu-timings-v2.bin')
                     ;;
                 *)
                     printf '%s\n' \"\$path\"

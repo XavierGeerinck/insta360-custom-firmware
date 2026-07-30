@@ -10,7 +10,7 @@ BINARY_INPUT="$1"
 SOURCE_INPUT="$2"
 IMAGE="ghcr.io/cross-rs/aarch64-unknown-linux-gnu@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-EXPECTED_BINARY="$REPOSITORY_ROOT/artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
+EXPECTED_BINARY="$REPOSITORY_ROOT/artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
 EXPECTED_SOURCE="$REPOSITORY_ROOT/waved/tools/npu-compiler/wave_npu_benchmark_ctc_cpu_vs_npu.cc"
 EXPECTED_HEADER="$REPOSITORY_ROOT/artifacts/npu/build/poc15a/onnxruntime-v1.15.1/include/onnxruntime_c_api.h"
 EXPECTED_HEADER_SHA256="cfa6e9fcf7750d386f94a0b1c3bc3ac062f9ccdff51490154bcd9243a82f1f91"
@@ -73,13 +73,13 @@ required = [
     "constexpr double kMeanAbsoluteErrorMax = 0.025;",
     "constexpr double kMaximumAbsoluteErrorMax = 0.25;",
     "constexpr double kCosineSimilarityMin = 0.999;",
-    "/tmp/wave-npu-poc15a/model/ctc.onnx",
-    "/tmp/wave-npu-poc15a/model/ctc_online.nb",
+    "/tmp/wave-npu-poc15a-r2/model/ctc.onnx",
+    "/tmp/wave-npu-poc15a-r2/model/ctc_online.nb",
     "/usr/lib/libonnxruntime.so.1.15.1",
     "/usr/lib/libnnsdk.so",
-    "/tmp/wave-npu-poc15a/lib/libCLC.so",
-    "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.bin",
-    "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.partial",
+    "/tmp/wave-npu-poc15a-r2/lib/libCLC.so",
+    "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.bin",
+    "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.partial",
     "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219",
     "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
     "457784da0d1c525171b15438cfbaf869f57e9317817e30691136b8ebe10d4639",
@@ -97,6 +97,10 @@ required = [
     "O_NOFOLLOW",
     "FloatToHalfBits(",
     "HalfBitsToFloat(",
+    "static_cast<int32_t>(*state & 0xffU) - 128",
+    "input->data()[0] = 0.5F;",
+    "!enforce_numerical_gates || qualification_passed",
+    "pair-materialization-gate",
     "std::memcpy(",
     "pair & 1U",
     "CTC_CPU_NPU_BENCH status=PASS mode=benchmark",
@@ -151,7 +155,7 @@ docker run --rm \
     --workdir /work \
     "$IMAGE" \
     bash -euo pipefail -c '
-        binary="artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1"
+        binary="artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2"
         header="$(aarch64-linux-gnu-readelf -h "$binary")"
         dynamic="$(aarch64-linux-gnu-readelf -d "$binary")"
         program="$(aarch64-linux-gnu-readelf -W -l "$binary")"
@@ -165,7 +169,7 @@ docker run --rm \
         grep -Fq "Type:                              DYN" <<<"$header"
         grep -Fq "Shared library: [libGAL.so]" <<<"$dynamic"
         grep -Fq \
-            "Library runpath: [/tmp/wave-npu-poc15a/lib:/usr/lib]" \
+            "Library runpath: [/tmp/wave-npu-poc15a-r2/lib:/usr/lib]" \
             <<<"$dynamic"
         grep -Fq "BIND_NOW" <<<"$dynamic"
         grep -Fq "GNU_RELRO" <<<"$program"
@@ -180,7 +184,7 @@ docker run --rm \
         grep -Fq "dlopen" <<<"$imports"
         grep -Fq "dlsym" <<<"$imports"
         grep -Fq "CTC_CPU_NPU_BENCH status=PASS mode=benchmark" <<<"$strings"
-        grep -Fq "CCN1" <<<"$strings"
+        grep -Fq "CCN2" <<<"$strings"
         grep -Fq "OrtGetApiBase" <<<"$strings"
         grep -Fq "aml_module_create" <<<"$strings"
         grep -Fq "aml_module_input_set" <<<"$strings"
@@ -196,7 +200,7 @@ docker run --rm \
         if grep -Eq \
             "/dev/galcore|/proc/sys/|/boot/|/lib/firmware/|libCLC\\.so" \
             <<<"$strings" &&
-            ! grep -Fq "/tmp/wave-npu-poc15a/lib/libCLC.so" <<<"$strings"; then
+            ! grep -Fq "/tmp/wave-npu-poc15a-r2/lib/libCLC.so" <<<"$strings"; then
             echo "policy: executable references a forbidden path" >&2
             exit 6
         fi

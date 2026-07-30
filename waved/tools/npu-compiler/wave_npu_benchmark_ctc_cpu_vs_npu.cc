@@ -77,7 +77,7 @@ constexpr uint32_t kWaveNbgVersion = 0x00020000U;
 constexpr unsigned int kWatchdogSeconds = 120;
 constexpr uint64_t kFnvOffsetBasis = UINT64_C(0xcbf29ce484222325);
 constexpr uint64_t kFnvPrime = UINT64_C(0x100000001b3);
-constexpr uint32_t kTimingSchemaVersion = 1;
+constexpr uint32_t kTimingSchemaVersion = 2;
 constexpr size_t kTimingHeaderBytes = 64;
 constexpr size_t kQualificationRecordBytes = 88;
 constexpr size_t kTimingRecordBytes = 136;
@@ -87,22 +87,22 @@ constexpr size_t kExpectedTimingBytes =
     (kColdPairs + kMeasuredPairs) * kTimingRecordBytes;
 
 constexpr char kExpectedLibraryPath[] =
-    "/tmp/wave-npu-poc15a/lib:/usr/lib";
+    "/tmp/wave-npu-poc15a-r2/lib:/usr/lib";
 constexpr char kExpectedSdkDirectory[] = "/usr";
 constexpr char kExpectedLogLevel[] = "2";
 constexpr char kOnnxPath[] =
-    "/tmp/wave-npu-poc15a/model/ctc.onnx";
+    "/tmp/wave-npu-poc15a-r2/model/ctc.onnx";
 constexpr char kNbgPath[] =
-    "/tmp/wave-npu-poc15a/model/ctc_online.nb";
+    "/tmp/wave-npu-poc15a-r2/model/ctc_online.nb";
 constexpr char kOrtLibraryPath[] =
     "/usr/lib/libonnxruntime.so.1.15.1";
 constexpr char kNnSdkLibraryPath[] = "/usr/lib/libnnsdk.so";
 constexpr char kForbiddenClcPath[] =
-    "/tmp/wave-npu-poc15a/lib/libCLC.so";
+    "/tmp/wave-npu-poc15a-r2/lib/libCLC.so";
 constexpr char kTimingPath[] =
-    "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.bin";
+    "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.bin";
 constexpr char kPartialTimingPath[] =
-    "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.partial";
+    "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.partial";
 constexpr char kInputName[] = "hidden";
 constexpr char kOutputName[] = "probs";
 constexpr char kOnnxSha256[] =
@@ -1363,7 +1363,7 @@ void FillRandomInput(
     for (size_t index = 0; index < kInputElements; ++index) {
         *state = NextXorshift32(*state);
         const int32_t quantized =
-            static_cast<int32_t>(*state & 0x1ffU) - 256;
+            static_cast<int32_t>(*state & 0xffU) - 128;
         input->data()[index] =
             static_cast<float>(quantized) / 256.0F;
     }
@@ -1380,7 +1380,7 @@ const char* FillQualificationFixture(
     }
     if (fixture == 1U) {
         std::fill_n(input->data(), kInputElements, 0.0F);
-        input->data()[kInputElements / 2U] = 0.5F;
+        input->data()[0] = 0.5F;
         return "impulse";
     }
     if (fixture == 2U) {
@@ -1399,7 +1399,8 @@ bool CompareOutputs(
     const GuardedArray<float>& cpu_output,
     const GuardedArray<float>& npu_output,
     GuardedArray<uint16_t>* cpu_half,
-    NumericalMetrics* metrics) {
+    NumericalMetrics* metrics,
+    bool enforce_numerical_gates) {
     cpu_half->Reset();
     long double sum_absolute_error = 0.0L;
     long double dot_product = 0.0L;
@@ -1490,20 +1491,22 @@ bool CompareOutputs(
     metrics->cosine_npu_squared =
         static_cast<double>(npu_squared);
     metrics->cosine_similarity = cosine_similarity;
-    return cpu_output.CanariesIntact() &&
-           npu_output.CanariesIntact() &&
-           cpu_half->CanariesIntact() &&
-           finite_count == kOutputElements &&
-           top1_matches == kTimeSteps &&
-           std::isfinite(metrics->mean_absolute_error) &&
-           std::isfinite(metrics->maximum_absolute_error) &&
-           std::isfinite(metrics->cosine_similarity) &&
-           metrics->mean_absolute_error <=
-               kMeanAbsoluteErrorMax &&
-           metrics->maximum_absolute_error <=
-               kMaximumAbsoluteErrorMax &&
-           metrics->cosine_similarity >=
-               kCosineSimilarityMin;
+    const bool materialization_passed =
+        cpu_output.CanariesIntact() &&
+        npu_output.CanariesIntact() &&
+        cpu_half->CanariesIntact() &&
+        finite_count == kOutputElements &&
+        std::isfinite(metrics->mean_absolute_error) &&
+        std::isfinite(metrics->maximum_absolute_error) &&
+        std::isfinite(metrics->cosine_similarity);
+    const bool qualification_passed =
+        top1_matches == kTimeSteps &&
+        metrics->mean_absolute_error <= kMeanAbsoluteErrorMax &&
+        metrics->maximum_absolute_error <=
+            kMaximumAbsoluteErrorMax &&
+        metrics->cosine_similarity >= kCosineSimilarityMin;
+    return materialization_passed &&
+           (!enforce_numerical_gates || qualification_passed);
 }
 
 bool QualifyFixture(
@@ -1551,7 +1554,11 @@ bool QualifyFixture(
     }
     NumericalMetrics metrics {};
     if (!CompareOutputs(
-            *cpu_output, *npu_output, cpu_half, &metrics)) {
+            *cpu_output,
+            *npu_output,
+            cpu_half,
+            &metrics,
+            true)) {
         *failure = "qualification-numerical-gate";
         return false;
     }
@@ -1656,8 +1663,12 @@ bool RunPair(
     }
     NumericalMetrics metrics {};
     if (!CompareOutputs(
-            *cpu_output, *npu_output, cpu_half, &metrics)) {
-        *failure = "pair-numerical-gate";
+            *cpu_output,
+            *npu_output,
+            cpu_half,
+            &metrics,
+            false)) {
+        *failure = "pair-materialization-gate";
         return false;
     }
     return true;
@@ -1688,7 +1699,7 @@ std::vector<uint8_t> SerializeTimings(
     const std::vector<TimingRecord>& measured) {
     std::vector<uint8_t> payload;
     payload.reserve(kExpectedTimingBytes);
-    payload.insert(payload.end(), {'C', 'C', 'N', '1'});
+    payload.insert(payload.end(), {'C', 'C', 'N', '2'});
     AppendLe32(&payload, kTimingSchemaVersion);
     AppendLe32(&payload, static_cast<uint32_t>(kFixtureCount));
     AppendLe32(&payload, static_cast<uint32_t>(kMeasuredPairs));
@@ -1787,7 +1798,7 @@ bool PublishTimings(const std::vector<uint8_t>& payload) {
         return false;
     }
     const int directory_fd = open(
-        "/tmp/wave-npu-poc15a/result",
+        "/tmp/wave-npu-poc15a-r2/result",
         O_RDONLY | O_CLOEXEC | O_DIRECTORY);
     if (directory_fd < 0) {
         return false;
@@ -1815,7 +1826,10 @@ void PrintDefinition() {
         "\"benchmark_seed\":\"0x%08x\",\"cold_pairs\":1,"
         "\"warmup_pairs\":20,\"measured_pairs\":200,"
         "\"alternating_order\":true,"
-        "\"timing_schema\":\"CCN1-v1\","
+        "\"timing_schema\":\"CCN2-v2\","
+        "\"qualification_before_timing\":true,"
+        "\"random_mapping\":\"(xorshift32&255)-128 over 256\","
+        "\"performance_semantics\":\"finite-materialized-output\","
         "\"qualification_record_bytes\":%zu,"
         "\"timing_record_bytes\":%zu,\"timing_bytes\":%zu,"
         "\"executes_graph\":true}\n",
@@ -1894,27 +1908,6 @@ int Benchmark() {
     }
 
     const char* failure = "unknown";
-    uint32_t benchmark_state = kBenchmarkSeed;
-    FillRandomInput(&input, &benchmark_state);
-    TimingRecord cold {};
-    if (!RunPair(
-            0,
-            0,
-            &cpu,
-            &npu,
-            &input,
-            &cpu_output,
-            &cpu_half,
-            &npu_input_half,
-            &npu_output_half,
-            &npu_output,
-            &cold,
-            &failure)) {
-        CleanupNpu(&npu);
-        CleanupCpu(&cpu);
-        return Fail(19, failure);
-    }
-
     std::array<QualificationRecord, kFixtureCount> qualifications {};
     uint32_t qualification_state = kQualificationSeed;
     for (size_t fixture = 0; fixture < kFixtureCount; ++fixture) {
@@ -1944,6 +1937,27 @@ int Benchmark() {
         CleanupNpu(&npu);
         CleanupCpu(&cpu);
         return Fail(19, "qualification-generator-state");
+    }
+
+    uint32_t benchmark_state = kBenchmarkSeed;
+    FillRandomInput(&input, &benchmark_state);
+    TimingRecord cold {};
+    if (!RunPair(
+            0,
+            0,
+            &cpu,
+            &npu,
+            &input,
+            &cpu_output,
+            &cpu_half,
+            &npu_input_half,
+            &npu_output_half,
+            &npu_output,
+            &cold,
+            &failure)) {
+        CleanupNpu(&npu);
+        CleanupCpu(&cpu);
+        return Fail(19, failure);
     }
 
     for (size_t pair = 0; pair < kWarmupPairs; ++pair) {

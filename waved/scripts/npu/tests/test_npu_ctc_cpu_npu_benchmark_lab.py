@@ -111,7 +111,7 @@ class CtcCpuNpuBenchmarkLabTests(unittest.TestCase):
     def test_host_generator_matches_locked_final_state_and_digest(self) -> None:
         self.assertEqual(
             lab.expected_measured_input_fnv(),
-            "0xd3908eba921decdb",
+            "0xeea0b3af5a10188e",
         )
 
     def test_valid_payload_parses_and_passes_bridge_gate(self) -> None:
@@ -140,7 +140,7 @@ class CtcCpuNpuBenchmarkLabTests(unittest.TestCase):
 
     def test_parser_rejects_header_change(self) -> None:
         payload = bytearray(valid_payload())
-        struct.pack_into("<I", payload, 4, 2)
+        struct.pack_into("<I", payload, 4, 3)
         with self.assertRaisesRegex(lab.ResultError, "header"):
             lab.parse_timing_payload(bytes(payload))
 
@@ -217,8 +217,8 @@ class CtcCpuNpuBenchmarkLabTests(unittest.TestCase):
     def test_native_result_parser_accepts_exact_framing(self) -> None:
         manifest = lab.load_manifest()
         identity = (
-            "IDENTITY chip_model=0x00009000 chip_revision=0x00009000 "
-            "chip_product_id=0x05080009 chip_eco_id=0x00000000 "
+            "IDENTITY chip_model=0x00009000 chip_revision=0x00009002 "
+            "chip_product_id=0x05090001 chip_eco_id=0x04000000 "
             "customer_id=0x1000000e reserved=0x00000000 "
             "flags=0x0000000000000000"
         )

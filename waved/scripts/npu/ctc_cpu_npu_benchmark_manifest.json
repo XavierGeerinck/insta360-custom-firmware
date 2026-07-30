@@ -1,7 +1,7 @@
 {
   "absent_artifacts": [
     "/lib/libCLC.so",
-    "/tmp/wave-npu-poc15a/lib/libCLC.so",
+    "/tmp/wave-npu-poc15a-r2/lib/libCLC.so",
     "/usr/lib/libCLC.so"
   ],
   "device": {
@@ -15,7 +15,7 @@
     "serial": "PSP_0000000000000000"
   },
   "environment": {
-    "LD_LIBRARY_PATH": "/tmp/wave-npu-poc15a/lib:/usr/lib",
+    "LD_LIBRARY_PATH": "/tmp/wave-npu-poc15a-r2/lib:/usr/lib",
     "VIVANTE_SDK_DIR": "/usr",
     "VSI_NN_LOG_LEVEL": "2"
   },
@@ -30,36 +30,40 @@
     "fp32_bridge_ratio_of_means_max": 0.9,
     "fp32_bridge_ratio_p50_max": 0.9,
     "fp32_bridge_ratio_p95_max_exclusive": 1.0,
+    "impulse_linear_index": 0,
     "maximum_absolute_error_max": 0.25,
     "mean_absolute_error_max": 0.025,
     "measured_pairs": 200,
     "npu_run_count": 229,
+    "performance_semantics": "finite-materialized-output-only",
+    "qualification_before_timing": true,
     "qualification_record_bytes": 88,
     "qualification_seed": "0x573315a1",
     "timing_bytes": 27752,
     "timing_record_bytes": 136,
-    "timing_schema": "CCN1-v1",
+    "random_mapping": "(xorshift32&255)-128 over 256",
+    "timing_schema": "CCN2-v2",
     "top1_matches_required": 64,
     "warmup_pairs": 20
   },
-  "experiment": "wave-npu-poc15a-ctc-cpu-vs-npu",
+  "experiment": "wave-npu-poc15a-r2-ctc-cpu-vs-npu",
   "invocation": {
     "argument": "--benchmark",
-    "executable": "/tmp/wave-npu-poc15a/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1",
-    "partial_timing": "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.partial",
-    "remote_root": "/tmp/wave-npu-poc15a",
+    "executable": "/tmp/wave-npu-poc15a-r2/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2",
+    "partial_timing": "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.partial",
+    "remote_root": "/tmp/wave-npu-poc15a-r2",
     "timeout_ms": 120000,
-    "timing": "/tmp/wave-npu-poc15a/result/ctc-cpu-npu-timings-v1.bin"
+    "timing": "/tmp/wave-npu-poc15a-r2/result/ctc-cpu-npu-timings-v2.bin"
   },
   "local_artifacts": {
     "binary": {
       "bytes": 49848,
-      "path": "artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v1",
-      "sha256": "0cd9e4413bc545d4f0fefe9746a00c4cc334ea4e0888d74e44813437c9694635"
+      "path": "artifacts/npu/build/poc15a/wave-npu-benchmark-ctc-cpu-vs-npu-v2",
+      "sha256": "d5316b2b45d49edbbc83daf368f32776388580a4e7db3667d0fe4ac88ebccf52"
     },
     "build_script": {
       "path": "waved/tools/npu-compiler/build-device-ctc-cpu-npu-benchmark.sh",
-      "sha256": "04f09b7cfbbc04703a65fd4db330a945b97a065a6e14dd798fa63925dec562f0"
+      "sha256": "06e2fb0852c6043459988d6e6889663e22080a08a3002f6ef3292b407c37fbf5"
     },
     "onnxruntime_header": {
       "bytes": 185543,
@@ -68,17 +72,17 @@
     },
     "policy_script": {
       "path": "waved/tools/npu-compiler/verify-device-ctc-cpu-npu-benchmark-policy.sh",
-      "sha256": "e7976ae0135355f44b43b9741a02f3329554d732078706d7dd4c471b6e5f4c15"
+      "sha256": "728eff19e5ce08432118766eba58db71e6ba834bd2751cf94a882d7317f3ef57"
     },
     "source": {
       "path": "waved/tools/npu-compiler/wave_npu_benchmark_ctc_cpu_vs_npu.cc",
-      "sha256": "18435fc05207005cf0d553741109cd11fcb775fa9c9aa80982507756d92bdae2"
+      "sha256": "6d924c2779f2636e50aab49656d015165dab487a058c73691b857c14692b7d27"
     }
   },
   "required_artifacts": {
-    "/tmp/wave-npu-poc15a/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v1": "0cd9e4413bc545d4f0fefe9746a00c4cc334ea4e0888d74e44813437c9694635",
-    "/tmp/wave-npu-poc15a/model/ctc.onnx": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219",
-    "/tmp/wave-npu-poc15a/model/ctc_online.nb": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
+    "/tmp/wave-npu-poc15a-r2/bin/wave-npu-benchmark-ctc-cpu-vs-npu-v2": "d5316b2b45d49edbbc83daf368f32776388580a4e7db3667d0fe4ac88ebccf52",
+    "/tmp/wave-npu-poc15a-r2/model/ctc.onnx": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219",
+    "/tmp/wave-npu-poc15a-r2/model/ctc_online.nb": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
     "/usr/lib/libArchModelSw.so": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f",
     "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
     "/usr/lib/libNNArchPerf.so": "253167677e9839d09815de93a86423824f26f56f097c100d59c03170adecffa9",
