@@ -1,0 +1,146 @@
+{
+  "api_header": {
+    "bytes": 185543,
+    "license": {
+      "path": "artifacts/npu/build/poc15a/onnxruntime-v1.15.1/LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "source": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.15.1/LICENSE",
+      "spdx": "MIT"
+    },
+    "ort_api_version": 15,
+    "path": "artifacts/npu/build/poc15a/onnxruntime-v1.15.1/include/onnxruntime_c_api.h",
+    "sha256": "cfa6e9fcf7750d386f94a0b1c3bc3ac062f9ccdff51490154bcd9243a82f1f91",
+    "source": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.15.1/include/onnxruntime/core/session/onnxruntime_c_api.h"
+  },
+  "cpu_runtime": {
+    "bytes": 8299512,
+    "path": "models/ai-models/runtime/libonnxruntime.so.1.15.1",
+    "required_provider": "CPUExecutionProvider",
+    "sha256": "457784da0d1c525171b15438cfbaf869f57e9317817e30691136b8ebe10d4639",
+    "version": "1.15.1"
+  },
+  "interpretation": {
+    "host_profile_does_not_prove": "the NBG contains numerically identical weights or that the NPU beats the CPU",
+    "host_profile_proves": "fixed shapes, types, operation sequence, memory-order map, runtime ABI source, and artifact identity"
+  },
+  "layout_mapping": {
+    "input": {
+      "linear_memory_order_equal": true,
+      "nbg": "[feature=512,time=16,batch=1]",
+      "onnx": "[batch=1,time=16,feature=512]"
+    },
+    "output": {
+      "linear_memory_order_equal": true,
+      "nbg": "[class=4999,time=16,batch=1]",
+      "onnx": "[batch=1,time=16,class=4999]"
+    }
+  },
+  "live_gate": {
+    "cold_pairs": 1,
+    "cosine_similarity_min": 0.999,
+    "fixture_count": 4,
+    "maximum_absolute_error_max": 0.25,
+    "mean_absolute_error_max": 0.025,
+    "measured_pairs": 200,
+    "paired_ratio_p50_max": 0.9,
+    "paired_ratio_p95_max_exclusive": 1.0,
+    "performance_boundary": "fp32-bridge-total",
+    "ratio_of_means_max": 0.9,
+    "top1_matches_required": 64,
+    "warmup_pairs": 20
+  },
+  "nbg": {
+    "bytes": 5263360,
+    "format": "VPMN",
+    "input": {
+      "bytes": 16384,
+      "dtype": "fp16",
+      "elements": 8192,
+      "name": "input/output[0]",
+      "shape": [
+        512,
+        16,
+        1
+      ]
+    },
+    "output": {
+      "bytes": 159968,
+      "dtype": "fp16",
+      "elements": 79984,
+      "name": "uid_1_out_0",
+      "shape": [
+        4999,
+        16,
+        1
+      ]
+    },
+    "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc_online.nb",
+    "product": "0x1000000e",
+    "sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
+    "stored_checksum_count": 5,
+    "stored_checksums_valid": true,
+    "structural_signature": "ba00110d6d7d90e1f21ad5b3919a378a4e934592f0dc38bdd69a186ddf59d20a",
+    "target": "0x1000000e",
+    "version": "0x00020000"
+  },
+  "onnx": {
+    "bytes": 10258790,
+    "initializers": [
+      {
+        "bytes": 19996,
+        "element_count": 4999,
+        "name": "ctc_lo.bias",
+        "sha256": "08e3d98aaa31b261103ab307f03c776f4f79fccda1644d247afaa91cc9bc022c",
+        "shape": [
+          4999
+        ]
+      },
+      {
+        "bytes": 10237952,
+        "element_count": 2559488,
+        "name": "onnx::MatMul_7",
+        "sha256": "516a6e577b687129fb890d3b2413ac356743ab5ddb2c257734af847985704fbc",
+        "shape": [
+          512,
+          4999
+        ]
+      }
+    ],
+    "input": {
+      "bytes": 32768,
+      "dtype": "float32",
+      "elements": 8192,
+      "name": "hidden",
+      "shape": [
+        1,
+        16,
+        512
+      ]
+    },
+    "ir_version": 7,
+    "matrix_macs_per_invocation": 40951808,
+    "nodes": [
+      "MatMul",
+      "Add",
+      "LogSoftmax"
+    ],
+    "opset": 14,
+    "output": {
+      "bytes": 319936,
+      "dtype": "float32",
+      "elements": 79984,
+      "name": "probs",
+      "shape": [
+        1,
+        16,
+        4999
+      ]
+    },
+    "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc.onnx",
+    "sha256": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219"
+  },
+  "poc": "15A",
+  "relationship": "source-binary-anchor-pending-live-numerical-proof",
+  "schema_version": 1,
+  "status": "host-profile-qualified"
+}
