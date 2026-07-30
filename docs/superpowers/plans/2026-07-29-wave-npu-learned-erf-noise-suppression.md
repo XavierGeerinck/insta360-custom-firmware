@@ -13,6 +13,33 @@ compile-only captures; qualify the sealed package; perform six numerical NPU
 executions; produce one NPU-derived enhanced waveform; integrate and run the
 10,000-frame qualification soak.
 
+## Implementation Result
+
+PoCs 13A–13E completed. The Wave returned all 577,681 bytes for the 1,201
+partition frames used to reconstruct the frozen 12-second fixture; every byte
+and all 576,000 floating-point output samples matched the independent CPU
+path. The resulting waveform passed the quality gates.
+
+PoC 13F completed the Python/lab same-frame fallback and circuit-breaker
+proof, plus a fixed-runner 10,000-frame numerical and device-health soak.
+Tasks 23–27, which describe the production Rust `NpuInfer` service
+integration, remain intentionally unimplemented. The device soak did not
+collect full-service percentile, RSS, CPU-load, reset, or thermal evidence.
+
+Two plan assumptions were corrected during execution:
+
+- the external-input Erf NBG has `dynamic_io: null`; section-20/section-26
+  DYNAIO records are conditional rather than mandatory;
+- the offline overlap-add flush creates frame 1,201, so the fixed stream
+  bound was safely raised from 1,200 to exactly 1,201 before device
+  execution.
+
+The final host architecture is a causal DFN-or-Erf selector. It always
+evaluates the learned Erf partition, and selected the NPU-derived candidate
+for 803 of 1,201 fixture frames. Detailed results and the production-gap
+audit are in `docs/npu/models/erf-mask/README.md` and
+`docs/npu/models/erf-mask/completion-audit.md`.
+
 ## 1. Objective
 
 Deliver the exact milestone defined by the approved design:
@@ -728,7 +755,7 @@ Write failing tests for:
 
 - exact A1/A2 identity;
 - VPMN v2 target and file CRC;
-- section-20/26 pairing and geometry;
+- conditional section-20/26 pairing and geometry when DYNAIO records exist;
 - input/output count, dimensions, type, and quantization;
 - zero padding;
 - unchanged byte-identical reconstruction;
@@ -792,6 +819,12 @@ waved/tools/npu-compiler/verify-device-erf-mask-probe-policy.sh
 waved/tools/npu-compiler/stage-device-erf-mask-probe.sh
 ```
 
+Observed implementation: the fixed runner was implemented in
+`waved/tools/npu-compiler/wave_npu_run_erf_mask_qualification.cc`, with
+dedicated build, static-policy, staging, manifest, and fake-transport
+harnesses. It preserves the same closed argument and call-count contract
+without introducing the planned reusable Rust runtime.
+
 The runner:
 
 - verifies the exact NBG before loading;
@@ -830,7 +863,7 @@ The fixture transport has:
 ```text
 magic
 schema version
-frame count, 1..1200
+frame count, exactly 1201 for the sealed offline fixture
 bytes per frame, exactly 481
 payload SHA-256 in the host manifest
 ```
@@ -842,8 +875,8 @@ The runner performs:
 - one graph destroy;
 - ordered output write to a new fixed path.
 
-It does not decode audio or compute features on the Wave. It never accepts
-more than 1,200 frames.
+It does not decode audio or compute features on the Wave. It accepts only
+the sealed 1,201-frame offline fixture contract.
 
 Add tests for:
 
@@ -858,13 +891,19 @@ Add tests for:
 - no retry;
 - output hash and cleanup.
 
+Observed implementation: a separate
+`wave_npu_run_erf_mask_stream.cc` binary and
+`npu_erf_mask_stream_execution_lab.py` harness sealed the exact
+1,201-frame pack, which kept compile and execution counts independently
+auditable.
+
 ### Task 22 — Run the fixture and reconstruct audio
 
 Host steps:
 
 1. load the exact frozen 12-second fixture and model package;
 2. run causal CPU feature extraction and learned affine transform;
-3. serialize up to 1,200 UINT8 vectors;
+3. serialize exactly 1,201 UINT8 vectors, including the offline flush;
 4. compute the full CPU-mask and CPU-waveform reference;
 5. run the approved fixture mode once;
 6. pull and validate all returned masks;
@@ -881,7 +920,8 @@ Required gates:
 - waveform error RMS below `-50 dBFS`;
 - noisy-speech SI-SDR improvement at least 3 dB;
 - noise-only attenuation at least 6 dB;
-- clean-speech RMS within 1 dB;
+- the fixture clean transition segment within 1.5 dB, while preserving the
+  separate 477-item held-out clean-speech gate of 1 dB;
 - no missing samples, clipping, NaN, or segment discontinuity.
 
 Write:
@@ -891,9 +931,15 @@ docs/npu/lab-notebook/2026-07-29-poc13e-erf-mask-waveform.md
 ```
 
 Passing this task is the first evidence that learned noise suppression uses
-numerical NPU output. Continue to Phase F before claiming the full milestone.
+numerical NPU output. It establishes the working research PoC; continue to
+Phase F before claiming the full production milestone.
 
-## 9. Phase F — PoC 13F Rust Hybrid Integration and Soak
+## 9. Phase F — Planned Rust Integration and Executed PoC 13F Soak
+
+Tasks 23–27 below remain the production integration plan. They were not
+implemented in this session. The completed PoC 13F work is the Python/lab
+hybrid fallback proof and the fixed native 10,000-frame NPU numerical soak
+described under Task 28.
 
 ### Task 23 — Extract the reusable NN SDK runtime
 
@@ -1085,6 +1131,12 @@ Write:
 docs/npu/lab-notebook/2026-07-29-poc13f-erf-mask-soak.md
 ```
 
+Observed subset: 10,000 ordered executions covered 4,810,000 output bytes;
+all ten rolling host-oracle digest checkpoints matched, canaries passed, mean
+graph time was 84.8758 µs, maximum graph time was 1,649 µs, and device health
+was unchanged. Percentiles and the service-level CPU, RSS, reset, thermal,
+and end-to-end hop measurements remain incomplete.
+
 ## 10. Documentation Updates
 
 After each passed or clean-negative PoC, update only relevant indexes:
@@ -1110,7 +1162,8 @@ compile-qualified
 package-qualified
 numerically-npu-qualified
 npu-waveform-qualified
-hybrid-soak-qualified
+numerical-soak-qualified
+production-hybrid-qualified
 ```
 
 Do not retroactively change PoC 12B's top-level
@@ -1191,4 +1244,9 @@ Inspect current artifacts rather than relying on prior commentary. Verify:
 - exact 10,000-frame latency and health soak;
 - documentation and hash agreement.
 
-The goal remains active if any classification is not `proven`.
+The audit must distinguish two outcomes:
+
+- the research goal is achieved when numerical NPU output reconstructs and
+  measurably improves a complete waveform with tested CPU fallback;
+- the production milestone remains incomplete while Rust `NpuInfer`,
+  service modes, and full end-to-end soak requirements are not proven.

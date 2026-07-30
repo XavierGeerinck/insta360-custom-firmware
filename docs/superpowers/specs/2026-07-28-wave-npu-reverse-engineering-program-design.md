@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-28
 
-**Status:** Approved design; implementation plan pending
+**Status:** Implemented through PoC 8; compiler/model program continues
 
 **Primary outcome:** A reproducible, software-visible description of the
 Insta360 Wave NPU stack plus a safe toolchain for compiling, executing,
@@ -28,21 +28,37 @@ its output, and cleanly destroy the graph. The current custom add graph
 does not execute because the available host simulator emits product
 `0x10000020`, while the Wave accepts product `0x1000000e`.
 
-The central program gate is therefore:
+The original central gate was to produce and execute a legitimate
+Wave-targeted custom NBG. That gate has now passed for one deterministic U8
+Erf graph:
 
-> Produce a legitimate Wave-targeted NBG for a deterministic add graph
-> and execute it repeatedly through the stock runtime.
+```text
+generated NBG:
+  VPMN v2, target 0x1000000e, 5,840 bytes
+
+zero execution:
+  [0,0,0,0] -> [0,0,0,0]
+
+nonzero execution:
+  [0,1,2,255] -> [0,1,1,1]
+```
 
 Patching the product identifier in an incompatible NBG does not satisfy
 the gate. The compiler must produce a graph whose instructions,
 descriptors, kernels, and metadata are actually valid for the Wave.
 
-After that gate, the first real workload is microphone noise
-suppression. The model ladder starts with a deliberately small causal
-network composed only of verified operations, then advances to a
+The current gate is broader compiler and operation coverage. Fixed
+MatrixMul and Conv2d denoiser graphs select OpenVX but fail both NBG export
+and ordinary graph verification before inference. SignalFrame reaches the
+firmware's source-kernel path, but exact `libCLC.so` is absent; a
+version-adjacent CLC is ABI-incompatible and quarantined.
+
+The first real workload remains microphone noise suppression. The model
+ladder starts with a fixed convolution control, then a tiny causal
+spectral-mask network composed only of verified operations, and only later a
 higher-quality model such as a compatible DeepFilterNet variant. VAD,
-wake word, residual echo suppression, dereverberation, and speaker
-embeddings follow as independent PoCs.
+residual echo suppression, dereverberation, and speaker embeddings remain
+independent model PoCs.
 
 ## 2. Definition of "Reverse the Entire NPU"
 
@@ -131,7 +147,7 @@ input:       FP16 [256, 16, 1]
 output:      FP32 [5200, 16, 1]
 ```
 
-### 4.3 Custom compiler failure already isolated
+### 4.3 Custom compiler boundary
 
 The host-generated add graph uses:
 
@@ -148,8 +164,9 @@ set_graph_inoutputs fail
 aml_module_create returned NULL
 ```
 
-This separates runtime access from compiler targeting. Direct execution
-works; current custom compilation does not.
+This separated runtime access from the original host simulator. Later PoCs
+proved a narrow exact-device compile route for Erf, then showed that the
+same exposed interface does not generalize to Add, MatrixMul, or Conv2d.
 
 ### 4.4 Useful local assets
 
@@ -329,10 +346,9 @@ reviewable unit:
 5. commit the complete PoC;
 6. use its evidence to finalize the next PoC's plan.
 
-The next implementation plan covers PoC 0 only. Later PoCs may receive a
-small design addendum when a result materially changes their architecture,
-but the overall goals and safety boundary remain governed by this
-program design.
+PoCs 0 through 8 now have separate plans and evidence. Later PoCs receive a
+new plan when a result materially changes their architecture; the overall
+goals and safety boundary remain governed by this program design.
 
 ## 8. PoC 0 — Reproducible NPU Lab
 

@@ -382,8 +382,8 @@ globs, missing hashes, and unreviewed artifact kinds fail.
 - invokes the existing bounded Ghidra adapter on only the named targets;
 - binds function bodies to exact hashes;
 - records callers, callees, referenced functions, and diagnostics;
-- rejects missing, duplicate, thunk-only, truncated, or overlapping
-  functions;
+- rejects missing, duplicate, unapproved thunk-only, truncated, or
+  overlapping functions;
 - emits canonical static evidence;
 - never imports or executes an analyzed artifact.
 
@@ -419,7 +419,8 @@ so one evidence file does not become an unreviewable decompilation dump.
 - decoded record views;
 - raw bytes for every range;
 - gap and ownership ledger;
-- connection-tail range;
+- connection-tail view, plus an exclusive range only when it is not already
+  covered by a section;
 - original alignment and padding;
 - source offsets and lengths;
 - change state.
@@ -433,6 +434,17 @@ NbgImage.to_bytes()    -> allowed only when semantically unchanged
 
 Any API that changes a decoded field marks the image changed. PoC 12A's
 writer refuses changed images. It is not a general serializer API.
+
+The implementation established two exact representation details that refine
+the pre-implementation wording without changing the safety boundary:
+
+- all five selected v2 files have a section whose declared range reaches
+  EOF, so the runtime's final-512-byte connection fingerprint is a
+  `section-covered-view`, not a second byte owner;
+- `vxoBinaryGraph_SaveNetworkBinaryGraph` is an exact four-byte AArch64
+  branch export alias to the `SaveBinaryEntrance` path. It is the one
+  manifest-approved thunk; the remaining 20 selected targets retain full
+  non-thunk bodies.
 
 ### 7.4 Round-trip verifier
 
@@ -638,7 +650,7 @@ Forbidden:
 - invalid record stride;
 - unknown section preservation;
 - nonzero padding preservation;
-- connection-tail preservation;
+- connection-tail view preservation without double ownership;
 - one-byte corruption detection;
 - semantic-change refusal;
 - output non-overwrite.
@@ -720,7 +732,8 @@ PoC 12A passes only when:
 2. serializer entry, orchestration, coefficient, command, patch, relocation,
    and load-side functions have bounded static evidence;
 3. every byte of every selected NBG has exactly one ownership
-   classification;
+   classification, while overlapping analytical views do not claim
+   ownership;
 4. the generated Erf NBG round-trips byte-for-byte;
 5. the English CTC NBG round-trips byte-for-byte;
 6. every selected multilingual control round-trips byte-for-byte;

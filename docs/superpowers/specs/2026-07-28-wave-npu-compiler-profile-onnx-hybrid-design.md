@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-28
 
-**Status:** Approved for implementation planning
+**Status:** Approved; PoCs 9A, 9C, the acquisition/static portion of 9D, and
+the host-only 9E/9F control-plane gates completed. PoC 9D closed at the
+no-kernel NBG compiler gate.
 
 **Primary outcome:** Recover the minimum Wave-specific compiler and hardware
 profile contract required to compile and execute a fixed-shape convolutional
@@ -34,6 +36,28 @@ The open ONNX Runtime VSINPU execution provider supplies the general ONNX
 frontend. Unsupported graph regions run on the CPU. The designated audio mask
 subgraph must compile and execute on the NPU in strict qualification mode
 before the project claims NPU acceleration.
+
+Implementation update on 2026-07-28:
+
+- PoC 9A recovered the exact architecture lookup and Wave profile;
+- PoC 9C recovered the available simulator parser, but confirmed that the
+  then-local no-kernel `VIV_GPU_FILE` consumer was absent;
+- PoC 9D acquired and hash-pinned the Radxa-linked Allwinner
+  `ubuntu-npu:v2.0.10.2` image without loading or running it;
+- that package supplies the exact vendor Wave profile and genuine
+  `VIV_GPU_FILE` consumers, but only in standalone `6.4.18:967862`
+  GLSL/OpenCL shader compilers;
+- Acuity 6.30.22's graph-to-NBG path instead uses an embedded
+  `6.4.6:769531` simulator SDK through `VSIMULATOR_CONFIG`, so the required
+  `>=6.4.22` no-kernel NBG backend remains missing;
+- PoC 9E implemented bounded general ONNX admission, recursive control-flow
+  inventory, canonical signatures, and all-CPU placement manifests;
+- the host portion of PoC 9F implemented deterministic CPU execution and
+  fail-closed session construction, with zero current NPU attempts;
+- actual VSINPU compiler/provider hardening remains gated on PoC 9D.
+
+The completed host implementation is documented in
+`docs/npu/onnx/README.md`.
 
 ## 2. Verified Starting Point
 
@@ -363,9 +387,12 @@ It reports:
 - the designated mask partition;
 - whether strict mode would accept the model.
 
-The auditor creates stable graph signatures from canonical topology, tensor
-metadata, constants, attributes, profile identity, and runtime/compiler
-identity. A signature changes when any execution-relevant property changes.
+The auditor creates stable executable graph signatures from canonical
+topology, tensor metadata, constants, and attributes. The surrounding policy
+manifest separately binds the graph signature to the exact profile and
+runtime/compiler identity. A graph signature changes when an
+execution-relevant model property changes; a policy digest changes when the
+compiler qualification changes.
 
 ### 6.5 Hardened VSINPU
 
@@ -559,6 +586,12 @@ Pass:
 
 This PoC is host-only and does not compile a graph on the device.
 
+Completed result: the local x86 simulator grammar is recovered and tested.
+PoC 9D later corroborated the same five-field grammar in a real no-kernel
+shader compiler, but not in a compatible graph-to-NBG backend. The generated
+Wave file remains a parser-shaped candidate with an explicit compiler
+refusal, not a completed no-kernel profile qualification.
+
 ### 8.4 PoC 9D — Offline compiler compatibility
 
 Question:
@@ -586,6 +619,27 @@ Pass:
 Failure does not authorize patching NBG payloads, replacing libraries, or
 executing an incompatible candidate.
 
+Completed acquisition/static result:
+
+- trusted distribution, nested archives, OCI manifest/config, and all 15
+  layer blobs are hash-pinned and reverified;
+- the vendor-authored `VIP9000NANOS_PID0X1000000E.config` exactly matches the
+  PoC 9A database identity;
+- the standalone `vcompiler` five-field `VIV_GPU_FILE` parser is byte-locked,
+  with its call sites and feature-database call recovered;
+- those consumers are shader compilers at `6.4.18:967862`, below the current
+  TIM-VX no-kernel minimum;
+- Acuity's native NBG wrapper boundary is identified, but it uses
+  `VSIMULATOR_CONFIG` and an embedded `6.4.6:769531` SDK;
+- compiler I/O and allocation ownership remain unproven;
+- no compiler, container, or device call was made.
+
+The fixed Erf/Conv work in this PoC remains blocked. The next candidate must
+be a dedicated x86-64 Vivante no-kernel SDK `6.4.22` or newer whose
+OpenVX/ovxlib NBG path directly consumes `VIV_GPU_FILE`, with ovxlib
+`1.2.26` or newer, complete dependencies, licence records, and a proven
+input/output ABI.
+
 ### 8.5 PoC 9E — ONNX capability auditor
 
 Question:
@@ -606,6 +660,10 @@ Pass:
 - every rejected node has an exact reason;
 - strict and hybrid decisions match the manifest;
 - CPU-only models cannot be mislabeled NPU-capable.
+
+Completed host result: 35 tests cover deterministic fixtures, recursive graph
+limits, external-data refusal, stable signatures, exact all-CPU placement
+reasons, and a non-executing audit of the 51-graph/689-node Silero VAD model.
 
 ### 8.6 PoC 9F — VSINPU hardening
 
@@ -630,6 +688,12 @@ Pass:
 - unexpected compile failure creates one CPU-only session;
 - strict mode fails when the designated partition is not NPU-resident;
 - error-injection tests are deterministic.
+
+Completed host portion: `audit`, `cpu`, `hybrid`, and `strict` behavior plus
+one-attempt construction failure semantics are test-locked. Current hybrid
+creates one CPU-only session and makes zero NPU attempts; strict refuses
+before session construction. Provider compile/copy/run hardening and worker
+supervision remain pending because no compiler-qualified signature exists.
 
 ### 8.7 PoC 10A — First Conv control
 

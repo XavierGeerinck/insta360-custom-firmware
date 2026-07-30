@@ -8,6 +8,21 @@
 **Planning workflow:** Manual test-first fallback because the required
 `writing-plans` skill is not installed in this session.
 
+## Implementation result
+
+- PoC 13G: complete; `cpu-faster`.
+- PoC 14A: complete; deterministic package, six vectors, and all held-out
+  waveform gates passed.
+- PoC 14B: clean negative after one baseline compiler process. The exact
+  Wave checker rejected `ASYM UINT8, SYMM PC INT8` on `MULTIPLY` before NBG
+  emission. A2/B/C were not replayed.
+- PoCs 14C–14H: not started because no producer differential exists and the
+  prerequisite ladder forbids semantic emission or execution.
+
+The retained evidence is documented in
+`docs/npu/lab-notebook/2026-07-29-poc14a-affine-host.md` and
+`docs/npu/lab-notebook/2026-07-29-poc14b-affine-compiler-negative.md`.
+
 ## 1. Objective
 
 Execute the approved sequence:

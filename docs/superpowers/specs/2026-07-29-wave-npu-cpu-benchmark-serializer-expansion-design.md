@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-29
 
-**Status:** Approved design; awaiting written-spec review
+**Status:** PoC 13G and 14A passed; PoC 14B closed clean negative; PoCs
+14C–14H blocked by the prerequisite ladder
 
 **Parent designs:**
 
@@ -16,6 +17,35 @@
    Cortex-A55 CPU and Wave NPU.
 2. PoC 14 expands NPU residency through a serializer-first affine ladder,
    then attempts a minimal learned spectral Conv partition.
+
+## Implementation result
+
+PoC 13G passed but was performance-negative: on 10,000 same-device paired
+frames, the Wave Cortex-A55 lookup was 20.686 times faster than NPU
+`Run()` and 26.137 times faster than the complete NPU boundary by ratios of
+means.
+
+PoC 14A then froze and quality-qualified a useful U8-feature,
+per-channel-INT8 affine-plus-Erf partition. Its model contract is
+`b52ddaf3baed2a7001ff10cbf9ba0600945749a2332f02d71d2ae0be25ac98b8`.
+
+PoC 14B consumed one of the six permitted compile-only processes. Baseline
+A1 failed cleanly while checking its first `MULTIPLY` node:
+
+```text
+Inputs/Outputs data type not support: ASYM UINT8, SYMM PC INT8
+```
+
+The pinned source explains the result: `op_check_mul` delegates to ADD's
+finite 59-pair input-type registry, which contains no per-channel pair. No
+NBG was emitted, health remained unchanged, and the exact stage root was
+removed. A2/B1/B2/C1/C2 were skipped because changing a coefficient cannot
+change the rejected tensor signature and would be a known-equivalent retry.
+
+PoC 14C therefore has no coefficient differential to analyze. Semantic
+emission, affine execution, performance qualification, and Conv expansion
+remain blocked. The existing CPU-affine/NPU-Erf hybrid denoiser remains the
+working endpoint.
 
 ## 1. Decision
 

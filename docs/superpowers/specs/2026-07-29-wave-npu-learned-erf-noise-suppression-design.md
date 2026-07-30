@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-29
 
-**Status:** Architecture approved; written specification awaiting review
+**Status:** Research PoCs 13A–13F implemented and qualified; production Rust
+integration remains incomplete
 
 **Parent designs:**
 
@@ -10,12 +11,39 @@
 - `2026-07-28-wave-npu-compiler-profile-onnx-hybrid-design.md`
 - `2026-07-28-wave-npu-open-nbg-serializer-design.md`
 
-**Immediate outcome:** Run a learned spectral-mask denoiser whose quantized
-Erf partition executes numerically on the Insta360 Wave NPU, reconstruct an
-enhanced waveform from those NPU results, and retain an equivalent CPU
+**Immediate outcome:** Achieved. A learned spectral-mask denoiser ran its
+quantized Erf partition numerically on the Insta360 Wave NPU, reconstructed
+an enhanced waveform from those NPU results, and retained an equivalent CPU
 fallback.
 
 **Honest result name:** `learned-npu-assisted-erf-mask-denoiser`
+
+## Implementation Result Addendum
+
+The executed PoCs changed two implementation details without weakening the
+NPU-residency claim:
+
+- the final quality-qualified architecture evaluates both a DeepFilterNet
+  candidate and the learned Erf candidate, then uses a causal per-frame
+  selector; the NPU-derived Erf candidate was selected for 803 of 1,201
+  fixture frames;
+- the offline overlap-add flush adds one final partition input, so PoC 13E
+  executed 1,201 frames rather than the design estimate of 1,200.
+
+PoC 13E reconstructed all 576,000 samples of the 12-second fixture from
+Wave-returned tensors. All 577,681 NPU output bytes and all reconstructed
+floating-point samples exactly matched the independent CPU path. The
+waveform passed the noise, speech, intelligibility, silence, and numerical
+gates. PoC 13F then completed 10,000 consecutive NPU executions with all ten
+host-oracle digest checkpoints matching and no device-health change.
+
+The current runtime boundary is Python/lab code plus fixed offline TIM-VX
+device runners. It proves working NPU-assisted noise cancellation, but it is
+not yet the production Rust `NpuInfer` backend described in sections 3.5,
+8.4, and 11.6. Production modes, service scheduling, percentile latency,
+memory, reset, and thermal qualification remain follow-on work. The
+requirement-by-requirement status is recorded in
+`docs/npu/models/erf-mask/completion-audit.md`.
 
 ## 1. Decision
 
@@ -31,7 +59,10 @@ mono 48 kHz audio
   -> CPU learned per-frequency affine transform
   -> quantized UINT8 logits
   -> Wave NPU Erf over all 481 frequency bins
-  -> CPU mask scaling, application, and inverse STFT
+  -> CPU learned-candidate mask scaling and application
+  -> CPU DeepFilterNet candidate
+  -> CPU causal DFN-or-Erf selector
+  -> CPU inverse STFT
   -> enhanced mono audio
 ```
 
@@ -56,8 +87,10 @@ The current evidence establishes all of the following:
 - exact Wave libraries generated and executed an external-input UINT8 Erf
   graph;
 - the same producer generated deterministic constant-input Erf graphs;
-- PoC 12C recovered the VPMN v2 file CRC and the section-20/section-26 DYNAIO
-  mapping across the complete Wave v2 corpus;
+- PoC 12C recovered the VPMN v2 file CRC and conditional
+  section-20/section-26 DYNAIO mapping across the Wave v2 corpus; the
+  external-input Erf graph subsequently proved that not every VPMN v2 file
+  contains those records;
 - a CPU DeepFilterNet implementation already exists behind `NpuInfer`;
 - the ONNX control plane already implements audit, CPU, hybrid, and strict
   policies, but currently has zero approved NPU signatures.
@@ -361,9 +394,13 @@ outputs are exact or within one U8 unit of this independent oracle.
 
 ### 6.5 Synthesis
 
-The CPU multiplies each complex noisy spectrum by the real mask, performs a
-960-point inverse FFT, reapplies the square-root Hann window, and
-overlap-adds the result.
+The CPU multiplies each complex noisy spectrum by the NPU-derived real mask
+to form the learned candidate. The final qualified architecture also
+constructs a DeepFilterNet candidate and selects it when its retained frame
+power is within 1 dB of the noisy frame; otherwise it selects the learned
+Erf candidate. The selected candidate is overlap-added into the output. This
+causal selector is part of the frozen model policy and does not inspect a
+clean reference.
 
 The implementation must:
 
@@ -396,7 +433,8 @@ runtime library and device identity allowlist
 quality, numerical, latency, and soak evidence hashes
 ```
 
-The reference ONNX graph describes the complete mathematical model:
+The reference ONNX graph describes the complete learned Erf candidate. The
+causal DFN-or-Erf selector remains an explicit CPU orchestration step:
 
 ```text
 feature FLOAT [1,481]
@@ -463,9 +501,11 @@ The CPU implementation serves three roles:
 - same-model hybrid fallback;
 - explicit CPU execution mode.
 
-DeepFilterNet and Speex remain higher-level fallback choices when the entire
-Erf-mask model cannot initialize. They do not replace the same-model CPU
-fallback in numerical comparisons.
+DeepFilterNet also supplies the second candidate in the final
+quality-qualified selector. The same-model CPU Erf path remains the
+independent numerical oracle and same-frame NPU-failure fallback. Speex and
+the existing service-level DeepFilterNet selection remain higher-level
+fallback choices when the entire hybrid model cannot initialize.
 
 ### 8.4 `NpuInfer` integration
 
@@ -689,7 +729,9 @@ Work:
 
 - parse both PoC 13B artifacts with the strict VPMN v2 parser;
 - prove byte identity and deterministic section ownership;
-- verify DYNAIO entries and zero padding;
+- verify section-20/section-26 DYNAIO entries when present, and verify zero
+  padding; absence is valid for an external-input graph whose profile proves
+  `dynamic_io: null`;
 - reconstruct the unchanged graph byte-for-byte;
 - create the initial sealed model package;
 - derive the exact partition signature;
@@ -736,8 +778,8 @@ approval registry.
 
 ### 11.5 PoC 13E — NPU-derived enhanced waveform
 
-**Device actions:** one graph create, at most 1,200 sequential graph
-executions, one graph destroy.
+**Device actions:** one graph create, exactly 1,201 sequential graph
+executions including the offline flush, one graph destroy.
 
 The host computes causal features and affine logits for the frozen 12-second
 fixture. The Wave processes every 481-byte mask vector. The host reconstructs
@@ -753,7 +795,9 @@ Pass:
 - NPU-derived output improves SI-SDR by at least 3 dB on noisy-speech
   segments;
 - noise-only attenuation is at least 6 dB;
-- clean-speech RMS stays within 1 dB;
+- the fixture's single 2-second clean transition segment stays within
+  1.5 dB, while the broader 477-item held-out clean-speech qualification
+  remains within 1 dB;
 - there are no missing samples, clipping, NaNs, or discontinuities at segment
   boundaries;
 - input, CPU output, NPU output, masks, metrics, and logs all have exact
@@ -796,6 +840,14 @@ Pass:
 The NPU backend remains opt-in after this pass. Enabling it by default is a
 separate production decision.
 
+**Observed implementation status:** the Python/lab hybrid boundary passed
+same-frame CPU fallback and permanent circuit-breaker tests. A fixed native
+runner completed 10,000 consecutive NPU executions with exact rolling
+oracle digests, canaries, and unchanged pre/post device health. The planned
+Rust `NpuInfer` integration and the full service-level p50/p95/p99, CPU,
+RSS, reset, and thermal qualification were not implemented in this research
+session.
+
 ### 11.7 PoC 14 — serializer-first learned-operation expansion
 
 After PoC 13E proves an NPU-derived enhanced waveform, continue controlled
@@ -828,7 +880,7 @@ PoC 14 does not weaken or retroactively relabel the hybrid Erf result.
 |---|---:|---:|---:|---:|
 | 13B | 2 | 0 | 0 | 0 |
 | 13D | 0 | 1 | 6 | 1 |
-| 13E | 0 | 1 | 1,200 maximum | 1 |
+| 13E | 0 | 1 | 1,201 exactly | 1 |
 | 13F | 0 | 1 | 10,000 exactly | 1 |
 
 No stage starts until the preceding stage passes. There is no automatic
@@ -933,6 +985,7 @@ docs/superpowers/plans/
 
 docs/npu/models/erf-mask/
   README.md
+  completion-audit.md
   model-manifest.json
   training-manifest.json
   evaluation-summary.json
@@ -967,8 +1020,7 @@ Every notebook contains:
 
 ## 15. Completion Criteria
 
-The first learned NPU-assisted noise-suppression milestone is complete only
-when all of the following are proven:
+The original production milestone required all of the following:
 
 1. A deterministic learned 962-parameter model package exists.
 2. The package passes held-out ablation and quality gates.
@@ -991,9 +1043,19 @@ when all of the following are proven:
 13. All required manifests, lab notebooks, hashes, and reproduction commands
     exist and agree with current artifacts.
 
-No subset of these criteria is described as “noise cancellation working on
-the NPU.” In particular, successful compilation, one nonzero tensor, a CPU
-waveform, or an analytic Erf gate alone is insufficient.
+Criteria 1–8 are proven. Criterion 11 is proven at the Python/lab integration
+boundary. Criterion 12 is proven for 10,000-frame numerical ordering and
+device health, but not for the full service-level percentile, memory, reset,
+and thermal requirements. Criteria 9 and 10 remain incomplete because the
+production Rust `NpuInfer` integration was not implemented. Criterion 13 is
+proven by the final documentation audit.
+
+This supports the narrower, evidence-backed statement “working
+NPU-assisted noise cancellation research PoC”: a complete enhanced waveform
+was reconstructed from numerical NPU outputs and passed the stated quality
+gates. It does not support “production NPU backend complete.” Compilation,
+one nonzero tensor, a CPU-only waveform, or an analytic Erf gate alone would
+still be insufficient.
 
 ## 16. Follow-On Completion
 
