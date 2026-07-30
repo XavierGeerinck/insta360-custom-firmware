@@ -22,10 +22,63 @@ The immediate result is concrete:
 - PoC 3 captured two equivalent stock runtime/driver traces: 73 successful
   galcore calls per run, a stable phase-correlated command sequence, and the
   unchanged stock output digest;
-- the available host simulator still emits the wrong NBG product target, but
-  PoC 1 also found a separate private export-data graph-construction route;
-- arbitrary custom models are **not yet unlocked**: neither route has yet
-  produced a verified custom graph on the Wave.
+- the available host simulator still emits the wrong NBG product target;
+- the exact Wave stack generated an untouched 5,840-byte VPMN v2 Erf NBG for
+  target `0x1000000e`, with one U8 `[4]` input/output and all stored
+  checksums valid;
+- two separately reviewed executions proved zero and nonzero input/output
+  for that generated NBG;
+- the live hardware reports EVIS2, subgroup size 4, no stream processor, and
+  no VA40 support;
+- general custom models are **not yet unlocked**: Add, MatrixMul, and Conv2d
+  built-ins fail NBG export, and the tested MatrixMul/Conv2d graphs also fail
+  ordinary graph verification before execution;
+- the Wave firmware omits the exact `libCLC.so` needed by its embedded
+  EVIS/OpenCL source path; a version-adjacent compiler crossed relocation but
+  failed its program-object ABI and is permanently quarantined.
+- PoC 9A recovered the exact five-key architecture lookup, the unique
+  target-`0x1000000e` Wave database row, its masked revision-family fallback,
+  and a strict evidence profile without calling a compiler or device API.
+- PoC 9C recovered the x86 simulator's five-field config parser and
+  358-record catalog, accepted the live revision in an isolated 13-case
+  matrix, and emitted a strict Wave candidate that is explicitly refused for
+  compiler use because a compatible no-kernel graph-to-NBG
+  `VIV_GPU_FILE` consumer had not been qualified.
+- PoC 9D acquired and fully hash-pinned the Radxa-linked Allwinner
+  `ubuntu-npu:v2.0.10.2` image, recovered its exact vendor Wave config and a
+  genuine no-kernel parser, and then closed the package as incompatible for
+  graph NBG generation: its shader compilers are `6.4.18:967862`, while
+  Acuity uses an embedded `6.4.6:769531` simulator SDK.
+- PoC 9E/9F added bounded general ONNX admission, recursive control-flow
+  inventory, deterministic graph signatures, a CPU numerical oracle, and
+  fail-closed hybrid/strict modes; all NPU placement remains disabled.
+- PoC 12A modeled five exact NBGs with total byte ownership and
+  byte-identical unchanged re-emission while binding 21 serializer/load
+  targets to the exact Wave binaries.
+- PoC 12B captured three compile-only stock-serializer outputs for a
+  one-byte Erf constant differential; A1/A2 are byte-identical, and the
+  sealed finite-registry result remains conservatively unresolved.
+- PoC 12C separately recovered and enforced the v2 header CRC order,
+  decoded the section-20/26 dynamic-I/O table geometry, validated 138/138
+  v2 graphs and 8,939 table entries, and exactly reconstructed the
+  controlled B graph in memory without writing or executing it.
+- PoCs 13A–13F produced a working learned NPU-assisted noise-cancellation
+  PoC: the Wave executed 1,201 U8 `[481]` Erf partitions, all 577,681 output
+  bytes matched an independent CPU oracle, and those returned tensors
+  reconstructed a 576,000-sample waveform with +4.8443 dB median SI-SDR
+  improvement and 9.8283 dB noise attenuation.
+- The fixed partition also passed a 10,000-execution numerical and health
+  soak. Production Rust `NpuInfer` integration and full service-level
+  latency, memory, reset, and thermal qualification remain incomplete.
+- PoC 13G measured the exact partition on both Wave compute engines. The
+  Cortex-A55 lookup was 20.686 times faster than NPU `Run()` and 26.137
+  times faster than the complete NPU boundary by ratios of means.
+- PoC 14A froze and quality-qualified a larger learned
+  `Multiply -> Add -> Erf` partition, but PoC 14B closed it as a clean
+  compiler negative: the exact Wave checker rejects its asymmetric-U8 by
+  symmetric-per-channel-I8 Multiply signature before NBG emission. No
+  coefficient differential exists, so semantic affine emission and Conv
+  expansion remain blocked.
 
 The detailed program design is in
 [`2026-07-28-wave-npu-reverse-engineering-program-design.md`](../superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md).
@@ -40,6 +93,35 @@ PoC 2's format evidence starts at
 PoC 3's dynamic evidence starts at [`trace/README.md`](trace/README.md), and
 its implementation plan is
 [`2026-07-28-wave-npu-poc3-runtime-driver-trace.md`](../superpowers/plans/2026-07-28-wave-npu-poc3-runtime-driver-trace.md).
+PoCs 5 through 8 are consolidated in the
+[`custom compiler notebook`](lab-notebook/2026-07-28-poc5-custom-compiler.md),
+[`custom NBG execution notebook`](lab-notebook/2026-07-28-poc6-7-custom-nbg-execution.md),
+and
+[`audio denoiser boundary notebook`](lab-notebook/2026-07-28-poc8-audio-denoiser-boundary.md).
+PoC 9A starts at the
+[`architecture profile`](profile/README.md) and its
+[`architecture database notebook`](lab-notebook/2026-07-28-poc9a-architecture-database-recovery.md).
+PoC 9C continues in the
+[`configuration parser evidence`](profile/viv-gpu-file-grammar.json) and
+[`parser-recovery notebook`](lab-notebook/2026-07-28-poc9c-viv-gpu-file-parser-recovery.md).
+PoC 9D continues in the
+[`compiler-acquisition evidence`](profile/compiler-acquisition-evidence.json)
+and
+[`static-qualification notebook`](lab-notebook/2026-07-28-poc9d-compiler-acquisition-static-qualification.md).
+PoC 9E/9F starts at the
+[`ONNX audit and fallback evidence`](onnx/README.md) and its
+[`lab notebook`](lab-notebook/2026-07-28-poc9e-9f-onnx-cpu-fallback.md).
+PoC 12A–12C continue in the
+[`format and serializer evidence`](format/README.md), the
+[`PoC 12A notebook`](lab-notebook/2026-07-28-poc12a-open-nbg-serializer.md),
+the
+[`PoC 12B notebook`](lab-notebook/2026-07-29-poc12b-erf-constant-differential.md),
+and the
+[`PoC 12C notebook`](lab-notebook/2026-07-29-poc12c-dyna-io-crc-profile.md).
+PoCs 13A–13F are consolidated in the
+[`Erf-mask result and reproduction guide`](models/erf-mask/README.md), with
+the exact research-versus-production boundary in the
+[`completion audit`](models/erf-mask/completion-audit.md).
 
 ## Why this is a staged program
 
@@ -50,30 +132,43 @@ problem:
 ```text
 audio model or ONNX
         │
-        ├── compile to Wave-targeted NBG — compiler/target not solved
+        ├── strict host audit ──> ONNX Runtime CPU fallback — proven
         │
-        └── reconstruct private export-data graph — format not yet complete
-        ▼
-compiled NBG or verified export-data graph
-        │
-        │ private libnnsdk ABI — recovered and layout-tested
-        ▼
-VeriSilicon userspace runtime
-        │
-        │ /dev/galcore ioctls
-        ▼
-galcore kernel driver
-        │
-        ▼
-Wave NPU
+        └── Wave NPU routes
+              ├── exact compiler for general ops — blocked
+              ├── narrow firmware Erf export — proven
+              └── private export-data graph — incomplete
+                         │
+                         ▼
+              Wave-targeted NBG or verified export-data graph
+                         │
+                         │ TIM-VX import or private libnnsdk ABI
+                         ▼
+              VeriSilicon userspace runtime
+                         │
+                         │ /dev/galcore ioctls
+                         ▼
+              galcore kernel driver
+                         │
+                         ▼
+                      Wave NPU
 ```
 
-The compiled-NBG blocker is above the runtime: the host SDK available in this
-repository produces target `0x10000020`, while the tested Wave graph targets
-`0x1000000e`. The runtime rejects the former before execution. We do not
-patch that product field and execute the result because the field selects
-compiled hardware behavior; changing an identifier cannot make kernels
-correct for different silicon.
+The broad compiled-NBG blocker is above the runtime. The host SDK available
+in this repository produces target `0x10000020`, while the Wave requires
+`0x1000000e`. The exact device stack can emit the required target for the
+firmware-provided Erf path, and that NBG executes, but ordinary Add,
+MatrixMul, and Conv2d graphs do not pass the same export/verification gates.
+We do not patch a foreign product field because changing an identifier cannot
+make target-dependent kernels and command streams correct for different
+silicon.
+
+PoC 9D added a second host package to the inventory. It contains a correct
+vendor-authored Wave profile, but its two `VIV_GPU_FILE` executables are
+shader compilers below the no-kernel version gate. Its Acuity graph exporter
+uses an even older simulator SDK. A profile match and an NBG emitter existing
+in the same image do not prove that the emitter uses that profile or produces
+device-compatible code.
 
 PoC 1 found a second branch in the exact stock runtime. `nbgType` 2/3 parses
 a private export-data representation, creates individual OpenVX tensors and
@@ -99,11 +194,23 @@ transfer.
 | 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | **Passed 2026-07-28** | The strict host parser classifies all 139 configured graphs, agrees with live CTC metadata, and validates 690/690 section checksums. |
 | 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | **Passed 2026-07-28** | Two bounded traces have the same 73-call phase-correlated GAL sequence, output digest, loaded paths, driver events, syscall counts, cleanup, and health. |
 | 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | **Static backend gate passed in PoC 1** | It is classified as a CPU/MNN-style reference; dynamic format/quality characterization remains optional. |
-| 5 — Wave custom-graph gate | Can a minimal add/identity graph be represented for this runtime and target? | Two research routes | A genuinely Wave-targeted compiled NBG or fully reconstructed export-data graph passes create, execute, verify, and destroy. |
-| 6 — Operation characterization | Which operations, shapes, dtypes, and state patterns work? | Pending | An allowlisted compatibility matrix covers the needs of candidate audio models. |
-| 7 — Neural noise suppression | Can a useful denoiser meet quality and real-time constraints? | Pending | Quality, deadline, stability, cleanup, and CPU fallback gates all pass. |
-| 8 — Other audio models | Which VAD, echo suppression, dereverb, embedding, or event models are worthwhile? | Pending | Each candidate has an evidence-backed value/cost decision. |
-| 9 — Production runtime | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
+| 5 — Wave custom-graph compiler | Can exact Wave userspace emit a legitimate target-native custom graph? | **Partial pass 2026-07-28** | Erf emitted an untouched valid NBG; Add/MatrixMul/Conv export and general shader compilation remain blocked. |
+| 6 — First generated-NBG execution | Can that exact generated artifact be imported, run, read back, and cleaned up? | **Passed 2026-07-28** | One zero-input execution passed with unchanged health. |
+| 7 — Nonzero characterization | Does nonzero data traverse the generated graph and overwrite the output buffer correctly? | **Passed 2026-07-28** | `[0,1,2,255] -> [0,1,1,1]` for the U8 Erf graph in one bounded execution. |
+| 8 — Minimal audio-denoiser boundary | Can fixed MatrixMul or Conv2d filtering export or execute through public TIM-VX? | **Closed clean negative 2026-07-28** | Both node families select OpenVX but fail export and direct graph verification before inference. |
+| 9A — Architecture database recovery | What target identity/profile is embedded in the exact architecture libraries? | **Passed host-only 2026-07-28** | Five-key lookup, unique Wave row, revision mask, ABI bounds, strict evidence profile, and explicit unknowns are reproducible. |
+| 9C — Configuration parser recovery | What grammar and target catalog does the available Vivante simulator implement? | **Passed isolated-host gate 2026-07-28** | Five ordered fields, exact catalog, live-revision acceptance, unsafe vendor edge cases, and strict candidate/refusal outputs are reproducible. |
+| 9D — Compiler acquisition/static qualification | Does a trusted public package contain a compatible no-kernel Wave NBG compiler? | **Closed blocked gate 2026-07-28** | Exact vendor Wave config and real parser recovered; the only `VIV_GPU_FILE` consumers are `6.4.18` shader compilers and Acuity's NBG path is an older simulator backend. Zero compiler/device calls. |
+| 9E/9F — ONNX frontend and CPU fallback | Can general ONNX models be admitted, signed, explained, and run on CPU under fail-closed hybrid semantics? | **Passed host-only 2026-07-28** | Three deterministic fixtures, a real Silero audit, CPU/hybrid equality, zero NPU attempts, strict refusal, and 35 focused tests are reproducible. |
+| 12A — Open NBG serializer recovery | Can exact existing NBGs be modeled and re-emitted losslessly while statically bounding the firmware serializer? | **Passed host-only 2026-07-28** | Five exact graphs have total byte ownership and byte-identical re-emission; 21 serializer/load targets are byte-bound; bounded ONNX correlation leaves coefficient packing explicitly `not-ready`. |
+| 12B — Controlled Erf constant differential | Does the stock serializer emit deterministic evidence for a one-byte source-constant change? | **Passed live capture 2026-07-29; interpretation sealed** | Three compile-only calls produced identical A1/A2 and a structurally stable B; the original bounded registry remains `multi-region-unresolved`, and cleanup restored the exact device baseline. |
+| 12C — DYNAIO and file-CRC qualification | Can the section-20/26 geometry and header checksum be uniquely recovered without another device run? | **Passed host-only 2026-07-29** | Exact Wave save-path evidence, the controlled differential, and 138/138 corpus matches prove the CRC order; 8,939 table entries pass strict geometry, and in-memory A→B reconstruction is exact. |
+| 13A–13F — Learned Erf-mask denoiser | Can a learned, quality-qualified noise mask use one sealed NPU partition with exact fallback? | **Passed 2026-07-29** | Training, compile, strict package, six vectors, 1,201-frame waveform, 10,000-frame soak, and same-frame CPU fallback passed. |
+| 13G — Wave CPU/NPU benchmark | What is the same-device cost of the exact U8 `[481]` Erf partition? | **Passed R2 2026-07-29** | 10,000 paired frames were exact; Cortex-A55 was 20.686× faster than NPU `Run()` and 26.137× faster than NPU total by ratio of means. |
+| 14A — Learned affine host contract | Does a finite integer `Multiply -> Add -> Erf` partition retain the denoiser quality gates? | **Passed host-only 2026-07-29** | The U8/per-channel-I8 candidate, six vectors, ONNX graph, CPU oracle, and nine-file package regenerate byte-identically and pass all 1,230-item quality gates; execution remains unapproved. |
+| 14B/C — Affine producer differential | Can exact Wave userspace emit deterministic baseline/weight/bias NBG controls? | **Closed clean negative 2026-07-29** | A1 was rejected at `MULTIPLY` type checking (`ASYM UINT8, SYMM PC INT8`) before NBG emission. Known-equivalent retries were skipped, health and CLC gates held, and PoC 14C has no differential to decode. |
+| 9B / 9D continuation — Remaining compiler adapter | Can the missing no-kernel NBG consumer and exact VSINPU compiler path be proven? | Pending, separately gated | Acquire x86-64 no-kernel SDK `>=6.4.22` plus ovxlib `>=1.2.26`, prove its dependency/I/O ABI, then compile one fixed Conv before any NPU signature is approved. |
+| Production integration | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
 
 PoC 0 does not claim that custom models run. It establishes the controlled
 lab required to make every later claim reproducible.
@@ -112,8 +219,10 @@ PoC 1 also remains host-only. It proves the ABI and code paths present in
 specific hashed binaries; it does not make a new graph safe to execute.
 
 PoC 2 is also host-only. It names sections from pinned public source and
-decodes bounded metadata, but it leaves accelerator commands, coefficients,
-patches, load states, dynamic I/O, and the connection region opaque. Format
+decodes bounded metadata, but its original result left accelerator commands,
+coefficients, patches, load states, dynamic I/O, and the connection region
+opaque. PoC 12C later decoded dynamic-I/O table geometry and the file-level
+checksum; per-entry semantics and mutation safety remain unresolved. Format
 knowledge and valid checksums do not make a mutated or foreign graph safe.
 
 PoC 3 is dynamic but observational. It identifies the 32-byte request
@@ -121,6 +230,67 @@ envelope, 376-byte live interface, command/hardware/status prefix, lifecycle
 sequence, and runtime libraries without capturing command-union payloads.
 It does not turn those observations into a direct-driver programming API or
 authorize replay.
+
+PoC 5 is a narrow compiler result. It proves one firmware-provided Erf export,
+not arbitrary source compilation or general operation coverage. The
+version-adjacent CLC experiment is a negative ABI result and carries an
+explicit no-further-calls quarantine.
+
+PoCs 6 and 7 are positive live executions of one exact graph. They do not
+turn the harness into a general model runner and do not establish latency,
+streaming, or learned-model quality.
+
+PoC 8 is a useful negative model-portability result. `matrixmul` and `conv2d`
+node selection must not be reported as graph verification or inference.
+
+PoC 9A is host-only. It reads two statically demonstrated architecture tables
+from hash-pinned ELF load segments and cross-checks them with prior live
+facts. It does not load the libraries, generate `VIV_GPU_FILE`, invoke a
+compiler, or authorize PoC 9B device/API work.
+
+PoC 9C is host-only with one narrowly isolated x86 parser exception. It never
+contacts the Wave and never loads a compiler. The generated
+`.candidate.config` proves deterministic rendering from live facts; it does
+not prove that the absent no-kernel SDK consumes the same grammar.
+
+PoC 9D is entirely static. It never loads the acquired OCI image, imports an
+Acuity native extension, runs a compiler, or contacts the Wave. It
+corroborates PoC 9C's grammar in a real `VIV_GPU_FILE` consumer, but that
+consumer accepts shader source and does not emit graph NBG. The exact vendor
+profile is evidence, not authorization to use the embedded simulator or the
+quarantined adjacent CLC.
+
+PoC 9E/9F is also host-only. Its `hybrid` mode currently means one classified
+CPU-only ONNX Runtime session after NPU preflight finds no approved
+signature. It makes zero NPU attempts. The real Silero audit validates and
+counts its 51-graph, 689-node control-flow tree without running it. Neither
+the audit nor the Conv/Sigmoid fixture proves a Wave NPU operator.
+
+PoC 12A is host-only and serializer-first. It proves lossless unchanged
+representation, not semantic mutation: all five selected NBGs reconstruct
+byte-for-byte and any marked change is refused. Its bounded static evidence
+ties 21 generation/load exports to exact function bytes, including one
+explicit four-byte export alias. A finite ONNX/NBG search found no exact
+weight or bias occurrence, so it does not authorize coefficient repacking,
+custom NBG construction, or NPU execution.
+
+PoC 12B is the only new live step in this serializer sequence. It made
+exactly three compile-only calls against one fixed graph definition and
+performed no graph load or execution. Its captured analysis is frozen at
+the finite registry reviewed before the run; later discoveries do not
+retroactively turn that evidence into a broader claim.
+
+PoC 12C is host-only. It can validate section-20/26 ranges, recompute the
+header CRC, and reproduce one controlled A-to-B change in memory. It does
+not expose an operation encoder, coefficient packer, arbitrary dynamic-I/O
+writer, general ONNX compiler, or approved NPU placement signature.
+
+PoCs 13A–13F prove a working learned NPU-assisted noise-suppression research
+pipeline for one exact Erf NBG. PoC 13G adds the missing same-device
+performance comparison: offloading Erf alone is slower than the Cortex-A55
+lookup, although both paths fit comfortably inside a 10 ms audio hop. This
+does not predict the performance of a larger affine or convolutional
+partition.
 
 ## PoC 0 evidence summary
 
@@ -168,6 +338,16 @@ docs/npu/
     2026-07-28-poc1-...md           PoC 1 evidence
     2026-07-28-poc2-...md           PoC 2 evidence
     2026-07-28-poc3-...md           PoC 3 live trace evidence
+    2026-07-28-poc5-...md           compiler, caps, selector, CLC evidence
+    2026-07-28-poc6-7-...md         generated-NBG execution evidence
+    2026-07-28-poc8-...md           audio model portability boundary
+    2026-07-28-poc9a-...md          architecture-profile recovery
+    2026-07-28-poc9c-...md          simulator-config parser recovery
+    2026-07-28-poc9d-...md          compiler acquisition/static qualification
+    2026-07-28-poc9e-9f-...md       ONNX audit and CPU fallback
+    2026-07-28-poc12a-...md         lossless serializer recovery
+    2026-07-29-poc12b-...md         controlled live constant differential
+    2026-07-29-poc12c-...md         host DYNAIO and CRC qualification
   abi/
     README.md                       PoC 1 result and reproduction
     prototypes.md                   recovered FFI and layouts
@@ -178,10 +358,14 @@ docs/npu/
     firmware-matrix.md              generated cross-firmware matrix
     ghidra-evidence.json             generated focused call/decompile evidence
   format/
-    README.md                       PoC 2 result and reproduction
+    README.md                       PoC 2/12A–12C format and serializer result
     field-map.md                    byte layout and confidence ledger
     corpus-summary.md               generated corpus distributions
     stock-nbg-inventory.json        generated per-file evidence
+    serializer-*.json               static, ownership, and round-trip evidence
+    onnx-nbg-correlation.json        bounded coefficient search ledger
+    erf-constant-differential.json   sealed PoC 12B interpretation
+    dyna-io-crc-profile.json         PoC 12C machine evidence
   trace/
     README.md                       PoC 3 result and reproduction
     galcore-interface.md            ioctl envelope and command ledger
@@ -189,6 +373,24 @@ docs/npu/
     repeatability.md                live acceptance analysis
     normalized-run-{1,2}.json       pointer-free generated evidence
     repeatability.json              machine comparison
+  profile/
+    README.md                       PoC 9A result and reproduction
+    wave-profile.schema.json        strict evidence-profile schema
+    wave-profile-evidence.json      generated field-level Wave profile
+    arch-profile-ghidra-evidence.json
+                                    focused architecture decompilation
+    viv-gpu-file-grammar.json        recovered simulator grammar
+    wave-viv-gpu-file.candidate.*   strict candidate and refusal manifest
+    compiler-acquisition-evidence.json
+                                    acquired package qualification ledger
+    no-kernel-sdk-acquisition-checklist.md
+                                    exact missing-package request and gate
+  onnx/
+    README.md                       PoC 9E/9F result and reproduction
+    hybrid-policy.json              compiler-bound empty NPU allowlist
+    spectral-mask-*.json            audit and CPU/hybrid run evidence
+    spectral-mask-*.npz             deterministic CPU/hybrid outputs
+    silero-vad-audit.json            bounded real-model audit
 
 waved/scripts/npu/
   README.md                         harness developer guide
@@ -198,16 +400,43 @@ waved/scripts/npu/
   abi_inventory.py                  deterministic ELF inventory
   ghidra_targets.json               bounded decompiler targets
   ghidra_abi.py                     deterministic Ghidra export
+  arch_profile_targets.json         exact architecture/profile corpus
+  arch_profile.py                   strict host-only profile recovery
+  compiler_profile.py               simulator-config parser recovery
+  compiler_acquisition_targets.json exact package and refusal contract
+  compiler_acquisition.py           inert archive/OCI/compiler qualifier
   nbg_corpus.json                   exact NBG corpus definition
   nbg_format.py                     strict non-executing NBG parser
+  nbg_serializer_targets.json       exact PoC 12A artifact/function policy
+  nbg_serializer_recovery.py        bounded serializer static evidence
+  nbg_image.py                      immutable lossless NBG image
+  nbg_correlate.py                  finite ONNX/NBG correlation engine
+  nbg_constant_diff.py              sealed PoC 12B differential analyzer
+  nbg_dyna_profile.py               PoC 12C CRC/DYNAIO qualifier
   trace_normalize.py                strict pointer-free trace normalizer
+  npu_compile_*.py                  fixed compile-only experiment harnesses
+  npu_*execution_lab.py             fixed one-shot execution harnesses
+  npu_*audio_denoiser_lab.py        fixed PoC 8 graph harnesses
   tests/                             host contract tests
+
+waved/tools/npu-compiler/
+  tim_vx_compile_*.cc               immutable compile-only graph definitions
+  wave_npu_*.cc                     fixed capability/execution probes
+  build-device-*.sh                 pinned offline AArch64 builds
+  verify-device-*-policy.sh         source and ELF policy gates
+  stage-device-*.sh                 hash-pinned non-overwriting tmpfs staging
 
 waved/tools/npu-trace/
   gal_trace.c                       metadata-only ioctl interposer
   build.sh                          reproducible AArch64 build
   stage.sh                          exact non-overwriting tmpfs staging
   stock-ctc-trace.sh                fixed framed trace wrapper
+
+waved/tools/onnx-hybrid/
+  pyproject.toml, uv.lock            pinned host ONNX environment
+  src/wave_onnx_hybrid/              auditor, runtime, fixtures, and CLI
+  fixtures/                          deterministic ONNX and NPZ controls
+  tests/                             admission and fallback contract tests
 
 artifacts/npu/                       raw, local, gitignored run evidence
 ```
@@ -234,10 +463,20 @@ The distinction matters. For example:
 - “The tested stock CTC graph executes” is observed live.
 - “The graph target field is `0x1000000e`” is both statically parsed and
   observed in probe output.
+- “A custom generated Erf NBG executes nonzero input” is observed live in
+  PoC 7 and backed by the exact artifact and runner hashes.
+- “The tested Conv2d denoiser ran” is false: PoC 8D stopped at graph
+  verification before `Graph::Run`.
 - “The v3 `libmodel_infer.so` AES/ANS path is CPU/MNN-style and does not
   import the NPU stack” is static verified.
 - “The private export-data branch can run an arbitrary handcrafted graph”
   remains unknown.
+- “The ONNX hybrid runner tried the Wave NPU” is false: with the current
+  empty approval registry it records zero NPU attempts and one CPU session.
+- “The v2 header checksum and section-20/26 table geometry are recovered” is
+  static verified and controlled-differential verified in PoC 12C.
+- “Any ONNX initializer can now be written into section 20” remains
+  unsupported.
 - “Changing a product ID makes a foreign NBG safe” is unsupported and is not
   tested.
 
@@ -248,12 +487,12 @@ Allowed without a new device-mutation review:
 - host-side firmware and binary analysis;
 - ADB state checks and bounded reads;
 - read-only sysfs inspection;
-- execution of a source-controlled experiment whose executable, arguments,
-  environment, timeout, artifact hashes, and expected result are pinned;
-- staging disposable research artifacts only under `/data/waved/npu-lab/`
-  after that staging action is explicitly reviewed;
-- the exact PoC 3 wrapper at `/tmp/wave-npu-lab/stock-ctc-trace` when `/data`
-  has no free blocks, with both staged files hash-pinned and reboot-cleared.
+- execution of a separately reviewed source-controlled experiment whose
+  executable, graph/model, arguments, environment, timeout, artifact hashes,
+  expected result, attempt count, and stop conditions are pinned;
+- invocation of the exact hash-pinned, non-overwriting staging script named
+  by that reviewed plan, only in its unique disposable `/tmp/wave-npu-*`
+  root.
 
 Requires explicit approval before the specific action:
 
@@ -276,10 +515,10 @@ Never part of this program:
 
 ## Noise-cancellation target
 
-The first useful custom workload is neural noise suppression. PoCs 2 and 3
-now supply the format and runtime/driver controls; PoCs 5 and 6 must still
-prove a custom graph route and the required operation surface. Candidate
-models must:
+The first useful custom workload remains neural noise suppression. PoCs 5
+through 7 now prove one exact custom NBG compile-and-execute route. PoC 8
+shows that this narrow Erf result does not yet generalize to the MatrixMul or
+Conv2d primitives needed by even a minimal denoiser. Candidate models must:
 
 - operate on bounded streaming frames;
 - have a CPU quality/reference implementation;
@@ -291,15 +530,33 @@ models must:
   recovery.
 
 The existing DeepFilterNet-based CPU backend remains the correctness and
-fallback baseline. NPU acceleration is an optimization, not a reason to make
-audio capture fragile.
+fallback baseline. The next NPU milestone is a compiler-compatible fixed
+Conv control, followed by a tiny spectral-mask network—not an immediate full
+DeepFilterNet port. PoC 9E/9F now provides the fixed Conv/Sigmoid ONNX
+control, exact input/output validation, and CPU oracle for that later gate,
+but it deliberately keeps the control on CPU. PoC 12C removes two serializer
+unknowns but does not supply the missing Conv operation encoding or
+coefficient packing. NPU acceleration is an optimization, not a reason to
+make audio capture fragile.
 
 ## Start here
 
 1. Read [`reproduction.md`](reproduction.md),
    [`abi/README.md`](abi/README.md), and
    [`format/README.md`](format/README.md), then
-   [`trace/README.md`](trace/README.md).
+   [`trace/README.md`](trace/README.md), the
+   [`PoC 5 compiler notebook`](lab-notebook/2026-07-28-poc5-custom-compiler.md),
+   the
+   [`PoC 6/7 execution notebook`](lab-notebook/2026-07-28-poc6-7-custom-nbg-execution.md),
+   and the
+   [`PoC 8 audio notebook`](lab-notebook/2026-07-28-poc8-audio-denoiser-boundary.md),
+   then the
+   [`PoC 9A/9C profile result`](profile/README.md), and finally the
+   [`PoC 9E/9F ONNX result`](onnx/README.md) and
+   [`PoC 12A serializer notebook`](lab-notebook/2026-07-28-poc12a-open-nbg-serializer.md),
+   [`PoC 12B live differential`](lab-notebook/2026-07-29-poc12b-erf-constant-differential.md),
+   and
+   [`PoC 12C qualification`](lab-notebook/2026-07-29-poc12c-dyna-io-crc-profile.md).
 2. Run the host-only unit and ABI-layout tests.
 3. Regenerate or verify static evidence before changing a recovered
    declaration.

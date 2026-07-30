@@ -7,6 +7,75 @@ All AI/ML models extracted from firmware v1.1.6.6. Models are split across two l
 
 Extracted copies are in `docs/ai-models/`.
 
+## NPU Portability Update (2026-07-28)
+
+The stock NBG corpus and live controls show that target-native ASR and
+speaker-model `.nb` files execute through the Wave NPU stack. Repository code
+also generated and executed one tiny Erf NBG for target `0x1000000e`.
+
+This does **not** mean the TNNE audio-enhancement models can be copied to the
+NPU. The RAFA/NNEC/Chimera models remain CPU/TEA references. Fixed MatrixMul
+and Conv2d custom denoiser graphs were recognized by TIM-VX but rejected at
+NBG export and ordinary graph verification before inference. See the
+[`PoC 8 audio boundary`](npu/lab-notebook/2026-07-28-poc8-audio-denoiser-boundary.md).
+
+PoC 9E/9F adds bounded general ONNX admission and deterministic CPU/hybrid
+fallback. The real Silero VAD model audits as a 51-graph, 689-node
+control-flow model and remains entirely CPU-resident because no exact NPU
+graph signature or compatible general compiler is approved. The fixed
+Conv/Sigmoid spectral-mask control is also CPU-only; it is a numerical
+control, not a trained denoiser. See the
+[`ONNX evidence`](npu/onnx/README.md).
+
+PoC 9D narrows the compiler blocker. A trusted vendor package contains the
+exact Wave profile and a real `VIV_GPU_FILE` parser, but only in
+`6.4.18:967862` shader compilers that do not emit graph NBG. Its Acuity NBG
+path uses an embedded `6.4.6:769531` simulator SDK. A custom
+noise-cancelling model therefore remains CPU-correct and CPU-resident unless
+either a dedicated x86-64 no-kernel SDK `>=6.4.22` is acquired and passes
+the fixed-Conv gates, or the independent serializer route later recovers
+coefficient packing and operation emission. See the
+[`compiler-acquisition notebook`](npu/lab-notebook/2026-07-28-poc9d-compiler-acquisition-static-qualification.md).
+
+PoC 12C advances that serializer route without changing model placement. It
+recovers the v2 header checksum and the section-20/26 dynamic-I/O
+`(offset,size)` table, validates 138/138 Wave graphs and 8,939 table entries,
+and reproduces one controlled four-byte constant change exactly in memory.
+This is useful groundwork for a serializer, but it does not identify Conv,
+MatrixMul, recurrent-state, or coefficient encodings and does not provide
+general ONNX support. No noise-cancellation graph was emitted or executed.
+The hybrid runner therefore continues to use one CPU session and zero NPU
+attempts. See the
+[`PoC 12C notebook`](npu/lab-notebook/2026-07-29-poc12c-dyna-io-crc-profile.md).
+
+## Learned Erf-Mask Update (2026-07-29)
+
+PoCs 13A–13F supersede the earlier “no noise-cancellation graph executed”
+status for one deliberately narrow model. A deterministic 962-parameter
+spectral-mask estimator now runs its exact quantized U8 `[481]` Erf
+partition on the Wave NPU. The CPU retains feature extraction, a
+DeepFilterNet candidate, the causal DFN-or-Erf selector, and waveform
+synthesis.
+
+The frozen 12-second fixture used all 1,201 returned NPU tensors to
+reconstruct 576,000 samples. The NPU bytes and output samples exactly matched
+the CPU reference, while median SI-SDR improved by 4.8443 dB and noise-only
+attenuation reached 9.8283 dB. The exact partition also passed a
+10,000-execution numerical and health soak.
+
+This is custom-model support for one sealed Erf partition, not general ONNX
+support and not a port of the stock TNNE RAFA, NNEC, or Chimera models.
+Production Rust/audio-service integration is still incomplete. See the
+[`Erf-mask result`](npu/models/erf-mask/README.md) and
+[`completion audit`](npu/models/erf-mask/completion-audit.md).
+
+PoC 14 tested the next placement boundary. A quality-qualified
+`Multiply -> Add -> Erf` model exists on the host, but the exact Wave
+TIM-VX checker rejects its asymmetric-U8/per-channel-I8 Multiply before NBG
+emission. The larger affine partition is therefore not NPU-approved; the
+supported layout remains CPU affine plus sealed NPU Erf. See the
+[`PoC 14B notebook`](npu/lab-notebook/2026-07-29-poc14b-affine-compiler-negative.md).
+
 ---
 
 ## Model Format Reference
@@ -230,7 +299,10 @@ Located at `/model/` on a separate ext4 partition. Not extractable from the root
 | **Reverb-ASR** | WeNet + reverb augmentation | CTC/Attention hybrid | English (trained for conference room acoustics) |
 | **WeNet** | WeNet community | CTC/Attention hybrid | German, French |
 
-All models run on **ONNX Runtime 1.15.1** on the ARM Cortex-A53 CPU.
+Runtime follows the deployed file and caller: ONNX variants use CPU ONNX
+Runtime, while the many target-native `.nb` subgraphs use
+`libnnsdk`/VIPUNIFY on the NPU. The strict corpus contains 138 Wave-targeted
+v2 NBG files when the explicit live CTC reference is included.
 
 ### 2.2 Voice Activity Detection
 
@@ -255,7 +327,11 @@ Silero VAD is a lightweight, production-quality voice activity detector. It runs
 | **Runtime** | **Amlogic NPU** via libnnsdk/ADLA |
 | **Purpose** | Speaker embedding extraction for "who said what" |
 
-**This is the only model that runs on the NPU.** CAM++ (Class-Aware Modulation with enhanced features) extracts speaker embeddings — fixed-length vectors that represent a speaker's voice characteristics. These embeddings are compared to identify and label different speakers in a meeting.
+CAM++ is a clearly identified NPU model, but it is not the only NPU graph:
+the ASR tree contains many target-native NBG subgraphs. CAM++ (Class-Aware
+Modulation with enhanced features) extracts speaker embeddings—fixed-length
+vectors that represent a speaker's voice characteristics. These embeddings
+are compared to identify and label different speakers in a meeting.
 
 The model supports Chinese and English speakers (`cn_en`), uses FP16 quantization for NPU efficiency, and the `.nb` format is VeriSilicon's Network Binary Graph compiled for the specific NPU hardware.
 
@@ -356,8 +432,9 @@ graph TB
         end
     end
 
-    subgraph "NPU Model (VeriSilicon ADLA)"
-        CAMPP["CAM++ cn_en FP16<br/>.nb / Speaker diarization<br/>Only NPU model"]
+    subgraph "NPU Models (VeriSilicon VIPUNIFY)"
+        CAMPP["CAM++ cn_en FP16<br/>.nb / Speaker diarization"]
+        ASRNBG["ASR target-native subgraphs<br/>.nb / encoders + CTC components"]
     end
 
     subgraph "NLP Data (CPU)"
@@ -375,17 +452,20 @@ graph TB
 |---|---|---|---|
 | **TEA SDK** | 3.10.1.1153 | 15 TNNE/binary models | ARM Cortex-A53 CPU + NEON SIMD |
 | **ONNX Runtime** | 1.15.1 | ASR, VAD, Punctuation | ARM Cortex-A53 CPU |
-| **libnnsdk / ADLA** | galcore 6.4.19.5 | CAM++ (.nb) | VeriSilicon NPU @ 350 MHz |
+| **libnnsdk / VIPUNIFY** | galcore 6.4.19.5 | ASR/diarization target-native `.nb` graphs | VeriSilicon NPU; runtime-controlled clock |
 | **libopencc** | - | OCD2 dictionaries | CPU |
 | **libmarisa** | - | Trie dictionaries | CPU |
 
 ### NPU Frequency Setting
 
-At audio server startup (`Insta360_InitAudio`):
+An older audio-init path contains:
 ```bash
 echo 350000000 > /sys/module/galcore/parameters/nanoqFreq
 ```
-Sets the NPU clock to 350 MHz for inference.
+
+The accepted 2026-07-28 PoCs observed and pinned `nanoqFreq=838860800`.
+The clock is therefore runtime-controlled; do not describe the device as
+permanently running at 350 MHz or write this sysfs parameter during research.
 
 ### License Enforcement
 
