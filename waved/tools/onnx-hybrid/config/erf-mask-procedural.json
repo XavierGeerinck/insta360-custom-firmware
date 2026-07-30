@@ -1,0 +1,46 @@
+{
+  "clean_kinds": [
+    "voiced",
+    "unvoiced"
+  ],
+  "duration_samples": 192000,
+  "noise_kinds": [
+    "white",
+    "pink",
+    "narrow-band",
+    "hum",
+    "impulsive",
+    "amplitude-modulated"
+  ],
+  "sample_rate": 48000,
+  "schema_version": 1,
+  "snr_values_db": [
+    -10.0,
+    -5.0,
+    0.0,
+    5.0,
+    10.0
+  ],
+  "test_seeds": [
+    33001,
+    33002,
+    33003,
+    33004
+  ],
+  "train_seeds": [
+    13001,
+    13002,
+    13003,
+    13004,
+    13005,
+    13006,
+    13007,
+    13008
+  ],
+  "validation_seeds": [
+    23001,
+    23002,
+    23003,
+    23004
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "generator": "wave_onnx_hybrid.fixtures.generate_fixtures",
+  "models": [
+    {
+      "bytes": 272,
+      "ir_version": 10,
+      "node_count": 1,
+      "opsets": {
+        "ai.onnx": 18
+      },
+      "path": "dynamic_identity.onnx",
+      "sha256": "677ab415db19fcdfdef60504408a68cdfd8f5feb3d0d586297722df525c2991e"
+    },
+    {
+      "bytes": 403,
+      "ir_version": 10,
+      "node_count": 2,
+      "opsets": {
+        "ai.onnx": 18
+      },
+      "path": "mixed_sin.onnx",
+      "sha256": "043ec66203b5a73844b38f2b388c1da97e2cd334e3e2fcdcb51c23f78e1ea58f"
+    },
+    {
+      "bytes": 429,
+      "ir_version": 10,
+      "node_count": 2,
+      "opsets": {
+        "ai.onnx": 18
+      },
+      "path": "spectral_mask_conv.onnx",
+      "sha256": "175b5ca1f7d13778cc4d1e4fc7670aecf850c5f0f11a977e52bbbaacd81af165"
+    }
+  ],
+  "schema_version": 1,
+  "tensor_sets": [
+    {
+      "bytes": 274,
+      "path": "spectral_mask_expected.npz",
+      "sha256": "ce36553c40d2b84d6715af0a85f3a464f5344d0741ec9efb8f51230010e6b2a7",
+      "tensors": {
+        "mask": {
+          "bytes": 32,
+          "dtype": "float32",
+          "sha256": "0047b2f8b6d4a7deabd4c086ce34852c53ef95780fc43dfa51b198321caced7c",
+          "shape": [
+            1,
+            1,
+            8
+          ]
+        }
+      }
+    },
+    {
+      "bytes": 282,
+      "path": "spectral_mask_input.npz",
+      "sha256": "78d19010a09ee4ed042965ac3094594a977ba682308fc574631e05797c3a47e1",
+      "tensors": {
+        "features": {
+          "bytes": 32,
+          "dtype": "float32",
+          "sha256": "4f44161a6bec4e4a987439877ce4518b0822bbf66bec96acc0f05b863a4cf1d3",
+          "shape": [
+            1,
+            1,
+            8
+          ]
+        }
+      }
+    }
+  ]
+}
