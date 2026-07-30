@@ -1,0 +1,331 @@
+{
+  "catalog": {
+    "default_record": {
+      "identity": {
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009111",
+        "customer_id": "0x10000020",
+        "eco_id": "0x08000000",
+        "product_id": "0x05090009"
+      },
+      "index": 187,
+      "name": "VIP9000NANODI_PID0X10000020",
+      "record_sha256": "52909318e8d58c0ef1644e60ddcc0d853af7d9b27e3318e87547bc7e77b29ca3"
+    },
+    "file_offset": "0x0027c760",
+    "record_count": 358,
+    "record_size": 100,
+    "symbol": "vsimConfigs",
+    "table_sha256": "5f6bf1cf829c1b13878a8162950a0edc2e3b750aafb4dba0beeace5a6992b1ec",
+    "virtual_address": "0x0047c760",
+    "wave_record": {
+      "identity": {
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "product_id": "0x05090001"
+      },
+      "index": 157,
+      "name": "VIP9000NANOS_PID0X1000000E",
+      "record_sha256": "4d533d3c898a3eb1e317148826bad0d16172cecf7add61f10ede6d45ef407e69"
+    }
+  },
+  "discovery": {
+    "viv_gpu_file": {
+      "evidence_class": "source-documented",
+      "minimum_sdk": "Vivante SDK 6.4.22",
+      "required_sdk_flavor": "dedicated no-kernel SDK",
+      "sample_value": "/path/to/VIP9000NANOQ_PLUS_PID0X100000XX.config",
+      "status": "source-documented-consumer-absent",
+      "variable": "VIV_GPU_FILE"
+    },
+    "vsimulator_config": {
+      "decimal_prefix": "select built-in ID",
+      "evidence_class": "static-verified",
+      "name_prefixes": [
+        "VIP",
+        "GC",
+        "CC"
+      ],
+      "other_value": "configuration file path",
+      "owner": "libEmulator.so DebugServer constructor",
+      "variable": "VSIMULATOR_CONFIG"
+    }
+  },
+  "grammar_id": "vsimulator-five-identity-fields-v1",
+  "inputs": {
+    "corpus_manifest": {
+      "path": "waved/scripts/npu/compiler_profile_corpus.json",
+      "sha256": "75f6619a74985c06a309d3a9ca1ee603da8d46b95558919b1999e5d24144d9c9"
+    },
+    "emulator": {
+      "artifact_id": "x86-emulator-6.4.6",
+      "bytes": 3158688,
+      "execution_policy": "isolated-parser-only",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libEmulator.so",
+      "roles": [
+        "configuration-parser",
+        "host-x86",
+        "simulator-sdk"
+      ],
+      "sha256": "56e34c51ca5476e0ca54155d4e78679d96281552ddad7674f5ce4fe2fe5f7de6"
+    },
+    "emulator_dependency": {
+      "artifact_id": "x86-vdtproxy-6.4.6",
+      "bytes": 13424,
+      "execution_policy": "isolated-parser-only",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libvdtproxy.so",
+      "roles": [
+        "configuration-parser-dependency",
+        "host-x86",
+        "simulator-sdk"
+      ],
+      "sha256": "64934faba48ffb143bb7b52519f99ced40d69a2ecc6f56d0fe5bb23a866edf9f"
+    },
+    "ghidra_evidence": {
+      "path": "docs/npu/profile/compiler-profile-ghidra-evidence.json",
+      "sha256": "c38cd4a2965a3c84ce479ede89017b0e7329736f2f2327bbad970669cf830772",
+      "tool": {
+        "name": "Ghidra",
+        "script": "ExportNpuAbi.java",
+        "version": "12.0.4"
+      }
+    },
+    "ghidra_target_config": {
+      "path": "waved/scripts/npu/compiler_profile_targets.json",
+      "sha256": "c1a8e9c0c2088e3aa2b78d72566f91285d94896e79b6fb50615b84dd62659b24"
+    },
+    "multi_device_sample": {
+      "artifact_id": "timvx-multi-device-readme",
+      "bytes": 1074,
+      "execution_policy": "not-executable",
+      "path": "waved/third_party/TIM-VX/samples/multi_device/README",
+      "roles": [
+        "source-documentation",
+        "viv-gpu-file-example"
+      ],
+      "sha256": "53f7b6cfe4bbce04d43b3889b22806dba366457a26525e9c1ce57b6979ca7481"
+    },
+    "platform_sample": {
+      "artifact_id": "timvx-platform-readme",
+      "bytes": 915,
+      "execution_policy": "not-executable",
+      "path": "waved/third_party/TIM-VX/samples/platform_sample/README",
+      "roles": [
+        "source-documentation",
+        "viv-gpu-file-example"
+      ],
+      "sha256": "9bf64795fd7e77def7877cfd4dd856557d16f4ab506ca2f3f9a20ed77bbf40e1"
+    }
+  },
+  "isolated_probe": {
+    "case_count": 13,
+    "evidence_class": "isolated-observed",
+    "observations": [
+      {
+        "case": "built-in-wave-name",
+        "classification": "selected-wave-database-record",
+        "status": "completed"
+      },
+      {
+        "case": "valid-database",
+        "classification": "accepted-database-identity-file",
+        "status": "completed"
+      },
+      {
+        "case": "valid-live",
+        "classification": "accepted-live-identity-file",
+        "status": "completed"
+      },
+      {
+        "case": "missing",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "empty",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "truncated",
+        "classification": "retained-other-file-identity",
+        "status": "completed"
+      },
+      {
+        "case": "wrong-order",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "duplicate-key",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "unknown-key",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "malformed-number",
+        "classification": "retained-zero-initial-state",
+        "status": "completed"
+      },
+      {
+        "case": "overlong-line",
+        "classification": "accepted-database-identity-file",
+        "status": "completed"
+      },
+      {
+        "case": "wrong-customer",
+        "classification": "retained-other-file-identity",
+        "status": "completed"
+      },
+      {
+        "case": "trailing-content",
+        "classification": "accepted-database-identity-file",
+        "status": "completed"
+      }
+    ],
+    "results_sha256": "f620d368ebddc0a09850e222032795ba8c63bac32b65349858003703a62c5a75",
+    "status": "completed",
+    "summary": {
+      "all_cases_completed": true,
+      "completed_cases": 13,
+      "failed_cases": 0,
+      "requested_cases": 13,
+      "timed_out_cases": 0
+    }
+  },
+  "non_claims": [
+    "No Wave device, ADB endpoint, or /dev/galcore node was touched.",
+    "No compiler entrypoint was called.",
+    "No graph was built, compiled, or executed.",
+    "The built-in simulator name does not prove the filename required by the absent no-kernel SDK.",
+    "The simulator parser grammar is not asserted to be the VIV_GPU_FILE grammar of SDK 6.4.22 or newer."
+  ],
+  "schema_version": 1,
+  "scope": {
+    "candidate_status": "parser-shaped-not-compiler-qualified",
+    "consumer_status": "unverified-missing-no-kernel-sdk",
+    "evidence_boundary": "The local SDK proves VSIMULATOR_CONFIG file parsing. It does not contain the no-kernel >=6.4.22 VIV_GPU_FILE consumer named by the TIM-VX platform sample.",
+    "proven_parser": "x86 TIM-VX simulator 6.4.6 libEmulator.so"
+  },
+  "strict_host_contract": {
+    "blank_lines": "reject",
+    "canonical_rendering": "<key padded to 23 columns>= 0x<eight lowercase hex digits>;",
+    "comments": "reject",
+    "duplicate_fields": "reject",
+    "encoding": "ASCII",
+    "field_order": [
+      "chipModel",
+      "chipRevision",
+      "productID",
+      "ecoID",
+      "customerID"
+    ],
+    "integer_lexeme": "(?:0[xX])?[0-9a-fA-F]{1,8}",
+    "integer_semantics": "unsigned hexadecimal uint32",
+    "line_endings": "LF",
+    "max_file_bytes": 512,
+    "max_line_bytes": 128,
+    "required_final_lf": true,
+    "trailing_content": "reject",
+    "unknown_fields": "reject"
+  },
+  "vendor_parser": {
+    "defects": [
+      {
+        "effect": "EOF (-1) is accepted, so empty or truncated input can retain prior/default field values.",
+        "evidence_class": "static-verified",
+        "id": "nonzero-fscanf-result-treated-as-success"
+      },
+      {
+        "effect": "The parser does not test EOF after the fifth field.",
+        "evidence_class": "static-verified",
+        "id": "trailing-content-unchecked"
+      },
+      {
+        "effect": "Callers cannot distinguish fallback from a selected configuration using the return value.",
+        "evidence_class": "static-verified",
+        "id": "void-selector-no-failure-status"
+      }
+    ],
+    "fallbacks": {
+      "missing_file": "retain current/default configuration",
+      "unknown_identity": "gcQueryFeatureDB logs failure; selector has no status",
+      "unknown_name": "select constructor default"
+    },
+    "fields": [
+      {
+        "evidence_class": "static-verified",
+        "key": "chipModel",
+        "member": "chip_model",
+        "order": 0,
+        "record_offset": "0x50",
+        "required": true,
+        "type": "uint32",
+        "vendor_scanf_format": "chipModel              = %x;\\n"
+      },
+      {
+        "evidence_class": "static-verified",
+        "key": "chipRevision",
+        "member": "chip_revision",
+        "order": 1,
+        "record_offset": "0x54",
+        "required": true,
+        "type": "uint32",
+        "vendor_scanf_format": "chipRevision           = %x;\\n"
+      },
+      {
+        "evidence_class": "static-verified",
+        "key": "productID",
+        "member": "product_id",
+        "order": 2,
+        "record_offset": "0x58",
+        "required": true,
+        "type": "uint32",
+        "vendor_scanf_format": "productID              = %x;\\n"
+      },
+      {
+        "evidence_class": "static-verified",
+        "key": "ecoID",
+        "member": "eco_id",
+        "order": 3,
+        "record_offset": "0x5c",
+        "required": true,
+        "type": "uint32",
+        "vendor_scanf_format": "ecoID                  = %x;\\n"
+      },
+      {
+        "evidence_class": "static-verified",
+        "key": "customerID",
+        "member": "customer_id",
+        "order": 4,
+        "record_offset": "0x60",
+        "required": true,
+        "type": "uint32",
+        "vendor_scanf_format": "customerID             = %x;\\n"
+      }
+    ],
+    "file_mode": "rb",
+    "function": "StateParser::chooseTargetByConfigFile(char const*)",
+    "query_key_order": [
+      "chipModel",
+      "chipRevision",
+      "productID",
+      "ecoID",
+      "customerID"
+    ],
+    "record_layout": {
+      "identity_bytes": 20,
+      "identity_offset": "0x50",
+      "name_bytes": 80,
+      "name_offset": "0x00",
+      "record_bytes": 100
+    },
+    "success_test": "fscanf(...) != 0"
+  }
+}

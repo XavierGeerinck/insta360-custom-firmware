@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "document_kind": "tracked-training-summary",
+  "source": {
+    "path": "artifacts/npu/runs/poc13a-erf-mask-host-20260729-model-v4-selector/training-manifest.json",
+    "sha256": "3f89ab277adccf9e727956cefc1911f8a5dc1dc7c0e7894938f6e6a52c9057c1"
+  },
+  "trainer": "deterministic-cpu-affine-erf-mask",
+  "parameters": 962,
+  "selected_step": 2000,
+  "initial_validation_loss": 0.4008019093625265,
+  "selected_validation_loss": 0.08169930467787452,
+  "improvement_fraction": 0.7961603907398178,
+  "private_inputs_used": false,
+  "weights_sha256": "ab722366943c9e090f4f97fa5916bb3bf0da0d42bd04a924e1f30b5b256c030b",
+  "onnx_sha256": "effebd8e351d857fcc284558b7c551869eb191ba0eb4f572bbde6e45f7168539"
+}

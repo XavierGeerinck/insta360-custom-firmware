@@ -1,0 +1,195 @@
+{
+  "classification": "dyna-io-read-and-file-crc-qualified",
+  "controlled_differential": {
+    "artifacts": {
+      "a1": {
+        "bytes": 5904,
+        "sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b"
+      },
+      "a2": {
+        "bytes": 5904,
+        "sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b"
+      },
+      "b": {
+        "bytes": 5904,
+        "sha256": "c9e3e18414f5bc674d4204921966ba53b08918ddcef73112003b065b9599f227"
+      }
+    },
+    "classification": "direct-dyna-io-entry-mapping",
+    "determinism": {
+      "a1_sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b",
+      "a2_sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b",
+      "exact_match": true,
+      "first_difference": null
+    },
+    "dynamic_io": {
+      "changed_file_offset": 1511,
+      "changed_region_relative_offset": 3,
+      "data_section_index": 8,
+      "data_section_offset": 1508,
+      "data_section_size": 64,
+      "entry_index": 0,
+      "entry_offset": 0,
+      "entry_size": 4,
+      "new_byte_hex": "04",
+      "old_byte_hex": "03",
+      "table_section_index": 11
+    },
+    "file_checksum": {
+      "a_computed_crc32_hex": "0xd346207e",
+      "a_matches": true,
+      "a_recorded_crc32_hex": "0xd346207e",
+      "algorithm": "crc32-ieee",
+      "b_computed_crc32_hex": "0x67768f6f",
+      "b_matches": true,
+      "b_recorded_crc32_hex": "0x67768f6f",
+      "initial_value": 0,
+      "normalized_checksum_value_words": 3,
+      "scope": "section-payloads-in-directory-order"
+    },
+    "reconstruction": {
+      "exact_match": true,
+      "first_difference": null,
+      "reconstructed_sha256": "c9e3e18414f5bc674d4204921966ba53b08918ddcef73112003b065b9599f227",
+      "written_to_disk": false
+    },
+    "schema_version": 1,
+    "source": {
+      "a_u8": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "b_u8": [
+        0,
+        1,
+        2,
+        4
+      ],
+      "changed_index": 3
+    }
+  },
+  "corpus_validation": {
+    "configured_files": 139,
+    "covered_section_bytes": 3785534000,
+    "dyna_io": {
+      "entries": 8939,
+      "entry_count_distribution": [
+        {
+          "entries": 50,
+          "files": 6
+        },
+        {
+          "entries": 51,
+          "files": 66
+        },
+        {
+          "entries": 64,
+          "files": 4
+        },
+        {
+          "entries": 80,
+          "files": 20
+        },
+        {
+          "entries": 96,
+          "files": 2
+        },
+        {
+          "entries": 97,
+          "files": 2
+        },
+        {
+          "entries": 101,
+          "files": 6
+        },
+        {
+          "entries": 300,
+          "files": 1
+        },
+        {
+          "entries": 361,
+          "files": 1
+        },
+        {
+          "entries": 588,
+          "files": 3
+        }
+      ],
+      "files": 111,
+      "padding_bytes": 83024,
+      "padding_nonzero_bytes": 0,
+      "payload_bytes": 201600304,
+      "region_bytes": 201683328
+    },
+    "legacy_files_skipped": 1,
+    "v2_file_checksums_matched": 138,
+    "v2_file_checksums_mismatched": 0,
+    "v2_files": 138
+  },
+  "non_claims": [
+    "no NBG was loaded or executed",
+    "no command stream or coefficient encoder was recovered",
+    "no general ONNX-to-NBG compiler was recovered",
+    "no arbitrary DYNAIO mutation is declared runtime-safe",
+    "no noise-cancellation model was executed in this PoC"
+  ],
+  "poc_id": "poc12c-dyna-io-crc-profile",
+  "runtime_recovery": {
+    "crc_function": {
+      "body_bytes": 160,
+      "decompile_success": true,
+      "ghidra_entry": "002c8160",
+      "polynomial_hex": "0xedb88320",
+      "reflected": true,
+      "updates_accept_prior_crc": true
+    },
+    "evidence": {
+      "crc_export_sha256": "b1e80fd54ea3be3c183336fccbd78b7e81bd4ba12ec77717b227396609fa420f",
+      "save_export_sha256": "177e1a78191bdde750dec8b21e2cf260fde94b7d0232377642fdece2b601f3e9"
+    },
+    "libopenvx_sha256": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb",
+    "save_function": {
+      "body_bytes": 10428,
+      "decompile_success": true,
+      "ghidra_entry": "002d2f20",
+      "header_crc_field_offset": 12,
+      "initial_crc": 0,
+      "type40_values_written_after_file_crc": true
+    }
+  },
+  "schema_version": 1,
+  "serializer_capabilities": {
+    "compute_header_crc_sum": true,
+    "decode_dyna_io_table": true,
+    "rebuild_controlled_dyna_io_entry_in_memory": true,
+    "write_mutated_nbg_to_disk": false
+  },
+  "sources": {
+    "controlled_definition": {
+      "path": "artifacts/npu/runs/poc12b-erf-constant-diff-20260729/definition.json",
+      "sha256": "8fc97f217e33daf0ee8e96a87bd8ba3b9d1b96b98055db0f0207849f3c3176b5"
+    },
+    "corpus_inventory": {
+      "path": "docs/npu/format/stock-nbg-inventory.json",
+      "sha256": "7103775e6659117bea2eafef353aece3ff75c5046a7fcb198a8a50e8d3dc1c6c"
+    },
+    "crc_ghidra_export": {
+      "path": "artifacts/npu/analysis/poc12c-libopenvx-crc-function.json",
+      "sha256": "b1e80fd54ea3be3c183336fccbd78b7e81bd4ba12ec77717b227396609fa420f"
+    },
+    "libopenvx": {
+      "path": "waved/third_party/device-sdk/lib/libOpenVX.so",
+      "sha256": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb"
+    },
+    "profiler": {
+      "path": "waved/scripts/npu/nbg_dyna_profile.py",
+      "sha256": "46d120da2b8d6e5a40346a174571c87d2e607bce18a9e1abb134404e19892c51"
+    },
+    "save_ghidra_export": {
+      "path": "artifacts/npu/analysis/poc12c-libopenvx-string-xrefs.json",
+      "sha256": "177e1a78191bdde750dec8b21e2cf260fde94b7d0232377642fdece2b601f3e9"
+    }
+  }
+}

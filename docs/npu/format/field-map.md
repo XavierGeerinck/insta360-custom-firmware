@@ -1,7 +1,8 @@
 # NBG Field Map and Confidence Ledger
 
-This document maps the NBG fields used by PoC 2. It separates exact
-structure names from corpus relations and unresolved semantics.
+This document maps the NBG fields used by PoC 2 and the bounded extensions
+qualified by PoC 12A–12C. It separates exact structure names from corpus
+relations and unresolved semantics.
 
 ## Confidence codes
 
@@ -11,6 +12,9 @@ structure names from corpus relations and unresolved semantics.
 | `P` | Named structure or enum in a commit-pinned public VeriSilicon source |
 | `C` | Relation holds across the configured corpus |
 | `L` | Agrees with the exact graph observed through the live stock runtime |
+| `S` | Exact symbol bytes and bounded static serializer/load analysis |
+| `R` | Exact lossless-image ownership and byte-identical re-emission |
+| `D` | Deterministic controlled differential with exact reconstruction |
 | `I` | Inference; plausible but not yet uniquely established |
 | `U` | Unknown |
 
@@ -38,7 +42,7 @@ The structure is 48 bytes.
 | `0x00` | 4 | `magic[4]` | `magic` | `VPMN` | `W+P+C` |
 | `0x04` | 4 | `version` | `version` | `0x00020000` | `W+P+C` |
 | `0x08` | 4 | `target` | `target` / `product` | `0x1000000e` | `W+P+C+L` |
-| `0x0c` | 4 | `crc_sum` | `header.crc32` | 136 unique values | `P+C`; algorithm `U` |
+| `0x0c` | 4 | `crc_sum` | `header.crc32`, `file_checksum` | 136 unique values; all 138 match | `P+S+C+D` |
 | `0x10` | 4 | `total_size_low` | `declared_file_size_low` | equals file size low | `P+C` |
 | `0x14` | 4 | `total_size_high` | `declared_file_size_high` | zero | `P+C` |
 | `0x18` | 4 | `sub_header_offset` | `sub_header_offset` | 48 | `W+P+C` |
@@ -52,12 +56,25 @@ The structure is 48 bytes.
 `total_size_low/high` is composed as an unsigned 64-bit integer before being
 compared with the actual file size.
 
-The public comment describes `crc_sum` as CRC-32 excluding its own field.
-The tested standard CRC-32 variants over the whole file, with and without
-the final 512 bytes and with skipped/zeroed checksum bytes, do not reproduce
-the stock value. PoC 2 therefore preserves the source name but does not
-validate it. Alternatives include different coverage, ordering, seed, or a
-producer-specific calculation.
+The public comment identifies `crc_sum` as CRC-32 but does not by itself
+settle the producer's temporal coverage. PoC 12C recovers that order from
+the exact Wave save routine and validates it against both controlled output
+and the corpus:
+
+- initial accumulator: zero;
+- polynomial/representation: reflected IEEE CRC-32, polynomial
+  `0xedb88320`, with prior-CRC updates compatible with `zlib.crc32`;
+- coverage: section payloads in directory order;
+- excluded: header, sub-header, section directory, and inter-section
+  alignment gaps;
+- section 40 special case: include each `sd_type` word and substitute zero
+  for each checksum-value word;
+- producer order: write header `crc_sum`, then fill the section-40 checksum
+  values.
+
+All 138 Wave v2 files match this calculation. The parser rejects a mismatch
+as `file-checksum-mismatch`. This rule is not applied to the legacy v1
+negative control.
 
 ## v2 `nbg_sub_header_t`
 
@@ -124,13 +141,13 @@ pretend to understand it.
 | 17 | `NBG_SECTION_OPSYNC` | no | named only |
 | 18 | `NBG_SECTION_DMA_SBI_INFO` | no | named only |
 | 19 | `NBG_SECTION_PPU_INSTR` | yes | named, CRC-verified, fingerprinted |
-| 20 | `NBG_SECTION_DYNAIO` | 111 files | named, fingerprinted |
+| 20 | `NBG_SECTION_DYNAIO` | 111 files | data region, table-bounded, padding checked |
 | 21 | `NBG_SECTION_LOADSTATE` | yes | named, CRC-verified, fingerprinted |
 | 22 | `NBG_SECTION_DMA_SBI_ADDITION` | no | named only |
 | 23 | `NBG_SECTION_COEF_DATA_TABLE` | yes | named, fingerprinted |
 | 24 | `NBG_SECTION_COEF_DATA` | yes | named, CRC-verified, fingerprinted |
 | 25 | `NBG_SECTION_PPU_INSTR_TABLE` | yes | named, fingerprinted |
-| 26 | `NBG_SECTION_DYNAIO_TABLE` | 111 files | named, fingerprinted |
+| 26 | `NBG_SECTION_DYNAIO_TABLE` | 111 files | decoded `(offset, size)` records |
 | 27 | `NBG_SECTION_LOADSTATE_TABLE` | yes | named, fingerprinted |
 | 28 | `NBG_SECTION_LAYER_DUMP_OPERATION` | no | named only |
 | 29 | `NBG_SECTION_LAYER_DUMP_OUTPUTS` | no | named only |
@@ -282,6 +299,78 @@ range. A missing, duplicate, or mismatching target section fails parsing.
 The parser emits both stored and computed values plus `matches: true`.
 It never emits a successful result with `matches: false`.
 
+## Header file checksum
+
+The v2 parser emits a separate `file_checksum` object:
+
+| Key | Meaning |
+|---|---|
+| `algorithm` | `crc32-ieee` |
+| `initial_value` | zero |
+| `scope` | `section-payloads-in-directory-order` |
+| `covered_section_bytes` | bytes presented to the CRC, including normalized section 40 |
+| `excluded_alignment_gap_bytes` | gaps between declared payload ranges |
+| `normalized_checksum_value_words` | section-40 value words substituted with zero |
+| `recorded_crc32` / `computed_crc32` | producer value and independently computed value |
+| `matches` | always true in a successful parse |
+
+The controlled A/B values are:
+
+| Graph | Recorded | Computed | Result |
+|---|---:|---:|---|
+| A1/A2, source `[0,1,2,3]` | `0xd346207e` | `0xd346207e` | match |
+| B, source `[0,1,2,4]` | `0x67768f6f` | `0x67768f6f` | match |
+
+Across the configured corpus, 138 of 138 v2 files match and zero mismatch,
+covering 3,785,534,000 section bytes. Evidence: `S+C+D`.
+
+## Dynamic-I/O data and table
+
+Sections 20 and 26 form a pair:
+
+```text
+NBG_SECTION_DYNAIO
+    byte-addressed data region whose total size is a multiple of 64
+
+NBG_SECTION_DYNAIO_TABLE
+    repeated 8-byte little-endian records:
+    +0x00 u32 region-relative offset
+    +0x04 u32 payload size
+```
+
+The parser requires both sections or neither. For every table record it
+requires a positive size, a 64-byte-aligned offset, an in-bounds range,
+nondecreasing non-overlapping order, and zero bytes in all unmapped gaps and
+trailing padding.
+
+Corpus evidence:
+
+| Property | Observed |
+|---|---:|
+| Paired files | 111 |
+| One-sided pairs | 0 |
+| Entries | 8,939 |
+| Entry-count range | 50–588 |
+| Region bytes | 201,683,328 |
+| Mapped payload bytes | 201,600,304 |
+| Padding bytes | 83,024 |
+| Nonzero padding bytes | 0 |
+
+The controlled four-byte constant maps through entry zero:
+
+```text
+table entry       (offset 0, size 4)
+data region       file offset 1508, size 64
+source A          00 01 02 03
+source B          00 01 02 04
+changed byte      region +3, file offset 1511
+```
+
+An in-memory A-to-B substitution followed by the recovered file-checksum
+calculation reproduces the exact B bytes and SHA-256. This establishes the
+geometry and the one controlled mapping (`P+S+C+D`), not the semantic role
+of all 8,939 entries or permission to serialize arbitrary values.
+
 ## v1 compatible-prefix map
 
 The sole v1 file is the foreign target `0x10000020`, version `0x0001001e`.
@@ -319,18 +408,63 @@ object. PoC 2 therefore fingerprints that fixed tail separately. There are
 The contents and grammar remain unknown. The parser does not dump strings,
 interpret pointers, or assume this region is target-independent.
 
+PoC 12A adds an ownership correction: in each of its five selected v2
+controls, at least one declared section reaches EOF and therefore already
+owns the final 512 bytes. The connection region is recorded as a
+`section-covered-view`, with its own offset, size, and hash, but it does not
+claim the bytes again. This preserves both runtime evidence and the
+exclusive byte-ownership invariant. Evidence: `W+C+R`.
+
+## PoC 12A serializer and byte-ownership ledger
+
+The immutable image assigns exactly one owner to every source byte. Views
+may overlap owners but cannot participate in reconstruction.
+
+| Byte class | Ownership rule | Emission rule | Evidence |
+|---|---|---|---|
+| `decoded-record` | Exact proved header, directory, or section-record range | Original raw bytes only | `P+C+R` |
+| `alignment` | Minimum pre-section bytes required by the original alignment | Original raw bytes only | `P+C+R` |
+| `padding` | Remaining unclaimed gap bytes | Original raw bytes only | `C+R` |
+| `preserved-opaque` | Known or unknown section payload without a proved semantic codec | Original raw bytes only | `C+R` |
+| `connection-tail` | Allowed only if the validated final 512 bytes have no existing owner | Original raw bytes only | `W+R` |
+| `section-covered-view` | Non-owning fingerprint over an already owned final-512 range | Never emitted independently | `W+C+R` |
+
+All five selected images have continuous, non-overlapping owner ranges from
+zero through the exact file size. Re-emission after a semantic change is
+refused; unchanged reconstruction matches every source byte and source
+SHA-256.
+
+The bounded static serializer ledger is:
+
+| Relationship | Classification | Basis |
+|---|---|---|
+| `vsi_nn_GenerateNBG` calls imported `vxGenerateNBG` | `static-verified` | exact ovxlib body and direct call |
+| `NetworkBinaryGraph` reaches `SaveNetworkBinaryGraph` and relocation | `static-verified` | exact OpenVX bodies and direct calls |
+| `SaveNetworkBinaryGraph` is an export alias into the `SaveBinaryEntrance` path | `static-verified` | four-byte AArch64 branch and target context |
+| `SaveNNTPOperation` reaches command and state serializers | `static-verified` | exact direct calls |
+| `SaveNNTPCommand` reaches instruction serialization | `static-verified` | exact direct call |
+| `SaveNNTPInstruction` reaches weight/bias handling | `static-verified` | exact direct call |
+| `RelocateNetworkBinaryGraph` reaches binary relocation | `static-verified` | exact direct call |
+| `LoadNBG` releases through `ReleaseNBG` on cleanup paths | `static-verified` | bounded load-side call evidence |
+| Exact coefficient byte transform | `unresolved` | finite ONNX/NBG candidates have no exact occurrence |
+
+Function relationships do not by themselves assign a binary field grammar.
+The exact target list, symbol hashes, call records, and decompilation bounds
+are in
+[`serializer-ghidra-evidence.json`](serializer-ghidra-evidence.json).
+
 ## Unresolved fields and hypotheses
 
 | Item | Current state | What would resolve it |
 |---|---|---|
-| Header `crc_sum` coverage/algorithm | public name, stock values preserved, tested standard variants mismatch | producer source or exact runtime validation routine |
 | `vsi_reserved[31]` words | 1–2 nonzero words per graph, fingerprinted | linker/runtime field accesses |
 | Three implicit run operations | declared run count is saved operation count +3 in every v2 graph | lifecycle trace and operation-table decoding |
 | Patch source/destination semantics | public record structure known, payload opaque | bounded decoder plus runtime relocation trace |
 | NN/TP instruction words | section and command widths known | hardware documentation or trace-assisted disassembly |
-| Dynamic I/O data | section names and presence known | runtime consumer map |
+| Dynamic-I/O entry semantics and mutability | table geometry and one controlled four-byte mapping proved | correlate multiple controlled inputs with runtime consumers and safe load validation |
 | Load-state and PPU instruction grammar | section names, sizes, CRC known | exact runtime/driver trace |
-| Connection tail | fixed length and fingerprints known | parser field accesses |
+| Connection tail | fixed-length section-covered views and fingerprints known; inner grammar unknown | serializer/parser field accesses that uniquely decode its contents |
+| Coefficient packing | direct/FP16/BF16/transpose/fixed-lane candidate registry has no exact English CTC occurrence | a deterministic invertible transform corroborated across at least two tensors or graphs |
 
 No unresolved item authorizes native mutation fuzzing or execution of a
 hand-edited graph.

@@ -1,0 +1,423 @@
+{
+  "graph_inventory": {
+    "attribute_tensors": 345,
+    "constant_tensor_bytes": 2186503,
+    "constant_tensors": 345,
+    "graph_initializer_tensors": 0,
+    "graphs": 51,
+    "max_depth": 4,
+    "nested_nodes": 684,
+    "top_level_nodes": 5,
+    "total_nodes": 689
+  },
+  "graph_signature": "035071de3d208b626e52c63533651a3316dd55df337cdc59bad49d5d2304cb87",
+  "initializers": [],
+  "inputs": [
+    {
+      "dtype": "FLOAT",
+      "dtype_id": 1,
+      "estimated_bytes": null,
+      "kind": "tensor",
+      "name": "input",
+      "shape": [
+        null,
+        null
+      ],
+      "static": false
+    },
+    {
+      "dtype": "FLOAT",
+      "dtype_id": 1,
+      "estimated_bytes": null,
+      "kind": "tensor",
+      "name": "state",
+      "shape": [
+        2,
+        null,
+        128
+      ],
+      "static": false
+    },
+    {
+      "dtype": "INT64",
+      "dtype_id": 7,
+      "estimated_bytes": 8,
+      "kind": "tensor",
+      "name": "sr",
+      "shape": [],
+      "static": true
+    }
+  ],
+  "nodes": [
+    {
+      "domain": "ai.onnx",
+      "index": 0,
+      "inputs": [],
+      "name": "Constant_0",
+      "op_type": "Constant",
+      "outputs": [
+        "Constant_0_output"
+      ],
+      "placement": "cpu",
+      "reasons": [
+        "COMPILER_DEPENDENCY_MISMATCH",
+        "ONNX_OPERATOR_UNSUPPORTED",
+        "ONNX_TYPE_UNSUPPORTED",
+        "PARTITION_NOT_PREFLIGHTED"
+      ]
+    },
+    {
+      "domain": "ai.onnx",
+      "index": 1,
+      "inputs": [
+        "sr",
+        "Constant_0_output"
+      ],
+      "name": "Equal_0",
+      "op_type": "Equal",
+      "outputs": [
+        "Equal_0_C"
+      ],
+      "placement": "cpu",
+      "reasons": [
+        "COMPILER_DEPENDENCY_MISMATCH",
+        "ONNX_OPERATOR_UNSUPPORTED",
+        "ONNX_TYPE_UNSUPPORTED",
+        "PARTITION_NOT_PREFLIGHTED"
+      ]
+    },
+    {
+      "domain": "ai.onnx",
+      "index": 2,
+      "inputs": [
+        "Equal_0_C"
+      ],
+      "name": "If_0",
+      "op_type": "If",
+      "outputs": [
+        "If_0_outputs_0",
+        "If_0_outputs_1"
+      ],
+      "placement": "cpu",
+      "reasons": [
+        "COMPILER_DEPENDENCY_MISMATCH",
+        "ONNX_OPERATOR_UNSUPPORTED",
+        "ONNX_SHAPE_UNSUPPORTED",
+        "ONNX_TYPE_UNSUPPORTED",
+        "PARTITION_NOT_PREFLIGHTED"
+      ]
+    },
+    {
+      "domain": "ai.onnx",
+      "index": 3,
+      "inputs": [
+        "If_0_outputs_0"
+      ],
+      "name": "Introduce_0_id0",
+      "op_type": "Identity",
+      "outputs": [
+        "output"
+      ],
+      "placement": "cpu",
+      "reasons": [
+        "COMPILER_DEPENDENCY_MISMATCH",
+        "ONNX_SHAPE_UNSUPPORTED",
+        "PARTITION_NOT_PREFLIGHTED"
+      ]
+    },
+    {
+      "domain": "ai.onnx",
+      "index": 4,
+      "inputs": [
+        "If_0_outputs_1"
+      ],
+      "name": "Introduce_0_id1",
+      "op_type": "Identity",
+      "outputs": [
+        "stateN"
+      ],
+      "placement": "cpu",
+      "reasons": [
+        "COMPILER_DEPENDENCY_MISMATCH",
+        "ONNX_SHAPE_UNSUPPORTED",
+        "PARTITION_NOT_PREFLIGHTED"
+      ]
+    }
+  ],
+  "non_claims": [
+    "All nodes remain CPU until an exact graph signature and compiler/profile combination are separately approved.",
+    "No compiler or NPU provider was loaded.",
+    "No graph was compiled or executed by this audit.",
+    "Operator names do not establish Wave NPU support."
+  ],
+  "outputs": [
+    {
+      "dtype": "FLOAT",
+      "dtype_id": 1,
+      "estimated_bytes": null,
+      "kind": "tensor",
+      "name": "output",
+      "shape": [
+        {
+          "symbol": "unk__54"
+        },
+        1
+      ],
+      "static": false
+    },
+    {
+      "dtype": "FLOAT",
+      "dtype_id": 1,
+      "estimated_bytes": null,
+      "kind": "tensor",
+      "name": "stateN",
+      "shape": [
+        {
+          "symbol": "unk__55"
+        },
+        {
+          "symbol": "unk__56"
+        },
+        {
+          "symbol": "unk__57"
+        }
+      ],
+      "static": false
+    }
+  ],
+  "partitions": [
+    {
+      "index": 0,
+      "input_bytes": 8,
+      "inputs": [
+        "sr"
+      ],
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "output_bytes": 0,
+      "outputs": [
+        "output",
+        "stateN"
+      ],
+      "placement": "cpu",
+      "upstream_partitions": []
+    }
+  ],
+  "policy": {
+    "approved_signature_count": 0,
+    "compiler_manifest_sha256": "45b3c44488e4b8ceb8840111ffed67c18762bc8214a7e1a629dc6fc0f8721ddc",
+    "compiler_qualified": false,
+    "limits": {
+      "max_dimension": 1048576,
+      "max_initializer_bytes": 67108864,
+      "max_initializers": 4096,
+      "max_inputs": 64,
+      "max_model_bytes": 67108864,
+      "max_nodes": 4096,
+      "max_outputs": 64,
+      "max_rank": 8,
+      "max_tensor_bytes": 268435456,
+      "max_total_initializer_bytes": 268435456
+    },
+    "policy_id": "wave-poc9e-cpu-fallback-v1",
+    "sha256": "41e9f9354608e9ca22aaed5721611260555ec9edf4fb5d334a386467c1c5cb46"
+  },
+  "schema_version": 1,
+  "signature_document": {
+    "initializers": [],
+    "inputs": [
+      {
+        "dtype": "FLOAT",
+        "dtype_id": 1,
+        "estimated_bytes": null,
+        "kind": "tensor",
+        "name": "input",
+        "shape": [
+          null,
+          null
+        ],
+        "static": false
+      },
+      {
+        "dtype": "FLOAT",
+        "dtype_id": 1,
+        "estimated_bytes": null,
+        "kind": "tensor",
+        "name": "state",
+        "shape": [
+          2,
+          null,
+          128
+        ],
+        "static": false
+      },
+      {
+        "dtype": "INT64",
+        "dtype_id": 7,
+        "estimated_bytes": 8,
+        "kind": "tensor",
+        "name": "sr",
+        "shape": [],
+        "static": true
+      }
+    ],
+    "ir_version": 8,
+    "nodes": [
+      {
+        "attributes": [
+          {
+            "name": "value",
+            "type": "TENSOR",
+            "value": {
+              "protobuf_bytes": 8,
+              "protobuf_sha256": "80c7a702cbc15f0e5ad2f0f5f7ebe8e6d15b010eb1cb4bf727681d138f0f6f8d"
+            }
+          }
+        ],
+        "domain": "ai.onnx",
+        "index": 0,
+        "inputs": [],
+        "name": "Constant_0",
+        "op_type": "Constant",
+        "outputs": [
+          "Constant_0_output"
+        ]
+      },
+      {
+        "attributes": [],
+        "domain": "ai.onnx",
+        "index": 1,
+        "inputs": [
+          "sr",
+          "Constant_0_output"
+        ],
+        "name": "Equal_0",
+        "op_type": "Equal",
+        "outputs": [
+          "Equal_0_C"
+        ]
+      },
+      {
+        "attributes": [
+          {
+            "name": "else_branch",
+            "type": "GRAPH",
+            "value": {
+              "protobuf_bytes": 1039439,
+              "protobuf_sha256": "24d2f9689caa0074e5ef6add0b481263e8e7240c1c6c52cddc64cce25e4fb93c"
+            }
+          },
+          {
+            "name": "then_branch",
+            "type": "GRAPH",
+            "value": {
+              "protobuf_bytes": 1335336,
+              "protobuf_sha256": "4542868f49e37033ce4b37419143a33f34869bb2d1ba67ff2567072ad3497de0"
+            }
+          }
+        ],
+        "domain": "ai.onnx",
+        "index": 2,
+        "inputs": [
+          "Equal_0_C"
+        ],
+        "name": "If_0",
+        "op_type": "If",
+        "outputs": [
+          "If_0_outputs_0",
+          "If_0_outputs_1"
+        ]
+      },
+      {
+        "attributes": [],
+        "domain": "ai.onnx",
+        "index": 3,
+        "inputs": [
+          "If_0_outputs_0"
+        ],
+        "name": "Introduce_0_id0",
+        "op_type": "Identity",
+        "outputs": [
+          "output"
+        ]
+      },
+      {
+        "attributes": [],
+        "domain": "ai.onnx",
+        "index": 4,
+        "inputs": [
+          "If_0_outputs_1"
+        ],
+        "name": "Introduce_0_id1",
+        "op_type": "Identity",
+        "outputs": [
+          "stateN"
+        ]
+      }
+    ],
+    "opsets": [
+      {
+        "domain": "ai.onnx",
+        "version": 16
+      }
+    ],
+    "outputs": [
+      {
+        "dtype": "FLOAT",
+        "dtype_id": 1,
+        "estimated_bytes": null,
+        "kind": "tensor",
+        "name": "output",
+        "shape": [
+          {
+            "symbol": "unk__54"
+          },
+          1
+        ],
+        "static": false
+      },
+      {
+        "dtype": "FLOAT",
+        "dtype_id": 1,
+        "estimated_bytes": null,
+        "kind": "tensor",
+        "name": "stateN",
+        "shape": [
+          {
+            "symbol": "unk__55"
+          },
+          {
+            "symbol": "unk__56"
+          },
+          {
+            "symbol": "unk__57"
+          }
+        ],
+        "static": false
+      }
+    ],
+    "schema_version": 1
+  },
+  "source_model": {
+    "bytes": 2327524,
+    "name": "silero_vad_v5.onnx",
+    "sha256": "2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f"
+  },
+  "summary": {
+    "cpu_admissible": true,
+    "cpu_nodes": 5,
+    "cpu_partitions": 1,
+    "npu_nodes": 0,
+    "npu_partitions": 0
+  },
+  "tool": {
+    "component": "capability-auditor",
+    "name": "wave-onnx-hybrid",
+    "onnx_version": "1.22.0"
+  }
+}

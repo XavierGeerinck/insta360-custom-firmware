@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "policy_id": "wave-poc9e-cpu-fallback-v1",
+  "compiler_manifest": {
+    "path": "docs/npu/profile/wave-viv-gpu-file.candidate.manifest.json",
+    "sha256": "45b3c44488e4b8ceb8840111ffed67c18762bc8214a7e1a629dc6fc0f8721ddc"
+  },
+  "compiler_qualified": false,
+  "approved_npu_signatures": [],
+  "limits": {
+    "max_model_bytes": 67108864,
+    "max_nodes": 4096,
+    "max_inputs": 64,
+    "max_outputs": 64,
+    "max_initializers": 4096,
+    "max_initializer_bytes": 67108864,
+    "max_total_initializer_bytes": 268435456,
+    "max_rank": 8,
+    "max_dimension": 1048576,
+    "max_tensor_bytes": 268435456
+  }
+}

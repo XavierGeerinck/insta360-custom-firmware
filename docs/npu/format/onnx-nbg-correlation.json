@@ -1,0 +1,4682 @@
+{
+  "anchor": {
+    "nbg_artifact_id": "ctc-en",
+    "onnx": {
+      "cpu_admissible": true,
+      "graph_signature": "89281ef23aec1c0aa4ef3662d84f3f6873d644167be3a99989d73d94d15257ed",
+      "initializers": [
+        {
+          "dtype": "float32",
+          "element_count": 4999,
+          "name": "ctc_lo.bias",
+          "shape": [
+            4999
+          ],
+          "source_bytes": 19996,
+          "source_sha256": "08e3d98aaa31b261103ab307f03c776f4f79fccda1644d247afaa91cc9bc022c"
+        },
+        {
+          "dtype": "float32",
+          "element_count": 2559488,
+          "name": "onnx::MatMul_7",
+          "shape": [
+            512,
+            4999
+          ],
+          "source_bytes": 10237952,
+          "source_sha256": "516a6e577b687129fb890d3b2413ac356743ab5ddb2c257734af847985704fbc"
+        }
+      ],
+      "model_bytes": 10258790,
+      "model_sha256": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219",
+      "node_types": [
+        "MatMul",
+        "Add",
+        "LogSoftmax"
+      ],
+      "onnx_version": "1.22.0",
+      "policy": {
+        "approved_signature_count": 0,
+        "compiler_manifest_sha256": "45b3c44488e4b8ceb8840111ffed67c18762bc8214a7e1a629dc6fc0f8721ddc",
+        "compiler_qualified": false,
+        "limits": {
+          "max_dimension": 1048576,
+          "max_initializer_bytes": 67108864,
+          "max_initializers": 4096,
+          "max_inputs": 64,
+          "max_model_bytes": 67108864,
+          "max_nodes": 4096,
+          "max_outputs": 64,
+          "max_rank": 8,
+          "max_tensor_bytes": 268435456,
+          "max_total_initializer_bytes": 268435456
+        },
+        "policy_id": "wave-poc9e-cpu-fallback-v1",
+        "sha256": "41e9f9354608e9ca22aaed5721611260555ec9edf4fb5d334a386467c1c5cb46"
+      },
+      "source_artifact_id": "ctc-en-onnx",
+      "source_path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc.onnx"
+    },
+    "relationship": "source-binary-anchor",
+    "search_sections": [
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 1652,
+        "section_index": 7,
+        "section_sha256": "71a3478029e11d65bf148c97473a2efb1f71a58a5d1c344b56669a5f6c017e9e",
+        "section_size": 160,
+        "section_type": 4,
+        "type_name": "NBG_SECTION_OPERATIONS"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 1812,
+        "section_index": 8,
+        "section_sha256": "58b1417a8a2be459a83aba78e56c7fb2f4f4b9615895a689a9c0c5f96d722e37",
+        "section_size": 192,
+        "section_type": 7,
+        "type_name": "NBG_SECTION_NN"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 2004,
+        "section_index": 9,
+        "section_sha256": "a59f043fbf77e112caec16e51d29930cc8339058bdc4a14eea5335c10ae3270c",
+        "section_size": 384,
+        "section_type": 8,
+        "type_name": "NBG_SECTION_TP"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 2388,
+        "section_index": 10,
+        "section_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+        "section_size": 8,
+        "section_type": 9,
+        "type_name": "NBG_SECTION_SH"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 2396,
+        "section_index": 11,
+        "section_sha256": "7932b2fe6681b673c5a974804f619fb4dcb8324e0d7d9b391ebf682feb12b658",
+        "section_size": 504,
+        "section_type": 10,
+        "type_name": "NBG_SECTION_PATCH"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 2900,
+        "section_index": 12,
+        "section_sha256": "f4a71a495ed0ebaf2aa81ad799552912dfef99522c57dcf5c315c1a5f37c44dc",
+        "section_size": 8,
+        "section_type": 23,
+        "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 2916,
+        "section_index": 14,
+        "section_sha256": "9d3cd8114e886f9e7161cae16d52e2be0e2810848ed29be0f225c736856c5489",
+        "section_size": 40,
+        "section_type": 27,
+        "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 3008,
+        "section_index": 15,
+        "section_sha256": "27fba4d24db49cb461794fd71198a333c813e790f603a7da019637e1f8a06446",
+        "section_size": 5257856,
+        "section_type": 24,
+        "type_name": "NBG_SECTION_COEF_DATA"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "file_offset": 5262336,
+        "section_index": 17,
+        "section_sha256": "284f8b972ab331cead701433bfadbd3d484e3bd3d08b426ef8d4982d5f10f308",
+        "section_size": 1024,
+        "section_type": 21,
+        "type_name": "NBG_SECTION_LOADSTATE"
+      }
+    ]
+  },
+  "decision": {
+    "poc12b": "not-ready",
+    "reason": "no deterministic invertible coefficient transform is corroborated across two tensors or graphs"
+  },
+  "differential_controls": {
+    "comparisons": [
+      {
+        "anchor_artifact_id": "ctc-en",
+        "control_artifact_id": "ctc-de",
+        "sections": [
+          {
+            "anchor_bytes": 160,
+            "anchor_sha256": "71a3478029e11d65bf148c97473a2efb1f71a58a5d1c344b56669a5f6c017e9e",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 160,
+            "common_suffix_bytes": 3,
+            "control_bytes": 192,
+            "control_sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 4,
+            "size_delta": 32,
+            "status": "compared",
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "anchor_bytes": 192,
+            "anchor_sha256": "58b1417a8a2be459a83aba78e56c7fb2f4f4b9615895a689a9c0c5f96d722e37",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 32,
+                "common_block_count": 4,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 64,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 110,
+            "control_bytes": 192,
+            "control_sha256": "9bb6d635aba7f97d3388433b85a8b114a226fc87b628e65c16686edba1e61e7c",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 7,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "anchor_bytes": 384,
+            "anchor_sha256": "a59f043fbf77e112caec16e51d29930cc8339058bdc4a14eea5335c10ae3270c",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 384
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 90,
+            "control_bytes": 384,
+            "control_sha256": "6aaa9e7c86c83961cbdb64936e75f16bd7bac90b8961e08fb8dea48a68127a3d",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 8,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              }
+            ],
+            "common_prefix_bytes": 8,
+            "common_suffix_bytes": 7,
+            "control_bytes": 16,
+            "control_sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 9,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "anchor_bytes": 504,
+            "anchor_sha256": "7932b2fe6681b673c5a974804f619fb4dcb8324e0d7d9b391ebf682feb12b658",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 32,
+                "common_block_count": 11,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 64,
+                "common_block_count": 4,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 588
+              }
+            ],
+            "common_prefix_bytes": 129,
+            "common_suffix_bytes": 23,
+            "control_bytes": 588,
+            "control_sha256": "2f7eabe8219235a2f075ec5180d964271c236f9545f38753f538525604c9e59b",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 10,
+            "size_delta": 84,
+            "status": "compared",
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "anchor_bytes": 1024,
+            "anchor_sha256": "284f8b972ab331cead701433bfadbd3d484e3bd3d08b426ef8d4982d5f10f308",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 32,
+                "common_block_count": 27,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 64,
+                "common_block_count": 13,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 128,
+                "common_block_count": 6,
+                "control_sampled_bytes": 1640
+              }
+            ],
+            "common_prefix_bytes": 184,
+            "common_suffix_bytes": 43,
+            "control_bytes": 1640,
+            "control_sha256": "7c58da886a5d5797aabd79bb51718bf8be9e87a1afcb739b08336328dcefa770",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 21,
+            "size_delta": 616,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "f4a71a495ed0ebaf2aa81ad799552912dfef99522c57dcf5c315c1a5f37c44dc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              }
+            ],
+            "common_prefix_bytes": 4,
+            "common_suffix_bytes": 1,
+            "control_bytes": 8,
+            "control_sha256": "36b7ca08c3252b39b2bc7a8c28c1be1bb602488265c5fc6b16a8953b00ebab21",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 23,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "anchor_bytes": 5257856,
+            "anchor_sha256": "27fba4d24db49cb461794fd71198a333c813e790f603a7da019637e1f8a06446",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              }
+            ],
+            "common_prefix_bytes": 20,
+            "common_suffix_bytes": 26,
+            "control_bytes": 2804480,
+            "control_sha256": "34b17df3cdb32c08b50be174120cc399604826d0d09a106b4a868d4a0e579a21",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 24,
+            "size_delta": -2453376,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "anchor_bytes": 40,
+            "anchor_sha256": "9d3cd8114e886f9e7161cae16d52e2be0e2810848ed29be0f225c736856c5489",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 32,
+                "common_block_count": 1,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              }
+            ],
+            "common_prefix_bytes": 40,
+            "common_suffix_bytes": 2,
+            "control_bytes": 48,
+            "control_sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 27,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          }
+        ]
+      },
+      {
+        "anchor_artifact_id": "ctc-en",
+        "control_artifact_id": "ctc-fr",
+        "sections": [
+          {
+            "anchor_bytes": 160,
+            "anchor_sha256": "71a3478029e11d65bf148c97473a2efb1f71a58a5d1c344b56669a5f6c017e9e",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 160,
+            "common_suffix_bytes": 3,
+            "control_bytes": 192,
+            "control_sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 4,
+            "size_delta": 32,
+            "status": "compared",
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "anchor_bytes": 192,
+            "anchor_sha256": "58b1417a8a2be459a83aba78e56c7fb2f4f4b9615895a689a9c0c5f96d722e37",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 32,
+                "common_block_count": 4,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 64,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 110,
+            "control_bytes": 192,
+            "control_sha256": "8d1fc5972ee81104adcc2f314bf452b2161982063b62af59f333d90617f148f0",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 7,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "anchor_bytes": 384,
+            "anchor_sha256": "a59f043fbf77e112caec16e51d29930cc8339058bdc4a14eea5335c10ae3270c",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 384
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 90,
+            "control_bytes": 384,
+            "control_sha256": "d6cfe2987771cb6bb4edd253f0fcfef8fbf92cffe2894f32898ab2255b4851cf",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 8,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              }
+            ],
+            "common_prefix_bytes": 8,
+            "common_suffix_bytes": 7,
+            "control_bytes": 16,
+            "control_sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 9,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "anchor_bytes": 504,
+            "anchor_sha256": "7932b2fe6681b673c5a974804f619fb4dcb8324e0d7d9b391ebf682feb12b658",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 32,
+                "common_block_count": 11,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 64,
+                "common_block_count": 4,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 588
+              }
+            ],
+            "common_prefix_bytes": 129,
+            "common_suffix_bytes": 23,
+            "control_bytes": 588,
+            "control_sha256": "8f0433d7b9912f3e47eb2c8da11c01b296645edccad6753918b5fa26cfb4cf20",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 10,
+            "size_delta": 84,
+            "status": "compared",
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "anchor_bytes": 1024,
+            "anchor_sha256": "284f8b972ab331cead701433bfadbd3d484e3bd3d08b426ef8d4982d5f10f308",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 32,
+                "common_block_count": 27,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 64,
+                "common_block_count": 13,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 128,
+                "common_block_count": 6,
+                "control_sampled_bytes": 1640
+              }
+            ],
+            "common_prefix_bytes": 184,
+            "common_suffix_bytes": 43,
+            "control_bytes": 1640,
+            "control_sha256": "afa6197977026e6c279588f2b70276be722c6acdf5bba5399a050bb3885385f2",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 21,
+            "size_delta": 616,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "f4a71a495ed0ebaf2aa81ad799552912dfef99522c57dcf5c315c1a5f37c44dc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              }
+            ],
+            "common_prefix_bytes": 4,
+            "common_suffix_bytes": 1,
+            "control_bytes": 8,
+            "control_sha256": "b6c7b364f61112d2749fab2706d4afdd1ccd35c1937510c3ea128ecb0e7fc32e",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 23,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "anchor_bytes": 5257856,
+            "anchor_sha256": "27fba4d24db49cb461794fd71198a333c813e790f603a7da019637e1f8a06446",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 32,
+                "common_block_count": 1,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              }
+            ],
+            "common_prefix_bytes": 20,
+            "common_suffix_bytes": 36,
+            "control_bytes": 2928576,
+            "control_sha256": "f5e8d14f38ca7a870a2ff4be3fe8952a274f9867bb69605fd2cc8b24e3282c4e",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 24,
+            "size_delta": -2329280,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "anchor_bytes": 40,
+            "anchor_sha256": "9d3cd8114e886f9e7161cae16d52e2be0e2810848ed29be0f225c736856c5489",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 32,
+                "common_block_count": 1,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              }
+            ],
+            "common_prefix_bytes": 40,
+            "common_suffix_bytes": 2,
+            "control_bytes": 48,
+            "control_sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 27,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          }
+        ]
+      },
+      {
+        "anchor_artifact_id": "ctc-en",
+        "control_artifact_id": "ctc-ja",
+        "sections": [
+          {
+            "anchor_bytes": 160,
+            "anchor_sha256": "71a3478029e11d65bf148c97473a2efb1f71a58a5d1c344b56669a5f6c017e9e",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 160,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 160,
+            "common_suffix_bytes": 3,
+            "control_bytes": 192,
+            "control_sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 4,
+            "size_delta": 32,
+            "status": "compared",
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "anchor_bytes": 192,
+            "anchor_sha256": "58b1417a8a2be459a83aba78e56c7fb2f4f4b9615895a689a9c0c5f96d722e37",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 32,
+                "common_block_count": 3,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 64,
+                "common_block_count": 1,
+                "control_sampled_bytes": 192
+              },
+              {
+                "anchor_sampled_bytes": 192,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 192
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 110,
+            "control_bytes": 192,
+            "control_sha256": "1b8426d49133752f584e68b9ace634ffcc0b8c1537e75003d11f1b1ddec1df1a",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 7,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "anchor_bytes": 384,
+            "anchor_sha256": "a59f043fbf77e112caec16e51d29930cc8339058bdc4a14eea5335c10ae3270c",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 32,
+                "common_block_count": 5,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 64,
+                "common_block_count": 2,
+                "control_sampled_bytes": 384
+              },
+              {
+                "anchor_sampled_bytes": 384,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 384
+              }
+            ],
+            "common_prefix_bytes": 1,
+            "common_suffix_bytes": 90,
+            "control_bytes": 384,
+            "control_sha256": "8a169f43f8489384cc339e219332f856aa7bc7f864069f7f8b5e4a4e6f766c17",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 8,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 16
+              }
+            ],
+            "common_prefix_bytes": 8,
+            "common_suffix_bytes": 7,
+            "control_bytes": 16,
+            "control_sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 9,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "anchor_bytes": 504,
+            "anchor_sha256": "7932b2fe6681b673c5a974804f619fb4dcb8324e0d7d9b391ebf682feb12b658",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 32,
+                "common_block_count": 11,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 64,
+                "common_block_count": 4,
+                "control_sampled_bytes": 588
+              },
+              {
+                "anchor_sampled_bytes": 504,
+                "block_bytes": 128,
+                "common_block_count": 1,
+                "control_sampled_bytes": 588
+              }
+            ],
+            "common_prefix_bytes": 129,
+            "common_suffix_bytes": 23,
+            "control_bytes": 588,
+            "control_sha256": "38f6d2c8fc13611330526620fc5f7a42ab4edb3c1d488e5245bcd7df2817ff9e",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 10,
+            "size_delta": 84,
+            "status": "compared",
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "anchor_bytes": 1024,
+            "anchor_sha256": "284f8b972ab331cead701433bfadbd3d484e3bd3d08b426ef8d4982d5f10f308",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 32,
+                "common_block_count": 27,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 64,
+                "common_block_count": 13,
+                "control_sampled_bytes": 1640
+              },
+              {
+                "anchor_sampled_bytes": 1024,
+                "block_bytes": 128,
+                "common_block_count": 6,
+                "control_sampled_bytes": 1640
+              }
+            ],
+            "common_prefix_bytes": 184,
+            "common_suffix_bytes": 43,
+            "control_bytes": 1640,
+            "control_sha256": "740c23cfa2a9cfc6958b7ae8ce7d5175041bd4b573edd5d4aa71fbfa90af85d8",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 21,
+            "size_delta": 616,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE"
+          },
+          {
+            "anchor_bytes": 8,
+            "anchor_sha256": "f4a71a495ed0ebaf2aa81ad799552912dfef99522c57dcf5c315c1a5f37c44dc",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              },
+              {
+                "anchor_sampled_bytes": 8,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 8
+              }
+            ],
+            "common_prefix_bytes": 4,
+            "common_suffix_bytes": 1,
+            "control_bytes": 8,
+            "control_sha256": "69a3ac3b5c0a3235b5756afe0e918c39797ed66239ac57cff31e9ce4a3d8c1c9",
+            "equal_bytes": false,
+            "equal_size": true,
+            "section_type": 23,
+            "size_delta": 0,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "anchor_bytes": 5257856,
+            "anchor_sha256": "27fba4d24db49cb461794fd71198a333c813e790f603a7da019637e1f8a06446",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 32,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              },
+              {
+                "anchor_sampled_bytes": 1048576,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 1048576
+              }
+            ],
+            "common_prefix_bytes": 20,
+            "common_suffix_bytes": 17,
+            "control_bytes": 2711104,
+            "control_sha256": "8374a25816c5dff1c5860374b7d6105553e7d062637a96e49730d599b12a3499",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 24,
+            "size_delta": -2546752,
+            "status": "compared",
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "anchor_bytes": 40,
+            "anchor_sha256": "9d3cd8114e886f9e7161cae16d52e2be0e2810848ed29be0f225c736856c5489",
+            "block_samples": [
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 32,
+                "common_block_count": 1,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 64,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              },
+              {
+                "anchor_sampled_bytes": 40,
+                "block_bytes": 128,
+                "common_block_count": 0,
+                "control_sampled_bytes": 48
+              }
+            ],
+            "common_prefix_bytes": 40,
+            "common_suffix_bytes": 2,
+            "control_bytes": 48,
+            "control_sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "equal_bytes": false,
+            "equal_size": false,
+            "section_type": 27,
+            "size_delta": 8,
+            "status": "compared",
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          }
+        ]
+      }
+    ],
+    "profiles": [
+      {
+        "artifact_id": "ctc-de",
+        "output_dimensions": [
+          [
+            5200,
+            16,
+            1
+          ]
+        ],
+        "path": "models/ai-models/asr-models/model/asr_de/de_online/ctc_online.nb",
+        "sections": [
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 1920,
+            "index": 7,
+            "offset": 1728,
+            "record_count": 6,
+            "sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "size": 192,
+            "stride": 32,
+            "type": 4,
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2112,
+            "index": 8,
+            "offset": 1920,
+            "record_count": 1,
+            "sha256": "9bb6d635aba7f97d3388433b85a8b114a226fc87b628e65c16686edba1e61e7c",
+            "size": 192,
+            "stride": 192,
+            "type": 7,
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2496,
+            "index": 9,
+            "offset": 2112,
+            "record_count": 2,
+            "sha256": "6aaa9e7c86c83961cbdb64936e75f16bd7bac90b8961e08fb8dea48a68127a3d",
+            "size": 384,
+            "stride": 192,
+            "type": 8,
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2512,
+            "index": 10,
+            "offset": 2496,
+            "record_count": 2,
+            "sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "size": 16,
+            "stride": 8,
+            "type": 9,
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3100,
+            "index": 11,
+            "offset": 2512,
+            "record_count": 21,
+            "sha256": "2f7eabe8219235a2f075ec5180d964271c236f9545f38753f538525604c9e59b",
+            "size": 588,
+            "stride": 28,
+            "type": 10,
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3108,
+            "index": 12,
+            "offset": 3100,
+            "record_count": 1,
+            "sha256": "36b7ca08c3252b39b2bc7a8c28c1be1bb602488265c5fc6b16a8953b00ebab21",
+            "size": 8,
+            "stride": 8,
+            "type": 23,
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3172,
+            "index": 14,
+            "offset": 3124,
+            "record_count": 6,
+            "sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "size": 48,
+            "stride": 8,
+            "type": 27,
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          },
+          {
+            "alignment": 64,
+            "classification": "opaque",
+            "end": 2807680,
+            "index": 15,
+            "offset": 3200,
+            "record_count": 2804480,
+            "sha256": "34b17df3cdb32c08b50be174120cc399604826d0d09a106b4a868d4a0e579a21",
+            "size": 2804480,
+            "stride": 1,
+            "type": 24,
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2810984,
+            "index": 17,
+            "offset": 2809344,
+            "record_count": 1640,
+            "sha256": "7c58da886a5d5797aabd79bb51718bf8be9e87a1afcb739b08336328dcefa770",
+            "size": 1640,
+            "stride": 1,
+            "type": 21,
+            "type_name": "NBG_SECTION_LOADSTATE"
+          }
+        ],
+        "sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66"
+      },
+      {
+        "artifact_id": "ctc-en",
+        "output_dimensions": [
+          [
+            4999,
+            16,
+            1
+          ]
+        ],
+        "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc_online.nb",
+        "sections": [
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 1812,
+            "index": 7,
+            "offset": 1652,
+            "record_count": 5,
+            "sha256": "71a3478029e11d65bf148c97473a2efb1f71a58a5d1c344b56669a5f6c017e9e",
+            "size": 160,
+            "stride": 32,
+            "type": 4,
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2004,
+            "index": 8,
+            "offset": 1812,
+            "record_count": 1,
+            "sha256": "58b1417a8a2be459a83aba78e56c7fb2f4f4b9615895a689a9c0c5f96d722e37",
+            "size": 192,
+            "stride": 192,
+            "type": 7,
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2388,
+            "index": 9,
+            "offset": 2004,
+            "record_count": 2,
+            "sha256": "a59f043fbf77e112caec16e51d29930cc8339058bdc4a14eea5335c10ae3270c",
+            "size": 384,
+            "stride": 192,
+            "type": 8,
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2396,
+            "index": 10,
+            "offset": 2388,
+            "record_count": 1,
+            "sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+            "size": 8,
+            "stride": 8,
+            "type": 9,
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2900,
+            "index": 11,
+            "offset": 2396,
+            "record_count": 18,
+            "sha256": "7932b2fe6681b673c5a974804f619fb4dcb8324e0d7d9b391ebf682feb12b658",
+            "size": 504,
+            "stride": 28,
+            "type": 10,
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2908,
+            "index": 12,
+            "offset": 2900,
+            "record_count": 1,
+            "sha256": "f4a71a495ed0ebaf2aa81ad799552912dfef99522c57dcf5c315c1a5f37c44dc",
+            "size": 8,
+            "stride": 8,
+            "type": 23,
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2956,
+            "index": 14,
+            "offset": 2916,
+            "record_count": 5,
+            "sha256": "9d3cd8114e886f9e7161cae16d52e2be0e2810848ed29be0f225c736856c5489",
+            "size": 40,
+            "stride": 8,
+            "type": 27,
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          },
+          {
+            "alignment": 64,
+            "classification": "opaque",
+            "end": 5260864,
+            "index": 15,
+            "offset": 3008,
+            "record_count": 5257856,
+            "sha256": "27fba4d24db49cb461794fd71198a333c813e790f603a7da019637e1f8a06446",
+            "size": 5257856,
+            "stride": 1,
+            "type": 24,
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 5263360,
+            "index": 17,
+            "offset": 5262336,
+            "record_count": 1024,
+            "sha256": "284f8b972ab331cead701433bfadbd3d484e3bd3d08b426ef8d4982d5f10f308",
+            "size": 1024,
+            "stride": 1,
+            "type": 21,
+            "type_name": "NBG_SECTION_LOADSTATE"
+          }
+        ],
+        "sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5"
+      },
+      {
+        "artifact_id": "ctc-fr",
+        "output_dimensions": [
+          [
+            5432,
+            16,
+            1
+          ]
+        ],
+        "path": "models/ai-models/asr-models/model/asr_fr/fr_online/ctc_online.nb",
+        "sections": [
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 1920,
+            "index": 7,
+            "offset": 1728,
+            "record_count": 6,
+            "sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "size": 192,
+            "stride": 32,
+            "type": 4,
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2112,
+            "index": 8,
+            "offset": 1920,
+            "record_count": 1,
+            "sha256": "8d1fc5972ee81104adcc2f314bf452b2161982063b62af59f333d90617f148f0",
+            "size": 192,
+            "stride": 192,
+            "type": 7,
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2496,
+            "index": 9,
+            "offset": 2112,
+            "record_count": 2,
+            "sha256": "d6cfe2987771cb6bb4edd253f0fcfef8fbf92cffe2894f32898ab2255b4851cf",
+            "size": 384,
+            "stride": 192,
+            "type": 8,
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2512,
+            "index": 10,
+            "offset": 2496,
+            "record_count": 2,
+            "sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "size": 16,
+            "stride": 8,
+            "type": 9,
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3100,
+            "index": 11,
+            "offset": 2512,
+            "record_count": 21,
+            "sha256": "8f0433d7b9912f3e47eb2c8da11c01b296645edccad6753918b5fa26cfb4cf20",
+            "size": 588,
+            "stride": 28,
+            "type": 10,
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3108,
+            "index": 12,
+            "offset": 3100,
+            "record_count": 1,
+            "sha256": "b6c7b364f61112d2749fab2706d4afdd1ccd35c1937510c3ea128ecb0e7fc32e",
+            "size": 8,
+            "stride": 8,
+            "type": 23,
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3172,
+            "index": 14,
+            "offset": 3124,
+            "record_count": 6,
+            "sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "size": 48,
+            "stride": 8,
+            "type": 27,
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          },
+          {
+            "alignment": 64,
+            "classification": "opaque",
+            "end": 2931776,
+            "index": 15,
+            "offset": 3200,
+            "record_count": 2928576,
+            "sha256": "f5e8d14f38ca7a870a2ff4be3fe8952a274f9867bb69605fd2cc8b24e3282c4e",
+            "size": 2928576,
+            "stride": 1,
+            "type": 24,
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2935144,
+            "index": 17,
+            "offset": 2933504,
+            "record_count": 1640,
+            "sha256": "afa6197977026e6c279588f2b70276be722c6acdf5bba5399a050bb3885385f2",
+            "size": 1640,
+            "stride": 1,
+            "type": 21,
+            "type_name": "NBG_SECTION_LOADSTATE"
+          }
+        ],
+        "sha256": "db8a79e3e7b35eddd87a7369bd464101607083f489a75418d73073718ff6f079"
+      },
+      {
+        "artifact_id": "ctc-ja",
+        "output_dimensions": [
+          [
+            5132,
+            16,
+            1
+          ]
+        ],
+        "path": "models/ai-models/asr-models/model/asr_ja/ja_online/ctc_online.nb",
+        "sections": [
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 1920,
+            "index": 7,
+            "offset": 1728,
+            "record_count": 6,
+            "sha256": "51926ef7eb5c310e56048a8377ac4ddbf6539168c0cb3dab37bfdb3b442ed058",
+            "size": 192,
+            "stride": 32,
+            "type": 4,
+            "type_name": "NBG_SECTION_OPERATIONS"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2112,
+            "index": 8,
+            "offset": 1920,
+            "record_count": 1,
+            "sha256": "1b8426d49133752f584e68b9ace634ffcc0b8c1537e75003d11f1b1ddec1df1a",
+            "size": 192,
+            "stride": 192,
+            "type": 7,
+            "type_name": "NBG_SECTION_NN"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2496,
+            "index": 9,
+            "offset": 2112,
+            "record_count": 2,
+            "sha256": "8a169f43f8489384cc339e219332f856aa7bc7f864069f7f8b5e4a4e6f766c17",
+            "size": 384,
+            "stride": 192,
+            "type": 8,
+            "type_name": "NBG_SECTION_TP"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2512,
+            "index": 10,
+            "offset": 2496,
+            "record_count": 2,
+            "sha256": "9d34149fbd1fe777eb238799054c8cbfbce372255f219f8740838def9bfd02db",
+            "size": 16,
+            "stride": 8,
+            "type": 9,
+            "type_name": "NBG_SECTION_SH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3100,
+            "index": 11,
+            "offset": 2512,
+            "record_count": 21,
+            "sha256": "38f6d2c8fc13611330526620fc5f7a42ab4edb3c1d488e5245bcd7df2817ff9e",
+            "size": 588,
+            "stride": 28,
+            "type": 10,
+            "type_name": "NBG_SECTION_PATCH"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3108,
+            "index": 12,
+            "offset": 3100,
+            "record_count": 1,
+            "sha256": "69a3ac3b5c0a3235b5756afe0e918c39797ed66239ac57cff31e9ce4a3d8c1c9",
+            "size": 8,
+            "stride": 8,
+            "type": 23,
+            "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 3172,
+            "index": 14,
+            "offset": 3124,
+            "record_count": 6,
+            "sha256": "d18131a248ef30169496b526673826f343534c11cf1d8fe895b721b69be0ed38",
+            "size": 48,
+            "stride": 8,
+            "type": 27,
+            "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+          },
+          {
+            "alignment": 64,
+            "classification": "opaque",
+            "end": 2714304,
+            "index": 15,
+            "offset": 3200,
+            "record_count": 2711104,
+            "sha256": "8374a25816c5dff1c5860374b7d6105553e7d062637a96e49730d599b12a3499",
+            "size": 2711104,
+            "stride": 1,
+            "type": 24,
+            "type_name": "NBG_SECTION_COEF_DATA"
+          },
+          {
+            "alignment": 0,
+            "classification": "opaque",
+            "end": 2717544,
+            "index": 17,
+            "offset": 2715904,
+            "record_count": 1640,
+            "sha256": "740c23cfa2a9cfc6958b7ae8ce7d5175041bd4b573edd5d4aa71fbfa90af85d8",
+            "size": 1640,
+            "stride": 1,
+            "type": 21,
+            "type_name": "NBG_SECTION_LOADSTATE"
+          }
+        ],
+        "sha256": "2c261beb8aedb1361c3a4832878ff09dec597bcae4681aee742069c6faa54b5d"
+      }
+    ],
+    "relationship_class": "differentially-supported",
+    "warning": "language, topology, compiler, and vocabulary differences are confounded; comparisons do not prove a transform"
+  },
+  "generator": "waved/scripts/npu/nbg_correlate.py",
+  "limits": {
+    "max_candidate_bytes": 67108864,
+    "max_candidates_per_tensor": 128,
+    "max_initializer_bytes": 67108864,
+    "max_search_bytes_per_tensor": 268435456,
+    "max_search_sections": 16
+  },
+  "manifest": {
+    "path": "waved/scripts/npu/nbg_serializer_targets.json",
+    "sha256": "75e2b282cfc5ff4d52d06dac99768db945dfdd23d4f92b7cff681ee99b9d805b"
+  },
+  "non_claims": [
+    "No coefficient layout was emitted.",
+    "No compiler, simulator, runtime, or device was called.",
+    "The ONNX/NBG anchor is not proven same-build provenance.",
+    "Unchanged NBG round-trip does not establish semantic mutation."
+  ],
+  "poc_id": "poc12a-open-nbg-serializer",
+  "safety": {
+    "adb_calls": 0,
+    "compiler_calls": 0,
+    "container_registrations": 0,
+    "container_runs": 0,
+    "device_calls": 0,
+    "generated_custom_nbg_files": 0,
+    "mutated_nbg_files": 0,
+    "native_extension_imports": 0,
+    "simulator_calls": 0
+  },
+  "schema_version": 1,
+  "tensors": [
+    {
+      "candidate_count": 47,
+      "candidates": [
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "d92a733d0a0ab9d334b0d8606ee47c2f750949db6cd627bb6dfcd7d6f6a1452d",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "bc66307c1ca53f8e0c60d1e0e20f4c4d04df67c2e2214530f7a89e7e5d6274ee",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "d92a733d0a0ab9d334b0d8606ee47c2f750949db6cd627bb6dfcd7d6f6a1452d",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "d92a733d0a0ab9d334b0d8606ee47c2f750949db6cd627bb6dfcd7d6f6a1452d",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "80e048ce3bbab521ea41adeb3bc62c5a1d2077e0f59209cfbd6a119b2921ba4d",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "1bde978af125685cbcadc3d53fd663e9b0d06acb4f19e00a0c3ff7608aa8a56d",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "f19630202c58ddaca9d039df100d2d37ff837216976d2c3e8f5de7f7695ee33a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "55a0aff6a0b93d90bd77209c183607d67a2a9fa5954c6459cb2732536ee4d24a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "71d07befdd8ff8361485f292c97de005e09504ca8724fbad09def52470f224ce",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "01eeee798f19c4fbed03efb677d79d8ed502e2c5c7c6179b9a60d0d096917efa",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "eb68012aa1b7c4584ac0108863420cde53c35f4b3e734886d8391296faa1e416",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "c50fb872a7fc5c3f92cb429b184deb4a7b5100e73a6486694c7472c6d68b5add",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "precision is lost during FP32 to BF16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "b4448091abd08a93fc29678bd5e03259871ef7241cc1206a8c79d6544d01d32b",
+          "parameters": {
+            "encoding": "bfloat16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "cast-bf16-rne-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "precision is lost during FP32 to FP16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "bc66307c1ca53f8e0c60d1e0e20f4c4d04df67c2e2214530f7a89e7e5d6274ee",
+          "parameters": {
+            "encoding": "float16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "cast-fp16-rne-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6,
+              9,
+              8,
+              11,
+              10,
+              13,
+              12,
+              15,
+              14
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "c72e032219a664c14549eb830f4ca35b5dd4f696a3babf34a6a5bf4284886b86",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              8,
+              1,
+              9,
+              2,
+              10,
+              3,
+              11,
+              4,
+              12,
+              5,
+              13,
+              6,
+              14,
+              7,
+              15
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "5056f6505390a8e8eed1b15ab7ce73ab7699a67dfa9f406e7b63b1eb64d00b5c",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              8,
+              0,
+              9,
+              1,
+              10,
+              2,
+              11,
+              3,
+              12,
+              4,
+              13,
+              5,
+              14,
+              6,
+              15,
+              7
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "d03526046e7938cdb43c4802dd2280b7a48364cdb34e3a5427593e89ed008358",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              15,
+              14,
+              13,
+              12,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "e693ec89d58d9c0ff6d05b9ecc6d8428494a6356e0343435cc696265d65e8def",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "a986e6748fa4954feeabe5e581d3f9112a606680f484e08fbb333deba3ee052a",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "08e3d98aaa31b261103ab307f03c776f4f79fccda1644d247afaa91cc9bc022c",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "a986e6748fa4954feeabe5e581d3f9112a606680f484e08fbb333deba3ee052a",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "a986e6748fa4954feeabe5e581d3f9112a606680f484e08fbb333deba3ee052a",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6,
+              9,
+              8,
+              11,
+              10,
+              13,
+              12,
+              15,
+              14,
+              17,
+              16,
+              19,
+              18,
+              21,
+              20,
+              23,
+              22,
+              25,
+              24,
+              27,
+              26,
+              29,
+              28,
+              31,
+              30
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "c72e032219a664c14549eb830f4ca35b5dd4f696a3babf34a6a5bf4284886b86",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              16,
+              1,
+              17,
+              2,
+              18,
+              3,
+              19,
+              4,
+              20,
+              5,
+              21,
+              6,
+              22,
+              7,
+              23,
+              8,
+              24,
+              9,
+              25,
+              10,
+              26,
+              11,
+              27,
+              12,
+              28,
+              13,
+              29,
+              14,
+              30,
+              15,
+              31
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "63b01b1c1d1ddbe133e459a8611b065b4eac16307c907295c09a7616e6c5d46f",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              16,
+              0,
+              17,
+              1,
+              18,
+              2,
+              19,
+              3,
+              20,
+              4,
+              21,
+              5,
+              22,
+              6,
+              23,
+              7,
+              24,
+              8,
+              25,
+              9,
+              26,
+              10,
+              27,
+              11,
+              28,
+              12,
+              29,
+              13,
+              30,
+              14,
+              31,
+              15
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "87e778d7c9c55a4f1c14d90cf772ff667932b6cfdd2817ba4d8b287d8e957946",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              31,
+              30,
+              29,
+              28,
+              27,
+              26,
+              25,
+              24,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              17,
+              16,
+              15,
+              14,
+              13,
+              12,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "c6e229c396c8b5e17c5399faa76bcd479e0dfed79f73741a1aff378d1349acf1",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "bc941568e39b14d78951c4b29f70878af2f0651cde743fffb8a0e52e2901391e",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "16af98fc626776a8bb099d3494e96f3cc353d7eead65cc48207167ce46d6df0d",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "e628c7bad58c2aa9d71ae00ece759c24aea1818b1d931d2ccfcff358d8dffdd1",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "0c8a253e4be521298f0f825ad9108534ecaaf854f191979bd3e68c3fc588b303",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "c72e032219a664c14549eb830f4ca35b5dd4f696a3babf34a6a5bf4284886b86",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "3d9b51f0723387d92a5f9d00432c45a68df28805bc55587263e6605108547658",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "ff420a4d17d06c80994a50ff271bfc9a8ee2fbfacdbc5d52a680d6d50a3c78a3",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "51faa3786fa2fcf995adf93dff14b6ae329c58c92cc988870913db6ff154fc78",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "5b19fe238781558438f974a9e0a689bc703a8b5b9b7be871cbcee9a9656bb994",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "bc66307c1ca53f8e0c60d1e0e20f4c4d04df67c2e2214530f7a89e7e5d6274ee",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "5b19fe238781558438f974a9e0a689bc703a8b5b9b7be871cbcee9a9656bb994",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "5b19fe238781558438f974a9e0a689bc703a8b5b9b7be871cbcee9a9656bb994",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "9aa1de7320215fe6be00e7ceda65b140a7117900626029e83f3f0ee6099e61e1",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "e67d202e3226446587f77a65d2ce4e479ac1e21244599dfd0555a5ee557b3d65",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "06fbbc6ca1d3584466b804602d7324f777d88a689f03f09943a33c9c94465d32",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "ba6e4061173aac5231fd7303c3f3ab3bf148e653582c9fb29611a7fa9025c81f",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "905b233c7af5ff622c698ac9c609fcb034d07b66b810dbf0122b0de6e068897f",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "7f860b8c48f2119f5a2202371b621082530ea80a2e08c6c9d23ad96c1854c108",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "7e5008776a59270230a5e378946479cbea659c362f4d1d4f931b40b585f6f74a",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 9998,
+          "output_sha256": "c444da061f48b4966dc8173e4c51d8d7589dc28e84cc166c5926dd2bba4a23ed",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "reason": "identity transform"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 19996,
+          "output_sha256": "08e3d98aaa31b261103ab307f03c776f4f79fccda1644d247afaa91cc9bc022c",
+          "parameters": {
+            "encoding": "float32-le",
+            "order": "C"
+          },
+          "source_name": "ctc_lo.bias",
+          "status": "no-match",
+          "transform_id": "identity-fp32-le"
+        }
+      ],
+      "plain_fp16": {
+        "error_code": null,
+        "evidence_class": "unresolved",
+        "inverse": {
+          "available": false,
+          "reason": "precision is lost during FP32 to FP16 conversion"
+        },
+        "occurrence_count": 0,
+        "occurrences": [],
+        "output_bytes": 9998,
+        "output_sha256": "bc66307c1ca53f8e0c60d1e0e20f4c4d04df67c2e2214530f7a89e7e5d6274ee",
+        "parameters": {
+          "encoding": "float16-le",
+          "rounding": "nearest-even"
+        },
+        "source_name": "ctc_lo.bias",
+        "status": "no-match",
+        "transform_id": "cast-fp16-rne-le"
+      },
+      "relationship": {
+        "class": "unresolved",
+        "reason": "no reviewed finite transform has an exact occurrence",
+        "unique_hypothesis_count": 0
+      },
+      "search": {
+        "candidate_comparison_bytes": 247228272,
+        "section_bytes_per_candidate": 5260176,
+        "section_count": 9
+      },
+      "source": {
+        "dtype": "float32",
+        "element_count": 4999,
+        "name": "ctc_lo.bias",
+        "shape": [
+          4999
+        ],
+        "source_bytes": 19996,
+        "source_sha256": "08e3d98aaa31b261103ab307f03c776f4f79fccda1644d247afaa91cc9bc022c"
+      }
+    },
+    {
+      "candidate_count": 50,
+      "candidates": [
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "85ca7c1631e40e6b2e081a6bde3f4e81f9be8b857d931c56f830ea2e54158c8a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "70665e038d7d1a2c8f2886c4d4ee9b8cb2ceb5d32c94577ceaff25569bc8f551",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "85ca7c1631e40e6b2e081a6bde3f4e81f9be8b857d931c56f830ea2e54158c8a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "85ca7c1631e40e6b2e081a6bde3f4e81f9be8b857d931c56f830ea2e54158c8a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 2,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "85ca7c1631e40e6b2e081a6bde3f4e81f9be8b857d931c56f830ea2e54158c8a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "7595c4153333346050b415adcee764d361d48071fb167c697aa3802399b482d4",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "4f3986e36cc9a0e6517500e765ea94513a4827379356c735fa66047b905e968a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "6c32881187c0e273ccf605d596807a466b88c4cbb457e79f5396a298418e8bbc",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 4,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "85ca7c1631e40e6b2e081a6bde3f4e81f9be8b857d931c56f830ea2e54158c8a",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "4fb1cc0147175df90dbb053e904a8a1a3902184486d9e1d1888374aa7a3b3b88",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "6cd8ca6e452a52d079c56a4e84459d986d5a60308add08db63d39a526bcb0cd5",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "byte-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "f9cd8f3058791acb851316082b58a92c27aacd7558932a3b9d3c88f6e4fcd607",
+          "parameters": {
+            "encoding": "float16-le-bytes",
+            "lane_bytes": 8,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "byte-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "precision is lost during FP32 to BF16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "1457db640472502b78df631a842242ac22c3a694cc25c5968e29d97ca9c9a99e",
+          "parameters": {
+            "encoding": "bfloat16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "cast-bf16-rne-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "precision is lost during FP32 to FP16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "70665e038d7d1a2c8f2886c4d4ee9b8cb2ceb5d32c94577ceaff25569bc8f551",
+          "parameters": {
+            "encoding": "float16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "cast-fp16-rne-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6,
+              9,
+              8,
+              11,
+              10,
+              13,
+              12,
+              15,
+              14
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              8,
+              1,
+              9,
+              2,
+              10,
+              3,
+              11,
+              4,
+              12,
+              5,
+              13,
+              6,
+              14,
+              7,
+              15
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "0bd346e3c9f36a6a9cf9750323cf8d4114bda04e63623fbcb255a73184944a52",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              8,
+              0,
+              9,
+              1,
+              10,
+              2,
+              11,
+              3,
+              12,
+              4,
+              13,
+              5,
+              14,
+              6,
+              15,
+              7
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "a9aad595bc6374ada1d673e504a780fcf0adf5ad44257bd830d017803fd0d8d8",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              15,
+              14,
+              13,
+              12,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "09b7cb1e5bbac6168ef2d8929ab61d94fa62572a2178a9e3e74169ede85756d1",
+          "parameters": {
+            "block_elements": 16,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "516a6e577b687129fb890d3b2413ac356743ab5ddb2c257734af847985704fbc",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 2,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6,
+              9,
+              8,
+              11,
+              10,
+              13,
+              12,
+              15,
+              14,
+              17,
+              16,
+              19,
+              18,
+              21,
+              20,
+              23,
+              22,
+              25,
+              24,
+              27,
+              26,
+              29,
+              28,
+              31,
+              30
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              16,
+              1,
+              17,
+              2,
+              18,
+              3,
+              19,
+              4,
+              20,
+              5,
+              21,
+              6,
+              22,
+              7,
+              23,
+              8,
+              24,
+              9,
+              25,
+              10,
+              26,
+              11,
+              27,
+              12,
+              28,
+              13,
+              29,
+              14,
+              30,
+              15,
+              31
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "1abcdbd2fb51e11f569cb8c41271e3f95b4f1acbda3d88facfba8d40f4d3111f",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              16,
+              0,
+              17,
+              1,
+              18,
+              2,
+              19,
+              3,
+              20,
+              4,
+              21,
+              5,
+              22,
+              6,
+              23,
+              7,
+              24,
+              8,
+              25,
+              9,
+              26,
+              10,
+              27,
+              11,
+              28,
+              12,
+              29,
+              13,
+              30,
+              14,
+              31,
+              15
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "9c7b83295dafc4ddc986c175c9075495268f585869a949746de52af1dda68da1",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              31,
+              30,
+              29,
+              28,
+              27,
+              26,
+              25,
+              24,
+              23,
+              22,
+              21,
+              20,
+              19,
+              18,
+              17,
+              16,
+              15,
+              14,
+              13,
+              12,
+              11,
+              10,
+              9,
+              8,
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "8bf7e7cf2b3115f7e9909751dff3006e30fb08ec5e292ef3ebedba2684bd0318",
+          "parameters": {
+            "block_elements": 32,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "fc2a17f489d286149419f44c7b11c68c63d7b8352c72f4d016282aa9c682748a",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "126f58ea8da67dd2e49b2d746f6b545f26b847fa27580d3a04e6a952abeaec3a",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "539f98d753ce282c8a03125b3b239a3c5e9ba6b0245ba62c3de9ce1687855997",
+          "parameters": {
+            "block_elements": 4,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "de6aba596ca48bf698c4b842130aa0d846e967dbcd839909108c024e8bcef8f8",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "3d4209d7b38717fea3dd844c62a0fbba5091805be74b4dc5568b81c7b32dec57",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "157854ecb8c8b7b96fc0c7ce6dcf9ca74c9ff2190b23b4506a3d096864f2d876",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "fixed permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "d32a0f03b57c35259c30c8454f600faa4a51ce6af701069958781ed321ffc43e",
+          "parameters": {
+            "block_elements": 8,
+            "encoding": "float32-le",
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "fixed-block-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "9ae6f1da2ff617aafd8d338f47a749ef4128f6b8ad8f36cff00f54fb1db6908b",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              1
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "70665e038d7d1a2c8f2886c4d4ee9b8cb2ceb5d32c94577ceaff25569bc8f551",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "9ae6f1da2ff617aafd8d338f47a749ef4128f6b8ad8f36cff00f54fb1db6908b",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "9ae6f1da2ff617aafd8d338f47a749ef4128f6b8ad8f36cff00f54fb1db6908b",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 2,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "9ae6f1da2ff617aafd8d338f47a749ef4128f6b8ad8f36cff00f54fb1db6908b",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              2,
+              1,
+              3
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "ccd7bcf6fefe5e3e888a3f2ebfca5bbee6b50c59b7ecea3525078db304294aa3",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              2,
+              0,
+              3,
+              1
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "ffd95829a4f6205db82cc4599de713481680650c5e17eadbc2b1bc044095bd90",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "b0e95a0565f3d864505442802139cec6696ef4c9fcd630901ee84ad4a7d23044",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 4,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              1,
+              0,
+              3,
+              2,
+              5,
+              4,
+              7,
+              6
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "9ae6f1da2ff617aafd8d338f47a749ef4128f6b8ad8f36cff00f54fb1db6908b",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "adjacent-pair-swap",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              0,
+              4,
+              1,
+              5,
+              2,
+              6,
+              3,
+              7
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "ccda97d7949dba0abbf1560b88a4c38c5babf96d6c9bf2a36e98ef74b972322c",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "even-odd",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              4,
+              0,
+              5,
+              1,
+              6,
+              2,
+              7,
+              3
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "3510a43cf05ec6f8d30f15d4e722ceed6178607e55e57c89d8d31ebe71b716b1",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "odd-even",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "inverse_indices": [
+              7,
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "reason": "halfword-lane permutation has an exact inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "00d7b4d902989743d421bcc69af75687e6ea4b57a7acbc4d900323bf87fa893f",
+          "parameters": {
+            "encoding": "float16-le-halfwords",
+            "lane_halfwords": 8,
+            "pattern": "reverse",
+            "tail": "unchanged"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "halfword-lane-permute"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "reason": "identity transform"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "516a6e577b687129fb890d3b2413ac356743ab5ddb2c257734af847985704fbc",
+          "parameters": {
+            "encoding": "float32-le",
+            "order": "C"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "identity-fp32-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": true,
+            "reason": "2D transpose is self-inverse"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 10237952,
+          "output_sha256": "c59e5aded9c91c2f4ba24d097ab35fcafef2a3d2ba705f65c4782d8c422c87dc",
+          "parameters": {
+            "axes": [
+              1,
+              0
+            ],
+            "encoding": "float32-le"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "transpose-2d"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "transpose is invertible but precision is lost during BF16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "c65bc9ef2b1222ecb70b510c01b3b5c1e312d3a9bdcf2cce5d365e19633beb7e",
+          "parameters": {
+            "axes": [
+              1,
+              0
+            ],
+            "encoding": "bfloat16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "transpose-2d+cast-bf16-rne-le"
+        },
+        {
+          "error_code": null,
+          "evidence_class": "unresolved",
+          "inverse": {
+            "available": false,
+            "reason": "transpose is invertible but precision is lost during FP16 conversion"
+          },
+          "occurrence_count": 0,
+          "occurrences": [],
+          "output_bytes": 5118976,
+          "output_sha256": "560ce4e834ee27a604e80b9f4aab8698d246ff03ba53dab7bc6bf7a7f2962091",
+          "parameters": {
+            "axes": [
+              1,
+              0
+            ],
+            "encoding": "float16-le",
+            "rounding": "nearest-even"
+          },
+          "source_name": "onnx::MatMul_7",
+          "status": "no-match",
+          "transform_id": "transpose-2d+cast-fp16-rne-le"
+        }
+      ],
+      "plain_fp16": {
+        "error_code": null,
+        "evidence_class": "unresolved",
+        "inverse": {
+          "available": false,
+          "reason": "precision is lost during FP32 to FP16 conversion"
+        },
+        "occurrence_count": 0,
+        "occurrences": [],
+        "output_bytes": 5118976,
+        "output_sha256": "70665e038d7d1a2c8f2886c4d4ee9b8cb2ceb5d32c94577ceaff25569bc8f551",
+        "parameters": {
+          "encoding": "float16-le",
+          "rounding": "nearest-even"
+        },
+        "source_name": "onnx::MatMul_7",
+        "status": "no-match",
+        "transform_id": "cast-fp16-rne-le"
+      },
+      "relationship": {
+        "class": "unresolved",
+        "reason": "no reviewed finite transform has an exact occurrence",
+        "unique_hypothesis_count": 0
+      },
+      "search": {
+        "candidate_comparison_bytes": 263008800,
+        "section_bytes_per_candidate": 5260176,
+        "section_count": 9
+      },
+      "source": {
+        "dtype": "float32",
+        "element_count": 2559488,
+        "name": "onnx::MatMul_7",
+        "shape": [
+          512,
+          4999
+        ],
+        "source_bytes": 10237952,
+        "source_sha256": "516a6e577b687129fb890d3b2413ac356743ab5ddb2c257734af847985704fbc"
+      }
+    }
+  ],
+  "tools": {
+    "numpy_version": "2.5.1",
+    "onnx_runtime_imported": false,
+    "onnx_version": "1.22.0",
+    "policy_path": "docs/npu/onnx/hybrid-policy.json"
+  },
+  "transform_registry": [
+    "byte-lane-permute",
+    "cast-bf16-rne-le",
+    "cast-fp16-rne-le",
+    "fixed-block-permute",
+    "halfword-lane-permute",
+    "identity-fp32-le",
+    "transpose-2d",
+    "transpose-2d+cast-bf16-rne-le",
+    "transpose-2d+cast-fp16-rne-le"
+  ]
+}

@@ -1,0 +1,179 @@
+{
+  "authorization": {
+    "compiler_execution": false,
+    "device_execution": false,
+    "graph_construction": false,
+    "isolated_x86_parser_probe": true,
+    "strict_host_parse_and_render": true
+  },
+  "candidate": {
+    "bytes": 185,
+    "identity": {
+      "chip_model": "0x00009000",
+      "chip_revision": "0x00009002",
+      "customer_id": "0x1000000e",
+      "eco_id": "0x04000000",
+      "product_id": "0x05090001"
+    },
+    "path": "docs/npu/profile/wave-viv-gpu-file.candidate.config",
+    "sha256": "8d1d184a4546731a7b014fab1a2f01ff997d50f9a25212b194a1605261558d89"
+  },
+  "consumer_status": "unverified-missing-no-kernel-sdk",
+  "decision": "parser-shaped-candidate-not-compiler-qualified",
+  "emitted_fields": [
+    {
+      "confidence": "high",
+      "config_key": "chipModel",
+      "evidence_class": "observed-live",
+      "hex": "0x00009000",
+      "profile_fact": "identity.chip_model",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 36864
+    },
+    {
+      "confidence": "high",
+      "config_key": "chipRevision",
+      "evidence_class": "observed-live",
+      "hex": "0x00009002",
+      "profile_fact": "identity.chip_revision_observed",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": 36866
+    },
+    {
+      "confidence": "high",
+      "config_key": "productID",
+      "evidence_class": "observed-live",
+      "hex": "0x05090001",
+      "profile_fact": "identity.product_id",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 84475905
+    },
+    {
+      "confidence": "high",
+      "config_key": "ecoID",
+      "evidence_class": "observed-live",
+      "hex": "0x04000000",
+      "profile_fact": "identity.eco_id",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        },
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 67108864
+    },
+    {
+      "confidence": "high",
+      "config_key": "customerID",
+      "evidence_class": "observed-live",
+      "hex": "0x1000000e",
+      "profile_fact": "identity.customer_id",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        },
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-live-baseline-manifest",
+          "location": "npu.nbg_product_target and exact runtime artifact inventory"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 268435470
+    }
+  ],
+  "grammar": {
+    "path": "docs/npu/profile/viv-gpu-file-grammar.json",
+    "scope": "x86 simulator parser; not qualified for VIV_GPU_FILE",
+    "sha256": "141258477d751e4b30b4c5408817c5c16852ff34b43c454624a67ef2fa665a4e"
+  },
+  "non_claims": [
+    "The filename is intentionally marked .candidate and is not a proven vendor target filename.",
+    "This file is not a compiler-qualified Acuity profile.",
+    "This manifest does not authorize NPU or Wave execution.",
+    "This manifest does not authorize loading libCLC.so."
+  ],
+  "qualification_blockers": [
+    "Acquire and hash-pin the dedicated no-kernel Vivante SDK 6.4.22 or newer named by the TIM-VX platform sample.",
+    "Recover and test the actual VIV_GPU_FILE consumer rather than transferring simulator behavior by assumption.",
+    "Review a separate PoC 9D plan before any fixed-graph compiler entrypoint is called."
+  ],
+  "schema_version": 1,
+  "simulator_catalog": {
+    "built_in_wave_record": {
+      "identity": {
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "product_id": "0x05090001"
+      },
+      "index": 157,
+      "name": "VIP9000NANOS_PID0X1000000E",
+      "record_sha256": "4d533d3c898a3eb1e317148826bad0d16172cecf7add61f10ede6d45ef407e69"
+    },
+    "database_revision": "0x00009001",
+    "live_revision": "0x00009002",
+    "revision_relation": "PoC 9A proves masked revision-family fallback; the candidate uses the observed live revision and does not overwrite it with the older database row."
+  },
+  "wave_profile": {
+    "path": "docs/npu/profile/wave-profile-evidence.json",
+    "profile_id": "wave-fw-v1.1.6.6-0x1000000e",
+    "sha256": "0e465f66f80c19747d4f0a73ab7db0fc9ba4a3b873fb9253a544b6dc4c3235e8"
+  }
+}

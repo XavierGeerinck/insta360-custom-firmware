@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "document_kind": "tracked-evaluation-summary",
+  "source": {
+    "path": "artifacts/npu/runs/poc13a-erf-mask-host-20260729-evaluation-v5-selector-final/evaluation-summary.json",
+    "sha256": "32d7b224253e2a05f230555db7cfdf4bb6094c81d832d5793851a582a376ee2d"
+  },
+  "passed": true,
+  "item_count": 1230,
+  "invalid_item_count": 0,
+  "summary": {
+    "synthetic_median_si_sdr_improvement_db": 3.2597667131597303,
+    "natural_median_si_sdr_improvement_db": 5.233809701205215,
+    "natural_median_stoi_delta": 0.01355329354528545,
+    "noise_median_attenuation_db": 10.583764037992767,
+    "speech_median_abs_rms_delta_db": 0.04637585469540184
+  },
+  "selector": {
+    "partition_calls": 740742,
+    "erf_selected_frames": 450140,
+    "dfn_selected_frames": 290602,
+    "erf_selection_fraction": 0.6076879669304562
+  }
+}

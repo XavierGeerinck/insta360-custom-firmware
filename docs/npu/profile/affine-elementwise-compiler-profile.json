@@ -1,0 +1,125 @@
+{
+  "capture": {
+    "path": "artifacts/npu/runs/poc14b-a1-erf-affine-20260729/stdout.txt",
+    "rejection": {
+      "function": "op_check_add",
+      "input_descriptions": [
+        "ASYM UINT8",
+        "SYMM PC INT8"
+      ],
+      "line": 465,
+      "normalized_signature": [
+        "D_U8|Q_ASYM",
+        "D_I8|Q_SYM_PC"
+      ]
+    },
+    "sha256": "7f8e2b4058986af91472476eb8513b202fedba2124307fa22678efb50adbe575",
+    "source_error_line": 466,
+    "source_line_delta": 1
+  },
+  "checker": {
+    "accepted_pair_count": 59,
+    "accepted_pairs": [
+      ["D_BF16", "D_BF16"],
+      ["D_F32", "D_F32"],
+      ["D_F16", "D_F16"],
+      ["D_F16", "D_I16|Q_DFP"],
+      ["D_F16", "D_I16|Q_ASYM"],
+      ["D_F16", "D_I16|Q_SYM"],
+      ["D_F16", "D_I8|Q_DFP"],
+      ["D_F16", "D_I8|Q_ASYM"],
+      ["D_F16", "D_I8|Q_SYM"],
+      ["D_F16", "D_U8|Q_ASYM"],
+      ["D_I16|Q_DFP", "D_F16"],
+      ["D_I16|Q_ASYM", "D_F16"],
+      ["D_I16|Q_SYM", "D_F16"],
+      ["D_I8|Q_DFP", "D_F16"],
+      ["D_I8|Q_ASYM", "D_F16"],
+      ["D_I8|Q_SYM", "D_F16"],
+      ["D_U8|Q_ASYM", "D_F16"],
+      ["D_I8|Q_DFP", "D_I16|Q_DFP"],
+      ["D_I8|Q_DFP", "D_I8|Q_DFP"],
+      ["D_I8|Q_ASYM", "D_I8|Q_ASYM"],
+      ["D_I8|Q_SYM", "D_I8|Q_SYM"],
+      ["D_I16|Q_DFP", "D_I16|Q_DFP"],
+      ["D_I16|Q_ASYM", "D_I16|Q_ASYM"],
+      ["D_I16|Q_SYM", "D_I16|Q_SYM"],
+      ["D_U8|Q_ASYM", "D_U8|Q_ASYM"],
+      ["D_U8|Q_ASYM", "D_I16|Q_DFP"],
+      ["D_I16|Q_DFP", "D_I8|Q_DFP"],
+      ["D_I16|Q_DFP", "D_U8|Q_ASYM"],
+      ["D_U8|Q_ASYM", "D_I32"],
+      ["D_F32", "D_F16"],
+      ["D_F16", "D_F32"],
+      ["D_I32", "D_I32"],
+      ["D_I16", "D_I32"],
+      ["D_I32", "D_I16"],
+      ["D_U8|Q_ASYM", "D_I8|Q_DFP"],
+      ["D_I8|Q_DFP", "D_U8|Q_ASYM"],
+      ["D_F32", "D_BF16"],
+      ["D_U4|Q_ASYM", "D_U4|Q_ASYM"],
+      ["D_U4|Q_SYM", "D_U4|Q_SYM"],
+      ["D_I4|Q_ASYM", "D_I4|Q_ASYM"],
+      ["D_I4|Q_SYM", "D_I4|Q_SYM"],
+      ["D_I4|Q_ASYM", "D_U4|Q_ASYM"],
+      ["D_U4|Q_ASYM", "D_I4|Q_ASYM"],
+      ["D_U4|Q_ASYM", "D_U8|Q_ASYM"],
+      ["D_U4|Q_ASYM", "D_I8|Q_ASYM"],
+      ["D_I4|Q_ASYM", "D_U8|Q_ASYM"],
+      ["D_I4|Q_ASYM", "D_I8|Q_ASYM"],
+      ["D_U8|Q_ASYM", "D_U4|Q_ASYM"],
+      ["D_I8|Q_ASYM", "D_U4|Q_ASYM"],
+      ["D_U8|Q_ASYM", "D_I4|Q_ASYM"],
+      ["D_I8|Q_ASYM", "D_I4|Q_ASYM"],
+      ["D_U4|Q_ASYM", "D_F32"],
+      ["D_U4|Q_ASYM", "D_F32"],
+      ["D_I4|Q_ASYM", "D_F32"],
+      ["D_I4|Q_ASYM", "D_F32"],
+      ["D_F32", "D_U4|Q_ASYM"],
+      ["D_F32", "D_U4|Q_ASYM"],
+      ["D_F32", "D_I4|Q_ASYM"],
+      ["D_F32", "D_I4|Q_ASYM"]
+    ],
+    "add_declared_input_count": 2,
+    "add_declared_output_count": 0,
+    "multiply_delegates_to_add": true,
+    "per_channel_pair_count": 0,
+    "rejected_signature_present": false
+  },
+  "interpretation": {
+    "coefficient_differential_available": false,
+    "compatible_type_example": [
+      "D_U8|Q_ASYM",
+      "D_U8|Q_ASYM"
+    ],
+    "compatible_type_example_caveat": "type-check compatibility is not NBG-export evidence; PoC 5B already observed OpenVX Add selection followed by vxGenerateNBG failure",
+    "current_target_a_eligible_for_semantic_emission": false,
+    "first_blocking_stage": "TIM-VX operation type check",
+    "nbg_emitted": false
+  },
+  "next_gate": "host-only lowering and quality qualification plus new static producer evidence; no retry of the failed A1 artifact",
+  "openvx_path": {
+    "add_constructor": "vxTensorAddNode",
+    "add_registered": true,
+    "multiply_constructor": "vxTensorMultiplyNode",
+    "multiply_registered": true
+  },
+  "poc": "14B",
+  "provenance": {
+    "elementwise_source": {
+      "path": "waved/third_party/TIM-VX/src/tim/vx/internal/src/ops/vsi_nn_op_eltwise.c",
+      "sha256": "3d2e3c991d0bb53545605b3d88310ed78487d57f72e7ff87e1f4cce86962bee2"
+    },
+    "openvx_source": {
+      "path": "waved/third_party/TIM-VX/src/tim/vx/internal/src/kernel/vx/eltwise_vx.c",
+      "sha256": "c4951165d155d1ab45c1c460aa8c6245903b62f4332e372d97b8f9a68011b4dd"
+    },
+    "wave_ovxlib": {
+      "path": "waved/third_party/device-sdk/lib/libovxlib.so",
+      "sha256": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9"
+    }
+  },
+  "schema_version": 1,
+  "scope": "Wave affine-plus-Erf compile-only baseline A1",
+  "status": "clean-negative"
+}

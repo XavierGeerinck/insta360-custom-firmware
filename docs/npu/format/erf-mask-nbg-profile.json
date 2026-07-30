@@ -1,0 +1,209 @@
+{
+  "artifact": {
+    "a1_a2_byte_identical": true,
+    "bytes": 5840,
+    "sha256": "96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94",
+    "structural_signature": "236bd56d2f3aee5bf0c370b8372dda937c5af1b8d37a6e224b21df82db85088a"
+  },
+  "classification": "sealed-unapproved-erf-mask-partition",
+  "device_calls": 0,
+  "file_checksum": {
+    "algorithm": "crc32-ieee",
+    "computed_crc32_hex": "0xf14f321a",
+    "matches": true,
+    "recorded_crc32_hex": "0xf14f321a",
+    "scope": "section-payloads-in-directory-order"
+  },
+  "next_gate": "six-vector numerical NPU qualification",
+  "non_claims": [
+    "This profile does not execute or load the NBG.",
+    "The exact partition is not execution-approved yet.",
+    "The general compiler remains unqualified."
+  ],
+  "package": {
+    "compiler_qualified": false,
+    "execution_approved": false,
+    "model_manifest_sha256": "bd7ffc58d253855e3ddc546def711f91812da8cb9ecd88dc658b56aada40ce5e",
+    "partition_signature": "1c535b02a536a6c313bcaa443c0e82af167720c5bdc9c9fb3efa1938c8cddd4b"
+  },
+  "poc": "13C",
+  "roundtrip": {
+    "artifact_id": "erf-mask-481",
+    "class_byte_totals": {
+      "alignment": 0,
+      "connection-tail": 0,
+      "decoded-record": 1104,
+      "padding": 0,
+      "preserved-opaque": 4736
+    },
+    "connection_tail_mode": "section-covered-view",
+    "exact_match": true,
+    "first_difference": null,
+    "input_bytes": 5840,
+    "input_sha256": "96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94",
+    "output_bytes": 5840,
+    "output_sha256": "96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94",
+    "padding_bytes": 0,
+    "padding_nonzero_bytes": 0,
+    "path": "<sealed-erf-mask-481>",
+    "range_count": 30
+  },
+  "schema_version": 1,
+  "sections": [
+    {
+      "alignment": 0,
+      "index": 0,
+      "offset": 632,
+      "size": 220,
+      "stride": 220,
+      "type": 35,
+      "type_name": "NBG_SECTION_NETWORK_INFO"
+    },
+    {
+      "alignment": 0,
+      "index": 1,
+      "offset": 852,
+      "size": 4,
+      "stride": 4,
+      "type": 38,
+      "type_name": "NBG_SECTION_VIP_SRAM"
+    },
+    {
+      "alignment": 0,
+      "index": 2,
+      "offset": 856,
+      "size": 24,
+      "stride": 8,
+      "type": 40,
+      "type_name": "NBG_SECTION_CHECKSUM"
+    },
+    {
+      "alignment": 0,
+      "index": 3,
+      "offset": 880,
+      "size": 112,
+      "stride": 112,
+      "type": 1,
+      "type_name": "NBG_SECTION_INPUT"
+    },
+    {
+      "alignment": 0,
+      "index": 4,
+      "offset": 992,
+      "size": 112,
+      "stride": 112,
+      "type": 2,
+      "type_name": "NBG_SECTION_OUTPUT"
+    },
+    {
+      "alignment": 0,
+      "index": 5,
+      "offset": 1104,
+      "size": 76,
+      "stride": 76,
+      "type": 3,
+      "type_name": "NBG_SECTION_LAYER"
+    },
+    {
+      "alignment": 0,
+      "index": 6,
+      "offset": 1180,
+      "size": 64,
+      "stride": 32,
+      "type": 4,
+      "type_name": "NBG_SECTION_OPERATIONS"
+    },
+    {
+      "alignment": 0,
+      "index": 7,
+      "offset": 1244,
+      "size": 192,
+      "stride": 192,
+      "type": 8,
+      "type_name": "NBG_SECTION_TP"
+    },
+    {
+      "alignment": 0,
+      "index": 8,
+      "offset": 1436,
+      "size": 140,
+      "stride": 28,
+      "type": 10,
+      "type_name": "NBG_SECTION_PATCH"
+    },
+    {
+      "alignment": 0,
+      "index": 9,
+      "offset": 1576,
+      "size": 8,
+      "stride": 8,
+      "type": 23,
+      "type_name": "NBG_SECTION_COEF_DATA_TABLE"
+    },
+    {
+      "alignment": 0,
+      "index": 10,
+      "offset": 1584,
+      "size": 16,
+      "stride": 8,
+      "type": 27,
+      "type_name": "NBG_SECTION_LOADSTATE_TABLE"
+    },
+    {
+      "alignment": 64,
+      "index": 11,
+      "offset": 1600,
+      "size": 4160,
+      "stride": 1,
+      "type": 24,
+      "type_name": "NBG_SECTION_COEF_DATA"
+    },
+    {
+      "alignment": 0,
+      "index": 12,
+      "offset": 5760,
+      "size": 80,
+      "stride": 1,
+      "type": 21,
+      "type_name": "NBG_SECTION_LOADSTATE"
+    }
+  ],
+  "target": {
+    "container": "VPMN",
+    "product": "0x1000000e",
+    "version": "0x00020000"
+  },
+  "tensors": {
+    "dynamic_io": null,
+    "inputs": [
+      {
+        "byte_size": 481,
+        "data_format": "uint8",
+        "dimensions": [
+          481
+        ],
+        "name": "input/output[0]",
+        "quantization": {
+          "format": "affine-asymmetric",
+          "scale": 0.03125,
+          "zero_point": 128
+        }
+      }
+    ],
+    "outputs": [
+      {
+        "byte_size": 481,
+        "data_format": "uint8",
+        "dimensions": [
+          481
+        ],
+        "name": "uid_1_out_0",
+        "quantization": {
+          "format": "affine-asymmetric",
+          "scale": 0.0078125,
+          "zero_point": 128
+        }
+      }
+    ]
+  }
+}

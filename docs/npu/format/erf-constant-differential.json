@@ -1,0 +1,156 @@
+{
+  "artifacts": {
+    "a1": {
+      "bytes": 5904,
+      "sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b"
+    },
+    "a2": {
+      "bytes": 5904,
+      "sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b"
+    },
+    "b": {
+      "bytes": 5904,
+      "sha256": "c9e3e18414f5bc674d4204921966ba53b08918ddcef73112003b065b9599f227"
+    }
+  },
+  "changed_sections": [
+    {
+      "a_crc32": "0x142f180a",
+      "a_sha256": "a311d70969256c215185ce114286f1d8e9180043817f0c0a25bbec64f8fe616a",
+      "b_crc32": "0xbe3cfdf6",
+      "b_sha256": "db8c0e91cfa8ccef06f8874940b0d197c4d67b4edb9d9d5e857586cfcc7535bd",
+      "index": 8,
+      "section_type": 20,
+      "size": 64,
+      "type_name": "NBG_SECTION_DYNAIO"
+    }
+  ],
+  "classification": "multi-region-unresolved",
+  "determinism": {
+    "a1_bytes": 5904,
+    "a1_sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b",
+    "a2_bytes": 5904,
+    "a2_sha256": "4a84faf4da4604429522dfa6f0a8eb9887287eecb0f97d697843e0beb78c8a8b",
+    "exact_match": true,
+    "first_difference": null,
+    "section_descriptors_equal": true,
+    "structural_signature_equal": true
+  },
+  "difference_runs": [
+    {
+      "byte_class": "decoded-record",
+      "candidate_interpretations": [
+        "unresolved-header-crc-sum"
+      ],
+      "classification": "producer-integrity-collateral",
+      "end": 16,
+      "end_hex": "0x00000010",
+      "length": 4,
+      "new_hex": "6f8f7667",
+      "new_sha256": "23c84341a05f155c02c790c1ef325518ccbc5bed849b8ee0ee509ddb388dc8ec",
+      "old_hex": "7e2046d3",
+      "old_sha256": "969379fd48d2e61e3d1d0826e0741b8e370ad57c8f84899e40c2af16ec25e7ac",
+      "owner": "root.header",
+      "section_index": null,
+      "section_relative_offset": null,
+      "section_type": null,
+      "section_type_name": null,
+      "start": 12,
+      "start_hex": "0x0000000c"
+    },
+    {
+      "byte_class": "preserved-opaque",
+      "candidate_interpretations": [],
+      "classification": "unresolved",
+      "end": 1512,
+      "end_hex": "0x000005e8",
+      "length": 1,
+      "new_hex": "04",
+      "new_sha256": "e52d9c508c502347344d8c07ad91cbd6068afc75ff6292f062a09ca381c89e71",
+      "old_hex": "03",
+      "old_sha256": "084fed08b978af4d7d196a7446a86b58009e636b611db16211b65a9aadff29c5",
+      "owner": "section[8]",
+      "section_index": 8,
+      "section_relative_offset": 3,
+      "section_type": 20,
+      "section_type_name": "NBG_SECTION_DYNAIO",
+      "start": 1511,
+      "start_hex": "0x000005e7"
+    }
+  ],
+  "finite_registry": {
+    "folded_output_u8": [
+      0,
+      1,
+      1,
+      1
+    ],
+    "search_section_types": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      21,
+      23,
+      24,
+      27
+    ],
+    "source_a_u8": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "source_b_u8": [
+      0,
+      1,
+      2,
+      4
+    ],
+    "transforms": [
+      "identity",
+      "fixed-block-permute:reverse-4",
+      "fixed-block-permute:even-odd-4",
+      "fixed-block-permute:odd-even-4",
+      "byte-lane-permute:adjacent-pair-swap-4",
+      "identity+zero-pad-to-recorded-alignment"
+    ]
+  },
+  "header_crc_sum": {
+    "a_hex": "7e2046d3",
+    "algorithm_proved": false,
+    "b_hex": "6f8f7667",
+    "changed": true
+  },
+  "integrity_collateral": [],
+  "mapping_candidates": [],
+  "observed_b_reconstruction": {
+    "attempted": false,
+    "exact_match": false,
+    "first_difference": null,
+    "reason": "no unique finite source mapping"
+  },
+  "poc12c": "not-ready",
+  "schema_version": 1,
+  "scope": {
+    "graph_execution": false,
+    "nbg_loading": false,
+    "raw_payload_emitted": false,
+    "result_applies_to": "one fixed U8 constant-input Erf graph"
+  },
+  "structural_comparison": {
+    "compatible": false,
+    "differing_stable_sections": [
+      8
+    ],
+    "directory_descriptors_equal": true,
+    "equal_size": true,
+    "memory_metadata_equal": true,
+    "network_metadata_equal": true,
+    "stable_section_bytes_equal": false,
+    "tensor_metadata_equal": true
+  }
+}

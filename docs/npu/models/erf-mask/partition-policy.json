@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "policy": "exact-hash-erf-mask-partition",
+  "target": {
+    "chip_model": "0x00009000",
+    "customer_id": "0x1000000e",
+    "kernel": "Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux"
+  },
+  "nbg": {
+    "sha256": "96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94",
+    "bytes": 5840,
+    "structural_signature": "236bd56d2f3aee5bf0c370b8372dda937c5af1b8d37a6e224b21df82db85088a",
+    "profile_sha256": "9e5300363c5eca8bd9dae6db820128d4e9534f2aa6007a69fe10bf7b9bc9cab7"
+  },
+  "execution_evidence": {
+    "six_vector_run_sha256": "f8ffbca89fb96275e1c404ea780c1ccb62de3deda07820ec7308ccf6aaab7fac",
+    "fixture_stream_run_sha256": "6079c34599386f2024ac7787deacf01413231b5bf312f75b030292f2cb87bda2",
+    "waveform_evidence_sha256": "6589c517483fbf120e70176c46267c867f96dc2d0286d57521920dab2d93d09b",
+    "soak_run_sha256": "e4f3fc3d0de3c833dadf912563585c3737d7dc30c7338f2e26d9936077ee6f8d"
+  },
+  "fallback": {
+    "mode": "latched-cpu-erf-after-first-npu-failure",
+    "same_frame_recomputed": true,
+    "automatic_retry": false
+  },
+  "approval_scope": {
+    "exact_partition_execution": true,
+    "arbitrary_nbg": false,
+    "general_onnx": false,
+    "general_acuity_compiler": false,
+    "production_default": false
+  }
+}

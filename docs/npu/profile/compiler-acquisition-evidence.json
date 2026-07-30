@@ -1,0 +1,677 @@
+{
+  "acquisition_id": "allwinner-ubuntu-npu-v2.0.10.2",
+  "acuity_nbg_boundary": {
+    "embedded_sdk": {
+      "artifact": "acuity_embedded_sdk",
+      "exact_wave_target_hits": [
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libEmulator.so"
+      ],
+      "sha256": "7a5b6953d798c44d082e3c4545a572c5af55129de3f30592e7b3798bf8f1a01b",
+      "version": "6.4.6:769531",
+      "version_string_hits": [
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libCLC.so",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libEmulator.so",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libGAL.1.7.4.so",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libGAL.so",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libOpenCL.so.1.2.0",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libOpenCL.so.3.0.0",
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libVSC.so"
+      ],
+      "viv_gpu_file_hits": [],
+      "vsimulator_config_hits": [
+        "vsi_sdk/prebuilt-sdk/x86_64_linux/lib/libEmulator.so"
+      ]
+    },
+    "output_ownership": {
+      "generated_native_program_emits_nbg": true,
+      "native_program_io_abi_proven": false,
+      "wrapper_directly_emits_nbg": false,
+      "wrapper_output_name": "network_binary.nb"
+    },
+    "wheel": {
+      "artifact": "acuity_wheel",
+      "exact_wave_target_hits": [],
+      "sha256": "70d8b36297e1cae785cb6f4e0022fc73afe01db343a3b880624447d09558393a",
+      "version": "6.30.22",
+      "viv_gpu_file_hits": [],
+      "vsimulator_config_hits": [
+        "acuitylib/app/exporter/ovxlib_case/casegenerator.cpython-38-x86_64-linux-gnu.so",
+        "acuitylib/app/exporter/timvx_case/casegenerator.cpython-38-x86_64-linux-gnu.so",
+        "acuitylib/app/helper/profiler.cpython-38-x86_64-linux-gnu.so",
+        "acuitylib/app/helper/profiler_old.cpython-38-x86_64-linux-gnu.so"
+      ]
+    },
+    "wrappers": {
+      "ovxlib_casegenerator": {
+        "contains_network_binary_nb": true,
+        "contains_viv_gpu_file": false,
+        "contains_vivante_sdk_dir": true,
+        "contains_vsimulator_config": true,
+        "execution_count": 0,
+        "sha256": "54aa6ee67adef80e6e4f9c67b0db26cb1eea2dda40a8cd721e33545a82287d72"
+      },
+      "timvx_casegenerator": {
+        "contains_network_binary_nb": true,
+        "contains_viv_gpu_file": false,
+        "contains_vivante_sdk_dir": true,
+        "contains_vsimulator_config": true,
+        "execution_count": 0,
+        "sha256": "e37e654b2a468bbef28cf00b40eca2a90a5858859b24b68a65674054c77cae32"
+      }
+    }
+  },
+  "archive": {
+    "inner_zip": {
+      "artifact": "inner_zip",
+      "member_count": 1,
+      "selected_member": {
+        "byte_count": 7883452416,
+        "compressed_byte_count": 2898787113,
+        "compression_method": 8,
+        "crc32": "411aa1c1",
+        "is_directory": false,
+        "name": "ubuntu-npu_v2.0.10.2.tar",
+        "sha256": "7d150a626e588cdae872e700a1616f9ce831c97ce57765e1c3baf0a7591641d6"
+      }
+    },
+    "outer_zip": {
+      "artifact": "outer_zip",
+      "member_count": 8,
+      "selected_member": {
+        "byte_count": 2898787419,
+        "compressed_byte_count": 2881860325,
+        "compression_method": 8,
+        "crc32": "7301124e",
+        "is_directory": false,
+        "name": "docker_images_v2.0.x/ubuntu-npu_v2.0.10.2.tar.zip",
+        "sha256": "c804d08e6499883b51b32443c7e470fbf03eb894e08946e7326fcca0c628f5f8"
+      }
+    }
+  },
+  "artifacts": {
+    "acuity_embedded_sdk": {
+      "byte_count": 17220618,
+      "execution_policy": "archive-only",
+      "kind": "tgz",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/acuity/vsi_sdk.tar.gz",
+      "roles": [
+        "acuity-embedded-sdk",
+        "simulator-sdk",
+        "version-below-gate"
+      ],
+      "sha256": "7a5b6953d798c44d082e3c4545a572c5af55129de3f30592e7b3798bf8f1a01b"
+    },
+    "acuity_wheel": {
+      "byte_count": 251665238,
+      "execution_policy": "archive-only",
+      "kind": "zip",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/acuity/acuity-6.30.22-cp38-cp38-manylinux2010_x86_64.whl",
+      "roles": [
+        "acuity-6.30.22",
+        "onnx-frontend",
+        "nbg-wrapper"
+      ],
+      "sha256": "70d8b36297e1cae785cb6f4e0022fc73afe01db343a3b880624447d09558393a"
+    },
+    "cmdtools_version": {
+      "byte_count": 94,
+      "execution_policy": "not-executable",
+      "kind": "text",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/toolchain/cmdtools.VERSION",
+      "roles": [
+        "ide-version-record",
+        "nbg-version-record"
+      ],
+      "sha256": "ae1f604674523c78e77c4ddf90b859a47bfe6e4373addb4abb1ea54a05aafc72"
+    },
+    "docker_manifest": {
+      "byte_count": 1339,
+      "execution_policy": "not-executable",
+      "kind": "json",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/oci/manifest.json",
+      "roles": [
+        "docker-compatibility-manifest"
+      ],
+      "sha256": "eeee73124c77b5101b53b74e176548143747d9993190d0286f900e92a5e74aee"
+    },
+    "inner_zip": {
+      "byte_count": 2898787419,
+      "execution_policy": "archive-only",
+      "kind": "zip",
+      "path": "artifacts/npu/compiler-acquisition/ubuntu-npu_v2.0.10.2.tar.zip",
+      "roles": [
+        "nested-vendor-distribution",
+        "oci-container-archive"
+      ],
+      "sha256": "c804d08e6499883b51b32443c7e470fbf03eb894e08946e7326fcca0c628f5f8"
+    },
+    "oci_config": {
+      "byte_count": 3964,
+      "execution_policy": "not-executable",
+      "kind": "json",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/oci/blobs/sha256/724759a03c224d102768586c3a051891a2281c56d838c0abf87fc2499637ba99",
+      "roles": [
+        "oci-image-config"
+      ],
+      "sha256": "724759a03c224d102768586c3a051891a2281c56d838c0abf87fc2499637ba99"
+    },
+    "oci_index": {
+      "byte_count": 373,
+      "execution_policy": "not-executable",
+      "kind": "json",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/oci/index.json",
+      "roles": [
+        "oci-index"
+      ],
+      "sha256": "564ca6147e7a4b7a4a780fddfe973c920139a6eb66ae88f2ac325d3c39223145"
+    },
+    "oci_manifest": {
+      "byte_count": 3596,
+      "execution_policy": "not-executable",
+      "kind": "json",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/oci/blobs/sha256/36b2a89e016f2cf10821b2434ebc1abb95269d15a930c53301630406c0b9c5df",
+      "roles": [
+        "oci-manifest"
+      ],
+      "sha256": "36b2a89e016f2cf10821b2434ebc1abb95269d15a930c53301630406c0b9c5df"
+    },
+    "oci_tar": {
+      "byte_count": 7883452416,
+      "execution_policy": "archive-only",
+      "kind": "tar",
+      "path": "artifacts/npu/compiler-acquisition/ubuntu-npu_v2.0.10.2.tar",
+      "roles": [
+        "oci-image-layout",
+        "never-registered"
+      ],
+      "sha256": "7d150a626e588cdae872e700a1616f9ce831c97ce57765e1c3baf0a7591641d6"
+    },
+    "outer_zip": {
+      "byte_count": 2903273080,
+      "execution_policy": "archive-only",
+      "kind": "zip",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-docker_images_v2.0.x.zip",
+      "roles": [
+        "vendor-distribution",
+        "provenance-root"
+      ],
+      "sha256": "d876a96a74905b92d09ae5681256dd5fc6c430b0ebbd612097142473ec87e287"
+    },
+    "ovxlib_casegenerator": {
+      "byte_count": 5276648,
+      "execution_policy": "static-only-never-import",
+      "kind": "elf",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/acuity/ovxlib-casegenerator.so",
+      "roles": [
+        "acuity-wrapper",
+        "ovxlib-case-generator"
+      ],
+      "sha256": "54aa6ee67adef80e6e4f9c67b0db26cb1eea2dda40a8cd721e33545a82287d72"
+    },
+    "timvx_casegenerator": {
+      "byte_count": 1487152,
+      "execution_policy": "static-only-never-import",
+      "kind": "elf",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/acuity/timvx-casegenerator.so",
+      "roles": [
+        "acuity-wrapper",
+        "tim-vx-case-generator"
+      ],
+      "sha256": "e37e654b2a468bbef28cf00b40eca2a90a5858859b24b68a65674054c77cae32"
+    },
+    "vccompiler": {
+      "byte_count": 23573768,
+      "execution_policy": "static-only-never-execute",
+      "kind": "elf",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/toolchain/vcCompiler",
+      "roles": [
+        "viv-gpu-file-consumer",
+        "no-kernel",
+        "standalone-opencl-shader-compiler",
+        "version-below-gate"
+      ],
+      "sha256": "719b1811cd19dba80397ffb695ef9a78e8f4b74d1a3c39e6119cb9b208e18dd2"
+    },
+    "vcompiler": {
+      "byte_count": 22490520,
+      "execution_policy": "static-only-never-execute",
+      "kind": "elf",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/toolchain/vcompiler",
+      "roles": [
+        "viv-gpu-file-consumer",
+        "no-kernel",
+        "standalone-glsl-shader-compiler",
+        "version-below-gate"
+      ],
+      "sha256": "dfa6a751e472184238915b4c0e20edeec0ca4a98f02ea07b887b0eae2f55e263"
+    },
+    "vendor_readme": {
+      "byte_count": 647,
+      "execution_policy": "not-executable",
+      "kind": "text",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/provenance/readme_2.0.10.2.txt",
+      "roles": [
+        "vendor-version-record",
+        "acuity-version-record"
+      ],
+      "sha256": "7e061e145748e13f32ca9eff04e6d2cc3ce5ca7fe36b3921c1d0747335694b99"
+    },
+    "vsimulator_version": {
+      "byte_count": 48,
+      "execution_policy": "not-executable",
+      "kind": "text",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/toolchain/vsimulator.VERSION",
+      "roles": [
+        "simulator-version-record"
+      ],
+      "sha256": "ab675b0866d467cc84f4b35474dbeaccb9221cee0d694c7142e8b882c22e0b7c"
+    },
+    "wave_vendor_config": {
+      "byte_count": 140,
+      "execution_policy": "not-executable",
+      "kind": "text",
+      "path": "artifacts/npu/compiler-acquisition/allwinner-v2.0.10.2-static/toolchain/VIP9000NANOS_PID0X1000000E.config",
+      "roles": [
+        "vendor-wave-profile",
+        "viv-gpu-file-input"
+      ],
+      "sha256": "4baa78fdfb2288e7c87f1acd77e3bb1a3ea18eba5b4ec33a8f16df95063a125d"
+    }
+  },
+  "evidence_id": "wave-poc9d-compiler-acquisition-v1",
+  "non_claims": [
+    "No acquired compiler was executed.",
+    "The vendor config is not yet qualified for an NBG compiler.",
+    "The 6.4.18 shader compilers are not a Wave NBG compiler.",
+    "No NBG payload was patched, generated, or sent to the device.",
+    "No general ONNX model is currently NPU-resident."
+  ],
+  "oci_image": {
+    "architecture": "amd64",
+    "config_digest": "sha256:724759a03c224d102768586c3a051891a2281c56d838c0abf87fc2499637ba99",
+    "created": "2026-06-09T14:37:11.046404394+08:00",
+    "image_reference": "docker.io/library/ubuntu-npu:v2.0.10.2",
+    "layer_count": 15,
+    "layers": [
+      {
+        "byte_count": 75149312,
+        "diff_id": "sha256:c3f11d77a5de76ec836c52333d45ac3742c7b27d3d83feba6ec978e223715c67",
+        "digest": "sha256:c3f11d77a5de76ec836c52333d45ac3742c7b27d3d83feba6ec978e223715c67",
+        "index": 0,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 24055296,
+        "diff_id": "sha256:b541832bd867246987543b6bf2b3ee2e0ad0ed850d04c026e395be580d38a509",
+        "digest": "sha256:b541832bd867246987543b6bf2b3ee2e0ad0ed850d04c026e395be580d38a509",
+        "index": 1,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 37487616,
+        "diff_id": "sha256:0a820baf60832672ed329829253a9748479e8734117e1e1735fd35aaefd7f348",
+        "digest": "sha256:0a820baf60832672ed329829253a9748479e8734117e1e1735fd35aaefd7f348",
+        "index": 2,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 5541376,
+        "diff_id": "sha256:63f56796fda6802f7bbba97a01d4302d38f82c9ef5cdd758400320064ef44d88",
+        "digest": "sha256:63f56796fda6802f7bbba97a01d4302d38f82c9ef5cdd758400320064ef44d88",
+        "index": 3,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 333252608,
+        "diff_id": "sha256:36dfedbd3a70752617120a4fa959311fcdaee8286c2f9edd0b158db79c0724fc",
+        "digest": "sha256:36dfedbd3a70752617120a4fa959311fcdaee8286c2f9edd0b158db79c0724fc",
+        "index": 4,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 3072,
+        "diff_id": "sha256:a488ff42ec1d08f7f696a9144dcaa748ad90944107c5076a56007a432efb7ece",
+        "digest": "sha256:a488ff42ec1d08f7f696a9144dcaa748ad90944107c5076a56007a432efb7ece",
+        "index": 5,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 14356480,
+        "diff_id": "sha256:cdb8f864bcb8b7eb74c15b5dcc8392279bec0b2164f6bcf94425343d7d4d4783",
+        "digest": "sha256:cdb8f864bcb8b7eb74c15b5dcc8392279bec0b2164f6bcf94425343d7d4d4783",
+        "index": 6,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 3521677312,
+        "diff_id": "sha256:eb087d98b83d22efc42a745d322cd3ea18ab7096c9e5ea32361cd1ebd1de875f",
+        "digest": "sha256:eb087d98b83d22efc42a745d322cd3ea18ab7096c9e5ea32361cd1ebd1de875f",
+        "index": 7,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 2560,
+        "diff_id": "sha256:c56454b78f15e16e6320c06874ee9710984949b3b1eef1fb9ef3404cd6a3eedb",
+        "digest": "sha256:c56454b78f15e16e6320c06874ee9710984949b3b1eef1fb9ef3404cd6a3eedb",
+        "index": 8,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 1024,
+        "diff_id": "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "digest": "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+        "index": 9,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 15239680,
+        "diff_id": "sha256:2873d9657edf159e61dce9a14f871a4c3260e4c04d74e3b56bf4092796239324",
+        "digest": "sha256:2873d9657edf159e61dce9a14f871a4c3260e4c04d74e3b56bf4092796239324",
+        "index": 10,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 356904448,
+        "diff_id": "sha256:a88ddfd3ff780f6335e22d6aafa5ca2d26e7bed32d48ed48d3a669985be7f170",
+        "digest": "sha256:a88ddfd3ff780f6335e22d6aafa5ca2d26e7bed32d48ed48d3a669985be7f170",
+        "index": 11,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 3499751424,
+        "diff_id": "sha256:df1922a4414b9ff879444d62aa99da6c6cb17bc441f66c6250b3355875300c00",
+        "digest": "sha256:df1922a4414b9ff879444d62aa99da6c6cb17bc441f66c6250b3355875300c00",
+        "index": 12,
+        "media_type": "application/vnd.docker.image.rootfs.diff.tar"
+      },
+      {
+        "byte_count": 3137,
+        "diff_id": "sha256:9bf1577a5f438ed48142af54cafbc1b06a63b2d8d7613ad0163630fd7e6db489",
+        "digest": "sha256:bdd13b4ee1486b90b654836e0991dca3f225cfeb12854baefbfd6c1a6913ce03",
+        "index": 13,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "byte_count": 3207,
+        "diff_id": "sha256:ecbdcc7b141c306435311938b0646c1102616ffb772aab42eee3d776ca40fcfc",
+        "digest": "sha256:f62c7fac08c77eccb26b23ad77b04c3c5092855c1a9f8cbf72b44f372141d576",
+        "index": 14,
+        "media_type": "application/vnd.oci.image.layer.v1.tar+gzip"
+      }
+    ],
+    "manifest_digest": "sha256:36b2a89e016f2cf10821b2434ebc1abb95269d15a930c53301630406c0b9c5df",
+    "os": "linux",
+    "tar_member_count": 22,
+    "verified_blob_digests": [
+      "sha256:36b2a89e016f2cf10821b2434ebc1abb95269d15a930c53301630406c0b9c5df",
+      "sha256:724759a03c224d102768586c3a051891a2281c56d838c0abf87fc2499637ba99",
+      "sha256:c3f11d77a5de76ec836c52333d45ac3742c7b27d3d83feba6ec978e223715c67",
+      "sha256:b541832bd867246987543b6bf2b3ee2e0ad0ed850d04c026e395be580d38a509",
+      "sha256:0a820baf60832672ed329829253a9748479e8734117e1e1735fd35aaefd7f348",
+      "sha256:63f56796fda6802f7bbba97a01d4302d38f82c9ef5cdd758400320064ef44d88",
+      "sha256:36dfedbd3a70752617120a4fa959311fcdaee8286c2f9edd0b158db79c0724fc",
+      "sha256:a488ff42ec1d08f7f696a9144dcaa748ad90944107c5076a56007a432efb7ece",
+      "sha256:cdb8f864bcb8b7eb74c15b5dcc8392279bec0b2164f6bcf94425343d7d4d4783",
+      "sha256:eb087d98b83d22efc42a745d322cd3ea18ab7096c9e5ea32361cd1ebd1de875f",
+      "sha256:c56454b78f15e16e6320c06874ee9710984949b3b1eef1fb9ef3404cd6a3eedb",
+      "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef",
+      "sha256:2873d9657edf159e61dce9a14f871a4c3260e4c04d74e3b56bf4092796239324",
+      "sha256:a88ddfd3ff780f6335e22d6aafa5ca2d26e7bed32d48ed48d3a669985be7f170",
+      "sha256:df1922a4414b9ff879444d62aa99da6c6cb17bc441f66c6250b3355875300c00",
+      "sha256:bdd13b4ee1486b90b654836e0991dca3f225cfeb12854baefbfd6c1a6913ce03",
+      "sha256:f62c7fac08c77eccb26b23ad77b04c3c5092855c1a9f8cbf72b44f372141d576"
+    ]
+  },
+  "onnx_implication": {
+    "acuity_accepts_onnx": true,
+    "cpu_fallback_available": true,
+    "current_safe_mode": "ONNX Runtime CPU with audited all-CPU placement",
+    "general_onnx_frontend_recovered": false,
+    "wave_npu_partition_qualified": false
+  },
+  "policy": {
+    "forbidden_actions": [
+      "docker-load",
+      "docker-run",
+      "compiler-execution",
+      "device-access",
+      "quarantined-clc-load"
+    ],
+    "minimum_no_kernel_sdk": "6.4.22",
+    "required_profile_environment": "VIV_GPU_FILE",
+    "wave_target_id": "0x1000000e",
+    "wave_target_name": "VIP9000NANOS_PID0X1000000E"
+  },
+  "qualification": {
+    "compiler_calls": 0,
+    "container_registrations": 0,
+    "container_runs": 0,
+    "device_calls": 0,
+    "gates": [
+      {
+        "gate": "trusted-vendor-provenance",
+        "reason": "Radxa documentation links the public Allwinner distribution; the outer download and every nested artifact are hash-pinned.",
+        "status": "pass"
+      },
+      {
+        "gate": "archive-integrity-and-safe-paths",
+        "reason": "Both ZIPs and the OCI TAR have bounded, non-escaping members; all OCI config, manifest, and layer digests were rehashed.",
+        "status": "pass"
+      },
+      {
+        "gate": "exact-wave-vendor-profile",
+        "reason": "Vivante IDE supplies VIP9000NANOS_PID0X1000000E.config with the exact five-word Wave database identity.",
+        "status": "pass"
+      },
+      {
+        "gate": "viv-gpu-file-parser-recovered",
+        "reason": "The five-field no-kernel parser is recovered and byte-locked inside standalone GLSL/OpenCL shader compilers, not an NBG graph compiler.",
+        "status": "pass-limited"
+      },
+      {
+        "gate": "no-kernel-sdk-version",
+        "reason": "Acquired no-kernel shader compiler is 6.4.18:967862; TIM-VX requires at least 6.4.22.",
+        "status": "fail"
+      },
+      {
+        "gate": "no-kernel-nbg-consumer",
+        "reason": "Acuity NBG wrappers consume VSIMULATOR_CONFIG and their embedded 6.4.6 simulator SDK. VIV_GPU_FILE appears only in standalone shader compilers, which do not emit NBG.",
+        "status": "fail"
+      },
+      {
+        "gate": "compiler-io-abi-and-ownership",
+        "reason": "The generated native gen_nbg boundary is identified, but its complete input/output ABI and allocation ownership remain unproven for a qualifying no-kernel backend.",
+        "status": "fail"
+      },
+      {
+        "gate": "fixed-conv-compile",
+        "reason": "Compiler execution remains forbidden until prior gates pass.",
+        "status": "blocked"
+      }
+    ],
+    "generated_nbg_files": 0,
+    "status": "blocked"
+  },
+  "required_next_acquisition": [
+    "A dedicated x86-64 Vivante no-kernel SDK 6.4.22 or newer whose OpenVX/ovxlib NBG path directly consumes VIV_GPU_FILE.",
+    "ovxlib 1.2.26 or newer and, for a VIPLite deployment route, VIPLite 2.0.0 or newer from the same vendor release.",
+    "The complete hash-pinned dynamic dependency closure, target licence/entitlement, headers, and build/version records.",
+    "A statically proven gen_nbg input/output and ownership ABI before one isolated fixed-Conv compile is authorized."
+  ],
+  "schema_version": 1,
+  "source": {
+    "direct_download_url": "https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip",
+    "distribution_name": "Allwinner ubuntu-npu v2.0.10.2",
+    "documentation_url": "https://docs.radxa.com/en/cubie/a7s/app-dev/npu-dev/cubie-acuity-env",
+    "http_content_length": 2903273080,
+    "http_etag": "\"6a27bfd8-ad0c6e78\"",
+    "http_last_modified": "Tue, 09 Jun 2026 07:25:12 GMT",
+    "retrieved_date": "2026-07-28",
+    "sharing_page_url": "https://netstorage.allwinnertech.com:5001/sharing/Mh23BhPHq"
+  },
+  "standalone_compilers": {
+    "vccompiler": {
+      "elf": {
+        "class": "ELF64",
+        "dynamic_dependency_count": 0,
+        "endianness": "little",
+        "has_pt_dynamic": false,
+        "has_pt_interp": false,
+        "machine": "x86-64",
+        "program_header_count": 6
+      },
+      "emits_nbg": false,
+      "execution_count": 0,
+      "profile_environment": "VIV_GPU_FILE",
+      "roles": [
+        "viv-gpu-file-consumer",
+        "no-kernel",
+        "standalone-opencl-shader-compiler",
+        "version-below-gate"
+      ],
+      "sdk_version": "6.4.18:967862",
+      "sha256": "719b1811cd19dba80397ffb695ef9a78e8f4b74d1a3c39e6119cb9b208e18dd2"
+    },
+    "vcompiler": {
+      "elf": {
+        "class": "ELF64",
+        "dynamic_dependency_count": 0,
+        "endianness": "little",
+        "has_pt_dynamic": false,
+        "has_pt_interp": false,
+        "machine": "x86-64",
+        "program_header_count": 6
+      },
+      "emits_nbg": false,
+      "execution_count": 0,
+      "profile_environment": "VIV_GPU_FILE",
+      "roles": [
+        "viv-gpu-file-consumer",
+        "no-kernel",
+        "standalone-glsl-shader-compiler",
+        "version-below-gate"
+      ],
+      "sdk_version": "6.4.18:967862",
+      "sha256": "dfa6a751e472184238915b4c0e20edeec0ca4a98f02ea07b887b0eae2f55e263"
+    }
+  },
+  "targets_manifest": {
+    "path": "waved/scripts/npu/compiler_acquisition_targets.json",
+    "sha256": "bf89032387cd900d24b28feccd0d3876cfb7195359aeab3bfa5473b45ca9ef10"
+  },
+  "versions": {
+    "acuity": "6.30.22",
+    "distribution": "ubuntu-npu:v2.0.10.2",
+    "generated_nbg_version": "0x00010020",
+    "ide_sdk_family": "6.4.18",
+    "standalone_compiler_build": "6.4.18:967862",
+    "vivante_ide": "5.11.0"
+  },
+  "viv_gpu_file_parser": {
+    "artifact": "vcompiler",
+    "artifact_sha256": "dfa6a751e472184238915b4c0e20edeec0ca4a98f02ea07b887b0eae2f55e263",
+    "call_sites": [
+      {
+        "target": "0x007a53e0",
+        "virtual_address": "0x007a64ee"
+      },
+      {
+        "target": "0x007a53e0",
+        "virtual_address": "0x007a66ee"
+      },
+      {
+        "target": "0x007a53e0",
+        "virtual_address": "0x007a67ed"
+      }
+    ],
+    "consumer_role": "standalone-glsl-shader-compiler",
+    "database_lookup": {
+      "argument_order": [
+        "chipModel",
+        "chipRevision",
+        "productID",
+        "ecoID",
+        "customerID"
+      ],
+      "call_virtual_address": "0x007a55ab",
+      "target_virtual_address": "0x00777890"
+    },
+    "elf": {
+      "class": "ELF64",
+      "dynamic_dependency_count": 0,
+      "endianness": "little",
+      "has_pt_dynamic": false,
+      "has_pt_interp": false,
+      "machine": "x86-64",
+      "program_header_count": 6
+    },
+    "execution_count": 0,
+    "fields": [
+      {
+        "destination_virtual_address": "0x01b88c64",
+        "file_offset": "0x0132f59a",
+        "format": "chipModel              = %x;\n",
+        "key": "chipModel"
+      },
+      {
+        "destination_virtual_address": "0x01b88c70",
+        "file_offset": "0x0132f5b8",
+        "format": "chipRevision           = %x;\n",
+        "key": "chipRevision"
+      },
+      {
+        "destination_virtual_address": "0x01b88c6c",
+        "file_offset": "0x0132f5d6",
+        "format": "productID              = %x;\n",
+        "key": "productID"
+      },
+      {
+        "destination_virtual_address": "0x01b88c60",
+        "file_offset": "0x0132f5f4",
+        "format": "ecoID                  = %x;\n",
+        "key": "ecoID"
+      },
+      {
+        "destination_virtual_address": "0x01b88c68",
+        "file_offset": "0x0132f612",
+        "format": "customerID             = %x;\n",
+        "key": "customerID"
+      }
+    ],
+    "function": {
+      "byte_count": 800,
+      "file_offset": "0x003a53e0",
+      "sha256": "d8ce3160f273f0719d56d46cff82c384ba81e608251ad19bdba63fa691a486d4",
+      "virtual_address": "0x007a53e0"
+    },
+    "profile_environment": "VIV_GPU_FILE",
+    "required_strings_verified": [
+      "$VERSION$6.4.18:967862$",
+      "ERROR: Failed to open vCompiler config file(VIV_GPU_FILE): %s\n",
+      "No database entry is found for chipModel=0x%x, chipRevision=0x%x, productID=0x%x, ecoID=0x%x, customerID=0x%x, please check the VIV_GPU_FILE file",
+      "VIV_GPU_FILE",
+      "failed to get vid memory node no-kernel"
+    ],
+    "sdk_version": "6.4.18:967862"
+  },
+  "wave_vendor_profile": {
+    "artifact": "wave_vendor_config",
+    "byte_count": 140,
+    "compiler_qualified": false,
+    "filename": "VIP9000NANOS_PID0X1000000E.config",
+    "identity": {
+      "chip_model": "0x00009000",
+      "chip_revision": "0x00009001",
+      "customer_id": "0x1000000e",
+      "eco_id": "0x04000000",
+      "product_id": "0x05090001"
+    },
+    "provenance": "Allwinner image / Vivante IDE 5.11.0 common/cfg",
+    "revision_relationship": {
+      "observed_live_revision": "0x00009002",
+      "same_masked_revision_family": true,
+      "vendor_database_revision": "0x00009001"
+    },
+    "sha256": "4baa78fdfb2288e7c87f1acd77e3bb1a3ea18eba5b4ec33a8f16df95063a125d"
+  }
+}

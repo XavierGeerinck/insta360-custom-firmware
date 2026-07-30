@@ -1,0 +1,305 @@
+{
+  "abi_basis": {
+    "called_symbols": [
+      "_ZN11StateParser18chooseTargetByNameEPKc",
+      "_ZN11StateParser24chooseTargetByConfigFileEPKc",
+      "_ZN11StateParser9getConfigEP17_VSimulatorConfig"
+    ],
+    "fake_receiver_bytes": 512,
+    "forbidden_symbols": [
+      "OpenVX entrypoints",
+      "VSC entrypoints",
+      "CLC entrypoints",
+      "graph construction",
+      "compiler entrypoints"
+    ],
+    "initialized_value": 187,
+    "only_initialized_receiver_offset": "0x00f0",
+    "output_record_bytes": 100
+  },
+  "artifact_path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libEmulator.so",
+  "artifact_sha256": "56e34c51ca5476e0ca54155d4e78679d96281552ddad7674f5ce4fe2fe5f7de6",
+  "cases": [
+    {
+      "case": "built-in-wave-name",
+      "classification": "selected-wave-database-record",
+      "container_exit_code": 0,
+      "record": {
+        "case": "built-in-wave-name",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "name": "VIP9000NANOS_PID0X1000000E",
+        "operation": "name",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "valid-database",
+      "classification": "accepted-database-identity-file",
+      "container_exit_code": 0,
+      "record": {
+        "case": "valid-database",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "valid-live",
+      "classification": "accepted-live-identity-file",
+      "container_exit_code": 0,
+      "record": {
+        "case": "valid-live",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009002",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "missing",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "missing",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": "Warning: not found GPU configuration, use default GPU configuration"
+    },
+    {
+      "case": "empty",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "empty",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": "ERROR: QueryFeatureDB(chip=0x00000000, rev=0x00000000, pid=0x00000000, ecoID=0x00000000, cid=0x00000000) failed"
+    },
+    {
+      "case": "truncated",
+      "classification": "retained-other-file-identity",
+      "container_exit_code": 0,
+      "record": {
+        "case": "truncated",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": "ERROR: QueryFeatureDB(chip=0x00009000, rev=0x00000000, pid=0x00000000, ecoID=0x00000000, cid=0x00000000) failed"
+    },
+    {
+      "case": "wrong-order",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "wrong-order",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "duplicate-key",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "duplicate-key",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "unknown-key",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "unknown-key",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "malformed-number",
+      "classification": "retained-zero-initial-state",
+      "container_exit_code": 0,
+      "record": {
+        "case": "malformed-number",
+        "chip_model": "0x00000000",
+        "chip_revision": "0x00000000",
+        "customer_id": "0x00000000",
+        "eco_id": "0x00000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x00000000"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "overlong-line",
+      "classification": "accepted-database-identity-file",
+      "container_exit_code": 0,
+      "record": {
+        "case": "overlong-line",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "case": "wrong-customer",
+      "classification": "retained-other-file-identity",
+      "container_exit_code": 0,
+      "record": {
+        "case": "wrong-customer",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0xdeadbeef",
+        "eco_id": "0x04000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": "ERROR: QueryFeatureDB(chip=0x00009000, rev=0x00009001, pid=0x05090001, ecoID=0x04000000, cid=0xdeadbeef) failed"
+    },
+    {
+      "case": "trailing-content",
+      "classification": "accepted-database-identity-file",
+      "container_exit_code": 0,
+      "record": {
+        "case": "trailing-content",
+        "chip_model": "0x00009000",
+        "chip_revision": "0x00009001",
+        "customer_id": "0x1000000e",
+        "eco_id": "0x04000000",
+        "name": "",
+        "operation": "file",
+        "product_id": "0x05090001"
+      },
+      "status": "completed",
+      "stderr": "",
+      "stdout": ""
+    }
+  ],
+  "container": {
+    "compiler": "g++ 11.4.0",
+    "fresh_container_per_case": true,
+    "image": "wave-npu-compiler-toolchain:ubuntu22.04-amd64",
+    "image_id": "sha256:083ca628e0feb7ca682aec5180e5331d0c758bb4d73fcd878b9900cdd3d777ce",
+    "limits": {
+      "core_bytes": 0,
+      "cpus": 1,
+      "memory": "256m",
+      "nofile": 64,
+      "pids": 64,
+      "wall_seconds_per_case": 15
+    },
+    "network": "none",
+    "platform": "linux/amd64",
+    "process_environment": "empty except fixed PATH and LD_LIBRARY_PATH=/out, which contains only the harness and copied hash-pinned libvdtproxy.so",
+    "repository_mount": "read-only",
+    "root_filesystem": "read-only"
+  },
+  "dependency": {
+    "bytes": 13424,
+    "needed_by": "libEmulator.so DT_NEEDED",
+    "own_dependencies": [
+      "libc.so.6"
+    ],
+    "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libvdtproxy.so",
+    "sha256": "64934faba48ffb143bb7b52519f99ced40d69a2ecc6f56d0fe5bb23a866edf9f"
+  },
+  "harness_binary_sha256": "b667ea607879a3755b788350860613e31d1a85f416fd55d01b9dda9d957c25fc",
+  "harness_path": "waved/tools/npu-profile/vsim_config_parser_probe.cc",
+  "harness_sha256": "6b2187cde33a94fd620335592c91409655c24a5845116af385b32dbbef5562af",
+  "host_architecture": "arm64",
+  "non_claims": [
+    "No constructor was called explicitly.",
+    "No compiler, graph, OpenVX, VSC, or CLC symbol was called.",
+    "No Wave device or driver was accessed.",
+    "This old simulator behavior does not prove the absent VIV_GPU_FILE consumer behavior."
+  ],
+  "probe": "StateParser fixed config/name selector matrix",
+  "schema_version": 1,
+  "summary": {
+    "all_cases_completed": true,
+    "completed_cases": 13,
+    "failed_cases": 0,
+    "requested_cases": 13,
+    "timed_out_cases": 0
+  }
+}

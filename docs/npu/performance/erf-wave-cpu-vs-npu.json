@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "experiment": "wave-npu-poc13g-r2-erf-cpu-vs-npu",
+  "date": "2026-07-29",
+  "status": "PASS",
+  "classification": "cpu-faster",
+  "scope": {
+    "device": "Insta360 Wave",
+    "cpu": "4x Arm Cortex-A55, CPU part 0xd05",
+    "npu": "VeriSilicon VIP9000Nano-S, chip model 0x00009000",
+    "operation": "quantized Erf lookup over UINT8[481]",
+    "cold_frames": 1,
+    "warmup_frames": 100,
+    "measured_frames": 10000,
+    "total_frames": 10101,
+    "input_seed": "0x5733130f",
+    "measured_order": "alternating CPU-first/NPU-first",
+    "runtime_log_level": 2
+  },
+  "provenance": {
+    "git_commit": "ef5af98582c9db8d851d397d1e6b1af851c257f5",
+    "manifest_file_sha256": "54cdb3350a10d1e435a62081a648acebef9f82f711b5a789a67c6c88573f167a",
+    "manifest_sha256": "10238e2222e1c16b5ded7e6f7635cb8487dc074de919a2c11549bd6ffebee304",
+    "native_binary_sha256": "cc9154961833124c138553e15e572442033bd3c40b26ca302cd32aed40715799",
+    "native_source_sha256": "07feee816c2c5958b38f4965a076d061ae7bca9fb8d381f5d1010fe109c8be91",
+    "cpu_lut_sha256": "c9525963e022d4a4aea0814845119b37488f3727ec8d96684f52e1e2ad776296",
+    "nbg_sha256": "96447d6afd63a7c349bbd80f0af99150c89ef24ed7f1ef66ab285075362e6c94",
+    "tim_vx_sha256": "d2c8fc7aaf0ad0b86f02fcd54bb1cdca9f04967b5cd9efa61a211565b453375b",
+    "raw_timing_sha256": "7998b0df5000c0140b5c3229b244dbed8d158bbfc42a025fb741ff478dc0eb32",
+    "raw_timing_fnv1a64": "0x3966c5381aecace1",
+    "raw_timing_bytes": 640036,
+    "run_envelope_sha256": "d65b61cdf4fe1e6254871e57fb85872b9935c346bd5a217b31525151a900d3b2",
+    "run_directory": "artifacts/npu/runs/poc13g-r2-erf-wave-cpu-vs-npu-20260729"
+  },
+  "numeric_result": {
+    "compared_frames": 10101,
+    "compared_bytes_per_path": 4858581,
+    "mismatched_bytes": 0,
+    "canaries": "PASS",
+    "input_fnv1a64": "0x367c7eaad959d707",
+    "cpu_output_fnv1a64": "0x742e3a62d58acd0d",
+    "npu_output_fnv1a64": "0x742e3a62d58acd0d",
+    "final_xorshift_state": "0x6ae16fe0"
+  },
+  "timer": {
+    "wall_clock": "CLOCK_MONOTONIC_RAW",
+    "thread_clock": "CLOCK_THREAD_CPUTIME_ID",
+    "process_clock": "CLOCK_PROCESS_CPUTIME_ID",
+    "calibration_samples": 100000,
+    "mean_back_to_back_pair_ns": 85.15458,
+    "minimum_back_to_back_pair_ns": 41,
+    "cpu_thread_resolution_limited_zero_samples": 1,
+    "process_cpu_total_ns": 923272149,
+    "statistics": "uncorrected raw durations",
+    "percentiles": "nearest-rank"
+  },
+  "cold_ns": {
+    "cpu_wall": 5042,
+    "npu_copy_in": 43500,
+    "npu_run": 1505375,
+    "npu_copy_out": 26625,
+    "npu_total": 1582208,
+    "npu_run_over_cpu_wall": 298.56703689012295,
+    "npu_total_over_cpu_wall": 313.8056326854423
+  },
+  "steady_state_ns": {
+    "cpu_wall": {
+      "minimum": 3125,
+      "mean": 3303.2288,
+      "p50": 3333,
+      "p90": 3417,
+      "p95": 3458,
+      "p99": 3500,
+      "p99_9": 3958,
+      "maximum": 18417
+    },
+    "cpu_thread": {
+      "minimum": 0,
+      "mean": 2371.6916,
+      "p50": 2416,
+      "p90": 2500,
+      "p95": 2500,
+      "p99": 2542,
+      "p99_9": 2667,
+      "maximum": 5500
+    },
+    "npu_copy_in": {
+      "minimum": 7208,
+      "mean": 7653.2173,
+      "p50": 7583,
+      "p90": 7791,
+      "p95": 7875,
+      "p99": 8584,
+      "p99_9": 23083,
+      "maximum": 31375
+    },
+    "npu_run": {
+      "minimum": 59584,
+      "mean": 68330.0944,
+      "p50": 65750,
+      "p90": 73708,
+      "p95": 74458,
+      "p99": 86083,
+      "p99_9": 293542,
+      "maximum": 344667
+    },
+    "npu_copy_out": {
+      "minimum": 6459,
+      "mean": 7188.3906,
+      "p50": 7084,
+      "p90": 7500,
+      "p95": 7625,
+      "p99": 9084,
+      "p99_9": 23375,
+      "maximum": 27416
+    },
+    "npu_total": {
+      "minimum": 76833,
+      "mean": 86338.0684,
+      "p50": 83625,
+      "p90": 92042,
+      "p95": 93000,
+      "p99": 106959,
+      "p99_9": 314292,
+      "maximum": 366083
+    },
+    "npu_thread": {
+      "minimum": 64375,
+      "mean": 76280.8764,
+      "p50": 74083,
+      "p90": 80708,
+      "p95": 83208,
+      "p99": 87125,
+      "p99_9": 300792,
+      "maximum": 313541
+    }
+  },
+  "ratios": {
+    "ratio_definition": "NPU duration divided by CPU wall duration; values above 1 mean CPU is faster",
+    "ratio_of_means": {
+      "npu_run_over_cpu_wall": 20.685849675323734,
+      "npu_total_over_cpu_wall": 26.137477488692276
+    },
+    "same_percentile": {
+      "p50": {
+        "npu_run_over_cpu_wall": 19.726972697269726,
+        "npu_total_over_cpu_wall": 25.09000900090009
+      },
+      "p95": {
+        "npu_run_over_cpu_wall": 21.5320994794679,
+        "npu_total_over_cpu_wall": 26.89415847310584
+      },
+      "p99": {
+        "npu_run_over_cpu_wall": 24.595142857142857,
+        "npu_total_over_cpu_wall": 30.559714285714286
+      }
+    },
+    "paired_frame_distribution": {
+      "npu_run_over_cpu_wall": {
+        "mean": 20.771321399876904,
+        "p50": 20.425457991156033,
+        "p95": 23.300284180612568,
+        "p99": 26.43132301862962
+      },
+      "npu_total_over_cpu_wall": {
+        "mean": 26.24497027804061,
+        "p50": 25.950748129675812,
+        "p95": 29.10198926428797,
+        "p99": 32.600997506234414
+      }
+    }
+  },
+  "throughput_frames_per_second": {
+    "cpu_wall": 302734.1006472213,
+    "npu_run": 14634.840018602403,
+    "npu_total": 11582.376332153384
+  },
+  "ten_ms_audio_hop_fraction": {
+    "cpu_wall": 0.00033032288,
+    "npu_run": 0.00683300944,
+    "npu_total": 0.008633806840000001
+  },
+  "order_check": {
+    "cpu_first_frames": 5000,
+    "npu_first_frames": 5000,
+    "cpu_first_ratio_of_means": {
+      "npu_run_over_cpu_wall": 21.4715354463549,
+      "npu_total_over_cpu_wall": 27.1137746918107
+    },
+    "npu_first_ratio_of_means": {
+      "npu_run_over_cpu_wall": 19.952442913157576,
+      "npu_total_over_cpu_wall": 25.226142452407707
+    }
+  },
+  "system_context": {
+    "online_cpus": "0-3",
+    "cpu_architecture": 8,
+    "cpu_part": "0xd05",
+    "cpufreq_policy": {
+      "affected_cpus": "0 1 2 3",
+      "observed_current_khz": {
+        "preflight": 1500000,
+        "postflight": 1500000
+      },
+      "minimum_khz": 100000,
+      "maximum_khz": 2016000,
+      "governor": "schedutil"
+    },
+    "soc_temperature_millicelsius": {
+      "preflight": 38500,
+      "postflight": 38800
+    },
+    "npu_parameters": {
+      "enableNN": 255,
+      "nanoqFreq": 838860800,
+      "recovery": 1
+    },
+    "health_differences": [],
+    "kernel_alerts": []
+  },
+  "interpretation": {
+    "result": "For this tiny 481-byte lookup, the Cortex-A55 path is materially faster than both NPU graph execution and NPU end-to-end tensor transfer.",
+    "noise_cancellation_impact": "Do not offload Erf alone for speed. A larger affine or convolutional partition may amortize the fixed NPU submission and tensor-copy costs and must be measured independently.",
+    "deadline": "Both paths are far below one 10 ms audio hop in this isolated benchmark.",
+    "limitations": [
+      "Natural schedutil scheduling was observed; affinity, priority, frequency, and thermal controls were not changed.",
+      "CPU wall timing includes timer calls, so the reported CPU advantage is conservative for the raw LUT itself.",
+      "This result applies only to the exact UINT8[481] Erf partition and does not estimate larger-model NPU speed.",
+      "Cold timing includes first-execution runtime effects but excludes graph construction and compilation."
+    ]
+  },
+  "r1_negative": {
+    "status": "FAIL_CLOSED",
+    "git_commit": "7b08f614fe6903535449eee8178bc220f3c57507",
+    "remote_root": "/tmp/wave-npu-poc13g",
+    "native_exit": 7,
+    "failure_frame": 4833,
+    "timing_artifact_created": false,
+    "partial_artifact_created": false,
+    "health_differences": [],
+    "kernel_alerts": [],
+    "replayed": false,
+    "retained_run_directory": "artifacts/npu/runs/poc13g-erf-wave-cpu-vs-npu-20260729"
+  }
+}

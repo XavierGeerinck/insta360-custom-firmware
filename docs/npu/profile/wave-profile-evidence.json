@@ -1,0 +1,746 @@
+{
+  "features": {
+    "complete_bug_feature_vector": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The row tail contains bit vectors, but PoC 9A has not yet recovered a complete name-to-bit mapping without ambiguity.",
+      "representation": "ordered named boolean vector",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "evis1": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Returned by the reviewed PoC 5D read-only capability query.",
+      "representation": "boolean capability",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": false
+    },
+    "evis2": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Returned by the reviewed PoC 5D read-only capability query.",
+      "representation": "boolean capability",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": true
+    },
+    "stream_processor": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Both stream-processor availability and execution count were zero.",
+      "representation": "boolean capability",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": false
+    },
+    "subgroup_size": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Returned by the reviewed PoC 5D read-only capability query.",
+      "representation": "elements",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": 4
+    },
+    "va40": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Returned by the reviewed PoC 5D read-only capability query.",
+      "representation": "boolean capability",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": false
+    }
+  },
+  "identity": {
+    "chip_model": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "The live identity and both static database variants agree.",
+      "representation": "uint32; 0x00009000",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 36864
+    },
+    "chip_revision_database": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "Both static tables use the generic 0x9001 family row.",
+      "representation": "uint32; 0x00009001",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 36865
+    },
+    "chip_revision_observed": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "This is the live silicon revision, not the database row revision.",
+      "representation": "uint32; 0x00009002",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": 36866
+    },
+    "customer_id": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "This is also the product target in all 138 stock VPMN v2 NBGs.",
+      "representation": "uint32; 0x1000000e",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        },
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-live-baseline-manifest",
+          "location": "npu.nbg_product_target and exact runtime artifact inventory"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 268435470
+    },
+    "database_common_prefix": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "Words 0..113 agree except one build-specific word at index 6; its semantics are deliberately not inferred here. Layouts diverge at word 114.",
+      "representation": "uint32 word comparison from the start of both matched rows",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": {
+        "build_specific_word_index": 6,
+        "equal_non_build_specific_words": 113,
+        "words_compared": 114
+      }
+    },
+    "database_match_mode": {
+      "confidence": "medium",
+      "evidence_class": "inferred",
+      "notes": "Static control flow plus the live tuple demonstrates the only matching row, but PoC 9A does not call CreateAPModel to observe the branch dynamically.",
+      "representation": "live 0x9002 matches generic table 0x9001 under mask 0x0000fff0",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "candidate",
+      "value": "masked-revision-family-fallback"
+    },
+    "database_row_summary": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "The complete rows are hash-bound; only bounded identity metadata is serialized into the profile.",
+      "representation": "host-read ELF table geometry and SHA-256 of each complete row",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": {
+        "wave-nnarchperf-aarch64": {
+          "file_offset": "0x00051450",
+          "generic_revision_marker": 0,
+          "identity_words": [
+            "0x00009000",
+            "0x00009001",
+            "0x05090001",
+            "0x04000000",
+            "0x1000000e"
+          ],
+          "matched_row_index": 320,
+          "record_count": 457,
+          "record_size": 576,
+          "row_sha256": "85b860a40fbbc3663ea2c2b13dd4f81ed84ed0643d3e09fa3cee52ea7177f831",
+          "virtual_address": "0x00061450"
+        },
+        "x86-sim-nnarchperf": {
+          "file_offset": "0x00041120",
+          "generic_revision_marker": 0,
+          "identity_words": [
+            "0x00009000",
+            "0x00009001",
+            "0x05090001",
+            "0x04000000",
+            "0x1000000e"
+          ],
+          "matched_row_index": 290,
+          "record_count": 387,
+          "record_size": 552,
+          "row_sha256": "c8483d5250b4c6fb0ab55a4d4620cdd19862121cdf6d89b93ecd626a47e68882",
+          "virtual_address": "0x00241120"
+        }
+      }
+    },
+    "eco_id": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Read-only capability and identity probes agree with the table.",
+      "representation": "uint32; 0x04000000",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "PoC 5D hardware capabilities returned by the single read-only query"
+        },
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 67108864
+    },
+    "lookup_failure_behavior": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "No permissive unknown-chip fallback was found.",
+      "representation": "CreateAPModel prints all five keys and calls __assert_fail",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": "diagnostic-then-assert"
+    },
+    "lookup_key_offsets_bytes": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "Both decompilations compare five consecutive 32-bit words.",
+      "representation": "byte offsets in APM_IN_PARAM_T and each architecture table row",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": [
+        0,
+        4,
+        8,
+        12,
+        16
+      ]
+    },
+    "lookup_key_order": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "CreateAPModel compares words 0 through 4 in this order; the failure diagnostic independently names the order.",
+      "representation": "five consecutive little-endian uint32 keys",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": [
+        "chip_id",
+        "chip_version",
+        "product_id",
+        "eco_id",
+        "customer_id"
+      ]
+    },
+    "product_id": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "The live identity and both database variants agree.",
+      "representation": "uint32; 0x05090001",
+      "sources": [
+        {
+          "artifact_id": "poc6-7-custom-nbg-notebook",
+          "location": "PoC 6 exact runtime IDENTITY record before the reviewed Erf run"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 84475905
+    },
+    "revision_fallback_mask": {
+      "confidence": "high",
+      "evidence_class": "differentially-verified",
+      "notes": "The second lookup loop ignores only the low revision nibble.",
+      "representation": "uint32; (input_revision XOR row_revision) AND 0x0000fff0",
+      "sources": [
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "corroborated",
+      "value": 65520
+    }
+  },
+  "inputs": [
+    {
+      "bytes": 749534,
+      "id": "arch-profile-ghidra-evidence",
+      "path": "docs/npu/profile/arch-profile-ghidra-evidence.json",
+      "roles": [
+        "decompilation",
+        "host-only",
+        "static-evidence"
+      ],
+      "sha256": "b66aee19692523ed38730baee2de1cbda5fa0ad8d2ad7ed0ca7d290a93407814"
+    },
+    {
+      "bytes": 15198,
+      "id": "poc5-custom-compiler-notebook",
+      "path": "docs/npu/lab-notebook/2026-07-28-poc5-custom-compiler.md",
+      "roles": [
+        "observed-live",
+        "prior-poc",
+        "read-only-capabilities"
+      ],
+      "sha256": "d70fcb0153ee199b25fd0094692587c1a513d37604749770bb89157f4d7ed16c"
+    },
+    {
+      "bytes": 7286,
+      "id": "poc6-7-custom-nbg-notebook",
+      "path": "docs/npu/lab-notebook/2026-07-28-poc6-7-custom-nbg-execution.md",
+      "roles": [
+        "observed-live",
+        "prior-poc",
+        "runtime-identity"
+      ],
+      "sha256": "b50efd20fd35f0196ac5b849a983030fd86aafb653d69c4d1640a453c5206342"
+    },
+    {
+      "bytes": 457080,
+      "id": "wave-archmodel-aarch64",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libArchModelSw.so",
+      "roles": [
+        "architecture-model",
+        "exact-wave",
+        "live-matched"
+      ],
+      "sha256": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f"
+    },
+    {
+      "bytes": 8754,
+      "id": "wave-live-baseline-manifest",
+      "path": "docs/npu/manifests/wave-live-v1.1.6.6.json",
+      "roles": [
+        "artifact-provenance",
+        "observed-live",
+        "prior-poc"
+      ],
+      "sha256": "497edaba5a483352dadd5e5bd6254c25e80f514d7900e7d1eaf1d3f16cf57914"
+    },
+    {
+      "bytes": 598152,
+      "id": "wave-nnarchperf-aarch64",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libNNArchPerf.so",
+      "roles": [
+        "architecture-performance",
+        "exact-wave",
+        "live-matched"
+      ],
+      "sha256": "253167677e9839d09815de93a86423824f26f56f097c100d59c03170adecffa9"
+    },
+    {
+      "bytes": 459728,
+      "id": "x86-sim-archmodel",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libArchModelSw.so",
+      "roles": [
+        "architecture-model",
+        "differential-reference",
+        "x86-simulator"
+      ],
+      "sha256": "c4766ef80043ba38dfd5d8bf1ed06590395a995c8d489a093e7a68265f342f97"
+    },
+    {
+      "bytes": 498736,
+      "id": "x86-sim-nnarchperf",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libNNArchPerf.so",
+      "roles": [
+        "architecture-performance",
+        "differential-reference",
+        "x86-simulator"
+      ],
+      "sha256": "e5f58113287a803663f897784f97ed983a32e07c2755e23bd25b63fec3aff70d"
+    }
+  ],
+  "non_claims": [
+    "PoC 9A does not call any compiler, architecture-model, or performance-model entrypoint.",
+    "PoC 9A does not prove a VIV_GPU_FILE grammar or emit a candidate compiler profile.",
+    "PoC 9A does not prove physical core count, SRAM partitioning, or tensor alignment.",
+    "PoC 9A does not touch ADB, /dev/galcore, or the Wave device.",
+    "The static 0x00009001 database revision is not relabeled as the live 0x00009002 silicon revision.",
+    "The x86 simulator ABI is a differential reference and is not binary-compatible with the exact Wave ABI."
+  ],
+  "profile_id": "wave-fw-v1.1.6.6-0x1000000e",
+  "resources": {
+    "arch_nn_config_mapped_offsets_bytes": {
+      "confidence": "high",
+      "evidence_class": "static-verified",
+      "notes": "Only fields with unambiguous decompiled argument mapping are included; the notebook inventories the remaining labels.",
+      "representation": "selected high-confidence offsets from archShowConfigurations",
+      "sources": [
+        {
+          "artifact_id": "wave-archmodel-aarch64",
+          "location": "archSwLibInit@00117298 and archShowConfigurations@00107ca8"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": {
+        "axi_sram_latency": 208,
+        "axi_sram_size": 132,
+        "ddr_latency": 176,
+        "num_nn_cores": 104,
+        "num_nn_cores_float16": 120,
+        "num_nn_cores_int16": 112,
+        "num_nn_cores_int8": 108,
+        "num_nn_cores_uint16": 116,
+        "sw_tiling": 172,
+        "usc_cache_size": 212,
+        "vector_prune": 200,
+        "vip_sram_base_size": 128
+      }
+    },
+    "axi_sram_compiler_budget_bytes": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "A configuration field exists, but its live value and compiler reservation policy are unresolved.",
+      "representation": "bytes available to generated graphs",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "cache_line_bytes": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "Several cache fields are printed, but no single compile-time tensor cache-line constraint is yet demonstrated.",
+      "representation": "bytes",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "chip_identity_print_offsets_bytes": {
+      "confidence": "high",
+      "evidence_class": "static-verified",
+      "notes": "This print-structure order differs from the APM lookup tuple's eco/customer ordering.",
+      "representation": "archHAL_CHIPIDENTITY byte offsets in archShowConfigurations",
+      "sources": [
+        {
+          "artifact_id": "wave-archmodel-aarch64",
+          "location": "archSwLibInit@00117298 and archShowConfigurations@00107ca8"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": {
+        "chip_model": 0,
+        "chip_revision": 4,
+        "customer_id": 12,
+        "eco_id": 16,
+        "product_id": 8
+      }
+    },
+    "per_precision_usable_core_count": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "Configuration labels are mapped, but no reviewed live values exist for the per-precision fields.",
+      "representation": "mapping from precision to usable cores",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "physical_npu_core_count": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The live capability field was zero but is a graph-batch field; table values have not been mapped strongly enough to physical cores.",
+      "representation": "physical accelerator cores",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "tensor_alignment_bytes": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "No complete alignment table has been recovered in PoC 9A.",
+      "representation": "bytes by tensor/data type",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "vip_sram_partitioning": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The print expression is known; exact partition semantics and units are not.",
+      "representation": "bytes per bank/core and reserved regions",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "vip_sram_size_expression": {
+      "confidence": "medium",
+      "evidence_class": "static-verified",
+      "notes": "The expression is recovered, but PoC 9A does not assign its printed integer a byte unit.",
+      "representation": "archShowConfigurations expression; unit not established",
+      "sources": [
+        {
+          "artifact_id": "wave-archmodel-aarch64",
+          "location": "archSwLibInit@00117298 and archShowConfigurations@00107ca8"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": "config[0x20] + (config[0x1a] + 8) * 0x400"
+    },
+    "wave_structure_sizes_bytes": {
+      "confidence": "high",
+      "evidence_class": "static-verified",
+      "notes": "These are exact-build ABI bounds, not public or stable ABI sizes.",
+      "representation": "bytes copied or allocated by exact AArch64 initializers",
+      "sources": [
+        {
+          "artifact_id": "wave-archmodel-aarch64",
+          "location": "archSwLibInit@00117298 and archShowConfigurations@00107ca8"
+        },
+        {
+          "artifact_id": "wave-nnarchperf-aarch64",
+          "location": "CreateAPModel@00116ad8 and ELF table file+0x00051450, row 320"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": {
+        "apm_hw_info": 232,
+        "apm_input": 296,
+        "arch_drv_option": 8328,
+        "arch_hal_chipidentity": 32,
+        "arch_nn_config": 416,
+        "arch_nn_database_feature": 352
+      }
+    },
+    "x86_simulator_structure_sizes_bytes": {
+      "confidence": "high",
+      "evidence_class": "static-verified",
+      "notes": "The size differences prohibit treating the simulator ABI as the exact Wave ABI.",
+      "representation": "bytes copied or allocated by x86 simulator initializers",
+      "sources": [
+        {
+          "artifact_id": "x86-sim-archmodel",
+          "location": "archSwLibInit@0011aa00"
+        },
+        {
+          "artifact_id": "x86-sim-nnarchperf",
+          "location": "CreateAPModel@0011cdc0 and gChipInfo ELF table file+0x00041120, row 290"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": {
+        "apm_hw_info": 176,
+        "apm_input": 240,
+        "arch_drv_option": 616,
+        "arch_hal_chipidentity": 32,
+        "arch_nn_config": 408,
+        "arch_nn_database_feature": 328
+      }
+    }
+  },
+  "schema_version": 1,
+  "target": {
+    "hex": "0x1000000e",
+    "value": 268435470
+  },
+  "unknowns": [
+    "features.complete_bug_feature_vector",
+    "resources.axi_sram_compiler_budget_bytes",
+    "resources.cache_line_bytes",
+    "resources.per_precision_usable_core_count",
+    "resources.physical_npu_core_count",
+    "resources.tensor_alignment_bytes",
+    "resources.vip_sram_partitioning",
+    "versions.arch_model_version",
+    "versions.sw_tiling_version",
+    "versions.vip7_version"
+  ],
+  "versions": {
+    "arch_model_version": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The label is present, but no immutable static value has been mapped to it.",
+      "representation": "vendor architecture-model semantic version",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "firmware_baseline": {
+      "confidence": "medium",
+      "evidence_class": "inferred",
+      "notes": "Runtime library hashes match the extraction; the live release file did not itself report v1.1.6.6.",
+      "representation": "rootfs compatibility label",
+      "sources": [
+        {
+          "artifact_id": "wave-live-baseline-manifest",
+          "location": "npu.nbg_product_target and exact runtime artifact inventory"
+        }
+      ],
+      "validation_state": "candidate",
+      "value": "v1.1.6.6-compatible"
+    },
+    "galcore_runtime": {
+      "confidence": "high",
+      "evidence_class": "observed-live",
+      "notes": "Previously captured from the exact live Wave runtime notebook.",
+      "representation": "exact live runtime version string",
+      "sources": [
+        {
+          "artifact_id": "poc5-custom-compiler-notebook",
+          "location": "Fixed device and runtime identity: galcore exact version"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": "6.4.19.5.946407"
+    },
+    "ghidra": {
+      "confidence": "high",
+      "evidence_class": "static-verified",
+      "notes": "Recorded by every focused Ghidra analysis.",
+      "representation": "host static-analysis tool version",
+      "sources": [
+        {
+          "artifact_id": "arch-profile-ghidra-evidence",
+          "location": "tool.version and four hash-bound focused analyses"
+        }
+      ],
+      "validation_state": "single-source",
+      "value": "12.0.4"
+    },
+    "sw_tiling_version": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The label is present, but no immutable static value has been mapped to it.",
+      "representation": "vendor software-tiling semantic version",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    },
+    "vip7_version": {
+      "confidence": "none",
+      "evidence_class": "unknown",
+      "notes": "The configuration offset is present, but its exact Wave value has not been observed or safely recovered.",
+      "representation": "numeric architecture-generation value",
+      "sources": [],
+      "validation_state": "unresolved",
+      "value": null
+    }
+  }
+}

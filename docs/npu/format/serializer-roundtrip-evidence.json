@@ -1,0 +1,123 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "ctc-de",
+      "class_byte_totals": {
+        "alignment": 156,
+        "connection-tail": 0,
+        "decoded-record": 1348,
+        "padding": 0,
+        "preserved-opaque": 2809480
+      },
+      "connection_tail_mode": "section-covered-view",
+      "exact_match": true,
+      "first_difference": null,
+      "input_bytes": 2810984,
+      "input_sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66",
+      "output_bytes": 2810984,
+      "output_sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66",
+      "path": "models/ai-models/asr-models/model/asr_de/de_online/ctc_online.nb",
+      "range_count": 44
+    },
+    {
+      "artifact_id": "ctc-en",
+      "class_byte_totals": {
+        "alignment": 244,
+        "connection-tail": 0,
+        "decoded-record": 1348,
+        "padding": 0,
+        "preserved-opaque": 5261768
+      },
+      "connection_tail_mode": "section-covered-view",
+      "exact_match": true,
+      "first_difference": null,
+      "input_bytes": 5263360,
+      "input_sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
+      "output_bytes": 5263360,
+      "output_sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
+      "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc_online.nb",
+      "range_count": 44
+    },
+    {
+      "artifact_id": "ctc-fr",
+      "class_byte_totals": {
+        "alignment": 220,
+        "connection-tail": 0,
+        "decoded-record": 1348,
+        "padding": 0,
+        "preserved-opaque": 2933576
+      },
+      "connection_tail_mode": "section-covered-view",
+      "exact_match": true,
+      "first_difference": null,
+      "input_bytes": 2935144,
+      "input_sha256": "db8a79e3e7b35eddd87a7369bd464101607083f489a75418d73073718ff6f079",
+      "output_bytes": 2935144,
+      "output_sha256": "db8a79e3e7b35eddd87a7369bd464101607083f489a75418d73073718ff6f079",
+      "path": "models/ai-models/asr-models/model/asr_fr/fr_online/ctc_online.nb",
+      "range_count": 44
+    },
+    {
+      "artifact_id": "ctc-ja",
+      "class_byte_totals": {
+        "alignment": 92,
+        "connection-tail": 0,
+        "decoded-record": 1348,
+        "padding": 0,
+        "preserved-opaque": 2716104
+      },
+      "connection_tail_mode": "section-covered-view",
+      "exact_match": true,
+      "first_difference": null,
+      "input_bytes": 2717544,
+      "input_sha256": "2c261beb8aedb1361c3a4832878ff09dec597bcae4681aee742069c6faa54b5d",
+      "output_bytes": 2717544,
+      "output_sha256": "2c261beb8aedb1361c3a4832878ff09dec597bcae4681aee742069c6faa54b5d",
+      "path": "models/ai-models/asr-models/model/asr_ja/ja_online/ctc_online.nb",
+      "range_count": 44
+    },
+    {
+      "artifact_id": "generated-erf",
+      "class_byte_totals": {
+        "alignment": 0,
+        "connection-tail": 0,
+        "decoded-record": 1104,
+        "padding": 0,
+        "preserved-opaque": 4736
+      },
+      "connection_tail_mode": "section-covered-view",
+      "exact_match": true,
+      "first_difference": null,
+      "input_bytes": 5840,
+      "input_sha256": "6b2ac998909fecfdf8243e0b1e2b283e5abb485d09d579ae818fbc59824de3ee",
+      "output_bytes": 5840,
+      "output_sha256": "6b2ac998909fecfdf8243e0b1e2b283e5abb485d09d579ae818fbc59824de3ee",
+      "path": "artifacts/npu/runs/poc5c-erf-compile-1-20260728/candidate-1.nbg",
+      "range_count": 30
+    }
+  ],
+  "claim": "Selected unchanged Wave NBGs reconstruct byte-for-byte; this is not custom graph generation.",
+  "copies_written": 0,
+  "generator": "waved/scripts/npu/nbg_image.py",
+  "manifest": {
+    "path": "waved/scripts/npu/nbg_serializer_targets.json",
+    "sha256": "75e2b282cfc5ff4d52d06dac99768db945dfdd23d4f92b7cff681ee99b9d805b"
+  },
+  "poc_id": "poc12a-open-nbg-serializer",
+  "safety": {
+    "adb_calls": 0,
+    "compiler_calls": 0,
+    "container_registrations": 0,
+    "container_runs": 0,
+    "device_calls": 0,
+    "generated_custom_nbg_files": 0,
+    "mutated_nbg_files": 0,
+    "native_extension_imports": 0,
+    "simulator_calls": 0
+  },
+  "schema_version": 1,
+  "semantic_change_policy": {
+    "error_code": "NBG_SEMANTIC_CHANGE_REFUSED",
+    "status": "refused"
+  }
+}
