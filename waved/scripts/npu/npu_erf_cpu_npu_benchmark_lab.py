@@ -23,27 +23,18 @@ import npu_lab
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MANIFEST = Path(__file__).with_name(
-    "erf_cpu_npu_benchmark_manifest.json"
-)
+DEFAULT_MANIFEST = Path(__file__).with_name("erf_cpu_npu_benchmark_manifest.json")
 DEFAULT_RUN_ROOT = REPOSITORY_ROOT / "artifacts/npu/runs"
 EXPECTED_MANIFEST_FILE_SHA256 = (
-    "54cdb3350a10d1e435a62081a648acebe"
-    "f9f82f711b5a789a67c6c88573f167a"
+    "54cdb3350a10d1e435a62081a648acebef9f82f711b5a789a67c6c88573f167a"
 )
 
 REMOTE_ROOT = "/tmp/wave-npu-poc13g-r2"
-REMOTE_EXECUTABLE = (
-    f"{REMOTE_ROOT}/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2"
-)
+REMOTE_EXECUTABLE = f"{REMOTE_ROOT}/bin/wave-npu-benchmark-erf-cpu-vs-npu-v2"
 REMOTE_TIM_VX = f"{REMOTE_ROOT}/lib/libtim-vx.so"
 REMOTE_NBG = f"{REMOTE_ROOT}/model/erf-mask.nbg"
-REMOTE_TIMING = (
-    f"{REMOTE_ROOT}/result/erf-cpu-npu-timings-v1.bin"
-)
-REMOTE_PARTIAL_TIMING = (
-    f"{REMOTE_ROOT}/result/erf-cpu-npu-timings-v1.partial"
-)
+REMOTE_TIMING = f"{REMOTE_ROOT}/result/erf-cpu-npu-timings-v1.bin"
+REMOTE_PARTIAL_TIMING = f"{REMOTE_ROOT}/result/erf-cpu-npu-timings-v1.partial"
 REMOTE_ARGUMENT = "--benchmark"
 EXPECTED_TIMEOUT_MS = 60_000
 
@@ -64,19 +55,13 @@ EXPECTED_ENVIRONMENT = {
 EXPECTED_IDENTITY = stream_lab.EXPECTED_IDENTITY
 EXPECTED_ARTIFACTS = {
     REMOTE_EXECUTABLE: (
-        "cc9154961833124c138553e15e5724420"
-        "33bd3c40b26ca302cd32aed40715799"
+        "cc9154961833124c138553e15e572442033bd3c40b26ca302cd32aed40715799"
     ),
-    REMOTE_TIM_VX: stream_lab.EXPECTED_ARTIFACTS[
-        stream_lab.REMOTE_TIM_VX
-    ],
-    REMOTE_NBG: stream_lab.EXPECTED_ARTIFACTS[
-        stream_lab.REMOTE_NBG
-    ],
+    REMOTE_TIM_VX: stream_lab.EXPECTED_ARTIFACTS[stream_lab.REMOTE_TIM_VX],
+    REMOTE_NBG: stream_lab.EXPECTED_ARTIFACTS[stream_lab.REMOTE_NBG],
 }
 EXPECTED_SOURCE_SHA256 = (
-    "07feee816c2c5958b38f4965a076d061"
-    "ae7bca9fb8d381f5d1010fe109c8be91"
+    "07feee816c2c5958b38f4965a076d061ae7bca9fb8d381f5d1010fe109c8be91"
 )
 EXPECTED_CPU_TABLE_SHA256 = stream_lab.ERF_TABLE_SHA256
 EXPECTED_ABSENT_ARTIFACTS = (
@@ -118,9 +103,7 @@ COLD_RE = re.compile(
     r"npu_copy_out_ns=(?P<copy_out>[0-9]+) "
     r"npu_total_ns=(?P<total>[0-9]+)$"
 )
-PROCESS_RE = re.compile(
-    r"^PROCESS_CPU frames=10101 total_ns=(?P<total>[0-9]+)$"
-)
+PROCESS_RE = re.compile(r"^PROCESS_CPU frames=10101 total_ns=(?P<total>[0-9]+)$")
 SUMMARY_RE = re.compile(
     r"^ERF_CPU_NPU_BENCH status=PASS mode=benchmark "
     r"cold_frames=1 warmup_frames=100 measured_frames=10000 "
@@ -243,14 +226,11 @@ def load_manifest(path: Path = DEFAULT_MANIFEST) -> BenchmarkManifest:
         raise ManifestError(f"cannot read manifest: {exc}") from exc
     if (
         path.resolve() == DEFAULT_MANIFEST.resolve()
-        and hashlib.sha256(raw).hexdigest()
-        != EXPECTED_MANIFEST_FILE_SHA256
+        and hashlib.sha256(raw).hexdigest() != EXPECTED_MANIFEST_FILE_SHA256
     ):
         raise ManifestError("source-controlled manifest file hash differs")
     try:
-        document = json.loads(
-            raw.decode("utf-8"), object_pairs_hook=_duplicate_safe
-        )
+        document = json.loads(raw.decode("utf-8"), object_pairs_hook=_duplicate_safe)
     except ManifestError:
         raise
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -309,9 +289,8 @@ def load_manifest(path: Path = DEFAULT_MANIFEST) -> BenchmarkManifest:
             or SHA256_RE.fullmatch(digest) is None
         ):
             raise ManifestError("artifact allowlist is malformed")
-        if (
-            artifact_path.startswith("/tmp/")
-            and not artifact_path.startswith(f"{REMOTE_ROOT}/")
+        if artifact_path.startswith("/tmp/") and not artifact_path.startswith(
+            f"{REMOTE_ROOT}/"
         ):
             raise ManifestError("temporary artifact escapes fixed root")
     for artifact_path, digest in EXPECTED_ARTIFACTS.items():
@@ -319,10 +298,8 @@ def load_manifest(path: Path = DEFAULT_MANIFEST) -> BenchmarkManifest:
             raise ManifestError(f"fixed artifact mismatch: {artifact_path}")
 
     absent = document["absent_artifacts"]
-    if (
-        not isinstance(absent, list)
-        or tuple(sorted(absent))
-        != tuple(sorted(EXPECTED_ABSENT_ARTIFACTS))
+    if not isinstance(absent, list) or tuple(sorted(absent)) != tuple(
+        sorted(EXPECTED_ABSENT_ARTIFACTS)
     ):
         raise ManifestError("absent_artifacts differs from CLC policy")
     expected = document["expected_result"]
@@ -447,12 +424,14 @@ def parse_timing_payload(payload: bytes) -> TimingPayload:
     )
 
 
-def _nearest_rank(sorted_values: list[int], quantile: float) -> int:
+def _nearest_rank(sorted_values: list[int | float], quantile: float) -> int | float:
     rank = max(1, math.ceil(quantile * len(sorted_values)))
     return sorted_values[rank - 1]
 
 
-def _statistics(values: Sequence[int]) -> dict[str, int | float]:
+def _statistics(
+    values: Sequence[int | float],
+) -> dict[str, int | float]:
     ordered = sorted(values)
     total = sum(ordered)
     return {
@@ -474,16 +453,10 @@ def summarize_timings(timing: TimingPayload) -> dict[str, Any]:
     fields = {
         "cpu_wall_ns": tuple(r.cpu_wall_ns for r in timing.records),
         "cpu_thread_ns": tuple(r.cpu_thread_ns for r in timing.records),
-        "npu_copy_in_ns": tuple(
-            r.npu_copy_in_ns for r in timing.records
-        ),
+        "npu_copy_in_ns": tuple(r.npu_copy_in_ns for r in timing.records),
         "npu_run_ns": tuple(r.npu_run_ns for r in timing.records),
-        "npu_copy_out_ns": tuple(
-            r.npu_copy_out_ns for r in timing.records
-        ),
-        "npu_total_wall_ns": tuple(
-            r.npu_total_wall_ns for r in timing.records
-        ),
+        "npu_copy_out_ns": tuple(r.npu_copy_out_ns for r in timing.records),
+        "npu_total_wall_ns": tuple(r.npu_total_wall_ns for r in timing.records),
         "npu_thread_ns": tuple(r.npu_thread_ns for r in timing.records),
     }
     summary = {name: _statistics(values) for name, values in fields.items()}
@@ -510,27 +483,59 @@ def summarize_timings(timing: TimingPayload) -> dict[str, Any]:
     summary["timer_calibration"] = {
         "samples": timing.calibration_samples,
         "total_wall_ns": timing.calibration_total_wall_ns,
-        "mean_pair_ns": (
-            timing.calibration_total_wall_ns
-            / timing.calibration_samples
-        ),
+        "mean_pair_ns": (timing.calibration_total_wall_ns / timing.calibration_samples),
         "minimum_pair_ns": timing.calibration_min_wall_ns,
     }
+    summary["paired_ratios"] = {
+        "npu_run_over_cpu_wall": _statistics(
+            tuple(r.npu_run_ns / r.cpu_wall_ns for r in timing.records)
+        ),
+        "npu_total_over_cpu_wall": _statistics(
+            tuple(r.npu_total_wall_ns / r.cpu_wall_ns for r in timing.records)
+        ),
+    }
+    order_subsets: dict[str, Any] = {}
+    for order, name in ((0, "cpu-first"), (1, "npu-first")):
+        records = tuple(r for r in timing.records if r.order == order)
+        cpu = _statistics(tuple(r.cpu_wall_ns for r in records))
+        npu_run = _statistics(tuple(r.npu_run_ns for r in records))
+        npu_total = _statistics(tuple(r.npu_total_wall_ns for r in records))
+        order_subsets[name] = {
+            "count": len(records),
+            "cpu_wall_ns": cpu,
+            "npu_run_ns": npu_run,
+            "npu_total_wall_ns": npu_total,
+            "ratios_of_means": {
+                "npu_run_over_cpu_wall": (float(npu_run["mean"]) / float(cpu["mean"])),
+                "npu_total_over_cpu_wall": (
+                    float(npu_total["mean"]) / float(cpu["mean"])
+                ),
+            },
+        }
+    summary["order_subsets"] = order_subsets
+    calibration_mean = timing.calibration_total_wall_ns / timing.calibration_samples
+    noise_ns = max(float(timing.calibration_min_wall_ns), calibration_mean) * 2.0
+    if abs(npu_total_mean - cpu_mean) <= noise_ns:
+        classification = "within-measurement-noise"
+    elif npu_total_mean < cpu_mean:
+        classification = "npu-total-faster"
+    elif npu_run_mean < cpu_mean:
+        classification = "npu-run-faster-but-total-slower"
+    else:
+        classification = "cpu-faster"
+    summary["classification"] = classification
+    summary["classification_noise_ns"] = noise_ns
     return summary
 
 
-def parse_native_result(
-    stdout: str, manifest: BenchmarkManifest
-) -> dict[str, Any]:
+def parse_native_result(stdout: str, manifest: BenchmarkManifest) -> dict[str, Any]:
     identities = [
         line.rstrip("\r")
         for line in stdout.splitlines()
         if line.startswith("IDENTITY ")
     ]
     cold_lines = [
-        line.rstrip("\r")
-        for line in stdout.splitlines()
-        if line.startswith("COLD ")
+        line.rstrip("\r") for line in stdout.splitlines() if line.startswith("COLD ")
     ]
     process_lines = [
         line.rstrip("\r")
@@ -561,9 +566,7 @@ def parse_native_result(
         or process_match is None
         or summary_match is None
     ):
-        raise ResultError(
-            "identity, cold, process, or summary result is malformed"
-        )
+        raise ResultError("identity, cold, process, or summary result is malformed")
     identity = identity_match.groupdict()
     if identity != manifest.expected_result["identity"]:
         raise ResultError("live identity differs from fixed policy")
@@ -614,9 +617,7 @@ def parse_native_result(
     }
 
 
-def collect_snapshot(
-    transport: Any, manifest: BenchmarkManifest
-) -> dict[str, Any]:
+def collect_snapshot(transport: Any, manifest: BenchmarkManifest) -> dict[str, Any]:
     snapshot = npu_compile_lab.collect_snapshot(transport, manifest)
     errors = snapshot["errors"]
     snapshot["staged_artifact_states"] = {
@@ -651,29 +652,27 @@ def collect_snapshot(
         ),
         "cpu_frequency": (
             "for directory in /sys/devices/system/cpu/cpufreq/policy*; do "
-            "[ -d \"$directory\" ] || continue; "
+            '[ -d "$directory" ] || continue; '
             "printf '%s ' \"${directory##*/}\"; "
             "for name in affected_cpus scaling_cur_freq "
             "scaling_min_freq scaling_max_freq scaling_governor; do "
             "printf '%s=' \"$name\"; "
-            "cat \"$directory/$name\" 2>/dev/null || printf unavailable; "
+            'cat "$directory/$name" 2>/dev/null || printf unavailable; '
             "done; done"
         ),
         "thermal": (
             "for directory in /sys/class/thermal/thermal_zone*; do "
-            "[ -d \"$directory\" ] || continue; "
+            '[ -d "$directory" ] || continue; '
             "printf '%s type=' \"${directory##*/}\"; "
-            "cat \"$directory/type\" 2>/dev/null || printf unavailable; "
+            'cat "$directory/type" 2>/dev/null || printf unavailable; '
             "printf ' temp='; "
-            "cat \"$directory/temp\" 2>/dev/null || printf unavailable; "
+            'cat "$directory/temp" 2>/dev/null || printf unavailable; '
             "done"
         ),
         "proc_stat": "sed -n '1p' /proc/stat",
     }
     snapshot["system_context"] = {
-        name: npu_compile_lab._shell_value(
-            transport, command, name, errors
-        )
+        name: npu_compile_lab._shell_value(transport, command, name, errors)
         for name, command in context_commands.items()
     }
     return snapshot
@@ -689,9 +688,7 @@ def _competing_executor(
     )
 
 
-def verify_preflight(
-    manifest: BenchmarkManifest, snapshot: Mapping[str, Any]
-) -> None:
+def verify_preflight(manifest: BenchmarkManifest, snapshot: Mapping[str, Any]) -> None:
     if snapshot.get("errors"):
         raise PreflightError("; ".join(snapshot["errors"]))
     if snapshot.get("serials") != [manifest.serial]:
@@ -706,12 +703,8 @@ def verify_preflight(
         raise PreflightError("boot ID is missing or malformed")
     if snapshot.get("npu_parameters") != dict(manifest.npu_parameters):
         raise PreflightError("NPU parameters differ from fixed baseline")
-    if re.search(
-        r"\b199,\s*0\b", snapshot.get("galcore_device") or ""
-    ) is None:
-        raise PreflightError(
-            "/dev/galcore is not character device 199:0"
-        )
+    if re.search(r"\b199,\s*0\b", snapshot.get("galcore_device") or "") is None:
+        raise PreflightError("/dev/galcore is not character device 199:0")
     if snapshot.get("galcore_holders"):
         raise PreflightError("/dev/galcore is already held")
     if _competing_executor(manifest, snapshot):
@@ -729,14 +722,10 @@ def verify_preflight(
                 and state.get("bytes") != EXPECTED_STAGED_BYTES[path]
             )
         ):
-            raise PreflightError(
-                f"staged artifact metadata mismatch: {path}"
-            )
+            raise PreflightError(f"staged artifact metadata mismatch: {path}")
     for path in manifest.absent_artifacts:
         if (
-            snapshot.get("absent_artifact_states", {})
-            .get(path, {})
-            .get("status")
+            snapshot.get("absent_artifact_states", {}).get(path, {}).get("status")
             != "absent"
         ):
             raise PreflightError(f"forbidden CLC artifact visible: {path}")
@@ -761,27 +750,18 @@ def compare_health(
     before: Mapping[str, Any],
     after: Mapping[str, Any],
 ) -> tuple[list[str], list[str]]:
-    differences, alerts = npu_compile_lab.compare_health(
-        manifest, before, after
-    )
-    if (
-        before.get("staged_artifact_states")
-        != after.get("staged_artifact_states")
-    ):
+    differences, alerts = npu_compile_lab.compare_health(manifest, before, after)
+    if before.get("staged_artifact_states") != after.get("staged_artifact_states"):
         differences.append("staged artifact metadata changed")
     if _competing_executor(manifest, after):
         differences.append("the fixed benchmark executor remains")
-    partial = after.get("timing_output_states", {}).get(
-        REMOTE_PARTIAL_TIMING, {}
-    )
+    partial = after.get("timing_output_states", {}).get(REMOTE_PARTIAL_TIMING, {})
     if partial.get("status") != "absent":
         differences.append("partial timing output remains")
     return differences, alerts
 
 
-def build_remote_command(
-    manifest: BenchmarkManifest, sentinel: str
-) -> str:
+def build_remote_command(manifest: BenchmarkManifest, sentinel: str) -> str:
     if EXIT_RE.fullmatch(sentinel) is None:
         raise ValueError("invalid internal sentinel")
     invocation = [
@@ -805,7 +785,7 @@ def build_remote_command(
         f"{command}\n"
         "wave_erf_bench_rc=$?\n"
         f"printf '\\n{sentinel}:%s\\n' \"$wave_erf_bench_rc\"\n"
-        "exit \"$wave_erf_bench_rc\"\n"
+        'exit "$wave_erf_bench_rc"\n'
     )
 
 
@@ -816,9 +796,7 @@ def parse_remote_exit(stdout: str, sentinel: str) -> tuple[str, int]:
     )
     matches = list(pattern.finditer(stdout))
     if len(matches) != 1:
-        raise ResultError(
-            f"expected one remote-exit sentinel, observed {len(matches)}"
-        )
+        raise ResultError(f"expected one remote-exit sentinel, observed {len(matches)}")
     remote_exit = int(matches[0]["exit"])
     if not 0 <= remote_exit <= 255:
         raise ResultError("remote exit is outside 0..255")
@@ -851,18 +829,14 @@ def run_once(
         "result": None,
     }
     preflight = collect_snapshot(transport, manifest)
-    npu_compile_lab._write_json_exclusive(
-        run_directory / "preflight.json", preflight
-    )
+    npu_compile_lab._write_json_exclusive(run_directory / "preflight.json", preflight)
     try:
         verify_preflight(manifest, preflight)
     except PreflightError as exc:
         envelope["status"] = "PREFLIGHT_FAILED"
         envelope["errors"].append(str(exc))
         envelope["finished_at"] = npu_compile_lab._timestamp()
-        npu_compile_lab._write_json_exclusive(
-            run_directory / "run.json", envelope
-        )
+        npu_compile_lab._write_json_exclusive(run_directory / "run.json", envelope)
         return envelope, run_directory
 
     sentinel = f"__WAVE_ERF_BENCH_EXIT_{uuid.uuid4().hex}__"
@@ -880,12 +854,8 @@ def run_once(
         run_directory / "stderr.txt", command_result.stderr
     )
     postflight = collect_snapshot(transport, manifest)
-    npu_compile_lab._write_json_exclusive(
-        run_directory / "postflight.json", postflight
-    )
-    differences, alerts = compare_health(
-        manifest, preflight, postflight
-    )
+    npu_compile_lab._write_json_exclusive(run_directory / "postflight.json", postflight)
+    differences, alerts = compare_health(manifest, preflight, postflight)
     envelope["health_differences"] = differences
     envelope["kernel_alerts"] = alerts
     envelope["transport"] = {
@@ -900,9 +870,7 @@ def run_once(
         )
     else:
         try:
-            cleaned, remote_exit = parse_remote_exit(
-                command_result.stdout, sentinel
-            )
+            cleaned, remote_exit = parse_remote_exit(command_result.stdout, sentinel)
             envelope["transport"]["remote_exit"] = remote_exit
             try:
                 npu_compile_lab.verify_transport_status(
@@ -913,9 +881,7 @@ def run_once(
             except npu_compile_lab.ResultError as exc:
                 raise ResultError(str(exc)) from exc
             native = parse_native_result(cleaned, manifest)
-            output_state = postflight["timing_output_states"][
-                REMOTE_TIMING
-            ]
+            output_state = postflight["timing_output_states"][REMOTE_TIMING]
             if (
                 output_state.get("status") != "present"
                 or output_state.get("permissions") != "-r--r--r--"
@@ -923,25 +889,17 @@ def run_once(
             ):
                 raise ResultError("remote fixed timing metadata differs")
             local_timing = run_directory / "erf-cpu-npu-timings-v1.bin"
-            pull = transport.run(
-                ("pull", REMOTE_TIMING, str(local_timing)), 15_000
-            )
+            pull = transport.run(("pull", REMOTE_TIMING, str(local_timing)), 15_000)
             npu_compile_lab._write_text_exclusive(
                 run_directory / "pull.stdout.txt", pull.stdout
             )
             npu_compile_lab._write_text_exclusive(
                 run_directory / "pull.stderr.txt", pull.stderr
             )
-            if (
-                pull.timed_out
-                or pull.returncode != 0
-                or not local_timing.is_file()
-            ):
+            if pull.timed_out or pull.returncode != 0 or not local_timing.is_file():
                 raise ResultError("ADB timing pull failed")
             payload = local_timing.read_bytes()
-            if hashlib.sha256(payload).hexdigest() != output_state.get(
-                "sha256"
-            ):
+            if hashlib.sha256(payload).hexdigest() != output_state.get("sha256"):
                 raise ResultError("pulled/remote timing hashes differ")
             timing_fnv = f"0x{stream_lab.fnv1a64(payload):016x}"
             if timing_fnv != native["timing_fnv1a64"]:
@@ -949,20 +907,14 @@ def run_once(
             timing = parse_timing_payload(payload)
             timing_summary = summarize_timings(timing)
             if (
-                timing_summary["cpu_thread_ns"][
-                    "resolution_limited_zeros"
-                ]
+                timing_summary["cpu_thread_ns"]["resolution_limited_zeros"]
                 != native["cpu_thread_zero_count"]
             ):
-                raise ResultError(
-                    "native/raw CPU thread zero counts differ"
-                )
+                raise ResultError("native/raw CPU thread zero counts differ")
             envelope["result"] = {
                 "native": native,
                 "timing_artifact": {
-                    "path": local_timing.relative_to(
-                        REPOSITORY_ROOT
-                    ).as_posix(),
+                    "path": local_timing.relative_to(REPOSITORY_ROOT).as_posix(),
                     "bytes": len(payload),
                     "sha256": hashlib.sha256(payload).hexdigest(),
                     "fnv1a64": timing_fnv,
@@ -981,9 +933,7 @@ def run_once(
         envelope["errors"].append("device health gate failed")
     envelope["status"] = "PASS" if not envelope["errors"] else "FAIL"
     envelope["finished_at"] = npu_compile_lab._timestamp()
-    npu_compile_lab._write_json_exclusive(
-        run_directory / "run.json", envelope
-    )
+    npu_compile_lab._write_json_exclusive(run_directory / "run.json", envelope)
     return envelope, run_directory
 
 
@@ -1010,9 +960,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 json.dumps(
                     {
                         "manifest_sha256": manifest.sha256,
-                        "manifest_file_sha256": (
-                            EXPECTED_MANIFEST_FILE_SHA256
-                        ),
+                        "manifest_file_sha256": (EXPECTED_MANIFEST_FILE_SHA256),
                         "mode": "benchmark",
                         "cold_frames": COLD_FRAMES,
                         "warmup_frames": WARMUP_FRAMES,
@@ -1042,9 +990,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "run_directory": run_directory.relative_to(
                             REPOSITORY_ROOT
                         ).as_posix(),
-                        "execution_attempts": envelope[
-                            "execution_attempts"
-                        ],
+                        "execution_attempts": envelope["execution_attempts"],
                         "errors": envelope["errors"],
                     },
                     indent=2,

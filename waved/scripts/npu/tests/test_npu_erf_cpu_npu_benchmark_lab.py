@@ -112,9 +112,14 @@ class RawTimingTests(unittest.TestCase):
         self.assertEqual(summary["cpu_wall_ns"]["p99"], 9_999)
         self.assertEqual(summary["npu_total_wall_ns"]["maximum"], 10_229)
         self.assertGreater(summary["ratios"]["npu_total_over_cpu_wall"], 1.0)
-        limited = lab.parse_timing_payload(
-            self._payload(zero_cpu_thread=True)
+        self.assertEqual(summary["classification"], "cpu-faster")
+        self.assertEqual(
+            summary["paired_ratios"]["npu_run_over_cpu_wall"]["count"],
+            lab.MEASURED_FRAMES,
         )
+        self.assertEqual(summary["order_subsets"]["cpu-first"]["count"], 5_000)
+        self.assertEqual(summary["order_subsets"]["npu-first"]["count"], 5_000)
+        limited = lab.parse_timing_payload(self._payload(zero_cpu_thread=True))
         limited_summary = lab.summarize_timings(limited)
         self.assertEqual(
             limited_summary["cpu_thread_ns"]["resolution_limited_zeros"],
@@ -199,17 +204,14 @@ class BenchmarkHealthGateTests(unittest.TestCase):
             "kernel": self.manifest.kernel,
             "boot_id": "0b8091ee-557d-4857-8019-af1aaab9d665",
             "uptime": "100.0 90.0",
-            "galcore_device": (
-                "crw-rw---- 1 0 0 199, 0 Jul 29 12:00 /dev/galcore"
-            ),
+            "galcore_device": ("crw-rw---- 1 0 0 199, 0 Jul 29 12:00 /dev/galcore"),
             "npu_parameters": dict(self.manifest.npu_parameters),
             "galcore_holders": [],
             "processes": [],
             "artifact_hashes": dict(self.manifest.required_artifacts),
             "output_states": {},
             "absent_artifact_states": {
-                path: {"status": "absent"}
-                for path in self.manifest.absent_artifacts
+                path: {"status": "absent"} for path in self.manifest.absent_artifacts
             },
             "staged_artifact_states": {
                 path: {
@@ -246,12 +248,8 @@ class BenchmarkHealthGateTests(unittest.TestCase):
 
         after = copy.deepcopy(self.snapshot)
         after["uptime"] = "101.0 91.0"
-        after["timing_output_states"][lab.REMOTE_PARTIAL_TIMING] = {
-            "status": "present"
-        }
-        differences, _ = lab.compare_health(
-            self.manifest, self.snapshot, after
-        )
+        after["timing_output_states"][lab.REMOTE_PARTIAL_TIMING] = {"status": "present"}
+        differences, _ = lab.compare_health(self.manifest, self.snapshot, after)
         self.assertIn("partial timing output remains", differences)
 
 

@@ -87,6 +87,7 @@ for clc_path in /lib/libCLC.so /usr/lib/libCLC.so; do
         exit 15
     fi
 done
+# shellcheck disable=SC2016  # Expand fd/target only in the remote shell.
 holders="$(
     adb -s "$EXPECTED_SERIAL" shell '
 for fd in /proc/[0-9]*/fd/*; do

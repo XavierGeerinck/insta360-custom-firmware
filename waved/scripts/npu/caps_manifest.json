@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "device": {
+    "serial": "PSP_0000000000000000",
+    "kernel": "Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux",
+    "galcore_major_minor": "199:0",
+    "npu_parameters": {
+      "enableNN": "255",
+      "nanoqFreq": "838860800",
+      "recovery": "1"
+    }
+  },
+  "environment": {
+    "LD_LIBRARY_PATH": "/usr/lib"
+  },
+  "remote_executable": "/tmp/wave-npu-compile/bin/wave-npu-query-caps-v1",
+  "timeout_ms": 12000,
+  "required_artifacts": {
+    "/lib/libc.so.6": "cfc6aa042a880a87e4f0adbfb74b55c9ba9607561905b20f58da96fcb2d3bb86",
+    "/lib/libgcc_s.so.1": "859408230bf4baf943d0c7985870488683b6e61c0cb5725ed8934d8c45ea0ab1",
+    "/lib/libpthread.so.0": "7bbc9a4a3924f9da05f6969be2422f1ee65ce9432eb376f9be071b59e39a13f3",
+    "/lib64/ld-2.31.so": "912002c930f3096d98fc32e0897466049d6e5182cbb606b456b2ebcc99551366",
+    "/tmp/wave-npu-compile/bin/wave-npu-query-caps-v1": "6a1c0ac1af75c31de32e0b8d827bbde898b6a606919d5aef3987967ac459bfe9",
+    "/usr/lib/libArchModelSw.so": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f",
+    "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+    "/usr/lib/libNNArchPerf.so": "253167677e9839d09815de93a86423824f26f56f097c100d59c03170adecffa9",
+    "/usr/lib/libOpenCL.so": "40ea26cfc80a43b79af09c0798ced760bb5339f9eef9450e6d08931c3b320ded",
+    "/usr/lib/libOpenVX.so": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb",
+    "/usr/lib/libOpenVXU.so": "370083254b7de8478f95fe90914245ddb4a52b2b3520749fe01f3ab45fba791c",
+    "/usr/lib/libVSC.so": "e9a39fe3b522b3926ff34f3fb380c73983ad8d48c5f40ffd6e6d8024adc2ed18",
+    "/usr/lib/libVSC_Lite.so": "e7c2c38fa813c669b7370795fad5d7b1207881103c481a6ac90e4785d058591f",
+    "/usr/lib/libovxlib.so": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9",
+    "/usr/lib/libstdc++.so.6": "d2189eb10122876a7fd35909eaecbea22da38462ce345d9bf46a53f500435009"
+  },
+  "expected_identity": {
+    "chip_model": "0x00009000",
+    "chip_product_id": "0x05090001",
+    "chip_eco_id": "0x04000000",
+    "customer_id": "0x1000000e"
+  }
+}

@@ -15,7 +15,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 SCHEMA_VERSION = 1

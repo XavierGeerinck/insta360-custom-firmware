@@ -31,6 +31,10 @@ audio_dump/
 
 # Large binary assets (kept local only)
 models/
+# Tracked NPU model documentation and qualification metadata (no binaries).
+!docs/npu/models/
+!docs/npu/models/erf-mask/
+!docs/npu/models/erf-mask/**
 ghidra_projects/
 *.swu
 *.pkg

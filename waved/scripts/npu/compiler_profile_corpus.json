@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "artifacts": {
+    "adjacent-clc-6.4.18": {
+      "path": "waved/third_party/vip9000-sdk/6.4.18.5/drivers/libCLC.so",
+      "sha256": "a1e5d11cafb6d23c7c787d24a71a766782ea022346f1580797d892238bd99f14",
+      "kind": "elf",
+      "roles": [
+        "adjacent-sdk",
+        "compiler",
+        "quarantined"
+      ],
+      "execution_policy": "quarantined-never-call"
+    },
+    "adjacent-gal-6.4.18": {
+      "path": "waved/third_party/vip9000-sdk/6.4.18.5/drivers/libGAL.so",
+      "sha256": "fd544a476e0105b51d710aeb0fc8e173c85aabd77766d3469348a6b7c99512fb",
+      "kind": "elf",
+      "roles": [
+        "adjacent-sdk",
+        "configuration-discovery",
+        "runtime"
+      ],
+      "execution_policy": "static-only"
+    },
+    "adjacent-openvx-6.4.18": {
+      "path": "waved/third_party/vip9000-sdk/6.4.18.5/drivers/libOpenVX.so",
+      "sha256": "59ccad8a74c0e8e29487b0427c9c8898340315cc598f9dade646db70b9bcc75e",
+      "kind": "elf",
+      "roles": [
+        "adjacent-sdk",
+        "configuration-discovery",
+        "openvx"
+      ],
+      "execution_policy": "static-only"
+    },
+    "adjacent-vsc-6.4.18": {
+      "path": "waved/third_party/vip9000-sdk/6.4.18.5/drivers/libVSC.so",
+      "sha256": "7d20e84d6314d9c75a5288de418aa660fd365f1b187dca1812faa03c0ed3c079",
+      "kind": "elf",
+      "roles": [
+        "adjacent-sdk",
+        "configuration-discovery",
+        "shader-compiler"
+      ],
+      "execution_policy": "static-only"
+    },
+    "timvx-multi-device-readme": {
+      "path": "waved/third_party/TIM-VX/samples/multi_device/README",
+      "sha256": "53f7b6cfe4bbce04d43b3889b22806dba366457a26525e9c1ce57b6979ca7481",
+      "kind": "text",
+      "roles": [
+        "source-documentation",
+        "viv-gpu-file-example"
+      ],
+      "execution_policy": "not-executable"
+    },
+    "timvx-platform-readme": {
+      "path": "waved/third_party/TIM-VX/samples/platform_sample/README",
+      "sha256": "9bf64795fd7e77def7877cfd4dd856557d16f4ab506ca2f3f9a20ed77bbf40e1",
+      "kind": "text",
+      "roles": [
+        "source-documentation",
+        "viv-gpu-file-example"
+      ],
+      "execution_policy": "not-executable"
+    },
+    "wave-gal-exact": {
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libGAL.so",
+      "sha256": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "exact-wave",
+        "runtime"
+      ],
+      "execution_policy": "static-only"
+    },
+    "wave-openvx-exact": {
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libOpenVX.so",
+      "sha256": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "exact-wave",
+        "openvx"
+      ],
+      "execution_policy": "static-only"
+    },
+    "wave-profile-poc9a": {
+      "path": "docs/npu/profile/wave-profile-evidence.json",
+      "sha256": "0e465f66f80c19747d4f0a73ab7db0fc9ba4a3b873fb9253a544b6dc4c3235e8",
+      "kind": "text",
+      "roles": [
+        "architecture-profile",
+        "generated-evidence",
+        "poc9a"
+      ],
+      "execution_policy": "not-executable"
+    },
+    "wave-vsc-exact": {
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libVSC.so",
+      "sha256": "e9a39fe3b522b3926ff34f3fb380c73983ad8d48c5f40ffd6e6d8024adc2ed18",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "exact-wave",
+        "shader-compiler"
+      ],
+      "execution_policy": "static-only"
+    },
+    "wave-vsc-lite-exact": {
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libVSC_Lite.so",
+      "sha256": "e7c2c38fa813c669b7370795fad5d7b1207881103c481a6ac90e4785d058591f",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "exact-wave",
+        "shader-compiler-lite"
+      ],
+      "execution_policy": "static-only"
+    },
+    "x86-clc-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libCLC.so",
+      "sha256": "102d040c1a4bd83595bf99705494603a35d447f5efdaa0a4672ef0793406ecba",
+      "kind": "elf",
+      "roles": [
+        "compiler",
+        "simulator-sdk"
+      ],
+      "execution_policy": "static-only"
+    },
+    "x86-emulator-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libEmulator.so",
+      "sha256": "56e34c51ca5476e0ca54155d4e78679d96281552ddad7674f5ce4fe2fe5f7de6",
+      "kind": "elf",
+      "roles": [
+        "configuration-parser",
+        "host-x86",
+        "simulator-sdk"
+      ],
+      "execution_policy": "isolated-parser-only"
+    },
+    "x86-vdtproxy-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libvdtproxy.so",
+      "sha256": "64934faba48ffb143bb7b52519f99ced40d69a2ecc6f56d0fe5bb23a866edf9f",
+      "kind": "elf",
+      "roles": [
+        "configuration-parser-dependency",
+        "host-x86",
+        "simulator-sdk"
+      ],
+      "execution_policy": "isolated-parser-only"
+    },
+    "x86-gal-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libGAL.so",
+      "sha256": "013718031b134ad0f8af859179e32615b9de939a7873ccf539d30ff172a61e9c",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "runtime",
+        "simulator-sdk"
+      ],
+      "execution_policy": "static-only"
+    },
+    "x86-openvx-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libOpenVX.so.1.3.0",
+      "sha256": "423514a8f50c8d3c15d7b257b2027a1cd9434051a74ed0b2936b2df38badeb38",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "openvx",
+        "simulator-sdk"
+      ],
+      "execution_policy": "static-only"
+    },
+    "x86-vsc-6.4.6": {
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libVSC.so",
+      "sha256": "2081c87900446cb3561046d5652b695280eff7760c5de204cf45d658634aed33",
+      "kind": "elf",
+      "roles": [
+        "configuration-discovery",
+        "shader-compiler",
+        "simulator-sdk"
+      ],
+      "execution_policy": "static-only"
+    }
+  }
+}

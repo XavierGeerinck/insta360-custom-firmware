@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "x86-simulator-emulator": {
+      "firmware": "tim-vx-x86-simulator",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libEmulator.so",
+      "sha256": "56e34c51ca5476e0ca54155d4e78679d96281552ddad7674f5ce4fe2fe5f7de6",
+      "roles": [
+        "configuration-parser",
+        "differential-reference",
+        "host-x86",
+        "static-only"
+      ],
+      "functions": [
+        "StateParser::QueryFeatureDatabase",
+        "StateParser::StateParser",
+        "StateParser::chooseTargetByConfigFile",
+        "StateParser::chooseTargetByFeature",
+        "StateParser::chooseTargetByID",
+        "StateParser::chooseTargetByName",
+        "StateParser::getConfig",
+        "StateParser::~StateParser",
+        "gcQueryFeatureDB"
+      ],
+      "string_filters": [
+        "ChipModel",
+        "ChipRevision",
+        "QueryFeatureDB",
+        "VSIMULATOR_CONFIG",
+        "chipModel",
+        "chipRevision",
+        "customerID",
+        "ecoID",
+        "not found GPU configuration",
+        "productID"
+      ]
+    }
+  }
+}

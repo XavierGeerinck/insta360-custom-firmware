@@ -40,7 +40,8 @@ import ghidra.program.model.symbol.SymbolTable;
 
 public class ExportNpuAbi extends GhidraScript {
     private static final int DECOMPILE_TIMEOUT_SECONDS = 60;
-    private static final int MAX_DECOMPILED_CHARS = 24000;
+    private static final int DEFAULT_MAX_DECOMPILED_CHARS = 24000;
+    private static final int HARD_MAX_DECOMPILED_CHARS = 131072;
     private static final int MAX_DIAGNOSTIC_CHARS = 1000;
     private static final int MAX_DIRECT_CALLERS_PER_TARGET = 64;
 
@@ -119,6 +120,20 @@ public class ExportNpuAbi extends GhidraScript {
         List<String> targets = splitAndSort(args[1]);
         List<String> diagnosticFilters =
             args.length >= 3 ? splitAndSort(args[2]) : Collections.emptyList();
+        int maxDecompiledChars = DEFAULT_MAX_DECOMPILED_CHARS;
+        if (args.length >= 4) {
+            maxDecompiledChars = Integer.parseInt(args[3]);
+            if (
+                maxDecompiledChars < DEFAULT_MAX_DECOMPILED_CHARS ||
+                maxDecompiledChars > HARD_MAX_DECOMPILED_CHARS
+            ) {
+                throw new IllegalArgumentException(
+                    "maximum decompiled characters must be " +
+                    DEFAULT_MAX_DECOMPILED_CHARS + ".." +
+                    HARD_MAX_DECOMPILED_CHARS
+                );
+            }
+        }
         if (targets.isEmpty()) {
             throw new IllegalArgumentException("target list must not be empty");
         }
@@ -201,7 +216,8 @@ public class ExportNpuAbi extends GhidraScript {
                         currentProgram.getListing(),
                         currentProgram.getReferenceManager(),
                         decompiler,
-                        diagnosticFilters
+                        diagnosticFilters,
+                        maxDecompiledChars
                     )
                 );
             }
@@ -253,7 +269,8 @@ public class ExportNpuAbi extends GhidraScript {
                         currentProgram.getListing(),
                         currentProgram.getReferenceManager(),
                         decompiler,
-                        diagnosticFilters
+                        diagnosticFilters,
+                        maxDecompiledChars
                     )
                 );
                 callerCount++;
@@ -298,7 +315,8 @@ public class ExportNpuAbi extends GhidraScript {
         Listing listing,
         ReferenceManager referenceManager,
         DecompInterface decompiler,
-        List<String> diagnosticFilters
+        List<String> diagnosticFilters,
+        int maxDecompiledChars
     ) {
         FunctionEvidence result = new FunctionEvidence();
         result.role = role;
@@ -413,9 +431,9 @@ public class ExportNpuAbi extends GhidraScript {
                         .replace('\r', '\n');
                     result.decompile_success = true;
                     result.decompile_truncated =
-                        code.length() > MAX_DECOMPILED_CHARS;
+                        code.length() > maxDecompiledChars;
                     result.decompiled_c = bounded(
-                        code, MAX_DECOMPILED_CHARS
+                        code, maxDecompiledChars
                     );
                 }
                 else {

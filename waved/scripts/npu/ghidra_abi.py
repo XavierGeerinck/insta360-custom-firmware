@@ -40,6 +40,8 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 HEADLESS_TIMEOUT_SECONDS = 1800
 MAX_TOOL_LOG_CHARS = 12000
+MIN_DECOMPILED_CHARS = 24000
+MAX_DECOMPILED_CHARS = 131072
 
 
 class GhidraAbiError(Exception):
@@ -264,8 +266,23 @@ def _find_analyze_headless() -> Path:
 
 
 class HeadlessGhidra:
-    def __init__(self, config: GhidraConfig):
+    def __init__(
+        self,
+        config: GhidraConfig,
+        *,
+        max_decompiled_chars: int | None = None,
+    ):
         self.config = config
+        if max_decompiled_chars is not None and not (
+            MIN_DECOMPILED_CHARS
+            <= max_decompiled_chars
+            <= MAX_DECOMPILED_CHARS
+        ):
+            raise GhidraExecutionError(
+                "max_decompiled_chars must be "
+                f"{MIN_DECOMPILED_CHARS}..{MAX_DECOMPILED_CHARS}"
+            )
+        self.max_decompiled_chars = max_decompiled_chars
         self.executable = _find_analyze_headless()
         self.script_directory = (
             config.repository_root / "scripts/ghidra"
@@ -297,8 +314,10 @@ class HeadlessGhidra:
                 str(output),
                 ",".join(target.functions),
                 ",".join(target.string_filters),
-                "-deleteProject",
             ]
+            if self.max_decompiled_chars is not None:
+                command.append(str(self.max_decompiled_chars))
+            command.append("-deleteProject")
             environment = os.environ.copy()
             java_home = Path(
                 "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"

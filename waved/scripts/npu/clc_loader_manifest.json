@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "device": {
+    "serial": "PSP_0000000000000000",
+    "kernel": "Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux",
+    "galcore_major_minor": "199:0",
+    "npu_parameters": {
+      "enableNN": "255",
+      "nanoqFreq": "838860800",
+      "recovery": "1"
+    }
+  },
+  "environment": {
+    "LD_LIBRARY_PATH": "/tmp/wave-npu-compile/lib:/usr/lib"
+  },
+  "remote_executable": "/tmp/wave-npu-compile/bin/wave-npu-clc-loader-probe-v1",
+  "timeout_ms": 12000,
+  "required_artifacts": {
+    "/lib/libc.so.6": "cfc6aa042a880a87e4f0adbfb74b55c9ba9607561905b20f58da96fcb2d3bb86",
+    "/lib/libdl.so.2": "c710e23f6825dea065bc8f254ec3272cbb91f7a8c1b45969e289cb5d25fa7919",
+    "/lib/libm.so.6": "da77dc08dc2b89000f1f25edb31741c85c3bb97910876d513ca6a0233ca67911",
+    "/lib/libpthread.so.0": "7bbc9a4a3924f9da05f6969be2422f1ee65ce9432eb376f9be071b59e39a13f3",
+    "/lib/librt.so.1": "7aea2a3b0aea7a15660a4af45693e93d2d6582482a79d92229da299bb0d5ce8b",
+    "/lib64/ld-2.31.so": "912002c930f3096d98fc32e0897466049d6e5182cbb606b456b2ebcc99551366",
+    "/tmp/wave-npu-compile/bin/wave-npu-clc-loader-probe-v1": "33efe6b0e4cf081e9b871fb12dd50654b52912cd566252caeba51883b72f8e79",
+    "/tmp/wave-npu-compile/lib/libCLC.so": "a1e5d11cafb6d23c7c787d24a71a766782ea022346f1580797d892238bd99f14",
+    "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+    "/usr/lib/libVSC.so": "e9a39fe3b522b3926ff34f3fb380c73983ad8d48c5f40ffd6e6d8024adc2ed18"
+  }
+}

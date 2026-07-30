@@ -112,6 +112,22 @@ def set_u32(data: bytearray, offset: int, value: int) -> None:
     struct.pack_into("<I", data, offset, value)
 
 
+def v2_serializer_file_checksum(
+    section_payloads: list[tuple[int, bytes, int]],
+) -> int:
+    checksum = 0
+    for section_type, section_data, _stride in section_payloads:
+        if section_type == 40:
+            normalized = bytearray(section_data)
+            if len(normalized) % nbg_format.V2_CHECKSUM_RECORD_BYTES:
+                raise ValueError("checksum section must contain whole records")
+            for offset in range(4, len(normalized), 8):
+                normalized[offset : offset + 4] = b"\0" * 4
+            section_data = bytes(normalized)
+        checksum = zlib.crc32(section_data, checksum)
+    return checksum
+
+
 def make_v2(
     *,
     input_record: bytes | None = None,
@@ -164,7 +180,6 @@ def make_v2(
     data[:4] = nbg_format.MAGIC
     set_u32(data, 4, nbg_format.V2_VERSION)
     set_u32(data, 8, 0x1000000E)
-    set_u32(data, 12, 0x12345678)
     set_u32(data, 24, directory_locator)
     set_u32(data, 28, nbg_format.V2_SUB_HEADER_BYTES)
     set_u32(data, 32, 1)
@@ -180,6 +195,7 @@ def make_v2(
     data.extend(payload)
     data.extend(bytes(range(256)) * 2)
     set_u32(data, 16, len(data))
+    set_u32(data, 12, v2_serializer_file_checksum(section_payloads))
     return bytes(data)
 
 
@@ -567,7 +583,11 @@ class V2ParserTests(unittest.TestCase):
         self.assertEqual(result["product"], 0x1000000E)
         self.assertEqual(result["target"], 0x1000000E)
         self.assertEqual(result["directory"]["section_header_count"], 3)
-        self.assertEqual(result["header"]["crc32"], 0x12345678)
+        self.assertEqual(
+            result["header"]["crc32"],
+            result["file_checksum"]["computed_crc32"],
+        )
+        self.assertTrue(result["file_checksum"]["matches"])
         self.assertEqual(result["header"]["sub_header_size"], 12)
         self.assertEqual(result["inputs"][0]["dimensions"], [4, 2])
         self.assertEqual(result["inputs"][0]["byte_size"], 16)
@@ -673,6 +693,153 @@ class V2ParserTests(unittest.TestCase):
             result["checksums"][0]["section_type_name"],
             "NBG_SECTION_COEF_DATA",
         )
+        self.assertEqual(
+            result["file_checksum"]["normalized_checksum_value_words"], 1
+        )
+
+    def test_serializer_file_checksum_scope_and_mismatch(self):
+        base = bytearray(make_v2())
+        result = nbg_format.parse_bytes(bytes(base))
+        integrity = result["file_checksum"]
+        self.assertEqual(integrity["algorithm"], "crc32-ieee")
+        self.assertEqual(integrity["initial_value"], 0)
+        self.assertEqual(
+            integrity["scope"], "section-payloads-in-directory-order"
+        )
+        self.assertEqual(integrity["excluded_alignment_gap_bytes"], 0)
+        self.assertTrue(integrity["matches"])
+
+        wrong_header = bytearray(base)
+        set_u32(wrong_header, 12, result["header"]["crc32"] ^ 1)
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bytes(wrong_header))
+        self.assertEqual(caught.exception.code, "file-checksum-mismatch")
+
+        opaque_section = next(
+            section for section in result["sections"] if section["type"] == 24
+        )
+        changed_payload = bytearray(base)
+        changed_payload[opaque_section["offset"]] ^= 1
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bytes(changed_payload))
+        self.assertEqual(caught.exception.code, "file-checksum-mismatch")
+
+        changed_tail = bytearray(base)
+        changed_tail[-1] ^= 1
+        tail_result = nbg_format.parse_bytes(bytes(changed_tail))
+        self.assertTrue(tail_result["file_checksum"]["matches"])
+        self.assertNotEqual(tail_result["sha256"], result["sha256"])
+
+        changed_product = bytearray(base)
+        set_u32(changed_product, 8, 0x1000000F)
+        product_result = nbg_format.parse_bytes(bytes(changed_product))
+        self.assertTrue(product_result["file_checksum"]["matches"])
+
+    def test_checksum_values_are_zero_during_file_checksum(self):
+        opaque = b"serializer-order"
+        checksum_record = struct.pack(
+            "<II", 24, zlib.crc32(opaque) & 0xFFFFFFFF
+        )
+        base = bytearray(
+            make_v2(
+                opaque=opaque,
+                extra_sections=[(40, checksum_record, 8)],
+            )
+        )
+        result = nbg_format.parse_bytes(bytes(base))
+        self.assertTrue(result["file_checksum"]["matches"])
+        self.assertEqual(
+            result["file_checksum"]["normalized_checksum_value_words"], 1
+        )
+
+        checksum_section = next(
+            section for section in result["sections"] if section["type"] == 40
+        )
+        changed_value = bytearray(base)
+        changed_value[checksum_section["offset"] + 4] ^= 1
+        with self.assertRaises(nbg_format.NbgParseError) as caught:
+            nbg_format.parse_bytes(bytes(changed_value))
+        self.assertEqual(caught.exception.code, "checksum-mismatch")
+
+    def test_dyna_io_table_maps_aligned_payload_ranges(self):
+        dyna_data = bytes((0, 1, 2, 3)) + bytes(60)
+        result = nbg_format.parse_bytes(
+            make_v2(
+                extra_sections=[
+                    (20, dyna_data, 1),
+                    (26, struct.pack("<II", 0, 4), 8),
+                ]
+            )
+        )
+        profile = result["dynamic_io"]
+        self.assertEqual(profile["entry_count"], 1)
+        self.assertEqual(profile["region_bytes"], 64)
+        self.assertEqual(profile["payload_bytes"], 4)
+        self.assertEqual(profile["padding_bytes"], 60)
+        self.assertTrue(profile["padding_all_zero"])
+        self.assertEqual(
+            profile["entries"],
+            [
+                {
+                    "end": 4,
+                    "index": 0,
+                    "offset": 0,
+                    "offset_alignment": 64,
+                    "size": 4,
+                }
+            ],
+        )
+
+    def test_dyna_io_pair_shape_ranges_and_padding_fail(self):
+        data = bytes((0, 1, 2, 3)) + bytes(60)
+        cases = [
+            (
+                [(20, data, 1)],
+                "dyna-io-pair-mismatch",
+            ),
+            (
+                [(26, struct.pack("<II", 0, 4), 8)],
+                "dyna-io-pair-mismatch",
+            ),
+            (
+                [(20, data, 1), (26, struct.pack("<II", 0, 4), 4)],
+                "invalid-section-record-size",
+            ),
+            (
+                [(20, data, 1), (26, struct.pack("<II", 64, 1), 8)],
+                "dyna-io-range",
+            ),
+            (
+                [
+                    (20, data, 1),
+                    (26, struct.pack("<IIII", 0, 4, 0, 4), 8),
+                ],
+                "dyna-io-overlap",
+            ),
+            (
+                [
+                    (20, data, 1),
+                    (26, struct.pack("<IIII", 0, 4, 4, 4), 8),
+                ],
+                "dyna-io-alignment",
+            ),
+            (
+                [(20, data, 1), (26, struct.pack("<II", 0, 0), 8)],
+                "dyna-io-empty-entry",
+            ),
+            (
+                [
+                    (20, bytes((0, 1, 2, 3, 9)) + bytes(59), 1),
+                    (26, struct.pack("<II", 0, 4), 8),
+                ],
+                "dyna-io-padding-nonzero",
+            ),
+        ]
+        for sections, code in cases:
+            with self.subTest(code=code):
+                with self.assertRaises(nbg_format.NbgParseError) as caught:
+                    nbg_format.parse_bytes(make_v2(extra_sections=sections))
+                self.assertEqual(caught.exception.code, code)
 
     def test_declared_size_locator_record_size_and_count_fail(self):
         base = bytearray(make_v2())

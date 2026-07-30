@@ -53,6 +53,8 @@ V2_NETWORK_INFO_BYTES = 220
 V2_MEMORY_POOL_BYTES = 8
 V2_SRAM_BYTES = 4
 V2_CHECKSUM_RECORD_BYTES = 8
+V2_DYNA_IO_TABLE_RECORD_BYTES = 8
+V2_DYNA_IO_ALIGNMENT = 64
 CONNECTION_TAIL_BYTES = 512
 MAX_DIRECTORY_RECORDS = 256
 MAX_IO_RECORDS = 256
@@ -1813,6 +1815,268 @@ def _parse_v2_checksums(
     return checksums
 
 
+def _first_nonzero_byte(
+    reader: CheckedReader,
+    offset: int,
+    size: int,
+    *,
+    field: str,
+) -> int | None:
+    reader.checked_range(
+        offset,
+        size,
+        field,
+        code="dyna-io-range",
+        stage="v2-dyna-io",
+    )
+    cursor = offset
+    try:
+        for chunk in reader.source.chunks(
+            offset, size, FINGERPRINT_CHUNK_BYTES
+        ):
+            for index, value in enumerate(chunk):
+                if value:
+                    return cursor + index
+            cursor += len(chunk)
+    except OSError as exc:
+        raise NbgParseError(
+            "dyna-io-range",
+            "v2-dyna-io",
+            f"streaming read failed: {exc}",
+            offset=offset,
+            context=field,
+        ) from exc
+    return None
+
+
+def _parse_v2_dynamic_io(
+    reader: CheckedReader, sections: Sequence[dict[str, Any]]
+) -> dict[str, Any] | None:
+    data_section = _one_v2_section(sections, 20)
+    table_section = _one_v2_section(sections, 26)
+    if (data_section is None) != (table_section is None):
+        present = data_section or table_section
+        assert present is not None
+        raise NbgParseError(
+            "dyna-io-pair-mismatch",
+            "v2-dyna-io",
+            "DYNAIO data and table sections must occur together",
+            offset=present["offset"],
+        )
+    if data_section is None or table_section is None:
+        return None
+
+    _require_v2_section_shape(data_section, entry_size=1)
+    _require_v2_section_shape(
+        table_section, entry_size=V2_DYNA_IO_TABLE_RECORD_BYTES
+    )
+    region_bytes = data_section["size"]
+    if (
+        region_bytes == 0
+        or region_bytes % V2_DYNA_IO_ALIGNMENT != 0
+    ):
+        raise NbgParseError(
+            "dyna-io-region-alignment",
+            "v2-dyna-io",
+            f"DYNAIO region must be a nonempty multiple of "
+            f"{V2_DYNA_IO_ALIGNMENT} bytes, observed {region_bytes}",
+            offset=data_section["offset"],
+        )
+    count = table_section["record_count"]
+    assert isinstance(count, int)
+    if not 1 <= count <= MAX_LAYER_OR_OPERATION_COUNT:
+        raise NbgParseError(
+            "section-count-limit",
+            "v2-dyna-io",
+            f"expected 1..{MAX_LAYER_OR_OPERATION_COUNT} table records, "
+            f"observed {count}",
+            offset=table_section["offset"],
+        )
+
+    entries: list[dict[str, Any]] = []
+    payload_bytes = 0
+    prior_end = 0
+    padding_ranges: list[tuple[int, int]] = []
+    for index in range(count):
+        record_offset = (
+            table_section["offset"]
+            + index * V2_DYNA_IO_TABLE_RECORD_BYTES
+        )
+        relative_offset = reader.u32(
+            record_offset,
+            f"dynamic_io.entries[{index}].offset",
+            stage="v2-dyna-io",
+        )
+        size = reader.u32(
+            record_offset + 4,
+            f"dynamic_io.entries[{index}].size",
+            stage="v2-dyna-io",
+        )
+        if size == 0:
+            raise NbgParseError(
+                "dyna-io-empty-entry",
+                "v2-dyna-io",
+                "DYNAIO table entries must have positive size",
+                offset=record_offset + 4,
+                context=f"entry {index}",
+            )
+        if relative_offset % V2_DYNA_IO_ALIGNMENT:
+            raise NbgParseError(
+                "dyna-io-alignment",
+                "v2-dyna-io",
+                f"entry offset {relative_offset} is not "
+                f"{V2_DYNA_IO_ALIGNMENT}-byte aligned",
+                offset=record_offset,
+                context=f"entry {index}",
+            )
+        if (
+            relative_offset > region_bytes
+            or size > region_bytes - relative_offset
+        ):
+            raise NbgParseError(
+                "dyna-io-range",
+                "v2-dyna-io",
+                f"entry range [{relative_offset}, "
+                f"{relative_offset + size}) exceeds region size "
+                f"{region_bytes}",
+                offset=record_offset,
+                context=f"entry {index}",
+            )
+        end = relative_offset + size
+        if relative_offset < prior_end:
+            raise NbgParseError(
+                "dyna-io-overlap",
+                "v2-dyna-io",
+                f"entry {index} begins at {relative_offset} before "
+                f"the prior end {prior_end}",
+                offset=record_offset,
+            )
+        if relative_offset > prior_end:
+            padding_ranges.append((prior_end, relative_offset))
+        entries.append(
+            {
+                "end": end,
+                "index": index,
+                "offset": relative_offset,
+                "offset_alignment": V2_DYNA_IO_ALIGNMENT,
+                "size": size,
+            }
+        )
+        payload_bytes += size
+        prior_end = end
+
+    if prior_end < region_bytes:
+        padding_ranges.append((prior_end, region_bytes))
+    for start, end in padding_ranges:
+        absolute = data_section["offset"] + start
+        first_nonzero = _first_nonzero_byte(
+            reader,
+            absolute,
+            end - start,
+            field=f"dynamic_io.padding[{start}:{end}]",
+        )
+        if first_nonzero is not None:
+            raise NbgParseError(
+                "dyna-io-padding-nonzero",
+                "v2-dyna-io",
+                "bytes outside mapped DYNAIO entries must be zero",
+                offset=first_nonzero,
+                context=(
+                    f"region-relative offset "
+                    f"{first_nonzero - data_section['offset']}"
+                ),
+            )
+
+    return {
+        "data_section_index": data_section["index"],
+        "entries": entries,
+        "entry_count": count,
+        "padding_all_zero": True,
+        "padding_bytes": region_bytes - payload_bytes,
+        "payload_bytes": payload_bytes,
+        "region_bytes": region_bytes,
+        "table_section_index": table_section["index"],
+    }
+
+
+def _parse_v2_file_checksum(
+    reader: CheckedReader,
+    sections: Sequence[dict[str, Any]],
+    recorded_checksum: int,
+) -> dict[str, Any]:
+    computed = 0
+    normalized_words = 0
+    covered_bytes = 0
+    try:
+        for section in sections:
+            offset = section["offset"]
+            size = section["size"]
+            covered_bytes += size
+            if section["type"] == 40:
+                count = section["record_count"]
+                assert isinstance(count, int)
+                for index in range(count):
+                    record_offset = (
+                        offset + index * V2_CHECKSUM_RECORD_BYTES
+                    )
+                    section_type = reader.bytes(
+                        record_offset,
+                        4,
+                        f"checksums[{index}].section_type",
+                        code="file-checksum-read",
+                        stage="v2-file-checksum",
+                    )
+                    computed = zlib.crc32(section_type, computed)
+                    computed = zlib.crc32(b"\0\0\0\0", computed)
+                    normalized_words += 1
+                continue
+            for chunk in reader.source.chunks(
+                offset, size, FINGERPRINT_CHUNK_BYTES
+            ):
+                computed = zlib.crc32(chunk, computed)
+    except OSError as exc:
+        raise NbgParseError(
+            "file-checksum-read",
+            "v2-file-checksum",
+            f"streaming read failed: {exc}",
+        ) from exc
+
+    nonempty = sorted(
+        (
+            (section["offset"], section["offset"] + section["size"])
+            for section in sections
+            if section["size"]
+        )
+    )
+    excluded_gap_bytes = sum(
+        max(0, current[0] - prior[1])
+        for prior, current in zip(nonempty, nonempty[1:])
+    )
+    computed &= 0xFFFFFFFF
+    if computed != recorded_checksum:
+        raise NbgParseError(
+            "file-checksum-mismatch",
+            "v2-file-checksum",
+            f"recorded {_hex32(recorded_checksum)} does not match "
+            f"computed {_hex32(computed)}",
+            offset=12,
+            context="header.crc_sum",
+        )
+    return {
+        "algorithm": "crc32-ieee",
+        "computed_crc32": computed,
+        "computed_crc32_hex": _hex32(computed),
+        "covered_section_bytes": covered_bytes,
+        "excluded_alignment_gap_bytes": excluded_gap_bytes,
+        "initial_value": 0,
+        "matches": True,
+        "normalized_checksum_value_words": normalized_words,
+        "recorded_crc32": recorded_checksum,
+        "recorded_crc32_hex": _hex32(recorded_checksum),
+        "scope": "section-payloads-in-directory-order",
+    }
+
+
 def _parse_v2(
     reader: CheckedReader, version: int
 ) -> dict[str, Any]:
@@ -2086,11 +2350,13 @@ def _parse_v2(
                 "IO section size is not divisible by its stride",
                 offset=section["offset"],
             )
-        if not 1 <= count <= MAX_IO_RECORDS:
+        minimum_count = 0 if section_type == 1 else 1
+        if not minimum_count <= count <= MAX_IO_RECORDS:
             raise NbgParseError(
                 "io-count-limit",
                 "v2-io",
-                f"expected 1..{MAX_IO_RECORDS}, observed {count}",
+                f"expected {minimum_count}..{MAX_IO_RECORDS}, "
+                f"observed {count}",
                 offset=section["offset"],
             )
         direction = "inputs" if section_type == 1 else "outputs"
@@ -2108,11 +2374,11 @@ def _parse_v2(
         else:
             outputs.extend(parsed)
 
-    if 1 not in seen_io_types or 2 not in seen_io_types:
+    if 2 not in seen_io_types:
         raise NbgParseError(
             "invalid-io-record-size",
             "v2-io",
-            "v2 graph must contain one input and one output section",
+            "v2 graph must contain one output section",
         )
 
     network_section = _one_v2_section(sections, 35)
@@ -2132,7 +2398,11 @@ def _parse_v2(
             offset=network_section["offset"] + 64,
         )
     memory_info = _parse_v2_memory_metadata(reader, sections)
+    dynamic_io = _parse_v2_dynamic_io(reader, sections)
     checksums = _parse_v2_checksums(reader, sections)
+    file_checksum = _parse_v2_file_checksum(
+        reader, sections, header_checksum
+    )
 
     io_bytes = sum(
         section["size"]
@@ -2166,6 +2436,8 @@ def _parse_v2(
             "section_headers_offset": records_offset,
             "sub_header_offset": sub_header_offset,
         },
+        "dynamic_io": dynamic_io,
+        "file_checksum": file_checksum,
         "format_family": "v2-directory",
         "header": {
             "class": format_class,

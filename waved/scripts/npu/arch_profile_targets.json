@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "wave-archmodel-aarch64": {
+      "firmware": "fw_v1.1.6.6",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libArchModelSw.so",
+      "sha256": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f",
+      "roles": [
+        "architecture-model",
+        "exact-wave",
+        "live-matched"
+      ],
+      "functions": [
+        "archCalculateArchPerf",
+        "archFillOpInfo",
+        "archIsFeatureAvailable",
+        "archSetManualFeatures",
+        "archShowConfigurations",
+        "archSwLibInit",
+        "archSwLibInitFromDriver",
+        "updateCustomizedCArchConfigs"
+      ],
+      "string_filters": [
+        "ArchModelVersion",
+        "ChipID",
+        "ChipVersion",
+        "CustomerID",
+        "EcoID",
+        "NumNNCores",
+        "NumUsedNNCores",
+        "ProductID",
+        "SWTilingVersion",
+        "VIP SRAM",
+        "VIP7Version",
+        "featureDB"
+      ]
+    },
+    "wave-nnarchperf-aarch64": {
+      "firmware": "fw_v1.1.6.6",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libNNArchPerf.so",
+      "sha256": "253167677e9839d09815de93a86423824f26f56f097c100d59c03170adecffa9",
+      "roles": [
+        "architecture-performance",
+        "exact-wave",
+        "live-matched"
+      ],
+      "functions": [
+        "APMDeriveHWFeatures",
+        "APMGetBugFeatures",
+        "APMSetManualFeatures",
+        "CreateAPModel",
+        "DestroyAPModel",
+        "amInitialize",
+        "amSetFeaturesSetting",
+        "amSetState"
+      ],
+      "string_filters": [
+        "AXI SRAM",
+        "ChipID",
+        "ChipVersion",
+        "CustomerID",
+        "EcoID",
+        "NumNNCores",
+        "ProductID",
+        "VIP SRAM",
+        "featureDB"
+      ]
+    },
+    "x86-sim-archmodel": {
+      "firmware": "tim-vx-x86-simulator",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libArchModelSw.so",
+      "sha256": "c4766ef80043ba38dfd5d8bf1ed06590395a995c8d489a093e7a68265f342f97",
+      "roles": [
+        "architecture-model",
+        "differential-reference",
+        "x86-simulator"
+      ],
+      "functions": [
+        "archCalculateArchPerf",
+        "archFillOpInfo",
+        "archIsFeatureAvailable",
+        "archSetManualFeatures",
+        "archSwLibInit",
+        "archSwLibInitFromDriver",
+        "updateCustomizedCArchConfigs"
+      ],
+      "string_filters": [
+        "ArchModelVersion",
+        "ChipID",
+        "ChipVersion",
+        "CustomerID",
+        "EcoID",
+        "NumNNCores",
+        "NumUsedNNCores",
+        "ProductID",
+        "SWTilingVersion",
+        "VIP SRAM",
+        "VIP7Version",
+        "featureDB"
+      ]
+    },
+    "x86-sim-nnarchperf": {
+      "firmware": "tim-vx-x86-simulator",
+      "path": "waved/third_party/TIM-VX/prebuilt-sdk/x86_64_linux/lib/libNNArchPerf.so",
+      "sha256": "e5f58113287a803663f897784f97ed983a32e07c2755e23bd25b63fec3aff70d",
+      "roles": [
+        "architecture-performance",
+        "differential-reference",
+        "x86-simulator"
+      ],
+      "functions": [
+        "APMDeriveHWFeatures",
+        "APMGetBugFeatures",
+        "APMSetManualFeatures",
+        "CreateAPModel",
+        "DestroyAPModel",
+        "amInitialize",
+        "amSetFeaturesSetting",
+        "amSetState"
+      ],
+      "string_filters": [
+        "AXI SRAM",
+        "ChipID",
+        "ChipVersion",
+        "CustomerID",
+        "EcoID",
+        "NumNNCores",
+        "ProductID",
+        "VIP SRAM",
+        "featureDB"
+      ]
+    }
+  }
+}

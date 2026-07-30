@@ -1,0 +1,262 @@
+{
+  "artifacts": {
+    "ctc-de": {
+      "bytes": 2810984,
+      "kind": "nbg",
+      "path": "models/ai-models/asr-models/model/asr_de/de_online/ctc_online.nb",
+      "roles": [
+        "differential-control",
+        "exact-wave",
+        "roundtrip-control"
+      ],
+      "sha256": "5d2795be781af80593321cf0ae627f56f4f6f64e71e95d1d8b0a27f6192a9f66"
+    },
+    "ctc-en": {
+      "bytes": 5263360,
+      "kind": "nbg",
+      "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc_online.nb",
+      "roles": [
+        "exact-wave",
+        "roundtrip-control",
+        "source-anchor-target"
+      ],
+      "sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5"
+    },
+    "ctc-en-onnx": {
+      "bytes": 10258790,
+      "kind": "onnx",
+      "path": "models/ai-models/asr-models/model/asr_en/reverb_asr_online/ctc.onnx",
+      "roles": [
+        "source-anchor"
+      ],
+      "sha256": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219"
+    },
+    "ctc-fr": {
+      "bytes": 2935144,
+      "kind": "nbg",
+      "path": "models/ai-models/asr-models/model/asr_fr/fr_online/ctc_online.nb",
+      "roles": [
+        "differential-control",
+        "exact-wave",
+        "roundtrip-control"
+      ],
+      "sha256": "db8a79e3e7b35eddd87a7369bd464101607083f489a75418d73073718ff6f079"
+    },
+    "ctc-ja": {
+      "bytes": 2717544,
+      "kind": "nbg",
+      "path": "models/ai-models/asr-models/model/asr_ja/ja_online/ctc_online.nb",
+      "roles": [
+        "differential-control",
+        "exact-wave",
+        "roundtrip-control"
+      ],
+      "sha256": "2c261beb8aedb1361c3a4832878ff09dec597bcae4681aee742069c6faa54b5d"
+    },
+    "generated-erf": {
+      "bytes": 5840,
+      "kind": "nbg",
+      "path": "artifacts/npu/runs/poc5c-erf-compile-1-20260728/candidate-1.nbg",
+      "roles": [
+        "exact-wave",
+        "generated-control",
+        "roundtrip-control"
+      ],
+      "sha256": "6b2ac998909fecfdf8243e0b1e2b283e5abb485d09d579ae818fbc59824de3ee"
+    },
+    "wave-openvx": {
+      "bytes": 6422744,
+      "kind": "elf",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libOpenVX.so",
+      "roles": [
+        "exact-wave",
+        "serializer-provider"
+      ],
+      "sha256": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb"
+    },
+    "wave-ovxlib": {
+      "bytes": 5838160,
+      "kind": "elf",
+      "path": "firmwares/fw_v1.1.6.6/extracted/rootfs/usr/lib/libovxlib.so",
+      "roles": [
+        "exact-wave",
+        "serializer-caller"
+      ],
+      "sha256": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9"
+    }
+  },
+  "correlation": {
+    "anchor": {
+      "id": "ctc-en-anchor",
+      "nbg_artifact_id": "ctc-en",
+      "onnx_artifact_id": "ctc-en-onnx",
+      "relationship": "source-binary-anchor"
+    },
+    "control_nbg_ids": [
+      "ctc-de",
+      "ctc-fr",
+      "ctc-ja"
+    ],
+    "limits": {
+      "max_candidate_bytes": 67108864,
+      "max_candidates_per_tensor": 128,
+      "max_initializer_bytes": 67108864,
+      "max_search_bytes_per_tensor": 268435456,
+      "max_search_sections": 16
+    },
+    "search_section_types": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      21,
+      23,
+      24,
+      27
+    ],
+    "transforms": [
+      "identity-fp32-le",
+      "cast-fp16-rne-le",
+      "cast-bf16-rne-le",
+      "transpose-2d",
+      "transpose-2d+cast-fp16-rne-le",
+      "transpose-2d+cast-bf16-rne-le",
+      "fixed-block-permute",
+      "byte-lane-permute",
+      "halfword-lane-permute"
+    ]
+  },
+  "ghidra_batches": {
+    "wave-openvx-entry": {
+      "artifact_id": "wave-openvx",
+      "functions": [
+        "vxGenerateNBG",
+        "vxoBinaryGraph_NetworkBinaryGraph"
+      ],
+      "roles": [
+        "serializer-provider"
+      ],
+      "string_filters": [
+        "binary graph",
+        "generate",
+        "nbg"
+      ]
+    },
+    "wave-openvx-envelope-memory": {
+      "artifact_id": "wave-openvx",
+      "functions": [
+        "vxoBinaryGraph_GenerateSectionMemory",
+        "vxoBinaryGraph_SaveBinaryEntrance",
+        "vxoBinaryGraph_SaveBinaryEntranceBefore",
+        "vxoBinaryGraph_SaveNetworkBinaryGraph",
+        "vxoBinaryGraph_SaveWeightAndBias",
+        "vxoBinaryGraph_UpdateCoefHeaderCache"
+      ],
+      "roles": [
+        "serializer-provider"
+      ],
+      "string_filters": [
+        "binary entrance",
+        "coefficient",
+        "header",
+        "section",
+        "weight"
+      ]
+    },
+    "wave-openvx-operation-command": {
+      "artifact_id": "wave-openvx",
+      "functions": [
+        "vxoBinaryGraph_SaveNNTPCommand",
+        "vxoBinaryGraph_SaveNNTPInstruction",
+        "vxoBinaryGraph_SaveNNTPOperation",
+        "vxoBinaryGraph_SaveNNTPStates"
+      ],
+      "roles": [
+        "serializer-provider"
+      ],
+      "string_filters": [
+        "command",
+        "instruction",
+        "operation",
+        "state"
+      ]
+    },
+    "wave-openvx-patch-relocation-load": {
+      "artifact_id": "wave-openvx",
+      "functions": [
+        "vxoBinaryGraph_AllocateBinaryLoadBuffer",
+        "vxoBinaryGraph_LoadNBG",
+        "vxoBinaryGraph_Patch32bitVa",
+        "vxoBinaryGraph_Patch40bitVa",
+        "vxoBinaryGraph_ReleaseNBG",
+        "vxoBinaryGraph_RelocateBinaryEntrance",
+        "vxoBinaryGraph_RelocateNetworkBinaryGraph",
+        "vxoBinaryGraph_SetPatchDataInfo"
+      ],
+      "roles": [
+        "serializer-provider"
+      ],
+      "string_filters": [
+        "load",
+        "nbg",
+        "patch",
+        "relocate"
+      ]
+    },
+    "wave-ovxlib-entry": {
+      "artifact_id": "wave-ovxlib",
+      "functions": [
+        "vsi_nn_GenerateNBG"
+      ],
+      "roles": [
+        "serializer-caller"
+      ],
+      "string_filters": [
+        "generate",
+        "nbg"
+      ]
+    }
+  },
+  "outputs": {
+    "correlation": "docs/npu/format/onnx-nbg-correlation.json",
+    "ghidra": "docs/npu/format/serializer-ghidra-evidence.json",
+    "ownership": "docs/npu/format/serializer-byte-ownership.json",
+    "roundtrip": "docs/npu/format/serializer-roundtrip-evidence.json"
+  },
+  "poc_id": "poc12a-open-nbg-serializer",
+  "policy": {
+    "allowed_operations": [
+      "compute-bounded-transforms",
+      "hash-files",
+      "parse-elf",
+      "parse-nbg",
+      "parse-onnx",
+      "run-ghidra-headless",
+      "write-identical-nbg-copy",
+      "write-json-evidence",
+      "write-markdown-evidence"
+    ],
+    "prohibited_actions": {
+      "adb_calls": 0,
+      "compiler_calls": 0,
+      "container_registrations": 0,
+      "container_runs": 0,
+      "device_calls": 0,
+      "generated_custom_nbg_files": 0,
+      "mutated_nbg_files": 0,
+      "native_extension_imports": 0,
+      "simulator_calls": 0
+    }
+  },
+  "roundtrip_nbg_ids": [
+    "generated-erf",
+    "ctc-en",
+    "ctc-de",
+    "ctc-fr",
+    "ctc-ja"
+  ],
+  "schema_version": 1
+}
