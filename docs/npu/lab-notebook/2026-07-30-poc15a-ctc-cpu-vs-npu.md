@@ -2,8 +2,8 @@
 
 **Date:** 2026-07-30
 **Device:** Insta360 Wave `PSP_0000000000000000`
-**Status:** first live attempt invalidated by a host-runner protocol defect;
-corrected PoC 15A-R2 is host-qualified but has not been executed.
+**Status:** corrected PoC 15A-R2 passed semantic qualification and completed
+the paired benchmark; performance classification is `cpu-faster`.
 
 ## 1. Question
 
@@ -252,21 +252,193 @@ manifest SHA-256 ca4470dd272ea44e8461bae10b1cdf232f84c435ec471f0dffdf27d4c388026
 R2 again passes deterministic build, static policy, 19 focused tests, 93
 regression tests, Ruff, shell syntax, and ShellCheck.
 
-## 9. Authorization boundary
+## 9. Corrected live execution
 
-The approved PoC 15A plan capped this stage at one live process and
-forbade automatic retries. That process has been consumed. R2 is therefore
-host-qualified but deliberately not staged or run.
-
-A second native process is justified technically because the first process
-did not implement the approved protocol, but it is still a second live
-process. It requires explicit authorization before:
+The user explicitly authorized one corrected R2 process. The staged bundle
+and independent preflight both passed before execution. Exactly one native
+process then ran:
 
 ```text
-waved/tools/npu-compiler/stage-device-ctc-cpu-npu-benchmark.sh
-python3 waved/scripts/npu/npu_ctc_cpu_npu_benchmark_lab.py \
-  run --run-id <new-r2-run-id>
+run ID:              poc15a-r2-ctc-crossover-20260730-a1
+controller start:    2026-07-30T06:20:56.412Z
+controller finish:   2026-07-30T06:21:13.529Z
+native transport:    9.617 s
+native exit:         0
+execution attempts:  1
+result status:       PASS
+decision:            cpu-faster
+source commit:       19eac419c40a7f84fef437d952337df49f8e569a
 ```
 
-Until then, no CPU-versus-NPU speed claim is made and no downstream device
-candidate is eligible.
+The raw evidence is retained below the ignored device-evidence root:
+
+```text
+artifacts/npu/runs/poc15a-r2-ctc-crossover-20260730-a1/
+  preflight.json
+  postflight.json
+  stdout.txt
+  stderr.txt
+  pull.stdout.txt
+  pull.stderr.txt
+  ctc-cpu-npu-timings-v2.bin
+  run.json
+  report.md
+```
+
+The timing artifact is 27,752 bytes, contains four qualification records,
+one cold record, and 200 measured records, and has:
+
+```text
+schema:          CCN2-v2
+SHA-256:         e40ce01c1ad148c2ce9ea5ab19365317751d63623be58d0d587a5c2afc5430f8
+FNV-1a64:        0x5d3d86b9b9547b57
+measured input:  0xeea0b3af5a10188e
+CPU output:      0x3a55b11149de1589
+NPU output:      0x60f5d3463b3f609d
+CPU run count:   225
+NPU run count:   229
+```
+
+The host controller validated the file size, schema, record counts, FNV
+digest, all fixed header values, and the native result framing. A separate
+post-run `analyze` invocation over the pulled binary reproduced every
+reported percentile, ratio, gate, and decision.
+
+## 10. Corrected semantic qualification
+
+All four corrected fixtures passed every gate:
+
+| Fixture | Top-1 | Finite | Mean abs. error | Max abs. error | Cosine | Repeat |
+|---|---:|---:|---:|---:|---:|---|
+| zero | 16/16 | 79,984 | 0.000117211 | 0.0078125 | 0.999999994047 | exact |
+| impulse at index 0 | 16/16 | 79,984 | 0.000117748 | 0.0078125 | 0.999999994007 | exact |
+| stripe | 16/16 | 79,984 | 0.000948688 | 0.015625 | 0.999999976145 | exact |
+| xorshift, 8-bit mapping | 16/16 | 79,984 | 0.000733863 | 0.015625 | 0.999999979828 | exact |
+
+This is the valid qualification result. It proves that the fixed ONNX and
+NBG implement the same useful CTC projection to within the approved FP16
+tolerances for all four fixtures. It does not prove arbitrary ONNX support
+or a general ONNX-to-NBG compiler.
+
+## 11. Paired CPU-versus-NPU result
+
+The 200 steady-state pairs produced:
+
+| Boundary | Mean (ms) | p50 (ms) | p95 (ms) | p99 (ms) | Mean throughput |
+|---|---:|---:|---:|---:|---:|
+| Stock ORT CPU | 4.658214 | 4.646291 | 4.742667 | 4.788416 | 214.675/s |
+| NPU native FP16 | 4.492492 | 4.481583 | 4.560542 | 4.810750 | 222.594/s |
+| NPU FP32 bridge | 5.154930 | 5.142208 | 5.224917 | 5.474583 | 193.989/s |
+
+The bridge performance gate was:
+
+| Gate | Limit | Observed | Pass |
+|---|---:|---:|---|
+| Ratio of means | `<= 0.90` | 1.106632 | no |
+| Paired-ratio p50 | `<= 0.90` | 1.106377 | no |
+| Paired-ratio p95 | `< 1.00` | 1.128194 | no |
+
+The result is therefore unambiguously `cpu-faster`: with equivalent FP32
+application boundaries, the NPU path was 10.663% slower by ratio of means.
+This is far outside all three precommitted NPU-win thresholds.
+
+The native FP16 boundary tells a more nuanced story. Its ratio of means was
+0.964424, with paired p50 0.964474 and paired p95 0.986071. It was 3.558%
+faster on average, but not the required 10%, and its p99 was slightly worse.
+The accelerator's `run` interval alone averaged 2.788182 ms, 40.145% below
+the CPU wall mean. That interval is not an application latency result
+because it excludes input submission and complete output retrieval.
+
+## 12. Where the gain was lost
+
+The NPU bridge mean decomposes as:
+
+| Component | Mean (ms) | Share of 5.155 ms bridge |
+|---|---:|---:|
+| FP32 to FP16 input conversion | 0.085435 | 1.7% |
+| NPU input submission | 0.079704 | 1.5% |
+| NPU execution | 2.788182 | 54.1% |
+| NPU output retrieval and 159,968-byte copy | 1.621567 | 31.5% |
+| FP16 to FP32 output conversion | 0.569299 | 11.0% |
+
+Small timer-bracketing differences account for the remaining fraction. The
+dominant avoidable costs are the complete 79,984-element output transfer and
+the output conversion, not input conversion. The model performs about 41
+million matrix MACs but emits almost 160 KiB every invocation.
+
+The measured calling-thread time was 4.574888 ms for the CPU call and
+2.553058 ms for the NPU bridge, a 44.194% reduction at that narrow thread
+boundary. The runner did not isolate whole-process CPU consumption per
+engine, power, energy, or concurrent pipeline throughput, so this must not
+be promoted to a total CPU-utilization or efficiency claim.
+
+Cold measurements do not change the conclusion:
+
+| Boundary | Cold wall (ms) |
+|---|---:|
+| Stock ORT CPU | 4.734375 |
+| NPU native | 4.530333 |
+| NPU FP32 bridge | 5.181208 |
+
+## 13. Device state and safety
+
+Preflight and postflight used the same boot ID
+`10d25963-b224-4ad7-86a3-c1b1ed323741`. The observed environment was:
+
+```text
+kernel:       Linux 5.4.242-ab575 #2, aarch64
+CPU online:   0-3
+governor:     schedutil
+CPU current:  1.404 GHz preflight, 1.500 GHz postflight
+CPU limits:   100 MHz to 2.016 GHz
+NPU setting:  nanoqFreq=838860800
+temperature:  38.0 C preflight, 40.9 C postflight
+```
+
+Postflight found no benchmark process, no `/dev/galcore` holder, no partial
+timing file, no kernel alert, no boot/driver/library health difference, and
+no controller error. The final timing file was read-only and matched the
+pulled SHA-256.
+
+No firmware, stock model, system DSO, service, module, sysfs value, clock,
+governor, thermal control, driver state, or root-filesystem file was
+modified.
+
+The guarded cleanup command was attempted only after all evidence was
+pulled and independently parsed. By then ADB listed no connected device, so
+the serial guard exited before deletion. The exact staged root
+`/tmp/wave-npu-poc15a-r2` is consequently **cleanup pending** rather than
+claimed removed. It may be removed only with the fixed cleanup script after
+the exact Wave serial reconnects; the native benchmark must not be replayed.
+
+## 14. Decision and downstream gate
+
+PoC 15A-R2 establishes all of the following:
+
+- the substantial stock CTC NBG is numerically related to its adjacent ONNX;
+- NPU compute can beat the Wave CPU for a large matrix-heavy graph;
+- the complete native FP16 boundary is only marginally faster;
+- the equivalent FP32 application boundary is slower because output
+  transfer and conversion erase the compute gain;
+- the NPU remains useful for resident FP16 pipelines, concurrency, or
+  higher arithmetic-intensity graphs, but those benefits are not proven by
+  this latency experiment.
+
+The precommitted plan requires an FP32-bridge win before PoC 15B or PoC 15C
+device work. That prerequisite failed cleanly. Both downstream live ladders
+are therefore stopped with zero PoC 15B/15C device processes. Continuing
+them would be changing the experiment after seeing the result.
+
+The next performance design must attack the measured boundary rather than
+repeat this candidate. Defensible options are:
+
+1. keep adjacent operators and tensors resident in FP16 so the bridge is
+   paid once per larger pipeline;
+2. retrieve a compact downstream result instead of all 79,984 logits;
+3. choose a fused denoising or encoder graph with a much higher
+   compute-to-output ratio;
+4. separately measure concurrent CPU availability and energy, neither of
+   which this benchmark resolves.
+
+Any such design is a new, separately reviewed PoC. It cannot reuse this
+run ID, timing output, staged root, or one-process authorization.

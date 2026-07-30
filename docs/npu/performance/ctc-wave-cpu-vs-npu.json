@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "experiment": "wave-npu-poc15a-r2-ctc-cpu-vs-npu",
+  "date": "2026-07-30",
+  "device_serial": "PSP_0000000000000000",
+  "run_id": "poc15a-r2-ctc-crossover-20260730-a1",
+  "source_commit": "19eac419c40a7f84fef437d952337df49f8e569a",
+  "status": "PASS",
+  "decision": "cpu-faster",
+  "execution_attempts": 1,
+  "model": {
+    "onnx_sha256": "8d6d3b6ce9da51f852981bb5bdd33e2818d47d3e545e9efe5d3700a37b367219",
+    "nbg_sha256": "3a9294ea8595789cc23ddc9298ebceb4474738fed07a9a8b10e2442b67b0d8d5",
+    "matrix_macs": 40951808,
+    "input_elements": 8192,
+    "output_elements": 79984,
+    "npu_output_bytes": 159968
+  },
+  "runtime": {
+    "onnxruntime_sha256": "457784da0d1c525171b15438cfbaf869f57e9317817e30691136b8ebe10d4639",
+    "libnnsdk_sha256": "36b87d6ce89f4253b9120cb89b5cc1ce33a2cab84e4acb2ee010742b66cc44fe",
+    "cpu_provider": "CPUExecutionProvider",
+    "npu_target": "0x1000000e",
+    "npu_frequency_setting_hz": 838860800
+  },
+  "evidence": {
+    "timing_schema": "CCN2-v2",
+    "timing_bytes": 27752,
+    "timing_sha256": "e40ce01c1ad148c2ce9ea5ab19365317751d63623be58d0d587a5c2afc5430f8",
+    "timing_fnv1a64": "0x5d3d86b9b9547b57",
+    "manifest_sha256": "9a9a3789d2e2452b78e928ff1e2ae31ccb97536309958acbc5af53cd3544b454",
+    "qualification_records": 4,
+    "cold_records": 1,
+    "measured_pairs": 200,
+    "raw_run_directory": "artifacts/npu/runs/poc15a-r2-ctc-crossover-20260730-a1"
+  },
+  "qualification": {
+    "passed": true,
+    "top1_matches_per_fixture": [
+      16,
+      16,
+      16,
+      16
+    ],
+    "finite_values_per_fixture": [
+      79984,
+      79984,
+      79984,
+      79984
+    ],
+    "mean_absolute_error": [
+      0.00011721094218843769,
+      0.00011774815900680136,
+      0.0009486882728108122,
+      0.0007338625928310662
+    ],
+    "maximum_absolute_error": [
+      0.0078125,
+      0.0078125,
+      0.015625,
+      0.015625
+    ],
+    "cosine_similarity": [
+      0.9999999940471951,
+      0.9999999940072433,
+      0.999999976144938,
+      0.9999999798282518
+    ],
+    "repeat_outputs_exact": true
+  },
+  "steady_state_ns": {
+    "cpu_wall": {
+      "mean": 4658214.18,
+      "p50": 4646291,
+      "p95": 4742667,
+      "p99": 4788416
+    },
+    "npu_run": {
+      "mean": 2788181.73,
+      "p50": 2781834,
+      "p95": 2828875,
+      "p99": 2939667
+    },
+    "npu_native_total": {
+      "mean": 4492491.645,
+      "p50": 4481583,
+      "p95": 4560542,
+      "p99": 4810750
+    },
+    "npu_fp32_bridge_total": {
+      "mean": 5154929.775,
+      "p50": 5142208,
+      "p95": 5224917,
+      "p99": 5474583
+    },
+    "fp32_to_fp16": {
+      "mean": 85435.175,
+      "p50": 84375,
+      "p95": 85041,
+      "p99": 135292
+    },
+    "input_set": {
+      "mean": 79703.965,
+      "p50": 78167,
+      "p95": 81583,
+      "p99": 133833
+    },
+    "output_get_and_copy": {
+      "mean": 1621567.29,
+      "p50": 1611667,
+      "p95": 1660958,
+      "p99": 1734000
+    },
+    "fp16_to_fp32": {
+      "mean": 569298.965,
+      "p50": 562333,
+      "p95": 594625,
+      "p99": 652042
+    }
+  },
+  "throughput_inferences_per_second": {
+    "cpu": 214.67454293825537,
+    "npu_native": 222.5936248791844,
+    "npu_fp32_bridge": 193.98906360465404
+  },
+  "ratios": {
+    "npu_run_over_cpu_ratio_of_means": 0.5985516385165441,
+    "npu_native_over_cpu_ratio_of_means": 0.9644235905443059,
+    "npu_bridge_over_cpu_ratio_of_means": 1.1066321933269287,
+    "paired_npu_bridge_over_cpu_p50": 1.1063768791137354,
+    "paired_npu_bridge_over_cpu_p95": 1.1281941831549356
+  },
+  "performance_gate": {
+    "ratio_of_means_max": 0.9,
+    "paired_p50_max": 0.9,
+    "paired_p95_max_exclusive": 1.0,
+    "passed": false
+  },
+  "device_state": {
+    "boot_id_unchanged": true,
+    "cpu_online": "0-3",
+    "cpu_governor": "schedutil",
+    "temperature_celsius_preflight": 38.0,
+    "temperature_celsius_postflight": 40.9,
+    "galcore_holders_postflight": 0,
+    "benchmark_processes_postflight": 0,
+    "kernel_alerts": 0,
+    "health_differences": 0
+  },
+  "downstream_gate": {
+    "poc15b_device_eligible": false,
+    "poc15c_device_eligible": false,
+    "reason": "The complete FP32-boundary NPU bridge failed all three precommitted performance gates."
+  },
+  "cleanup": {
+    "status": "pending-device-reconnect",
+    "remote_root": "/tmp/wave-npu-poc15a-r2",
+    "reason": "ADB listed no device when the fixed serial-guarded cleanup was attempted after evidence collection."
+  }
+}

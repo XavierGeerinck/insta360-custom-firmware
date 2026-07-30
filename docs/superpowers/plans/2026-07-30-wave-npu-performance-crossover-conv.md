@@ -302,10 +302,41 @@ postflight was clean, and the fixed remote root was removed after audit.
 
 PoC 15A-R2 corrects those four deviations, uses remote root
 `/tmp/wave-npu-poc15a-r2` and timing schema `CCN2-v2`, and is
-host-qualified. Because the original plan capped PoC 15A at one live
-process, R2 requires explicit authorization before staging or execution.
+host-qualified. The user explicitly authorized one corrected process, run
+`poc15a-r2-ctc-crossover-20260730-a1`.
+
+R2 completed with native exit zero, one execution attempt, valid semantic
+qualification, a 27,752-byte timing artifact, and a clean postflight. The
+200-pair steady-state means were:
+
+```text
+stock ORT CPU:   4.658214 ms
+NPU native FP16: 4.492492 ms
+NPU FP32 bridge: 5.154930 ms
+```
+
+The bridge/CPU ratio of means was `1.106632`, paired-ratio p50 was
+`1.106377`, and paired-ratio p95 was `1.128194`. All three precommitted
+NPU-win gates failed, so the valid decision is `cpu-faster`. Independent
+analysis of the pulled `CCN2-v2` binary reproduced the controller result.
+
+The accelerator `run` interval alone averaged 2.788182 ms and the native
+FP16 boundary was 3.558% faster than CPU by ratio of means. The complete
+FP32 bridge was nevertheless 10.663% slower because full output retrieval
+and FP16-to-FP32 conversion erased that gain. Those narrower results do not
+override the application-boundary gate.
+
+No PoC 15B or PoC 15C process is eligible under this plan. The fixed R2
+cleanup command was attempted after evidence collection, but ADB listed no
+device and its serial guard exited before deletion. Cleanup of only
+`/tmp/wave-npu-poc15a-r2` remains pending; the benchmark is non-replayable.
 
 ## 6. Phase D — PoC 15B Erf residency curve
+
+**Outcome:** stopped before implementation and device execution because PoC
+15A-R2 did not pass its complete FP32-bridge performance prerequisite.
+Tasks 11–13 remain design records only. Zero PoC 15B compile or execution
+processes were used.
 
 ### Task 11 — implement the closed graph generator
 
@@ -353,6 +384,11 @@ candidates after the first stable crossover.
 Publish the complete attempted curve and clearly label it synthetic.
 
 ## 7. Phase E — PoC 15C custom FP16 Conv
+
+**Outcome:** stopped before implementation and device execution because PoC
+15A-R2 did not pass its complete FP32-bridge performance prerequisite.
+Tasks 14–17 remain design records only. Zero PoC 15C device processes were
+used.
 
 ### Task 14 — generate the static Conv profile
 
@@ -463,3 +499,11 @@ Each final notebook records hypotheses, exact commands, hashes, call ledger,
 raw and derived metrics, health evidence, limits, and the next gated
 decision. A clean negative is a completed result, not permission to mutate
 the graph or retry.
+
+The final PoC 15A evidence is recorded in:
+
+```text
+docs/npu/lab-notebook/2026-07-30-poc15a-ctc-cpu-vs-npu.md
+docs/npu/performance/ctc-wave-cpu-vs-npu.json
+artifacts/npu/runs/poc15a-r2-ctc-crossover-20260730-a1/
+```
