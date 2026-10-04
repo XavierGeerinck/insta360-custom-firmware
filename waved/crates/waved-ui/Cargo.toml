@@ -23,3 +23,6 @@ uuid.workspace = true
 [build-dependencies]
 cc = "1"
 bindgen = "0.71"
+
+[dev-dependencies]
+png = "0.17"

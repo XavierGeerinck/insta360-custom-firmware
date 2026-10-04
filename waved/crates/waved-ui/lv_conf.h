@@ -66,6 +66,10 @@
 #define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_DEFAULT &lv_font_montserrat_16
+
+/* Dark default theme: unstyled widgets render dark instead of white discs. */
+#define LV_USE_THEME_DEFAULT 1
+#define LV_THEME_DEFAULT_DARK 1
 #define LV_USE_FREETYPE 0
 
 /*==================
