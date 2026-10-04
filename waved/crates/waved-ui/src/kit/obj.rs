@@ -43,10 +43,24 @@ impl Obj {
 
     /// Debug-build check that this is a label, for the label-only methods.
     fn assert_label(self) {
+        self.check_live();
         debug_assert!(
             // SAFETY: live object; `lv_label_class` is a static class descriptor.
             unsafe { lv_obj_check_type(self.0, &raw const lv_label_class) },
             "this Obj is not a label"
+        );
+    }
+
+    /// Debug-build check that the object still exists. `Obj` is `Copy`, so a
+    /// handle can outlive its object; using it then is a use-after-free.
+    /// `lv_obj_is_valid` walks every object, so release builds skip it.
+    #[inline]
+    fn check_live(self) {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            // SAFETY: only compares the pointer against live objects.
+            unsafe { lv_obj_is_valid(self.0) },
+            "Obj used after its object was deleted"
         );
     }
 
@@ -70,11 +84,13 @@ impl Obj {
     /// A container with every theme style removed: transparent, no padding,
     /// border or scrolling, not clickable.
     pub fn plain(parent: Obj) -> Obj {
+        parent.check_live();
         // SAFETY: parent is a live object.
         unsafe { Obj(lv_obj_create(parent.0)) }.reset()
     }
 
     pub fn label(parent: Obj, text: &str, font: Font, hex: u32) -> Obj {
+        parent.check_live();
         // SAFETY: parent is a live object.
         let label = unsafe { Obj(lv_label_create(parent.0)) }.reset();
         label.set_text(text);
@@ -82,16 +98,19 @@ impl Obj {
     }
 
     pub fn arc(parent: Obj) -> Obj {
+        parent.check_live();
         // SAFETY: parent is a live object.
         unsafe { Obj(lv_arc_create(parent.0)) }.reset()
     }
 
     pub fn line(parent: Obj) -> Obj {
+        parent.check_live();
         // SAFETY: parent is a live object.
         unsafe { Obj(lv_line_create(parent.0)) }.reset()
     }
 
     fn reset(self) -> Self {
+        self.check_live();
         // SAFETY: self is a live object.
         unsafe {
             lv_obj_remove_style(
@@ -106,12 +125,14 @@ impl Obj {
     }
 
     pub fn pos(self, x: i32, y: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_pos(self.0, x, y) };
         self
     }
 
     pub fn size(self, w: i32, h: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_size(self.0, w, h) };
         self
@@ -133,6 +154,7 @@ impl Obj {
 
     /// Children in a row from the left, vertically centred, with side padding.
     pub fn row_start(self, gap: i32, pad_x: i32) -> Self {
+        self.check_live();
         let row = self.flex(lv_flex_flow_t_LV_FLEX_FLOW_ROW, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap);
         // SAFETY: live object.
         unsafe {
@@ -153,6 +175,7 @@ impl Obj {
     }
 
     fn flex(self, flow: lv_flex_flow_t, main: lv_flex_align_t, cross: lv_flex_align_t, gap: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe {
             lv_obj_set_flex_flow(self.0, flow);
@@ -165,6 +188,7 @@ impl Obj {
 
     /// Take the remaining space in a flex row.
     pub fn grow(self) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_flex_grow(self.0, 1) };
         self
@@ -172,6 +196,7 @@ impl Obj {
 
     /// Centre in the parent.
     pub fn center(self) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_center(self.0) };
         self
@@ -179,6 +204,7 @@ impl Obj {
 
     /// Border while pressed (for example the teal ring on side buttons).
     pub fn pressed_border(self, width: i32, hex: u32) -> Self {
+        self.check_live();
         let pressed = MAIN | LV_STATE_PRESSED as lv_style_selector_t;
         // SAFETY: live object.
         unsafe {
@@ -191,6 +217,7 @@ impl Obj {
 
     /// Centred text wrapping within `width`.
     pub fn wrapped_text(self, width: i32) -> Self {
+        self.check_live();
         self.assert_label();
         // SAFETY: live label.
         unsafe {
@@ -202,12 +229,14 @@ impl Obj {
     }
 
     pub fn width(self, w: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_width(self.0, w) };
         self
     }
 
     pub fn bg(self, hex: u32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe {
             lv_obj_set_style_bg_color(self.0, color(hex), MAIN);
@@ -217,12 +246,14 @@ impl Obj {
     }
 
     pub fn bg_opa(self, opa: u8) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_style_bg_opa(self.0, opa, MAIN) };
         self
     }
 
     pub fn radius(self, r: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_style_radius(self.0, r, MAIN) };
         self
@@ -233,6 +264,7 @@ impl Obj {
     }
 
     pub fn border(self, width: i32, hex: u32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe {
             lv_obj_set_style_border_width(self.0, width, MAIN);
@@ -243,18 +275,21 @@ impl Obj {
     }
 
     pub fn font(self, font: Font) -> Self {
+        self.check_live();
         // SAFETY: live object; static font.
         unsafe { lv_obj_set_style_text_font(self.0, font.ptr(), MAIN) };
         self
     }
 
     pub fn text_color(self, hex: u32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_style_text_color(self.0, color(hex), MAIN) };
         self
     }
 
     pub fn opa(self, opa: u8) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_style_opa(self.0, opa, MAIN) };
         self
@@ -262,6 +297,7 @@ impl Obj {
 
     /// Centre the text across `width` on one line, ending in "..." if too long.
     pub fn centered_text(self, width: i32) -> Self {
+        self.check_live();
         self.assert_label();
         // SAFETY: live label.
         unsafe { lv_obj_set_style_text_align(self.0, lv_text_align_t_LV_TEXT_ALIGN_CENTER, MAIN) };
@@ -274,6 +310,7 @@ impl Obj {
     /// the height to one line of the current font: call it after `font`, and
     /// again whenever the font changes.
     pub fn one_line(self) -> Self {
+        self.check_live();
         self.assert_label();
         // SAFETY: live label. LV_STYLE_TEXT_FONT always resolves to a font
         // (inherited, or LV_FONT_DEFAULT).
@@ -289,6 +326,7 @@ impl Obj {
     /// "..." when it needs more. Call after `font` and `wrapped_text`: the
     /// height is fixed, which is what makes LVGL truncate instead of grow.
     pub fn max_lines(self, lines: i32) -> Self {
+        self.check_live();
         self.assert_label();
         // SAFETY: live label (see `one_line`).
         unsafe {
@@ -301,6 +339,7 @@ impl Obj {
 
     /// Background while pressed.
     pub fn pressed_bg(self, hex: u32) -> Self {
+        self.check_live();
         let pressed = MAIN | LV_STATE_PRESSED as lv_style_selector_t;
         // SAFETY: live object.
         unsafe {
@@ -311,6 +350,7 @@ impl Obj {
     }
 
     pub fn set_text(self, text: &str) {
+        self.check_live();
         self.assert_label();
         let text = CString::new(text.replace('\0', "")).expect("NUL bytes removed");
         // SAFETY: live label; LVGL copies the text.
@@ -321,6 +361,7 @@ impl Obj {
     /// this is LVGL's internal buffer, which holds the truncated text with the
     /// dots, not the string passed to `set_text`.
     pub fn text(self) -> String {
+        self.check_live();
         self.assert_label();
         // SAFETY: live label; the pointer is LVGL's NUL-terminated buffer and
         // is copied before anything can change it.
@@ -336,6 +377,7 @@ impl Obj {
     }
 
     pub fn flag(self, flag: lv_obj_flag_t, on: bool) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe {
             if on {
@@ -349,12 +391,14 @@ impl Obj {
 
     /// Grow the tap area by `px` on every side without changing the visible box.
     pub fn ext_click(self, px: i32) -> Self {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_set_ext_click_area(self.0, px) };
         self
     }
 
     pub fn set_state(self, state: u32, on: bool) {
+        self.check_live();
         // SAFETY: live object.
         unsafe {
             if on {
@@ -366,11 +410,13 @@ impl Obj {
     }
 
     pub fn has_state(self, state: u32) -> bool {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_has_state(self.0, state as lv_state_t) }
     }
 
     pub fn has_flag(self, flag: lv_obj_flag_t) -> bool {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_has_flag(self.0, flag) }
     }
@@ -384,6 +430,7 @@ impl Obj {
     }
 
     pub fn coords(self) -> lv_area_t {
+        self.check_live();
         let mut area = lv_area_t::default();
         // SAFETY: live object.
         unsafe { lv_obj_get_coords(self.0, &mut area) };
@@ -391,6 +438,7 @@ impl Obj {
     }
 
     pub fn click_area(self) -> lv_area_t {
+        self.check_live();
         let mut area = lv_area_t::default();
         // SAFETY: live object.
         unsafe { lv_obj_get_click_area(self.0, &mut area) };
@@ -398,22 +446,26 @@ impl Obj {
     }
 
     pub fn child_count(self) -> u32 {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_get_child_count(self.0) }
     }
 
     pub fn child(self, index: i32) -> Obj {
+        self.check_live();
         // SAFETY: live object.
         unsafe { Obj(lv_obj_get_child(self.0, index)) }
     }
 
     pub fn update_layout(self) {
+        self.check_live();
         // SAFETY: live object.
         unsafe { lv_obj_update_layout(self.0) };
     }
 
     /// Delete the object and its children; their handlers are dropped.
     pub fn delete(self) {
+        self.check_live();
         // SAFETY: live object; not used afterwards by the caller.
         unsafe { lv_obj_delete(self.0) };
     }
@@ -467,6 +519,31 @@ mod tests {
             let root = lv.screen();
             let label = Obj::label(root, "Mic\0 on", Font::Body, TEXT);
             assert_eq!(label.text(), "Mic on");
+        });
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "used after its object was deleted")]
+    fn a_stale_handle_is_caught_in_debug_builds() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let obj = Obj::plain(root);
+            obj.delete();
+            obj.pos(0, 0);
+        });
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "used after its object was deleted")]
+    fn a_child_of_a_deleted_parent_is_caught_in_debug_builds() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let parent = Obj::plain(root);
+            let label = Obj::label(parent, "Mic on", Font::Body, TEXT);
+            parent.delete();
+            label.set_text("Mic off");
         });
     }
 
