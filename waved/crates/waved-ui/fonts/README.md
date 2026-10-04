@@ -8,7 +8,7 @@ pinned sources, so the output is reproducible. The generated `.c` files are comm
 | `font_micro_12`, `font_small_13`, `font_body_15` | Barlow Semi Condensed Medium | 12, 13, 15 |
 | `font_title_20`, `font_dial_26` | Barlow Semi Condensed SemiBold | 20, 26 |
 | `font_num_13`, `font_num_20` | Barlow Medium | 13, 20 (full text range) |
-| `font_num_26`, `font_num_48` | Barlow Medium | 26, 48 (digits, `% + - . :`, `a` `m` `p` for am/pm, and minus only) |
+| `font_num_26`, `font_num_48` | Barlow Medium | 26, 48 (digits, `% + - . :`, minus, and `a` `m` `p` for am/pm) |
 | `font_icons_16/20/26/44` | Tabler Icons webfont 3.48.0 | the 48 icons in `icons.py` |
 
 - **Tabular figures:** every Barlow face has its `tnum` feature frozen with

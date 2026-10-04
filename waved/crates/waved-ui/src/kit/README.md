@@ -13,7 +13,9 @@ deleted when the runtime switches over.
 - Never hard-code a line height. The fonts report Title 27, Dial 32 and Num48 43 (the 48 px digit
   font embeds `a`/`m`/`p`, so its height includes the descender), which differ from the mockup's
   CSS values. Use `Font::line_height()` or `one_line()`, which sizes the label to one line of its
-  font.
+  font. The Num48 and Num26 label boxes carry 9 and 5 px of empty room below the digits (the
+  descender of the am/pm glyphs), so position big digits by glyph/top, not by box centre; for a
+  12-hour suffix prefer Num20.
 - A label that can show user data (names, hosts, values) stays on one line. A plain `Obj::label`
   wraps instead. Pick one of:
   - `centered_text(width)` for centred text across a known width;
