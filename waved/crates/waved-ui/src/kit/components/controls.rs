@@ -59,7 +59,9 @@ impl RadioList {
         let rows: Vec<RadioRow> = options
             .iter()
             .map(|option| {
-                let obj = Obj::plain(viewport).size(296, 52).radius(20).clickable(true).row_start(12, 16);
+                // The mockup's 2 px border is an inset shadow inside a 16 px inset; LVGL's border
+                // adds to the padding, so pad 14 puts the ring 16 px from the row edge.
+                let obj = Obj::plain(viewport).size(296, 52).radius(20).clickable(true).row_start(12, 14);
                 let ring = Obj::plain(obj).size(20, 20).round().border(2, TEXT_3);
                 let dot = Obj::plain(ring).size(10, 10).round().bg(LIVE).center().hidden(true);
                 let text = Obj::plain(obj).fit().column(2);
