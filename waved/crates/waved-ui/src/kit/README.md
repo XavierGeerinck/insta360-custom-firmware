@@ -23,6 +23,10 @@ deleted when the runtime switches over.
   Do not use `max_width()` for truncation: in LVGL 9.2 a one-line label sized only by a maximum
   width collapses to "...". Multi-line text that must stop above a button row uses
   `wrapped_text(width)` then `max_lines(n)`, which ends in "..." when it needs more lines.
+- Read user settings from the snapshot: `snap.settings` (display, time, recording, uploads,
+  PIN) and `snap.audio` (mode, noise reduction, volumes, aim). Never read them from
+  `ctx.config`: it is the boot-time copy of config.toml and does not see changes made on the
+  device or by the setup page since.
 - Screens never navigate by sending bus commands. Use `ctx.dispatch.navigate(..)`,
   `.back()` or `.show(..)`. Services get `ctx.dispatch.command(..)`.
 - Every screen test calls `assert_targets_ok(root)` and `assert_golden(..)`, and the

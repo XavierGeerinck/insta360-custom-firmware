@@ -10,6 +10,8 @@ use waved_config::WavedConfig;
 #[derive(Clone)]
 pub struct ScreenCtx {
     pub dispatch: Dispatcher,
+    /// config.toml as loaded at boot. Read user settings from
+    /// `UiSnapshot::settings` / `UiSnapshot::audio`, which follow live changes.
     pub config: Arc<WavedConfig>,
 }
 
