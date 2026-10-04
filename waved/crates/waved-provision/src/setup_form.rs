@@ -151,8 +151,8 @@ fn render_field(
             spec.path,
             if value == "true" { " checked" } else { "" }
         ),
-        FieldKind::Select { options } => {
-            let options: String = options
+        FieldKind::Select { options: choices } => {
+            let mut options: String = choices
                 .iter()
                 .map(|(option, label)| {
                     format!(
@@ -162,6 +162,15 @@ fn render_field(
                     )
                 })
                 .collect();
+            // A saved value outside the fixed list must stay selected, or the
+            // browser would submit the first option and silently replace it.
+            if !value.is_empty() && !choices.iter().any(|(option, _)| value == *option) {
+                options.push_str(&format!(
+                    "<option value=\"{}\" selected>{}</option>",
+                    html_escape(&value),
+                    html_escape(&saved_option_label(spec.path, &value))
+                ));
+            }
             format!(
                 "<select id=\"{id}\" name=\"{}\"{required}>{options}</select>",
                 spec.path
@@ -215,6 +224,18 @@ fn render_audio_mode(config: &WavedConfig, id: &str) -> String {
         "<select id=\"{id}\" name=\"audio.mode\" required>{options}</select><div class=\"field steered\" id=\"steered-field\"{}><label for=\"audio_steered_initial_az_deg\">Initial azimuth</label><input id=\"audio_steered_initial_az_deg\" name=\"audio.steered_initial_az_deg\" type=\"number\" min=\"-180\" max=\"180\" step=\"1\" value=\"{azimuth}\"></div>",
         if selected == "steered" { "" } else { " hidden" }
     )
+}
+
+fn saved_option_label(path: &str, value: &str) -> String {
+    let seconds = matches!(path, "display.dim_after_s" | "display.off_after_s")
+        .then(|| value.parse::<u32>().ok())
+        .flatten();
+    match seconds {
+        Some(s) if s < 60 || s % 60 != 0 => format!("{s} seconds"),
+        Some(s) if s < 3600 || s % 3600 != 0 => format!("{} min", s / 60),
+        Some(s) => format!("{} hour{}", s / 3600, if s == 3600 { "" } else { "s" }),
+        None => value.to_string(),
+    }
 }
 
 fn value(config: &WavedConfig, path: &str) -> String {
@@ -347,5 +368,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn saved_value_outside_the_option_list_stays_selected() {
+        let mut config = WavedConfig::default();
+        config.display.dim_after_s = 900;
+        config.display.off_after_s = 7200;
+        let page = render_page(&config, &[], "csrf", &[], None);
+        assert!(page.contains("<option value=\"900\" selected>15 min</option>"));
+        assert!(page.contains("<option value=\"7200\" selected>2 hours</option>"));
+        // Listed values are not duplicated.
+        let page = render_page(&WavedConfig::default(), &[], "csrf", &[], None);
+        assert!(page.contains("<option value=\"120\" selected>2 min</option>"));
+        assert_eq!(page.matches("value=\"120\"").count(), 1);
+    }
+
+    #[test]
+    fn odd_saved_seconds_are_labelled_plainly() {
+        assert_eq!(
+            saved_option_label("display.dim_after_s", "30"),
+            "30 seconds"
+        );
+        assert_eq!(
+            saved_option_label("display.off_after_s", "90"),
+            "90 seconds"
+        );
+        assert_eq!(saved_option_label("device.language", "fr"), "fr");
     }
 }

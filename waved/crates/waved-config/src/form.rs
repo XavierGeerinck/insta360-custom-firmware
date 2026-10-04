@@ -100,7 +100,7 @@ static FIELD_SPECS: &[FieldSpec] = &[
         kind: FieldKind::Integer {
             min: 5,
             max: 100,
-            step: 5,
+            step: 1,
         },
         required: true,
     },
@@ -227,12 +227,12 @@ static FIELD_SPECS: &[FieldSpec] = &[
     FieldSpec {
         path: "recording.ask_timeout_s",
         section: Section::Webhook,
-        label: "Keep after (seconds)",
+        label: "Keep unanswered recordings after (seconds)",
         help: "With Ask, an unanswered recording is kept on the Wave after this time.",
         kind: FieldKind::Integer {
             min: 15,
             max: 600,
-            step: 15,
+            step: 1,
         },
         required: true,
     },
@@ -396,7 +396,7 @@ pub fn apply_form(
             _ => {
                 errors.push(FieldError {
                     path: "audio.nr_level",
-                    message: "unknown noise reduction level".into(),
+                    message: "unknown noise reduction level; use off, low, med or high".into(),
                 });
                 next.audio.nr_level.clone()
             }
@@ -571,6 +571,16 @@ fn bool_value(values: &BTreeMap<String, String>, path: &str, target: &mut bool) 
     }
 }
 
+fn number_error(path: &str) -> String {
+    match FIELD_SPECS.iter().find(|spec| spec.path == path) {
+        Some(FieldSpec {
+            kind: FieldKind::Integer { min, max, .. },
+            ..
+        }) => format!("Enter a whole number from {min} to {max}"),
+        _ => "Enter a whole number".into(),
+    }
+}
+
 fn parse_number<T>(
     values: &BTreeMap<String, String>,
     path: &'static str,
@@ -584,7 +594,7 @@ fn parse_number<T>(
             Ok(parsed) => *target = parsed,
             Err(_) => errors.push(FieldError {
                 path,
-                message: "must be a number".into(),
+                message: number_error(path),
             }),
         }
     }
@@ -712,5 +722,81 @@ mod tests {
             .insert("audio.nr_level".into(), "max".into());
         let errors = apply_form(&WavedConfig::default(), &submission).unwrap_err();
         assert!(errors.iter().any(|error| error.path == "audio.nr_level"));
+    }
+
+    fn submit(pairs: &[(&str, &str)]) -> Result<WavedConfig, Vec<FieldError>> {
+        let mut submission = FormSubmission::default();
+        for (path, value) in pairs {
+            submission.values.insert((*path).into(), (*value).into());
+        }
+        apply_form(&WavedConfig::default(), &submission)
+    }
+
+    fn rejects_path(pairs: &[(&str, &str)], path: &str) {
+        let errors = submit(pairs).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.path == path),
+            "expected an error for {path}, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_display_and_time_values() {
+        rejects_path(&[("time.zone", "../etc/passwd")], "time.zone");
+        rejects_path(&[("time.zone", "-UTC")], "time.zone");
+        rejects_path(&[("display.brightness_pct", "0")], "display.brightness_pct");
+        rejects_path(
+            &[
+                ("display.dim_after_s", "600"),
+                ("display.off_after_s", "300"),
+            ],
+            "display.off_after_s",
+        );
+        rejects_path(
+            &[("recording.ask_timeout_s", "5")],
+            "recording.ask_timeout_s",
+        );
+    }
+
+    #[test]
+    fn out_of_range_numbers_name_the_range() {
+        for value in ["300", "-5", "abc"] {
+            let errors = submit(&[("display.brightness_pct", value)]).unwrap_err();
+            let error = errors
+                .iter()
+                .find(|error| error.path == "display.brightness_pct")
+                .unwrap();
+            assert_eq!(error.message, "Enter a whole number from 5 to 100");
+        }
+    }
+
+    #[test]
+    fn noise_level_error_lists_allowed_values() {
+        let errors = submit(&[("audio.nr_level", "max")]).unwrap_err();
+        assert!(errors[0].message.contains("off, low, med or high"));
+    }
+
+    #[test]
+    fn omitted_new_keys_leave_values_unchanged() {
+        let mut current = WavedConfig::default();
+        current.display.brightness_pct = 42;
+        current.display.dim_after_s = 900;
+        current.display.off_after_s = 7200;
+        current.time.zone = "Asia/Tokyo".into();
+        current.time.clock_24h = !current.time.clock_24h;
+        current.tones.enabled = !current.tones.enabled;
+        current.audio.nr_level = NrLevel::High;
+        current.recording.pre_recording = !current.recording.pre_recording;
+        current.recording.ask_timeout_s = 200;
+        let mut submission = FormSubmission::default();
+        submission
+            .values
+            .insert("device.name".into(), "Office".into());
+        let next = apply_form(&current, &submission).unwrap();
+        assert_eq!(next.display, current.display);
+        assert_eq!(next.time, current.time);
+        assert_eq!(next.tones, current.tones);
+        assert_eq!(next.audio.nr_level, current.audio.nr_level);
+        assert_eq!(next.recording, current.recording);
     }
 }
