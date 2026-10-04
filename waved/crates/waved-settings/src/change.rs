@@ -42,10 +42,25 @@ impl Change {
             Command::SetMicVolume(value) => Change::MicVolume((*value).min(800)),
             Command::SetBeamAim(degrees) if degrees.is_finite() => {
                 let wrapped = degrees.rem_euclid(360.0);
-                Change::BeamAim(if wrapped >= 360.0 { 0.0 } else { wrapped })
+                // rem_euclid can return 360.0 (tiny negatives) or -0.0.
+                Change::BeamAim(if wrapped <= 0.0 || wrapped >= 360.0 {
+                    0.0
+                } else {
+                    wrapped
+                })
             }
             _ => return None,
         })
+    }
+}
+
+/// Screen-off never comes before dimming: when dimming is later than a
+/// non-zero screen-off, screen-off moves out to match (at least 60 s).
+fn off_after_for(dim_after_s: u32, off_after_s: u32) -> u32 {
+    if dim_after_s != 0 && off_after_s != 0 && off_after_s < dim_after_s {
+        dim_after_s.max(60)
+    } else {
+        off_after_s
     }
 }
 
@@ -54,10 +69,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::Brightness(value) => config.display.brightness_pct = *value,
         Change::DimAfter(value) => {
             config.display.dim_after_s = *value;
-            let off = config.display.off_after_s;
-            if *value != 0 && off != 0 && off < *value {
-                config.display.off_after_s = (*value).max(60);
-            }
+            config.display.off_after_s = off_after_for(*value, config.display.off_after_s);
         }
         Change::TimeZone(zone) => config.time.zone.clone_from(zone),
         Change::Clock24h(value) => config.time.clock_24h = *value,
@@ -79,9 +91,7 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         Change::Brightness(value) => settings.brightness_pct = *value,
         Change::DimAfter(value) => {
             settings.dim_after_s = *value;
-            if *value != 0 && settings.off_after_s != 0 && settings.off_after_s < *value {
-                settings.off_after_s = (*value).max(60);
-            }
+            settings.off_after_s = off_after_for(*value, settings.off_after_s);
         }
         Change::TimeZone(zone) => settings.time_zone.clone_from(zone),
         Change::Clock24h(value) => settings.clock_24h = *value,
@@ -103,17 +113,101 @@ mod tests {
 
     #[test]
     fn out_of_range_commands_are_clamped_or_ignored() {
-        assert_eq!(Change::from_command(&Command::SetBrightness(0)), Some(Change::Brightness(5)));
-        assert_eq!(Change::from_command(&Command::SetBrightness(250)), Some(Change::Brightness(100)));
-        assert_eq!(Change::from_command(&Command::SetSpeakerVolume(250)), Some(Change::SpeakerVolume(100)));
-        assert_eq!(Change::from_command(&Command::SetMicVolume(5_000)), Some(Change::MicVolume(800)));
-        assert_eq!(Change::from_command(&Command::SetDimAfter(5)), Some(Change::DimAfter(15)));
-        assert_eq!(Change::from_command(&Command::SetDimAfter(0)), Some(Change::DimAfter(0)));
-        assert_eq!(Change::from_command(&Command::SetBeamAim(-60.0)), Some(Change::BeamAim(300.0)));
-        assert_eq!(Change::from_command(&Command::SetBeamAim(720.0)), Some(Change::BeamAim(0.0)));
+        assert_eq!(
+            Change::from_command(&Command::SetBrightness(0)),
+            Some(Change::Brightness(5))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetBrightness(250)),
+            Some(Change::Brightness(100))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetSpeakerVolume(250)),
+            Some(Change::SpeakerVolume(100))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetMicVolume(5_000)),
+            Some(Change::MicVolume(800))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetDimAfter(5)),
+            Some(Change::DimAfter(15))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetDimAfter(0)),
+            Some(Change::DimAfter(0))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetBeamAim(-60.0)),
+            Some(Change::BeamAim(300.0))
+        );
+        assert_eq!(
+            Change::from_command(&Command::SetBeamAim(720.0)),
+            Some(Change::BeamAim(0.0))
+        );
         assert_eq!(Change::from_command(&Command::SetBeamAim(f32::NAN)), None);
-        assert_eq!(Change::from_command(&Command::SetTimeZone("../etc".into())), None);
+        assert_eq!(
+            Change::from_command(&Command::SetTimeZone("../etc".into())),
+            None
+        );
         assert_eq!(Change::from_command(&Command::ToggleMicMute), None);
+    }
+
+    #[test]
+    fn beam_aim_is_normalised_to_positive_zero() {
+        for degrees in [-0.0_f32, -360.0, 360.0, -1e-9, 720.0] {
+            match Change::from_command(&Command::SetBeamAim(degrees)) {
+                Some(Change::BeamAim(aim)) => {
+                    assert!(aim == 0.0 && aim.is_sign_positive(), "{degrees} -> {aim}")
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_change_keeps_the_default_config_valid() {
+        use waved_state::{AudioMode, NrLevel, UploadMode};
+        let mut changes = vec![
+            Change::Brightness(5),
+            Change::Brightness(100),
+            Change::TimeZone("Europe/Brussels".into()),
+            Change::Clock24h(false),
+            Change::PreRecording(false),
+            Change::UploadMode(UploadMode::Ask),
+            Change::UploadMode(UploadMode::LocalOnly),
+            Change::Tones(false),
+            Change::FirstRunDone,
+            Change::AudioMode(AudioMode::Cardioid),
+            Change::NrLevel(NrLevel::High),
+            Change::SpeakerVolume(0),
+            Change::SpeakerVolume(100),
+            Change::MicVolume(0),
+            Change::MicVolume(800),
+        ];
+        for dim in [0, 15, 59, 60, 3_600] {
+            changes.push(Change::DimAfter(dim));
+        }
+        for aim in [-0.0_f32, 0.0, 360.0, -1e-9, -60.0, 359.9] {
+            let change = Change::from_command(&Command::SetBeamAim(aim)).unwrap();
+            changes.push(change);
+        }
+        for off in [0, 60] {
+            for change in &changes {
+                let mut config = WavedConfig::default();
+                config.display.off_after_s = off;
+                if off != 0 {
+                    // Start from a valid pair: dimming no later than screen-off.
+                    config.display.dim_after_s = off;
+                }
+                apply_to_config(&mut config, change);
+                assert!(
+                    waved_config::validate_config(&config).is_ok(),
+                    "{change:?} with off_after_s={off}: {:?}",
+                    waved_config::validate_config(&config)
+                );
+            }
+        }
     }
 
     #[test]

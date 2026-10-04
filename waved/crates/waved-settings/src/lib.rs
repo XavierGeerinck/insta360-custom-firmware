@@ -73,7 +73,6 @@ mod tests {
     #[test]
     fn seed_copies_audio_and_settings_into_the_bus() {
         let bus = StateBus::new();
-        let _keep_audio = bus.audio.subscribe();
         seed_state(&bus, &configured());
         let audio = bus.audio.borrow().clone();
         assert_eq!(audio.mode, AudioMode::Cardioid);
