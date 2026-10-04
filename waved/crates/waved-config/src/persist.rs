@@ -21,7 +21,9 @@ pub(crate) fn save_atomic(config: &WavedConfig, path: &Path) -> Result<(), Confi
                 .join("; "),
         )
     })?;
-    let _guard = SAVE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SAVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }

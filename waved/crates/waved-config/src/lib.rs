@@ -1,8 +1,13 @@
+mod clamp;
 mod form;
 mod migrate;
 mod persist;
 mod validate;
 
+pub use clamp::{
+    clamp_ask_timeout, clamp_brightness, clamp_dim_after, clamp_mic_volume, clamp_off_after,
+    clamp_speaker_volume, wrap_beam_aim,
+};
 pub use form::{
     apply_form, field_specs, FieldError, FieldKind, FieldSpec, FormSubmission, Section,
 };
@@ -138,7 +143,10 @@ impl WavedConfig {
     pub fn parse(contents: &str) -> Result<Self, ConfigError> {
         let value: toml::Value = toml::from_str(contents)?;
         let migrated = migrate::migrate(value)?;
-        let config: Self = migrated.try_into().map_err(ConfigError::Parse)?;
+        let mut config: Self = migrated.try_into().map_err(ConfigError::Parse)?;
+        if clamp::normalise(&mut config) {
+            warn!("config had out-of-range settings; clamped them into range");
+        }
         validate_config(&config).map_err(|errors| {
             ConfigError::Validation(
                 errors
@@ -395,6 +403,97 @@ mic_volume = 300
         assert_eq!(config.display, DisplayConfig::default());
         assert_eq!(config.recording, RecordingConfig::default());
         assert_eq!(config.time, TimeConfig::default());
+    }
+
+    fn v2_with(section: &str, line: &str) -> String {
+        format!(
+            r#"config_version = 2
+
+[device]
+name = "Board room"
+
+[api]
+endpoint = "https://notes.example.com/hook"
+auth_token = "secret"
+
+[security]
+device_password = "4821"
+
+[{section}]
+{line}
+"#
+        )
+    }
+
+    #[test]
+    fn v2_out_of_range_device_values_are_clamped_and_keep_user_values() {
+        type Check = fn(&WavedConfig) -> bool;
+        let cases: [(&str, &str, Check); 13] = [
+            ("display", "brightness_pct = 3", |c| {
+                c.display.brightness_pct == 5
+            }),
+            ("display", "brightness_pct = 200", |c| {
+                c.display.brightness_pct == 100
+            }),
+            ("display", "dim_after_s = 5", |c| {
+                c.display.dim_after_s == 15
+            }),
+            ("display", "dim_after_s = 99999", |c| {
+                c.display.dim_after_s == 3_600 && c.display.off_after_s == 3_600
+            }),
+            ("display", "dim_after_s = 600\noff_after_s = 300", |c| {
+                c.display.dim_after_s == 600 && c.display.off_after_s == 600
+            }),
+            ("display", "off_after_s = 10", |c| {
+                c.display.off_after_s == 120
+            }),
+            ("display", "off_after_s = 999999", |c| {
+                c.display.off_after_s == 86_400
+            }),
+            ("recording", "ask_timeout_s = 5", |c| {
+                c.recording.ask_timeout_s == 15
+            }),
+            ("recording", "ask_timeout_s = 9000", |c| {
+                c.recording.ask_timeout_s == 600
+            }),
+            ("audio", "speaker_volume = 150", |c| {
+                c.audio.speaker_volume == 100
+            }),
+            ("audio", "mic_volume = 5000", |c| c.audio.mic_volume == 800),
+            ("audio", "beam_aim_deg = 400.0", |c| {
+                c.audio.beam_aim_deg == 40.0
+            }),
+            ("audio", "beam_aim_deg = nan", |c| {
+                c.audio.beam_aim_deg == 0.0
+            }),
+        ];
+        for (section, line, check) in cases {
+            let source = v2_with(section, line);
+            let config =
+                WavedConfig::parse(&source).unwrap_or_else(|error| panic!("{line}: {error}"));
+            assert!(check(&config), "{line}: {config:?}");
+            assert!(validate_config(&config).is_ok(), "{line}");
+            assert_eq!(config.device.name, "Board room", "{line}");
+            assert_eq!(
+                config.api.endpoint, "https://notes.example.com/hook",
+                "{line}"
+            );
+            assert_eq!(config.api.auth_token, "secret", "{line}");
+            assert_eq!(config.security.device_password, "4821", "{line}");
+        }
+        let negative = WavedConfig::parse(&v2_with("audio", "beam_aim_deg = -60.0")).unwrap();
+        assert_eq!(negative.audio.beam_aim_deg, 300.0);
+    }
+
+    #[test]
+    fn structural_errors_are_still_rejected() {
+        for source in [
+            v2_with("time", "zone = \"../etc\""),
+            v2_with("device", "future_flag = true"),
+            v2_with("api", "retry_max = 0"),
+        ] {
+            assert!(WavedConfig::parse(&source).is_err(), "{source}");
+        }
     }
 
     #[test]

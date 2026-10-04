@@ -1,6 +1,9 @@
 //! One persisted setting, mapped from a bus command and clamped to its range.
 
-use waved_config::WavedConfig;
+use waved_config::{
+    clamp_brightness, clamp_dim_after, clamp_mic_volume, clamp_off_after, clamp_speaker_volume,
+    wrap_beam_aim, WavedConfig,
+};
 use waved_state::{AudioMode, Command, NrLevel, SettingsState, UploadMode};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,9 +28,8 @@ impl Change {
     /// commands that don't touch settings, invalid time zones and non-finite aims.
     pub fn from_command(command: &Command) -> Option<Self> {
         Some(match command {
-            Command::SetBrightness(value) => Change::Brightness((*value).clamp(5, 100)),
-            Command::SetDimAfter(0) => Change::DimAfter(0),
-            Command::SetDimAfter(value) => Change::DimAfter((*value).clamp(15, 3_600)),
+            Command::SetBrightness(value) => Change::Brightness(clamp_brightness(*value)),
+            Command::SetDimAfter(value) => Change::DimAfter(clamp_dim_after(*value)),
             Command::SetTimeZone(zone) if waved_config::valid_time_zone(zone) => {
                 Change::TimeZone(zone.clone())
             }
@@ -38,29 +40,11 @@ impl Change {
             Command::MarkFirstRunDone => Change::FirstRunDone,
             Command::SetAudioMode(mode) => Change::AudioMode(mode.clone()),
             Command::SetNrLevel(level) => Change::NrLevel(level.clone()),
-            Command::SetSpeakerVolume(value) => Change::SpeakerVolume((*value).min(100)),
-            Command::SetMicVolume(value) => Change::MicVolume((*value).min(800)),
-            Command::SetBeamAim(degrees) if degrees.is_finite() => {
-                let wrapped = degrees.rem_euclid(360.0);
-                // rem_euclid can return 360.0 (tiny negatives) or -0.0.
-                Change::BeamAim(if wrapped <= 0.0 || wrapped >= 360.0 {
-                    0.0
-                } else {
-                    wrapped
-                })
-            }
+            Command::SetSpeakerVolume(value) => Change::SpeakerVolume(clamp_speaker_volume(*value)),
+            Command::SetMicVolume(value) => Change::MicVolume(clamp_mic_volume(*value)),
+            Command::SetBeamAim(degrees) => Change::BeamAim(wrap_beam_aim(*degrees)?),
             _ => return None,
         })
-    }
-}
-
-/// Screen-off never comes before dimming: when dimming is later than a
-/// non-zero screen-off, screen-off moves out to match (at least 60 s).
-fn off_after_for(dim_after_s: u32, off_after_s: u32) -> u32 {
-    if dim_after_s != 0 && off_after_s != 0 && off_after_s < dim_after_s {
-        dim_after_s.max(60)
-    } else {
-        off_after_s
     }
 }
 
@@ -69,7 +53,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::Brightness(value) => config.display.brightness_pct = *value,
         Change::DimAfter(value) => {
             config.display.dim_after_s = *value;
-            config.display.off_after_s = off_after_for(*value, config.display.off_after_s);
+            config.display.off_after_s = clamp_off_after(*value, config.display.off_after_s);
         }
         Change::TimeZone(zone) => config.time.zone.clone_from(zone),
         Change::Clock24h(value) => config.time.clock_24h = *value,
@@ -91,7 +75,7 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         Change::Brightness(value) => settings.brightness_pct = *value,
         Change::DimAfter(value) => {
             settings.dim_after_s = *value;
-            settings.off_after_s = off_after_for(*value, settings.off_after_s);
+            settings.off_after_s = clamp_off_after(*value, settings.off_after_s);
         }
         Change::TimeZone(zone) => settings.time_zone.clone_from(zone),
         Change::Clock24h(value) => settings.clock_24h = *value,
