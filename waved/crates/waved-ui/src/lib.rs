@@ -3,6 +3,7 @@ pub mod bindings;
 pub mod display;
 pub mod i18n;
 pub mod input;
+pub mod kit;
 pub mod nav;
 pub mod screens;
 pub mod status_bar;

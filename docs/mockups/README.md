@@ -149,12 +149,10 @@ has none of them.
 
 ### Icons
 
-The line icons in `index.html` map to LVGL built-ins where one exists: `LV_SYMBOL_WIFI`,
-`BLUETOOTH`, `USB`, `BATTERY_*`, `CHARGE`, `VOLUME_MAX`, `MUTE`, `PLAY`, `PAUSE`, `STOP`,
-`LEFT`, `RIGHT`, `DOWN`, `OK`, `WARNING`, `TRASH`, `UPLOAD`, `POWER`, `SETTINGS`, `REFRESH`,
-`CALL`, `DIRECTORY`, `BACKSPACE`. Six glyphs need a small custom icon font: microphone,
-microphone off, bookmark, speaker minus, speaker plus, lock. That removes all PNG dependencies, which is why the
-Save/Send/Discard buttons render blank today.
+All icons come from one subset of the Tabler Icons webfont (MIT, outline style with 2 px
+strokes), so they match the line icons in `index.html`. `crates/waved-ui/fonts/icons.py` lists
+the 49 icons. They are rendered at 16, 20, 26 and 44 px. No PNGs need to be deployed, which
+is the reason the Save/Send/Discard buttons render blank today.
 
 ## Components
 
