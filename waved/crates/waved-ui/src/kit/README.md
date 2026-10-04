@@ -10,9 +10,10 @@ deleted when the runtime switches over.
   calls belong only in `kit/obj.rs`, `kit/event.rs`, `kit/testkit.rs` and `kit/components/`.
   `Obj::from_raw` is `unsafe`; only the kit's own code needs it.
 - Every position and colour comes from `kit::tokens`. Every string is plain, sentence-case copy.
-- Never hard-code a line height. The fonts report Title 27, Dial 32 and Num48 34, which differ
-  from the mockup's CSS values. Use `Font::line_height()` or `one_line()`, which sizes the label to
-  one line of its font.
+- Never hard-code a line height. The fonts report Title 27, Dial 32 and Num48 43 (the 48 px digit
+  font embeds `a`/`m`/`p`, so its height includes the descender), which differ from the mockup's
+  CSS values. Use `Font::line_height()` or `one_line()`, which sizes the label to one line of its
+  font.
 - A label that can show user data (names, hosts, values) stays on one line. A plain `Obj::label`
   wraps instead. Pick one of:
   - `centered_text(width)` for centred text across a known width;

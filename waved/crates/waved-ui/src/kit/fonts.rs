@@ -104,6 +104,32 @@ mod tests {
     }
 
     #[test]
+    fn text_fonts_cover_latin_extended_a() {
+        for font in [
+            Font::Micro,
+            Font::Small,
+            Font::Body,
+            Font::Title,
+            Font::Dial,
+            Font::Num13,
+            Font::Num20,
+        ] {
+            for ch in ['ł', 'ő', 'č'] {
+                assert!(glyph(font, ch).is_some(), "{font:?} lacks {ch:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn num_fonts_cover_am_pm() {
+        for font in [Font::Num13, Font::Num20, Font::Num26, Font::Num48] {
+            for ch in ['a', 'm', 'p'] {
+                assert!(glyph(font, ch).is_some(), "{font:?} lacks {ch:?}");
+            }
+        }
+    }
+
+    #[test]
     fn digits_are_tabular() {
         for font in [Font::Num48, Font::Num26, Font::Body] {
             let widths: Vec<u16> = ('0'..='9')
@@ -132,8 +158,8 @@ mod tests {
 
     #[test]
     fn line_heights_follow_the_type_scale() {
-        // lv_font_conv sizes line_height to the glyphs it embeds, so the digit-only
-        // 48 px face is 34 px tall (cap height), not the 52 px of the type scale.
+        // lv_font_conv sizes line_height to the glyphs it embeds, so the 48 px digit
+        // face (digits plus a/m/p) is 43 px tall, not the 52 px of the type scale.
         // Components set their own heights; here only the ordering must hold.
         assert!(Font::Micro.line_height() < Font::Body.line_height());
         assert!(Font::Body.line_height() < Font::Title.line_height());
