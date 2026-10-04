@@ -6,3 +6,6 @@ pub mod dial;
 pub mod list;
 pub mod row;
 pub mod status;
+
+#[cfg(test)]
+mod compositions;
