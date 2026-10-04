@@ -9,6 +9,16 @@ use std::ffi::{CStr, CString};
 
 const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
 
+/// LVGL's "size to content" (LV_COORD_SET_SPEC(LV_COORD_MAX) in lv_area.h).
+pub const SIZE_CONTENT: i32 = ((1 << 29) - 1) | (1 << 29);
+
+/// Width of `text` on one line in `font`, in pixels.
+pub fn text_width(text: &str, font: Font) -> i32 {
+    let text = CString::new(text.replace('\0', "")).expect("NUL bytes removed");
+    // SAFETY: NUL-terminated text and a static font.
+    unsafe { lv_text_get_width(text.as_ptr(), text.as_bytes().len() as u32, font.ptr(), 0) }
+}
+
 /// 0xRRGGBB to an LVGL colour.
 pub fn color(hex: u32) -> lv_color_t {
     // SAFETY: pure conversion.
@@ -109,6 +119,94 @@ impl Obj {
 
     pub fn rect(self, r: Rect) -> Self {
         self.pos(r.x, r.y).size(r.w, r.h)
+    }
+
+    /// Size to the content (text or children).
+    pub fn fit(self) -> Self {
+        self.size(SIZE_CONTENT, SIZE_CONTENT)
+    }
+
+    /// Children in a row, centred both ways, `gap` px apart.
+    pub fn row(self, gap: i32) -> Self {
+        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_ROW, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap)
+    }
+
+    /// Children in a row from the left, vertically centred, with side padding.
+    pub fn row_start(self, gap: i32, pad_x: i32) -> Self {
+        let row = self.flex(lv_flex_flow_t_LV_FLEX_FLOW_ROW, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap);
+        // SAFETY: live object.
+        unsafe {
+            lv_obj_set_style_pad_left(self.0, pad_x, MAIN);
+            lv_obj_set_style_pad_right(self.0, pad_x, MAIN);
+        }
+        row
+    }
+
+    /// Children in a column, left-aligned, `gap` px apart.
+    pub fn column(self, gap: i32) -> Self {
+        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_COLUMN, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_START, gap)
+    }
+
+    /// Children in a column, centred across, `gap` px apart.
+    pub fn column_centered(self, gap: i32) -> Self {
+        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_COLUMN, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap)
+    }
+
+    fn flex(self, flow: lv_flex_flow_t, main: lv_flex_align_t, cross: lv_flex_align_t, gap: i32) -> Self {
+        // SAFETY: live object.
+        unsafe {
+            lv_obj_set_flex_flow(self.0, flow);
+            lv_obj_set_flex_align(self.0, main, cross, cross);
+            lv_obj_set_style_pad_row(self.0, gap, MAIN);
+            lv_obj_set_style_pad_column(self.0, gap, MAIN);
+        }
+        self
+    }
+
+    /// Take the remaining space in a flex row.
+    pub fn grow(self) -> Self {
+        // SAFETY: live object.
+        unsafe { lv_obj_set_flex_grow(self.0, 1) };
+        self
+    }
+
+    /// Centre in the parent.
+    pub fn center(self) -> Self {
+        // SAFETY: live object.
+        unsafe { lv_obj_center(self.0) };
+        self
+    }
+
+    /// Border while pressed (for example the teal ring on side buttons).
+    pub fn pressed_border(self, width: i32, hex: u32) -> Self {
+        let pressed = MAIN | LV_STATE_PRESSED as lv_style_selector_t;
+        // SAFETY: live object.
+        unsafe {
+            lv_obj_set_style_border_width(self.0, width, pressed);
+            lv_obj_set_style_border_color(self.0, color(hex), pressed);
+            lv_obj_set_style_border_opa(self.0, LV_OPA_COVER as lv_opa_t, pressed);
+        }
+        self
+    }
+
+    /// Centred text wrapping within `width`.
+    pub fn wrapped_text(self, width: i32) -> Self {
+        self.assert_label();
+        // SAFETY: live label.
+        unsafe {
+            lv_obj_set_width(self.0, width);
+            lv_obj_set_style_text_align(self.0, lv_text_align_t_LV_TEXT_ALIGN_CENTER, MAIN);
+            lv_label_set_long_mode(self.0, lv_label_long_mode_t_LV_LABEL_LONG_WRAP);
+        }
+        self
+    }
+
+    /// Let a content-sized label grow up to `width`. Together with `one_line`
+    /// it then ends in "..." (values next to a title in a row).
+    pub fn max_width(self, width: i32) -> Self {
+        // SAFETY: live object.
+        unsafe { lv_obj_set_style_max_width(self.0, width, MAIN) };
+        self
     }
 
     pub fn width(self, w: i32) -> Self {
@@ -363,6 +461,19 @@ mod tests {
             let root = lv.screen();
             let label = Obj::label(root, "Mic\0 on", Font::Body, TEXT);
             assert_eq!(label.text(), "Mic on");
+        });
+    }
+
+    #[test]
+    fn rows_centre_their_children() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let row = Obj::plain(root).rect(Rect::new(100, 100, 200, 40)).row(10);
+            let first = Obj::plain(row).size(20, 20);
+            let second = Obj::plain(row).size(20, 20);
+            row.update_layout();
+            assert_eq!((first.coords().x1, second.coords().x1), (175, 205));
+            assert_eq!(first.coords().y1, 110);
         });
     }
 }
