@@ -3787,6 +3787,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-settings"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "waved-config",
+ "waved-state",
+]
+
+[[package]]
 name = "waved-state"
 version = "0.1.0"
 dependencies = [

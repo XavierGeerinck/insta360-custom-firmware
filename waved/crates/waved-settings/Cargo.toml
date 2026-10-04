@@ -1,0 +1,15 @@
+[package]
+name = "waved-settings"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing.workspace = true
+waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"
+uuid.workspace = true
