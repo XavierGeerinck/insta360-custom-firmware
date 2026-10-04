@@ -293,6 +293,20 @@ impl Obj {
         self
     }
 
+    /// Wrapped text limited to `lines` lines of the current font, ending in
+    /// "..." when it needs more. Call after `font` and `wrapped_text`: the
+    /// height is fixed, which is what makes LVGL truncate instead of grow.
+    pub fn max_lines(self, lines: i32) -> Self {
+        self.assert_label();
+        // SAFETY: live label (see `one_line`).
+        unsafe {
+            let font = lv_obj_get_style_prop(self.0, MAIN, LV_STYLE_TEXT_FONT as lv_style_prop_t);
+            lv_obj_set_height(self.0, lines * lv_font_get_line_height(font.ptr.cast()));
+            lv_label_set_long_mode(self.0, lv_label_long_mode_t_LV_LABEL_LONG_DOT);
+        }
+        self
+    }
+
     /// Background while pressed.
     pub fn pressed_bg(self, hex: u32) -> Self {
         let pressed = MAIN | LV_STATE_PRESSED as lv_style_selector_t;

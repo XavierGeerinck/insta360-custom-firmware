@@ -4,7 +4,7 @@ use crate::kit::components::buttons::Tone;
 use crate::kit::event::on_click;
 use crate::kit::fonts::Font;
 use crate::kit::obj::Obj;
-use crate::kit::tokens::{Rect, LIVE, REC, ROW2, ROW3, SCREEN_W, TEXT, TEXT_2};
+use crate::kit::tokens::{Rect, ROW2, ROW3, SCREEN_W, TEXT, TEXT_2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -63,7 +63,12 @@ impl ButtonRow {
                 let icon = Obj::label(obj, "", Font::Icon20, TEXT);
                 let text = Obj::label(obj, "", Font::Body, TEXT);
                 let handler = handler.clone();
-                on_click(obj, move || (handler.borrow_mut())(index));
+                // A disabled button ignores taps even when the event is sent directly.
+                on_click(obj, move || {
+                    if obj.is_clickable() {
+                        (handler.borrow_mut())(index)
+                    }
+                });
                 let button = RowButton { obj, icon, text };
                 button.apply(spec);
                 button
@@ -89,6 +94,7 @@ impl ButtonRow {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ConfirmSpec {
     pub icon: &'static str,
     pub title: String,
@@ -105,11 +111,11 @@ pub fn confirm_dialog(
     on_confirm: impl FnMut() + 'static,
     on_cancel: impl FnMut() + 'static,
 ) -> ButtonRow {
-    let accent = if spec.tone == Tone::Rec { REC } else { LIVE };
+    let accent = spec.tone.accent();
     let disc = Obj::plain(root).rect(Rect::new(172, 58, 56, 56)).round().bg(tint(accent, 36));
     Obj::label(disc, spec.icon, Font::Icon26, accent).center();
     Obj::label(root, &spec.title, Font::Dial, TEXT).centered_text(SCREEN_W).pos(0, 128);
-    Obj::label(root, &spec.body, Font::Small, TEXT_2).wrapped_text(260).pos(70, 166);
+    Obj::label(root, &spec.body, Font::Small, TEXT_2).wrapped_text(260).max_lines(3).pos(70, 166);
     let (mut confirm, mut cancel) = (on_confirm, on_cancel);
     ButtonRow::two(
         root,
@@ -201,6 +207,77 @@ mod tests {
             assert_targets_ok(root);
             lv.click(row.obj(1));
             assert!(confirmed.get());
+        });
+    }
+
+    #[test]
+    fn a_long_confirmation_body_stops_at_three_lines_above_the_buttons() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            confirm_dialog(
+                root,
+                &ConfirmSpec {
+                    icon: icons::POWER,
+                    title: "Power off?".into(),
+                    body: "A recording in progress is saved first and uploaded when Wave is back online. \
+                           Anything still queued for upload stays on the device until then. Turn Wave on \
+                           again with the power button when you are ready to carry on."
+                        .into(),
+                    confirm: "Power off".into(),
+                    tone: Tone::Rec,
+                },
+                || {},
+                || {},
+            );
+            lv.render();
+            let body = root.child(2);
+            assert!(body.coords().y2 < ROW2[0].y);
+            assert!(body.text().ends_with("..."), "{}", body.text());
+        });
+    }
+
+    #[test]
+    fn a_destructive_confirmation_is_red_even_for_a_text_tone() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            confirm_dialog(
+                root,
+                &ConfirmSpec {
+                    icon: icons::TRASH,
+                    title: "Delete?".into(),
+                    body: "This recording is removed from Wave.".into(),
+                    confirm: "Delete".into(),
+                    tone: Tone::RecText,
+                },
+                || {},
+                || {},
+            );
+            let [r, g, b] = lv.render().pixel(200, 62);
+            assert!(r > g && r > b, "disc is not red: {r},{g},{b}");
+        });
+    }
+
+    #[test]
+    fn a_disabled_button_ignores_taps_until_it_is_enabled_again() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let taps = Rc::new(Cell::new(0));
+            let count = taps.clone();
+            let row = ButtonRow::two(
+                root,
+                [
+                    ButtonSpec::new(None, "No", Tone::Neutral),
+                    ButtonSpec::new(None, "Yes", Tone::Live),
+                ],
+                move |_| count.set(count.get() + 1),
+            );
+            row.set_enabled(1, false);
+            lv.click(row.obj(1));
+            assert_eq!(taps.get(), 0);
+            row.set_enabled(1, true);
+            assert!(row.obj(1).is_clickable());
+            lv.click(row.obj(1));
+            assert_eq!(taps.get(), 1);
         });
     }
 

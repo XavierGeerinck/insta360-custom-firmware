@@ -39,6 +39,15 @@ impl Tone {
         }
     }
 
+    /// The accent a dialog uses for this tone: red for destructive tones,
+    /// teal otherwise.
+    pub fn accent(self) -> u32 {
+        match self {
+            Tone::Rec | Tone::RecText => REC,
+            Tone::Neutral | Tone::Live | Tone::WarnText => LIVE,
+        }
+    }
+
     /// The fill while pressed.
     pub fn pressed(self) -> u32 {
         match self {
