@@ -1,6 +1,6 @@
 use crate::http::{html_escape, response};
 use waved_config::{field_specs, FieldError, FieldKind, Section, UploadMode, WavedConfig};
-use waved_state::AudioMode;
+use waved_state::{AudioMode, NrLevel};
 
 const OTHER_NETWORK_VALUE: &str = "__other_network__";
 
@@ -241,6 +241,21 @@ fn value(config: &WavedConfig, path: &str) -> String {
         "security.device_password" => String::new(),
         "security.ota_server" => config.security.ota_server.clone(),
         "ntp.servers" => config.ntp.servers.join("\n"),
+        "display.brightness_pct" => config.display.brightness_pct.to_string(),
+        "display.dim_after_s" => config.display.dim_after_s.to_string(),
+        "display.off_after_s" => config.display.off_after_s.to_string(),
+        "time.zone" => config.time.zone.clone(),
+        "time.clock_24h" => config.time.clock_24h.to_string(),
+        "tones.enabled" => config.tones.enabled.to_string(),
+        "audio.nr_level" => match config.audio.nr_level {
+            NrLevel::Off => "off",
+            NrLevel::Low => "low",
+            NrLevel::Med => "med",
+            NrLevel::High => "high",
+        }
+        .into(),
+        "recording.pre_recording" => config.recording.pre_recording.to_string(),
+        "recording.ask_timeout_s" => config.recording.ask_timeout_s.to_string(),
         _ => String::new(),
     }
 }
@@ -313,5 +328,24 @@ mod tests {
         assert!(page.contains("bad &lt;endpoint&gt;"));
         assert!(page.contains("write &lt;failed&gt;"));
         assert!(!page.contains("bad <endpoint>"));
+    }
+
+    #[test]
+    fn every_registry_field_renders_its_saved_value() {
+        let config = WavedConfig::default();
+        for spec in field_specs() {
+            let may_be_blank = matches!(spec.kind, FieldKind::Secret { .. })
+                || matches!(
+                    spec.path,
+                    "audio.mode" | "api.endpoint" | "security.ota_server"
+                );
+            if !may_be_blank {
+                assert!(
+                    !value(&config, spec.path).is_empty(),
+                    "no value for {}",
+                    spec.path
+                );
+            }
+        }
     }
 }

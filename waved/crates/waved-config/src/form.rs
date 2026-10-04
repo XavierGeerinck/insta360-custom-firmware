@@ -1,6 +1,6 @@
 use crate::{validate_config, UploadMode, WavedConfig};
 use std::collections::{BTreeMap, BTreeSet};
-use waved_state::AudioMode;
+use waved_state::{AudioMode, NrLevel};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Section {
@@ -52,6 +52,26 @@ const UPLOAD_MODE_OPTIONS: &[(&str, &str)] = &[
     ("ask", "Ask after recording"),
     ("local_only", "Keep locally"),
 ];
+const NR_LEVEL_OPTIONS: &[(&str, &str)] = &[
+    ("off", "Off"),
+    ("low", "Low"),
+    ("med", "Medium"),
+    ("high", "High"),
+];
+const DIM_AFTER_OPTIONS: &[(&str, &str)] = &[
+    ("0", "Never"),
+    ("60", "1 min"),
+    ("120", "2 min"),
+    ("300", "5 min"),
+    ("600", "10 min"),
+];
+const OFF_AFTER_OPTIONS: &[(&str, &str)] = &[
+    ("0", "Never"),
+    ("300", "5 min"),
+    ("600", "10 min"),
+    ("1800", "30 min"),
+    ("3600", "1 hour"),
+];
 
 static FIELD_SPECS: &[FieldSpec] = &[
     FieldSpec {
@@ -73,6 +93,62 @@ static FIELD_SPECS: &[FieldSpec] = &[
         required: true,
     },
     FieldSpec {
+        path: "display.brightness_pct",
+        section: Section::Device,
+        label: "Screen brightness",
+        help: "Backlight level in percent.",
+        kind: FieldKind::Integer {
+            min: 5,
+            max: 100,
+            step: 5,
+        },
+        required: true,
+    },
+    FieldSpec {
+        path: "display.dim_after_s",
+        section: Section::Device,
+        label: "Dim after",
+        help: "Time without a touch before the resting screen.",
+        kind: FieldKind::Select {
+            options: DIM_AFTER_OPTIONS,
+        },
+        required: true,
+    },
+    FieldSpec {
+        path: "display.off_after_s",
+        section: Section::Device,
+        label: "Screen off after",
+        help: "Never turns off while recording or in a call.",
+        kind: FieldKind::Select {
+            options: OFF_AFTER_OPTIONS,
+        },
+        required: true,
+    },
+    FieldSpec {
+        path: "time.zone",
+        section: Section::Device,
+        label: "Time zone",
+        help: "IANA name, for example Europe/Brussels.",
+        kind: FieldKind::Text { max_len: 64 },
+        required: true,
+    },
+    FieldSpec {
+        path: "time.clock_24h",
+        section: Section::Device,
+        label: "24-hour clock",
+        help: "Show 14:30 instead of 2:30 pm.",
+        kind: FieldKind::Boolean,
+        required: false,
+    },
+    FieldSpec {
+        path: "tones.enabled",
+        section: Section::Device,
+        label: "Alert tones",
+        help: "Sounds for mute, volume and recording start and stop.",
+        kind: FieldKind::Boolean,
+        required: false,
+    },
+    FieldSpec {
         path: "audio.mode",
         section: Section::Audio,
         label: "Audio mode",
@@ -87,7 +163,7 @@ static FIELD_SPECS: &[FieldSpec] = &[
         help: "Default speaker level.",
         kind: FieldKind::Integer {
             min: 0,
-            max: 200,
+            max: 100,
             step: 1,
         },
         required: true,
@@ -101,6 +177,16 @@ static FIELD_SPECS: &[FieldSpec] = &[
             min: 0,
             max: 800,
             step: 1,
+        },
+        required: true,
+    },
+    FieldSpec {
+        path: "audio.nr_level",
+        section: Section::Audio,
+        label: "Noise reduction",
+        help: "How much background noise to remove.",
+        kind: FieldKind::Select {
+            options: NR_LEVEL_OPTIONS,
         },
         required: true,
     },
@@ -127,6 +213,26 @@ static FIELD_SPECS: &[FieldSpec] = &[
         help: "Upload automatically, ask, or keep only on the Wave.",
         kind: FieldKind::Select {
             options: UPLOAD_MODE_OPTIONS,
+        },
+        required: true,
+    },
+    FieldSpec {
+        path: "recording.pre_recording",
+        section: Section::Webhook,
+        label: "Pre-recording",
+        help: "Keep the last 30 seconds in memory so Record includes them.",
+        kind: FieldKind::Boolean,
+        required: false,
+    },
+    FieldSpec {
+        path: "recording.ask_timeout_s",
+        section: Section::Webhook,
+        label: "Keep after (seconds)",
+        help: "With Ask, an unanswered recording is kept on the Wave after this time.",
+        kind: FieldKind::Integer {
+            min: 15,
+            max: 600,
+            step: 15,
         },
         required: true,
     },
@@ -255,6 +361,57 @@ pub fn apply_form(
         &submission.values,
         "device.language",
         &mut next.device.language,
+    );
+    parse_number(
+        &submission.values,
+        "display.brightness_pct",
+        &mut next.display.brightness_pct,
+        &mut errors,
+    );
+    parse_number(
+        &submission.values,
+        "display.dim_after_s",
+        &mut next.display.dim_after_s,
+        &mut errors,
+    );
+    parse_number(
+        &submission.values,
+        "display.off_after_s",
+        &mut next.display.off_after_s,
+        &mut errors,
+    );
+    text(&submission.values, "time.zone", &mut next.time.zone);
+    bool_value(
+        &submission.values,
+        "time.clock_24h",
+        &mut next.time.clock_24h,
+    );
+    bool_value(&submission.values, "tones.enabled", &mut next.tones.enabled);
+    if let Some(value) = submission.values.get("audio.nr_level") {
+        next.audio.nr_level = match value.as_str() {
+            "off" => NrLevel::Off,
+            "low" => NrLevel::Low,
+            "med" => NrLevel::Med,
+            "high" => NrLevel::High,
+            _ => {
+                errors.push(FieldError {
+                    path: "audio.nr_level",
+                    message: "unknown noise reduction level".into(),
+                });
+                next.audio.nr_level.clone()
+            }
+        };
+    }
+    bool_value(
+        &submission.values,
+        "recording.pre_recording",
+        &mut next.recording.pre_recording,
+    );
+    parse_number(
+        &submission.values,
+        "recording.ask_timeout_s",
+        &mut next.recording.ask_timeout_s,
+        &mut errors,
     );
     if let Some(value) = submission.values.get("audio.mode") {
         next.audio.mode = parse_audio_mode(value, &submission.values, &mut errors);
@@ -442,12 +599,21 @@ mod tests {
         let expected = [
             "device.name",
             "device.language",
+            "display.brightness_pct",
+            "display.dim_after_s",
+            "display.off_after_s",
+            "time.zone",
+            "time.clock_24h",
+            "tones.enabled",
             "audio.mode",
             "audio.speaker_volume",
             "audio.mic_volume",
+            "audio.nr_level",
             "api.endpoint",
             "api.auth_token",
             "api.upload_mode",
+            "recording.pre_recording",
+            "recording.ask_timeout_s",
             "api.allow_insecure_http",
             "api.retry_max",
             "api.retry_backoff_ms",
@@ -508,5 +674,43 @@ mod tests {
             next.audio.mode,
             AudioMode::Steered { initial_az_deg } if initial_az_deg == 90.0
         ));
+    }
+
+    #[test]
+    fn applies_display_time_recording_and_noise_fields() {
+        let mut submission = FormSubmission::default();
+        for (path, value) in [
+            ("display.brightness_pct", "60"),
+            ("display.dim_after_s", "300"),
+            ("display.off_after_s", "1800"),
+            ("time.zone", "Europe/Brussels"),
+            ("time.clock_24h", "false"),
+            ("tones.enabled", "false"),
+            ("audio.nr_level", "med"),
+            ("recording.pre_recording", "false"),
+            ("recording.ask_timeout_s", "120"),
+        ] {
+            submission.values.insert(path.into(), value.into());
+        }
+        let next = apply_form(&WavedConfig::default(), &submission).unwrap();
+        assert_eq!(next.display.brightness_pct, 60);
+        assert_eq!(
+            (next.display.dim_after_s, next.display.off_after_s),
+            (300, 1800)
+        );
+        assert_eq!(next.time.zone, "Europe/Brussels");
+        assert!(!next.time.clock_24h && !next.tones.enabled && !next.recording.pre_recording);
+        assert_eq!(next.audio.nr_level, NrLevel::Med);
+        assert_eq!(next.recording.ask_timeout_s, 120);
+    }
+
+    #[test]
+    fn rejects_an_unknown_noise_level() {
+        let mut submission = FormSubmission::default();
+        submission
+            .values
+            .insert("audio.nr_level".into(), "max".into());
+        let errors = apply_form(&WavedConfig::default(), &submission).unwrap_err();
+        assert!(errors.iter().any(|error| error.path == "audio.nr_level"));
     }
 }
