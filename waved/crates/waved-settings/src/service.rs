@@ -1,6 +1,7 @@
 //! Persists settings changes: updates the watch at once, writes config.toml
 //! once per quiet period, and merges into the file as it is on disk so a
-//! config saved by the setup page in the meantime keeps its fields.
+//! config saved by the setup page in the meantime keeps its fields. A file
+//! that exists but does not load is never overwritten.
 
 use crate::change::{apply_to_config, apply_to_settings, Change};
 use std::path::PathBuf;
@@ -8,11 +9,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
-use waved_config::WavedConfig;
+use waved_config::{ConfigError, WavedConfig};
 use waved_state::{Command, SettingsState};
 
 /// Quiet period before writing. Holding Louder sends about three commands a second.
 pub const DEFAULT_DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// Wait before retrying a write that failed or was refused.
+const RETRY_DELAY: Duration = Duration::from_secs(10);
 
 pub struct SettingsService {
     path: PathBuf,
@@ -70,26 +74,56 @@ impl SettingsService {
                     }
                 },
                 _ = quiet_period_over => {
-                    self.flush();
-                    deadline = None;
+                    deadline = if self.flush() {
+                        None
+                    } else {
+                        Some(tokio::time::Instant::now() + RETRY_DELAY)
+                    };
                 }
             }
         }
     }
 
     /// Re-read the file and apply only our changes, so fields written by the
-    /// setup page in the meantime survive.
-    fn flush(&mut self) {
+    /// setup page in the meantime survive. Starts from defaults only when the
+    /// file does not exist; a file that fails to load is left alone. Changes
+    /// stay pending until a save succeeds. Returns false when they are still
+    /// pending.
+    fn flush(&mut self) -> bool {
         if self.pending.is_empty() {
-            return;
+            return true;
         }
-        let mut config = WavedConfig::load_or_default(&self.path);
-        for change in self.pending.drain(..) {
-            apply_to_config(&mut config, &change);
+        let mut config = match WavedConfig::load(&self.path) {
+            Ok(config) => config,
+            Err(ConfigError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                WavedConfig::default()
+            }
+            Err(error) => {
+                warn!(
+                    "settings not saved: {} does not load ({error}); keeping {} change(s) \
+                     and leaving the file untouched",
+                    self.path.display(),
+                    self.pending.len()
+                );
+                return false;
+            }
+        };
+        for change in &self.pending {
+            apply_to_config(&mut config, change);
         }
         match config.save(&self.path) {
-            Ok(()) => info!("settings saved to {}", self.path.display()),
-            Err(error) => warn!("settings not saved: {error}"),
+            Ok(()) => {
+                self.pending.clear();
+                info!("settings saved to {}", self.path.display());
+                true
+            }
+            Err(error) => {
+                warn!(
+                    "settings not saved: {error}; keeping {} change(s)",
+                    self.pending.len()
+                );
+                false
+            }
         }
     }
 }
@@ -209,6 +243,93 @@ mod tests {
         assert_eq!(config.audio.beam_aim_deg, 0.0);
         bus.commands.send(Command::Shutdown).unwrap();
         handle.await.unwrap();
+    }
+
+    const UNLOADABLE: [(&str, &str); 3] = [
+        (
+            "bad value",
+            "config_version = 2\n[time]\nzone = \"../etc\"\n[api]\nendpoint = \"https://notes.example.com/hook\"\nauth_token = \"secret\"\n",
+        ),
+        (
+            "newer version",
+            "config_version = 99\n[api]\nendpoint = \"https://notes.example.com/hook\"\nauth_token = \"secret\"\n",
+        ),
+        (
+            "unknown key",
+            "config_version = 2\nfuture_flag = true\n[api]\nendpoint = \"https://notes.example.com/hook\"\nauth_token = \"secret\"\n",
+        ),
+    ];
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unreadable_config_is_never_overwritten() {
+        for (case, contents) in UNLOADABLE {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, contents).unwrap();
+            let (bus, handle) = start(&path);
+
+            bus.commands.send(Command::SetBrightness(40)).unwrap();
+            settle().await;
+            assert_eq!(bus.settings.borrow().brightness_pct, 40, "{case}: watch");
+            // Past the quiet period and several retries.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents, "{case}");
+
+            bus.commands.send(Command::Shutdown).unwrap();
+            handle.await.unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents, "{case}");
+            assert!(!dir.path().join("config.toml.bak").exists(), "{case}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_config_is_created_from_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let (bus, handle) = start(&path);
+
+        bus.commands.send(Command::SetSpeakerVolume(30)).unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        let mut expected = WavedConfig::default();
+        expected.audio.speaker_volume = 30;
+        assert_eq!(saved(&path), expected);
+        bus.commands.send(Command::Shutdown).unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_save_keeps_the_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        WavedConfig::default().save(&path).unwrap();
+        // A directory where save() writes its temporary file makes it fail.
+        let blocker = dir.path().join("config.toml.new");
+        std::fs::create_dir(&blocker).unwrap();
+        let (bus, handle) = start(&path);
+
+        bus.commands.send(Command::SetSpeakerVolume(30)).unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(saved(&path).audio.speaker_volume, 100, "save failed");
+
+        std::fs::remove_dir(&blocker).unwrap();
+        tokio::time::sleep(RETRY_DELAY).await;
+        assert_eq!(saved(&path).audio.speaker_volume, 30, "retried and saved");
+        bus.commands.send(Command::Shutdown).unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn restart_for_config_flushes_pending_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        WavedConfig::default().save(&path).unwrap();
+        let (bus, handle) = start(&path);
+
+        bus.commands.send(Command::SetBrightness(40)).unwrap();
+        bus.commands.send(Command::RestartForConfig).unwrap();
+        handle.await.unwrap();
+        assert_eq!(saved(&path).display.brightness_pct, 40);
     }
 
     #[tokio::test(start_paused = true)]
