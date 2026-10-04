@@ -189,6 +189,17 @@ pub enum PlaybackPreset {
     Media,
 }
 
+/// What happens to a recording when it stops. Lives here (not in waved-config)
+/// so state, commands and config share one type.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadMode {
+    #[default]
+    Automatic,
+    Ask,
+    LocalOnly,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BatteryState {
     pub level: u8,
@@ -662,5 +673,14 @@ mod tests {
         let bus = StateBus::new();
         let rx = bus.provisioning.subscribe();
         assert_eq!(*rx.borrow(), ProvisioningState::Idle);
+    }
+
+    #[test]
+    fn upload_mode_serializes_snake_case_and_defaults_to_automatic() {
+        assert_eq!(UploadMode::default(), UploadMode::Automatic);
+        assert_eq!(
+            serde_json::to_string(&UploadMode::LocalOnly).unwrap(),
+            "\"local_only\""
+        );
     }
 }

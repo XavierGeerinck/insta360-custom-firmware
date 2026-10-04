@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use waved_state::AudioMode;
+pub use waved_state::UploadMode;
 
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
@@ -54,15 +55,6 @@ pub struct AudioConfig {
     pub mode: AudioMode,
     pub speaker_volume: u16,
     pub mic_volume: u16,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UploadMode {
-    #[default]
-    Automatic,
-    Ask,
-    LocalOnly,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
