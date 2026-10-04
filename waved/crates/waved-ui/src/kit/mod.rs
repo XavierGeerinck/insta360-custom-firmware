@@ -7,6 +7,7 @@ pub mod fonts;
 pub mod icons;
 pub mod obj;
 pub mod route;
+pub mod router;
 pub mod screen;
 pub mod snapshot;
 pub mod tokens;
