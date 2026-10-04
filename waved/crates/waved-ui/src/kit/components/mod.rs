@@ -3,5 +3,6 @@
 pub mod buttons;
 pub mod controls;
 pub mod dial;
+pub mod list;
 pub mod row;
 pub mod status;
