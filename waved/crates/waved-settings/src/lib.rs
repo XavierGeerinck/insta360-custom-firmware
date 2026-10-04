@@ -2,8 +2,10 @@
 //! and persists changes made on the device back to it.
 
 mod change;
+mod service;
 
 pub use change::{apply_to_config, apply_to_settings, Change};
+pub use service::{SettingsService, DEFAULT_DEBOUNCE};
 
 use waved_config::WavedConfig;
 use waved_state::{SettingsState, StateBus};
