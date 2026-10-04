@@ -69,6 +69,18 @@ pub const ROW3: [Rect; 3] = [
 pub const DIAL_CX: i32 = 200;
 pub const DIAL_CY: i32 = 132;
 pub const DIAL_R: i32 = 78;
+/// Left edge of the 20 px icon at the top of the dial's text stack (Home's mic).
+pub const DIAL_ICON_X: i32 = 190;
+/// Top of that icon.
+pub const DIAL_ICON_Y: i32 = 74;
+/// Top of the dial's headline ("Mic on").
+pub const DIAL_TITLE_Y: i32 = 100;
+/// Top of the dial's status line ("In a call").
+pub const DIAL_LINE_Y: i32 = 134;
+/// Top of the dial's hint ("Tap to mute").
+pub const DIAL_HINT_Y: i32 = 172;
+/// Top of the content under a sub-screen title (the first radio row).
+pub const CONTENT_TOP: i32 = 70;
 pub const MESSAGE_MAX_W: i32 = 230;
 
 pub const MESSAGE_MS_SHORT: u64 = 2_000;

@@ -16,7 +16,8 @@ deleted when the runtime switches over.
 - A label that can show user data (names, hosts, values) stays on one line. A plain `Obj::label`
   wraps instead. Pick one of:
   - `centered_text(width)` for centred text across a known width;
-  - `one_line()` with an explicit `width(text_width(text, font).min(cap))`;
+  - `one_line()` with an explicit `width(text_width(text, font).min(cap))` (`text_width` is in
+    `kit::obj`);
   - `one_line()` inside a flex row or column with `grow()`.
 
   Do not use `max_width()` for truncation: in LVGL 9.2 a one-line label sized only by a maximum
@@ -92,13 +93,21 @@ are owned by their workstreams.
 ## Testing
 
 ```rust
+use crate::kit::dispatch::Dispatcher;
+use crate::kit::screen::{Screen, ScreenCtx};
+use crate::kit::snapshot::UiSnapshot;
 use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+use std::sync::Arc;
+use waved_config::WavedConfig;
 
 #[test]
 fn about_matches_the_mockup() {
     lvgl(|lv| {
         let root = lv.screen();
-        // build the screen into `root` with a fixture UiSnapshot
+        let (dispatch, _bus, _ui) = Dispatcher::test();
+        let ctx = ScreenCtx { dispatch, config: Arc::new(WavedConfig::default()) };
+        let snap = UiSnapshot::default(); // set the fixture fields the screen reads
+        AboutScreen::default().build(root, &ctx, &snap);
         assert_golden("about", &lv.render());
         assert_targets_ok(root);
     });
@@ -110,10 +119,13 @@ fn about_matches_the_mockup() {
   with `docs/mockups/png/`. The mockup PNGs are 880×880 at 2×; the 400×304 framebuffer
   sits at x 40..840, y 136..744.
 - A mismatch writes the actual frame to `target/golden-diff/<name>.actual.png`.
+- A new screen needs a `Route` variant in `kit/route.rs` (the router builds screens from it);
+  `Route::About` already exists.
 - Taps in tests: `lv.click(obj)`, `lv.send(obj, code)`, and `lv.advance(ms)` for held buttons.
 - `components/compositions.rs` shows Home and After a recording built from kit parts.
 
 ## Fonts and icons
 
-`fonts/build_fonts.sh` regenerates `src/kit/fonts/*.c` and `src/kit/icons.rs`; see
-`fonts/README.md`. To add an icon, add it to `fonts/icons.py` and rerun the script.
+`crates/waved-ui/fonts/build_fonts.sh` regenerates `src/kit/fonts/*.c` and `src/kit/icons.rs`; see
+`crates/waved-ui/fonts/README.md`. To add an icon, add it to `crates/waved-ui/fonts/icons.py` and
+rerun the script.

@@ -201,14 +201,6 @@ impl Obj {
         self
     }
 
-    /// Let a content-sized label grow up to `width`. Together with `one_line`
-    /// it then ends in "..." (values next to a title in a row).
-    pub fn max_width(self, width: i32) -> Self {
-        // SAFETY: live object.
-        unsafe { lv_obj_set_style_max_width(self.0, width, MAIN) };
-        self
-    }
-
     pub fn width(self, w: i32) -> Self {
         // SAFETY: live object.
         unsafe { lv_obj_set_width(self.0, w) };

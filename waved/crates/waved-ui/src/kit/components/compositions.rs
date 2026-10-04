@@ -11,7 +11,10 @@ use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
-use crate::kit::tokens::{DIAL_CX, DIAL_CY, DIAL_R, LIVE, PRIMARY, SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y};
+use crate::kit::tokens::{
+    CONTENT_TOP, DIAL_CX, DIAL_CY, DIAL_HINT_Y, DIAL_ICON_X, DIAL_ICON_Y, DIAL_LINE_Y, DIAL_R, DIAL_TITLE_Y, LIVE, PRIMARY,
+    SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y,
+};
 
 #[test]
 fn home_from_kit_parts() {
@@ -30,10 +33,10 @@ fn home_from_kit_parts() {
         let mut dial = Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(|| {});
         dial.set_ring(RingStyle::Live);
         dial.set_talker(Some(307.0));
-        Obj::label(root, icons::MIC, Font::Icon20, TEXT_2).pos(190, 74);
-        Obj::label(root, "Mic on", Font::Dial, TEXT).centered_text(SCREEN_W).pos(0, 100);
-        Obj::label(root, &snap.connection_line(), Font::Body, LIVE).centered_text(SCREEN_W).pos(0, 134);
-        Obj::label(root, "Tap to mute", Font::Micro, TEXT_3).centered_text(SCREEN_W).pos(0, 172);
+        Obj::label(root, icons::MIC, Font::Icon20, TEXT_2).pos(DIAL_ICON_X, DIAL_ICON_Y);
+        Obj::label(root, "Mic on", Font::Dial, TEXT).centered_text(SCREEN_W).pos(0, DIAL_TITLE_Y);
+        Obj::label(root, &snap.connection_line(), Font::Body, LIVE).centered_text(SCREEN_W).pos(0, DIAL_LINE_Y);
+        Obj::label(root, "Tap to mute", Font::Micro, TEXT_3).centered_text(SCREEN_W).pos(0, DIAL_HINT_Y);
         SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", || {});
         SideButton::new(root, Side::Right, icons::VOLUME_HIGH, "Louder", || {});
         PrimaryButton::new(root, PRIMARY, Tone::Rec, icons::RECORD, "Record", Some("includes last 30 s"), || {});
@@ -59,7 +62,7 @@ fn after_a_recording_from_kit_parts() {
         Obj::label(root, "After a recording", Font::Title, TEXT).centered_text(SCREEN_W).pos(0, TITLE_Y);
         RadioList::new(
             root,
-            70,
+            CONTENT_TOP,
             vec![
                 RadioOption::new("Send automatically", "As soon as Wi-Fi allows"),
                 RadioOption::new("Ask me each time", "Choose Send, Keep or Delete"),
