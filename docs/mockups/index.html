@@ -1,0 +1,1080 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wave Display Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout concept: a spec sheet for a round instrument. Light, cool grey paper around
+   dark device renders; screens grouped by flow, each placed in real framebuffer pixels. */
+:root{
+  --p-bg:#e6e9e8; --p-ink:#192021; --p-ink2:#535e5d; --p-rule:#c3cac8; --p-chip:#d6dbd9; --p-mark:#1f7f6a;
+  --p-bezel-a:#3a3f40; --p-bezel-b:#1c2021;
+  --f-ui:'Barlow Semi Condensed','Arial Narrow',system-ui,sans-serif;
+  --f-num:'Barlow',system-ui,sans-serif;
+  --f-code:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  /* Device tokens: the screen keeps its own colours in both page themes. */
+  --d-bg:#000000; --d-surface:#141c1e; --d-surface2:#1f292b; --d-line:#2a3639;
+  --d-text:#f2f5f4; --d-text2:#9aa7a6; --d-text3:#5d6a6a;
+  --d-live:#3fd6b1; --d-rec:#ff4b3e; --d-warn:#ffb547; --d-on-live:#00140f;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --p-bg:#141819; --p-ink:#e4e9e8; --p-ink2:#93a09e; --p-rule:#2c3436; --p-chip:#222a2b; --p-mark:#3fd6b1;
+    --p-bezel-a:#33393a; --p-bezel-b:#0d1010; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --p-bg:#141819; --p-ink:#e4e9e8; --p-ink2:#93a09e; --p-rule:#2c3436; --p-chip:#222a2b; --p-mark:#3fd6b1;
+  --p-bezel-a:#33393a; --p-bezel-b:#0d1010; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--p-bg);color:var(--p-ink);font:400 16px/1.55 var(--f-num)}
+a{color:inherit;text-underline-offset:2px}
+a:focus-visible,button:focus-visible{outline:2px solid var(--p-mark);outline-offset:2px;border-radius:4px}
+code{font:0.88em var(--f-code)}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:24px;padding-block:48px 96px}
+h1,h2,h3{text-wrap:balance}
+header.intro{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:48px;align-items:end;border-bottom:1px solid var(--p-rule);padding-bottom:40px}
+h1{font:600 clamp(40px,6vw,68px)/0.95 var(--f-ui);letter-spacing:-0.01em;margin:0 0 20px}
+.rev{display:inline-block;font:600 14px/1 var(--f-ui);color:var(--p-mark);margin-bottom:14px}
+.lede{font-size:19px;max-width:58ch;color:var(--p-ink2);margin:0}
+.intro aside{font-size:15px;color:var(--p-ink2)}
+.intro aside p{margin:0 0 10px}
+h2{font:600 30px/1.1 var(--f-ui);margin:72px 0 6px}
+h2 + .sub{color:var(--p-ink2);margin:0 0 32px;max-width:70ch}
+h3{font:600 19px/1.2 var(--f-ui);margin:16px 0 4px}
+.controls{display:flex;gap:12px;flex-wrap:wrap;margin-top:28px}
+.toggle{display:inline-flex;align-items:center;gap:8px;font:500 15px var(--f-ui);background:var(--p-chip);border-radius:999px;padding:8px 16px;cursor:pointer;user-select:none;border:0;color:var(--p-ink)}
+.toggle input{accent-color:var(--p-mark);width:16px;height:16px;margin:0}
+.toggle:focus-within{outline:2px solid var(--p-mark);outline-offset:2px}
+
+.changes{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px 40px;margin:0;padding:0;list-style:none}
+.changes li{border-top:1px solid var(--p-rule);padding-top:10px;font-size:15px;color:var(--p-ink2);min-width:0}
+.changes b{display:block;font:600 17px/1.3 var(--f-ui);color:var(--p-ink)}
+.decisions{width:100%;border-collapse:collapse;font-size:15px}
+.decisions th{text-align:left;font:600 15px var(--f-ui);color:var(--p-ink2);border-bottom:1px solid var(--p-rule);padding:8px 16px 8px 0}
+.decisions td{border-bottom:1px solid var(--p-rule);padding:10px 16px 10px 0;vertical-align:top}
+.decisions td:first-child{font:600 16px var(--f-ui);white-space:nowrap}
+.tablebox{overflow-x:auto}
+
+.principles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:28px 40px;margin-top:8px}
+.principles div{border-top:2px solid var(--p-ink);padding-top:12px}
+.principles b{display:block;font:600 18px/1.25 var(--f-ui);margin-bottom:4px}
+.principles span{color:var(--p-ink2);font-size:15px}
+
+.tokens{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:48px;align-items:start}
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+.sw{display:flex;gap:10px;align-items:center;font-size:14px}
+.sw i{width:40px;height:40px;border-radius:50%;flex:none;box-shadow:inset 0 0 0 1px rgba(127,127,127,.35)}
+.sw b{display:block;font:600 15px var(--f-ui)}
+.sw code{color:var(--p-ink2)}
+.typescale{background:var(--d-bg);color:var(--d-text);border-radius:20px;padding:24px 28px}
+.typescale div{display:flex;align-items:baseline;gap:16px;border-bottom:1px solid var(--d-surface2);padding:8px 0}
+.typescale div:last-child{border:0}
+.typescale small{font:12px var(--f-code);color:var(--d-text3);width:96px;flex:none}
+
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:56px 40px}
+figure.screen{margin:0;min-width:0}
+figure.screen figcaption{max-width:440px}
+figure.screen h3 .id{font:500 13px var(--f-code);color:var(--p-ink2);margin-left:8px}
+figure.screen p{margin:2px 0 0;font-size:15px;color:var(--p-ink2)}
+figure.screen ul{margin:8px 0 0;padding-left:18px;font-size:14px;color:var(--p-ink2)}
+figure.screen li{margin:2px 0}
+.new{font:600 12px/1 var(--f-ui);color:var(--p-mark);border:1px solid currentColor;border-radius:999px;padding:3px 8px;margin-left:6px;vertical-align:2px}
+
+.device{width:440px;height:440px;border-radius:50%;position:relative;
+  background:radial-gradient(circle at 50% 38%,var(--p-bezel-a),var(--p-bezel-b) 72%);
+  box-shadow:0 1px 0 rgba(255,255,255,.08) inset,0 18px 40px -18px rgba(0,0,0,.55)}
+.glass{position:absolute;left:28px;top:28px;width:384px;height:384px;border-radius:50%;background:var(--d-bg)}
+@media (max-width:520px){
+  .wrap{padding-inline:16px;padding-block:32px 72px}
+  header.intro{grid-template-columns:1fr;gap:24px}
+  .tokens{grid-template-columns:1fr}
+  .gallery{grid-template-columns:1fr}
+  .device{zoom:.74}
+  figure.screen figcaption{max-width:none}
+}
+
+/* ---------- Device framebuffer: 400 x 304, every direct child placed in px ---------- */
+.fb{position:absolute;left:-8px;top:40px;width:400px;height:304px;background:var(--d-bg);
+  clip-path:circle(190px at 200px 152px);overflow:hidden;color:var(--d-text);
+  font:500 15px/1.2 var(--f-ui);-webkit-font-smoothing:antialiased}
+.fb > *, .list > *{position:absolute}
+.fb svg.layer{left:0;top:0;width:400px;height:304px;overflow:visible;pointer-events:none}
+.fb svg{display:block}
+
+.crown{top:8px;left:100px;width:200px;height:20px;display:flex;justify-content:center;align-items:center;gap:7px;
+  font:500 13px/1 var(--f-num);color:var(--d-text2);font-variant-numeric:tabular-nums}
+.crown svg{width:15px;height:15px;flex:none}
+.crown .bat{display:flex;align-items:center;gap:3px}
+.crown.pill{top:7px;height:28px;border-radius:14px;background:var(--d-surface)}
+.crown .chev{width:12px;height:12px;color:var(--d-text3);margin-left:-1px}
+.toast{top:7px;left:50%;transform:translateX(-50%);height:28px;max-width:230px;white-space:nowrap;padding:0 13px 0 9px;border-radius:14px;
+  background:var(--d-surface2);display:flex;align-items:center;gap:6px;font:500 13px/1 var(--f-ui);color:var(--d-text)}
+.toast svg{width:15px;height:15px;flex:none}
+.title{top:38px;left:0;width:400px;text-align:center;font:600 20px/24px var(--f-ui);color:var(--d-text)}
+.c{left:0;width:400px;text-align:center}
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums;font-weight:500}
+.t-micro{font-size:12px;line-height:14px}
+.t-small{font-size:13px;line-height:16px}
+.t-body{font-size:15px;line-height:18px}
+.t-title{font-size:20px;line-height:24px;font-weight:600}
+.t-dial{font-size:26px;line-height:30px;font-weight:600}
+.t-big{font-size:48px;line-height:52px}
+.pct{font-size:20px;color:var(--d-text2)}
+.dim{color:var(--d-text2)} .faint{color:var(--d-text3)}
+.live{color:var(--d-live)} .rec{color:var(--d-rec)} .warn{color:var(--d-warn)}
+.chip{display:inline-flex;align-items:center;gap:5px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:currentColor}
+.ico{width:20px;height:20px;color:var(--d-text2)}
+.ico svg{width:100%;height:100%}
+
+.side{width:60px;height:60px;border-radius:50%;background:var(--d-surface);display:grid;place-items:center;color:var(--d-text)}
+.side svg{width:26px;height:26px}
+.side.l{left:28px} .side.r{left:312px}
+.side.pressed{background:var(--d-surface2);box-shadow:inset 0 0 0 2px var(--d-live)}
+.side-lbl{width:90px;text-align:center;font-size:12px;line-height:14px;color:var(--d-text2)}
+.side-lbl.l{left:13px} .side-lbl.r{left:297px}
+
+.primary{left:108px;top:216px;width:184px;height:56px;border-radius:28px;display:flex;align-items:center;justify-content:center;gap:10px;
+  font:600 18px/1 var(--f-ui);background:var(--d-rec);color:#fff}
+.primary svg{width:20px;height:20px;flex:none}
+.primary.go{background:var(--d-live);color:var(--d-on-live)}
+.stack{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
+.stack b{font:600 18px/19px var(--f-ui)}
+.stack small{font:500 11px/12px var(--f-ui);opacity:.85}
+.btn{top:222px;height:48px;border-radius:24px;display:flex;align-items:center;justify-content:center;gap:6px;
+  font:600 15px/1 var(--f-ui);background:var(--d-surface);color:var(--d-text)}
+.btn svg{width:18px;height:18px;flex:none}
+.btn.a{left:86px;width:108px} .btn.b{left:206px;width:108px}
+.btn.t1{left:72px;width:80px} .btn.t2{left:160px;width:80px} .btn.t3{left:248px;width:80px}
+.btn.fill-rec{background:var(--d-rec);color:#fff} .btn.fill-live{background:var(--d-live);color:var(--d-on-live)}
+.btn.off{opacity:.35}
+.btn.holding{background:linear-gradient(90deg,#ff9289 0 62%,#9e2c25 62% 100%);color:#fff;box-shadow:0 0 0 3px rgba(255,75,62,.3)}
+.back{left:144px;top:252px;width:112px;height:44px;border-radius:22px;background:var(--d-surface);display:flex;align-items:center;justify-content:center;gap:2px;
+  font:500 15px/1 var(--f-ui);color:var(--d-text)}
+.back svg{width:18px;height:18px;margin-left:-6px}
+
+.list{left:0;width:400px;overflow:hidden;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%);
+          mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%)}
+.row{display:flex;align-items:center;gap:12px;border-radius:24px;padding:0 18px;color:var(--d-text2);font-size:16px}
+.row svg{width:20px;height:20px;flex:none}
+.row .v{margin-left:auto;font-size:14px;color:var(--d-text3)}
+.row.focus{background:var(--d-surface);color:var(--d-text);font-size:20px;font-weight:600}
+.row.focus .v{color:var(--d-text2);font-size:15px;font-weight:500}
+.row.far{opacity:.5;font-size:14px}
+.row.danger{color:var(--d-rec)}
+.file{display:flex;align-items:center;gap:12px;left:50px;width:300px;height:52px;padding:0 14px;border-radius:16px;background:var(--d-surface)}
+.file svg{width:20px;height:20px;flex:none}
+.file .txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.file b{font:600 16px/18px var(--f-ui);color:var(--d-text)}
+.file span{font-size:13px;line-height:15px;color:var(--d-text2)}
+.file .chev{margin-left:auto;color:var(--d-text3)}
+.opt{display:flex;align-items:center;gap:12px;padding:0 16px;border-radius:20px}
+.opt .radio{width:20px;height:20px;border-radius:50%;box-shadow:inset 0 0 0 2px var(--d-text3);flex:none}
+.opt.on{background:var(--d-surface);box-shadow:inset 0 0 0 2px var(--d-live)}
+.opt.on .radio{background:var(--d-live);box-shadow:inset 0 0 0 2px var(--d-live),inset 0 0 0 5px var(--d-surface)}
+.opt .txt{display:flex;flex-direction:column;gap:2px}
+.opt b{font:600 16px/18px var(--f-ui);color:var(--d-text)}
+.opt span{font-size:12px;line-height:14px;color:var(--d-text2)}
+.vrow{display:flex;align-items:center;gap:8px;padding:0 14px 0 16px;border-radius:20px;background:var(--d-surface);font-size:15px;color:var(--d-text)}
+.vrow .lbl{color:var(--d-text2);font-size:14px}
+.vrow .v{margin-left:auto}
+.vrow svg{width:16px;height:16px;color:var(--d-text3);flex:none}
+.switch{margin-left:auto;width:44px;height:26px;border-radius:13px;background:var(--d-live);position:relative;flex:none}
+.switch::after{content:"";position:absolute;right:3px;top:3px;width:20px;height:20px;border-radius:50%;background:#fff}
+.dev{display:flex;align-items:center;gap:12px;padding:0 16px;border-radius:20px;background:var(--d-surface);font-size:16px;color:var(--d-text)}
+.dev svg{width:20px;height:20px;flex:none;color:var(--d-text2)}
+.dev .v{margin-left:auto;font-size:13px}
+.hopt{display:flex;align-items:center;gap:10px;padding:0 18px;border-radius:22px;background:var(--d-surface);font:500 16px var(--f-ui);color:var(--d-text)}
+.hopt.on{background:var(--d-surface2);box-shadow:inset 0 0 0 2px var(--d-live)}
+.hopt .ck{margin-left:auto;width:18px;height:18px;color:var(--d-live)}
+.key{width:64px;height:48px;border-radius:24px;background:var(--d-surface);display:grid;place-items:center;font:500 22px/1 var(--f-num);color:var(--d-text)}
+.key.alt{font:500 14px/1 var(--f-ui);color:var(--d-text2)}
+.qr{background:#fff;border-radius:8px}
+.dimmer{left:0;top:0;width:400px;height:304px;background:rgba(0,0,0,.45)}
+.steps{display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:17px}
+.steps b{color:var(--d-live);font-weight:600;margin-right:4px}
+
+.fb svg.overlay{display:none;left:0;top:0;width:400px;height:304px;pointer-events:none}
+body.show-grid .fb svg.overlay{display:block}
+
+body.only .wrap > *:not(.gallery-host){display:none}
+body.only .gallery-host > *:not(.gallery){display:none}
+body.only figure.screen:not(.target), body.only .gallery > :not(figure){display:none}
+body.only figure.screen figcaption{display:none}
+body.only .gallery{display:block}
+body.only .wrap{padding:0;max-width:none}
+body.only{background:transparent}
+body.only .device{zoom:1}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body class="auto">
+
+<!-- Icon set: 24 px grid, 2 px stroke, round caps. Each maps to an LV_SYMBOL_* glyph or a 4-glyph custom font. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 9.5a13 13 0 0 1 18 0"/><path d="M6.5 13a8 8 0 0 1 11 0"/><path d="M10 16.5a3 3 0 0 1 4 0"/><circle cx="12" cy="19.5" r=".9" fill="currentColor"/></symbol>
+    <symbol id="i-bt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></symbol>
+    <symbol id="i-usb" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v15"/><circle cx="12" cy="19.5" r="1.5"/><path d="M12 13l-5-3V7"/><path d="M12 11l5-3V5"/><rect x="5.5" y="5" width="3" height="2.5" rx=".5"/><circle cx="17" cy="4.5" r="1.3"/></symbol>
+    <symbol id="i-bat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="7" width="17" height="10" rx="2.5"/><path d="M22 10.5v3" stroke-linecap="round"/><rect x="5" y="9.5" width="10" height="5" rx="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-bat-low" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2.5" y="7" width="17" height="10" rx="2.5"/><path d="M22 10.5v3" stroke-linecap="round"/><rect x="5" y="9.5" width="2.5" height="5" rx="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-bat-charge" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2.5" y="7" width="17" height="10" rx="2.5"/><path d="M22 10.5v3" stroke-linecap="round"/><path d="M12 8.5l-3.5 4h3l-1 3 3.5-4h-3z" fill="currentColor" stroke-width="1"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 10V6a3 3 0 0 0-5.8-1"/><path d="M9 9v2a3 3 0 0 0 4.6 2.5"/><path d="M5.5 11a6.5 6.5 0 0 0 10.4 5.2M18.5 11c0 .7-.1 1.4-.3 2"/><path d="M12 17.5V21"/><path d="M4 4l16 16"/></symbol>
+    <symbol id="i-spk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5v14l-4.5-4.5H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+    <symbol id="i-spk-minus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5h3.5L11 5v14l-4.5-4.5H3z"/><path d="M15 12h6"/></symbol>
+    <symbol id="i-spk-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5h3.5L11 5v14l-4.5-4.5H3z"/><path d="M15 12h6M18 9v6"/></symbol>
+    <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5.5" width="4" height="13" rx="1.2" fill="currentColor"/><rect x="13.5" y="5.5" width="4" height="13" rx="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10-6.5a1 1 0 0 0 0-1.8l-10-6.5A1 1 0 0 0 8 5.5z" fill="currentColor"/></symbol>
+    <symbol id="i-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6l-6 6 6 6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></symbol>
+    <symbol id="i-chev-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3l2.7 2.7L16.2 9.5"/></symbol>
+    <symbol id="i-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.2L2.8 17.5A2 2 0 0 0 4.5 20.5h15a2 2 0 0 0 1.7-3L13.7 4.2a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4"/><circle cx="12" cy="16.8" r=".6" fill="currentColor"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></symbol>
+    <symbol id="i-device" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><ellipse cx="12" cy="7" rx="7.5" ry="3"/><path d="M4.5 7v9.5c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V7"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M5 15v3.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V15"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9.5 6.5V4.5h5v2"/><path d="M6.5 6.5l1 13a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-13"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.6 6.6a7.5 7.5 0 1 0 10.8 0"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M5 3.5h3.5l1.8 4.6-2.3 1.4a11 11 0 0 0 6.5 6.5l1.4-2.3 4.6 1.8V19a1.5 1.5 0 0 1-1.6 1.5A16.5 16.5 0 0 1 3.5 5.1 1.5 1.5 0 0 1 5 3.5z"/></symbol>
+    <symbol id="i-hang" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M2.5 14.3c5.3-5 13.7-5 19 0l-1.8 2.6-3.7-1.4v-2.6a10 10 0 0 0-8 0v2.6l-3.7 1.4z"/></symbol>
+    <symbol id="i-handset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2" stroke-linecap="round"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20" stroke-linecap="round"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.5 12A7.5 7.5 0 1 1 17 6.4"/><path d="M19.5 3.5v4.5H15"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2.5h8.4A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+    <symbol id="i-pattern" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 4c4.5 0 7 3.6 7 7.2 0 4.5-3.4 7.8-7 8.8-3.6-1-7-4.3-7-8.8C5 7.6 7.5 4 12 4z"/><circle cx="12" cy="13" r="1.4" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></symbol>
+    <symbol id="i-backspace" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 5.5H20a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H8.5L2.5 12z"/><path d="M11.5 9.5l5 5M16.5 9.5l-5 5"/></symbol>
+    <symbol id="i-nr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 14v-4M8 17V7M12 20V4M16 15V9M20 13v-2"/></symbol>
+  </defs>
+</svg>
+
+<div class="wrap">
+
+<header class="intro">
+  <div>
+    <span class="rev">Revision 2, 4 October 2026, decisions recorded</span>
+    <h1>Wave display redesign</h1>
+    <p class="lede">Every screen of the waved touch UI, drawn for the round 400 × 304 panel. Each mockup is placed in real framebuffer pixels, so the numbers on this page can be used directly in <code>lv_obj_set_pos</code>.</p>
+    <div class="controls">
+      <label class="toggle" for="grid"><input type="checkbox" id="grid"> Show layout zones</label>
+      <button class="toggle" id="theme" type="button">Switch page theme</button>
+    </div>
+  </div>
+  <aside>
+    <p>The panel is a 380 px circle cropped by a 400 × 304 framebuffer. It is 228 px wide at the top edge and 380 px wide through the middle.</p>
+    <p>Every tappable object stays within 182 px of the centre, and every target is at least 44 px. Actions that are hard to undo sit away from everything else.</p>
+    <p>The device sits in the middle of a meeting table, so people read it from about a metre away and from every side.</p>
+  </aside>
+</header>
+
+<h2>What changed in revision 2</h2>
+<p class="sub">A second pass focused on how the device is really used: mute and volume many times per meeting, record a few times a day, settings rarely.</p>
+<ul class="changes">
+  <li><b>Tap the dial to mute</b>The largest target on Home and Recording now does the most frequent job. The ring turns red so the whole table can see it. <a href="#home">Home</a></li>
+  <li><b>Volume in one tap</b>Quieter and Louder sit left and right on Home and while recording, in the same place. The dial shows the level while it changes. <a href="#home-volume">Changing volume</a></li>
+  <li><b>Menu moved to the top</b>The status pill opens the menu. Before, "Menu" sat right under Record, where a slip of the finger started a recording. <a href="#menu">Menu</a></li>
+  <li><b>Safer recording controls</b>Mark, Pause and Stop sit in one row. Stop needs a one-second hold, and a quick tap explains that. Muting while recording says the audio is left out. <a href="#hold-stop">Holding Stop</a></li>
+  <li><b>A clear question after recording</b>"Send this recording?" with Send, Keep and Delete. If nobody answers, the file stays on Wave after a minute instead of the screen waiting forever. <a href="#decision">After stop</a></li>
+  <li><b>Audio modes you can see</b>All six modes sit around a live preview. Directional modes are aimed by dragging the shape. Follow talker aims itself. <a href="#audio-mode">Audio mode</a></li>
+  <li><b>Plain words</b>"Pre-roll" is now "includes last 30 s" on the Record button. Errors say what happened and what to do next.</li>
+  <li><b>One Back button</b>112 × 44 px, bottom centre, on every screen including lists. Lists fade out above it instead of running underneath.</li>
+  <li><b>A PIN for Files and admin settings</b>Earlier meetings and the upload server are protected in a shared room. Mute, volume, Record and audio settings never ask for it. <a href="#pin">PIN</a></li>
+  <li><b>Screens that were missing</b>Start-up, first start, a dimmed resting screen, Bluetooth, Mic height, Display, Date and time, and a choice of what happens after each recording.</li>
+</ul>
+
+<h2>Decisions</h2>
+<p class="sub">Settled on 4 October 2026. The mockups and the backlog in <code>TODO.md</code> follow these.</p>
+<div class="tablebox">
+<table class="decisions">
+  <thead><tr><th>Decision</th><th>Chosen</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td>Stopping a recording</td><td>Hold Stop for one second</td><td>A short tap explains the hold. Letting go early cancels.</td></tr>
+    <tr><td>Audio modes</td><td>Six modes, directional ones aimed by dragging</td><td>Follow talker uses the smoothed steered beam. The raw per-frame chasing goes away.</td></tr>
+    <tr><td>Pre-recording</td><td>On by default</td><td>"includes last 30 s" on Record, a dot on the resting screen, a switch under System.</td></tr>
+    <tr><td>Nobody answers after a recording</td><td>Keep it on Wave after 60 s</td><td>Nothing leaves the device and nothing is deleted.</td></tr>
+    <tr><td>Feature scope</td><td>Everything on this page</td><td>Bluetooth, Wave Controller, updates, USB storage, Mic height, PIN lock, physical volume buttons. More languages wait for a later round.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>How the layout works</h2>
+<p class="sub">Six rules, applied the same way on every screen.</p>
+<div class="principles">
+  <div><b>The ring is the room</b><span>The dial in the middle of Home and Recording stands for the table. An arc lights up toward whoever is talking. Tapping it mutes. The same ring shows volume, playback, update progress and calls.</span></div>
+  <div><b>Same place, same job</b><span>Quieter is always left, Louder always right, mute always in the middle, recording controls always at the bottom. Home and Recording only differ in what the bottom row says.</span></div>
+  <div><b>Bottom centre does the main thing</b><span>Record, Stop, Send, Back and Confirm all sit at the bottom centre. Back is the same 112 × 44 px button on every screen.</span></div>
+  <div><b>Status opens the menu</b><span>The status pill at the top opens the menu, far from Record. Messages appear in the same spot for a few seconds and never cover a button.</span></div>
+  <div><b>Colour means something</b><span>Teal means live or selected. Red means recording, muted or destructive. Amber means paused or needs attention. Everything else is grey on black, which also hides the edge of the round panel.</span></div>
+  <div><b>No precise taps needed</b><span>Targets are at least 44 px, main actions at least 50 px. Stop needs a one-second hold and Delete asks first, because a mis-tap there can't be undone.</span></div>
+</div>
+
+<h2>Tokens</h2>
+<p class="sub">RGB565 collapses close hues, so the palette uses few, well-separated colours. Barlow and Barlow Semi Condensed are open-licence faces that compile with <code>lv_font_conv</code>. The condensed width fits more text where the circle narrows.</p>
+<div class="tokens">
+  <div class="swatches">
+    <div class="sw"><i style="background:var(--d-bg)"></i><div><b>Background</b><code>#000000</code></div></div>
+    <div class="sw"><i style="background:var(--d-surface)"></i><div><b>Surface</b><code>#141c1e</code></div></div>
+    <div class="sw"><i style="background:var(--d-surface2)"></i><div><b>Raised</b><code>#1f292b</code></div></div>
+    <div class="sw"><i style="background:var(--d-line)"></i><div><b>Line</b><code>#2a3639</code></div></div>
+    <div class="sw"><i style="background:var(--d-text)"></i><div><b>Text</b><code>#f2f5f4</code></div></div>
+    <div class="sw"><i style="background:var(--d-text2)"></i><div><b>Text 2</b><code>#9aa7a6</code></div></div>
+    <div class="sw"><i style="background:var(--d-text3)"></i><div><b>Text 3</b><code>#5d6a6a</code></div></div>
+    <div class="sw"><i style="background:var(--d-live)"></i><div><b>Live</b><code>#3fd6b1</code></div></div>
+    <div class="sw"><i style="background:var(--d-rec)"></i><div><b>Record</b><code>#ff4b3e</code></div></div>
+    <div class="sw"><i style="background:var(--d-warn)"></i><div><b>Attention</b><code>#ffb547</code></div></div>
+  </div>
+  <div class="typescale">
+    <div><small>big 48 Barlow</small><span class="num" style="font-size:48px;line-height:1">42:17</span></div>
+    <div><small>dial 26 / 600</small><span style="font:600 26px var(--f-ui)">Mic on</span></div>
+    <div><small>title 20 / 600</small><span style="font:600 20px var(--f-ui)">Noise reduction</span></div>
+    <div><small>body 15 / 500</small><span style="font:500 15px var(--f-ui)">In a call</span></div>
+    <div><small>small 13 / 500</small><span style="font:500 13px var(--f-ui);color:var(--d-text2)">Turns toward whoever talks</span></div>
+    <div><small>micro 12 / 500</small><span style="font:500 12px var(--f-ui);color:var(--d-text2)">Quieter</span></div>
+  </div>
+</div>
+
+<section class="gallery-host">
+
+<h2>Start-up</h2>
+<p class="sub">What people see before the first meeting.</p>
+<div class="gallery">
+
+  <figure class="screen" id="boot">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-line)" stroke-width="3"/>
+        <path data-arc="200 132 78 0 220" stroke="var(--d-live)" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+      <div class="c t-title" style="top:112px">Starting</div>
+      <div class="c t-micro faint num" style="top:142px">waved 0.9.3</div>
+    </div></div></div>
+    <figcaption><h3>Start-up <span class="new">new</span> <span class="id">screens/boot.rs</span></h3>
+      <p>The ring draws itself while audio, USB and Wi-Fi come up. This is the only animation that plays without a touch.</p>
+      <ul><li>Replaces the black screen between power-on and Home.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="first-run">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><span class="num">09:02</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="c t-dial" style="top:46px">Set up Wave</div>
+      <div class="c t-body dim" style="top:86px;left:70px;width:260px">Wave works as a USB speakerphone right away. Connect Wi-Fi to send recordings to your own server.</div>
+      <div class="primary go" style="top:160px;height:50px"><svg><use href="#i-wifi"/></svg>Set up Wi-Fi</div>
+      <div class="btn" style="left:112px;top:220px;width:176px;height:44px">Use without Wi-Fi</div>
+    </div></div></div>
+    <figcaption><h3>First start <span class="new">new</span> <span class="id">screens/first_run.rs</span></h3>
+      <p>Shown once, until Wi-Fi is set up or skipped. Skipping is a full answer: Wave is a speakerphone and local recorder without any network.</p>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Main</h2>
+<p class="sub">Home follows the meeting state on its own. Mute and volume are one tap away, and the dial tells the whole table what the microphones are doing.</p>
+<div class="gallery">
+
+  <figure class="screen" id="home">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-live)" stroke-width="3" opacity=".4"/>
+        <path data-arc="200 132 78 288 326" stroke="var(--d-live)" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 132 92 307" r="4" fill="var(--d-live)"/></svg>
+      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="ico" style="left:190px;top:74px"><svg><use href="#i-mic"/></svg></div>
+      <div class="c t-dial" style="top:100px">Mic on</div>
+      <div class="c t-body live" style="top:134px">In a call</div>
+      <div class="c t-micro faint" style="top:172px">Tap to mute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+    </div></div></div>
+    <figcaption><h3>Home <span class="id">screens/home.rs</span></h3>
+      <p>Tap anywhere on the dial to mute. The ring says where the audio goes: teal in a call, grey when nothing is connected, red when muted. The bright arc points at whoever is talking.</p>
+      <ul><li>"In a call" comes from the HID off-hook report that Teams and Zoom already send. Otherwise it reads "Connected by USB", "Bluetooth: iPhone" or "Not connected".</li>
+      <li>The status pill opens the menu (swipe down from the top does the same).</li>
+      <li>"includes last 30 s" appears only while pre-recording is on, so people know audio is being buffered.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="home-muted">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
+      <div class="toast"><svg class="live"><use href="#i-check"/></svg>Recording sent</div>
+      <div class="ico rec" style="left:190px;top:74px"><svg><use href="#i-mic-off"/></svg></div>
+      <div class="c t-dial rec" style="top:100px">Muted</div>
+      <div class="c t-body dim" style="top:134px">Call can't hear you</div>
+      <div class="c t-micro faint" style="top:172px">Tap to unmute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+    </div></div></div>
+    <figcaption><h3>Home, muted, with a message <span class="id">screens/home.rs, toast.rs</span></h3>
+      <p>Muted turns the whole ring red. The second line says what that means for the people on the call. A message replaces the status pill for two seconds and never covers a button.</p>
+      <ul><li>Messages can't be tapped (<code>LV_OBJ_FLAG_CLICKABLE</code> cleared). Today the toast blocks Record and Save.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="home-volume">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><path data-arc="200 132 78 -135 135" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 132 78 -135 27" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="c t-small dim" style="top:86px">Speaker</div>
+      <div class="c t-big num" style="top:104px">60<span class="pct">%</span></div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r pressed" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+    </div></div></div>
+    <figcaption><h3>Home, changing volume <span class="id">screens/home.rs</span></h3>
+      <p>Each tap on Quieter or Louder moves the speaker 10 %. For 1.5 s the dial turns into a gauge, so the feedback appears where people are already looking.</p>
+      <ul><li>Holding a side button repeats the step every 300 ms.</li><li>The full volume screen stays in the menu for speaker mute and the microphone level.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="ambient">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".5"/></svg>
+      <div class="c t-big num" style="top:100px">14:32</div>
+      <div class="c t-small live" style="top:158px">Mic on, in a call</div>
+      <div class="c t-micro live" style="top:236px"><span class="chip"><span class="dot"></span>Pre-recording</span></div>
+      <div class="dimmer"></div>
+    </div></div></div>
+    <figcaption><h3>Resting screen <span class="new">new</span> <span class="id">screens/ambient.rs</span></h3>
+      <p>After two minutes without a touch, the backlight dims and Home shrinks to a clock, the mic state and the pre-recording dot. The first tap only wakes the screen, so a bump can't mute or record.</p>
+      <ul><li>While recording, it shows the red ring and the timer instead of the clock, and never turns fully off.</li>
+      <li>Fully off after 10 minutes when idle. Any touch or the power key wakes it.</li></ul>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Recording</h2>
+<p class="sub">Same layout as Home, so mute and volume don't move. Only the bottom row changes to Mark, Pause and Stop.</p>
+<div class="gallery">
+
+  <figure class="screen" id="recording">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
+        <path data-arc="200 132 78 38 82" stroke="var(--d-rec)" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 132 92 60" r="4" fill="var(--d-rec)"/></svg>
+      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:98px">42:17</div>
+      <div class="c t-small dim" style="top:152px">Speaker 2 talking</div>
+      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
+      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
+      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+    </div></div></div>
+    <figcaption><h3>Recording <span class="id">screens/recording.rs</span></h3>
+      <p>The dim red ring says "recording" from any seat. The bright arc follows the direction of arrival. The speaker number comes from the per-meeting numbering (no names).</p>
+      <ul><li>Mark adds a bookmark and confirms with "Marked at 42:17".</li>
+      <li>The timer switches to h:mm:ss after 59:59.</li>
+      <li>The status pill still opens the menu, so noise reduction can change mid-meeting.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="recording-muted">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
+      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:35</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:98px">45:02</div>
+      <div class="c t-small rec" style="top:152px">Muted, not recorded</div>
+      <div class="c t-micro faint" style="top:176px">Tap to unmute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
+      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
+      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+    </div></div></div>
+    <figcaption><h3>Recording, muted <span class="new">new</span> <span class="id">screens/recording.rs</span></h3>
+      <p>Mute silences the microphones before anything else in the pipeline, so the recording keeps running but holds silence. The screen says so in four words.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="hold-stop">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
+        <path data-arc="200 132 78 38 82" stroke="var(--d-rec)" stroke-width="7" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 132 92 60" r="4" fill="var(--d-rec)"/></svg>
+      <div class="toast"><svg class="dim"><use href="#i-info"/></svg>Keep holding to stop</div>
+      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:98px">42:18</div>
+      <div class="c t-small dim" style="top:152px">Speaker 2 talking</div>
+      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
+      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
+      <div class="btn t3 holding"><svg><use href="#i-stop"/></svg>Stop</div>
+    </div></div></div>
+    <figcaption><h3>Holding Stop <span class="new">new</span> <span class="id">screens/recording.rs</span></h3>
+      <p>Stop fills from left to right over one second, then the recording ends. Letting go early cancels. A short tap shows "Hold Stop to end the recording" instead of doing nothing.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="paused">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-warn)" stroke-width="3" stroke-dasharray="4 8" stroke-linecap="round"/></svg>
+      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:40</span><span class="bat"><svg><use href="#i-bat"/></svg>81%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="c t-small warn" style="top:80px">Paused</div>
+      <div class="c t-big num" style="top:98px">42:17</div>
+      <div class="c t-small dim" style="top:152px">Not recording</div>
+      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
+      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Quieter</div>
+      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Louder</div>
+      <div class="btn t1 off"><svg><use href="#i-mark"/></svg>Mark</div>
+      <div class="btn t2" style="color:var(--d-warn)"><svg><use href="#i-play"/></svg>Resume</div>
+      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+    </div></div></div>
+    <figcaption><h3>Recording, paused <span class="id">screens/recording.rs</span></h3>
+      <p>A dashed amber ring reads as "on hold" without words. Mark is disabled because nothing is being recorded. Pause needs <code>PauseRecording</code> handled in <code>waved-meeting</code>.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="decision">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:14</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
+      <div class="title">Send this recording?</div>
+      <div class="c t-big num" style="top:66px">42:17</div>
+      <div class="c t-body dim" style="top:122px">184 MB, 3 speakers, 4 marks</div>
+      <div class="c t-small faint" style="top:142px">To notes.example.com</div>
+      <div class="primary go" style="top:164px;height:50px"><svg><use href="#i-send"/></svg>Send</div>
+      <div class="btn a" style="height:44px"><svg><use href="#i-device"/></svg>Keep</div>
+      <div class="btn b" style="height:44px;color:var(--d-rec)"><svg><use href="#i-trash"/></svg>Delete</div>
+      <div class="c t-micro faint num" style="top:276px">Keeps it on Wave in 0:52</div>
+    </div></div></div>
+    <figcaption><h3>After stop <span class="id">screens/confirmation.rs</span></h3>
+      <p>Only when "After a recording" is set to "Ask me each time". The question names the choice, every button has a label, and the countdown says what happens if nobody answers.</p>
+      <ul><li>Keep leaves the file in Files. Delete asks first.</li><li>Without a configured server, only Keep and Delete appear.</li></ul>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Settings</h2>
+<p class="sub">One menu opens from the status pill. Lists use LVGL's circular-scroll pattern (<code>lv_example_scroll_6</code>): the middle row grows and rows near the edge shrink and fade.</p>
+<div class="gallery">
+
+  <figure class="screen" id="menu">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><path data-arc="200 152 180 62 118" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 152 180 66 82" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="list" style="top:34px;height:218px">
+        <div class="row far" style="left:90px;top:0;width:220px;height:34px"><svg><use href="#i-folder"/></svg>Files<span class="v" style="display:flex;align-items:center;gap:6px">12<svg style="width:14px;height:14px"><use href="#i-lock"/></svg></span></div>
+        <div class="row" style="left:52px;top:40px;width:296px;height:46px"><svg><use href="#i-pattern"/></svg>Audio mode<span class="v">Follow talker</span></div>
+        <div class="row focus" style="left:40px;top:92px;width:320px;height:52px"><svg><use href="#i-nr"/></svg>Noise reduction<span class="v">Medium</span></div>
+        <div class="row" style="left:52px;top:150px;width:296px;height:46px"><svg><use href="#i-spk"/></svg>Volume<span class="v">60%</span></div>
+        <div class="row far" style="left:90px;top:196px;width:220px;height:34px"><svg><use href="#i-mic"/></svg>Mic height<span class="v">Medium</span></div>
+      </div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Menu <span class="id">screens/settings.rs, replaces More</span></h3>
+      <p>Every row shows its current value, so the menu doubles as a status overview. Order follows how often people need each item.</p>
+      <ul><li>Files, Audio mode, Noise reduction, Volume, Mic height, Wi-Fi, Bluetooth, Uploads, System.</li>
+      <li>A lock marks rows behind the PIN: Files, Wi-Fi, Bluetooth, Uploads and System.</li>
+      <li>The arc on the right shows the scroll position. A swipe to the right also goes back.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="audio-mode">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Audio mode</div>
+      <div class="c t-title" style="top:204px">Focused</div>
+      <div class="c t-small dim" style="top:229px">Drag the shape to aim it</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+      <svg class="layer">
+        <circle cx="200" cy="148" r="50" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
+        <circle cx="200" cy="148" r="25" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
+        <path data-polar="200 148 50 0.5 300" fill="rgba(63,214,177,.16)" stroke="var(--d-live)" stroke-width="2.5"/>
+        <line data-ray="200 148 50 300" stroke="var(--d-text2)" stroke-width="1.5" stroke-dasharray="3 4"/>
+        <circle cx="200" cy="148" r="4" fill="var(--d-text)"/>
+        <circle data-on-ring="200 148 50 300" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/>
+        <g data-btn="89.15 84"><path data-polar="89.15 84 14 1 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="72 148"><path data-polar="72 148 12 0.5 -50" fill="none" stroke="var(--d-text3)" stroke-width="1.6" stroke-dasharray="2 2.5"/><path data-polar="72 148 13 0.5 40" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="89.15 212" data-on="1"><path data-polar="89.15 212 15 0.5 0" fill="none" stroke="var(--d-live)" stroke-width="2.2"/></g>
+        <g data-btn="310.85 84"><path data-polar="310.85 84 15 0.366 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="328 148"><path data-polar="328 148 14 0 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="310.85 212"><path data-polar="310.85 212 12 0.5 -45" fill="none" stroke="var(--d-text2)" stroke-width="2"/><path data-polar="310.85 212 12 0.5 45" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+      </svg>
+    </div></div></div>
+    <figcaption><h3>Audio mode <span class="id">screens/audio_mode.rs</span></h3>
+      <p>All six modes sit around a live preview, so people can compare them without paging. Tap a mode to use it. The preview is drawn on an <code>lv_canvas</code>, so no images are needed.</p>
+      <ul><li>Left: Whole room, Follow talker, Focused. Right: Narrow, Two sides, Stereo.</li>
+      <li>Focused, Narrow and Two sides point where you drag them (<code>SetDoaOverride</code>). Follow talker turns on its own (the smoothed steered beam).</li>
+      <li>The top of the screen is the device's 0° direction, the same reference the direction estimate uses.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="noise">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Noise reduction</div>
+      <div style="left:94px;top:138px;width:44px;height:28px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:150px;top:118px;width:44px;height:48px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:206px;top:98px;width:44px;height:68px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:262px;top:78px;width:44px;height:88px;border-radius:10px;background:var(--d-surface);box-shadow:inset 0 0 0 2px var(--d-line)"></div>
+      <div class="c t-micro faint" style="top:172px;display:flex;justify-content:center">
+        <span style="width:56px">Off</span><span style="width:56px">Low</span><span style="width:56px;color:var(--d-live)">Medium</span><span style="width:56px">High</span></div>
+      <div class="c t-title" style="top:194px">Medium</div>
+      <div class="c t-small dim" style="top:219px">Removes most background noise</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Noise reduction <span class="id">screens/noise_reduction.rs</span></h3>
+      <p>Taller bars remove more noise. Each bar's tap target is the full 44 × 88 px column, so the short "Off" bar is as easy to hit as "High".</p>
+      <ul><li>Off: room sound untouched. Low: softens fans and hum. Medium: removes most background noise. High: strongest, voices only.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="volume">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><path data-arc="200 146 92 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 146 92 -135 27" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 146 92 27" r="11" fill="var(--d-text)"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="c t-small dim" style="top:92px">Speaker</div>
+      <div class="c t-big num" style="top:108px">60<span class="pct">%</span></div>
+      <div style="left:180px;top:172px;width:40px;height:40px;border-radius:50%;background:var(--d-surface);display:grid;place-items:center"><svg style="width:20px;height:20px"><use href="#i-spk"/></svg></div>
+      <div class="side l" style="top:120px;width:52px;height:52px;left:34px;font:500 28px/1 var(--f-num)">&minus;</div>
+      <div class="side r" style="top:120px;width:52px;height:52px;left:314px;font:500 28px/1 var(--f-num)">+</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Volume <span class="id">screens/volume.rs</span></h3>
+      <p>A native <code>lv_arc</code>. Drag the knob, or step by 10 with − and +. The speaker button in the middle mutes the speaker. Swipe left for the microphone level, which uses the same layout.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="mic-height">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:34</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Mic height</div>
+      <div class="hopt" style="left:116px;top:70px;width:168px;height:44px">High</div>
+      <div class="hopt on" style="left:116px;top:122px;width:168px;height:44px">Medium<svg class="ck"><use href="#i-ok"/></svg></div>
+      <div class="hopt" style="left:116px;top:174px;width:168px;height:44px">Low</div>
+      <div class="c t-small dim" style="top:228px">Raise it when laptops block the table</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Mic height <span class="new">new</span> <span class="id">screens/mic_height.rs</span></h3>
+      <p>The motor has three stops (<code>MotorPosition::Low/Medium/High</code>). While it moves, the chosen row shows "Moving" and the others are disabled.</p>
+      <ul><li>Needs on-device verification of the MCU motor frames before it ships.</li></ul>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Recordings</h2>
+<p class="sub">New screens: today "Files" only shows a placeholder toast.</p>
+<div class="gallery">
+
+  <figure class="screen" id="files">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:20</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
+      <div class="title">Files</div>
+      <div class="c t-micro faint" style="top:62px">3.2 GB free</div>
+      <div class="list" style="top:78px;height:170px">
+        <div class="file" style="top:2px"><svg class="warn"><use href="#i-alert"/></svg><div class="txt"><b>Today, 14:02</b><span>42 min, upload failed</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+        <div class="file" style="top:60px"><svg class="dim"><use href="#i-clock"/></svg><div class="txt"><b>Today, 10:30</b><span>18 min, waiting for Wi-Fi</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+        <div class="file" style="top:118px"><svg class="live"><use href="#i-check"/></svg><div class="txt"><b>Yesterday, 16:45</b><span>1 h 05 min, sent</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+      </div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Files <span class="new">new</span> <span class="id">screens/files.rs</span></h3>
+      <p>Newest first, with anything that needs attention at the top. Each icon is one upload state: failed (amber), waiting (clock), sent (teal), kept on Wave only (device).</p>
+      <ul><li>The free space line turns amber below 1 GB, the point at which new recordings are blocked.</li>
+      <li>Empty: "No recordings yet. Tap Record on the home screen to start one."</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="file-detail">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="140" r="66" fill="none" stroke="var(--d-line)" stroke-width="4"/>
+        <path data-arc="200 140 66 0 126" stroke="var(--d-live)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 140 77 53 56" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
+        <path data-arc="200 140 77 199 202" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
+        <circle data-on-ring="200 140 66 126" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:21</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
+      <div class="title">Today, 14:02</div>
+      <div style="left:178px;top:102px;width:44px;height:44px"><svg style="width:44px;height:44px"><use href="#i-pause"/></svg></div>
+      <div class="c t-small num dim" style="top:154px">14:52 / 42:17</div>
+      <div class="c t-small warn" style="top:216px">Upload failed: server didn't answer</div>
+      <div class="side l" style="top:110px"><svg style="color:var(--d-rec)"><use href="#i-trash"/></svg></div>
+      <div class="side-lbl l" style="top:176px">Delete</div>
+      <div class="side r" style="top:110px"><svg style="color:var(--d-live)"><use href="#i-refresh"/></svg></div>
+      <div class="side-lbl r" style="top:176px">Send again</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Recording detail <span class="new">new</span> <span class="id">screens/file_detail.rs</span></h3>
+      <p>The dial becomes the playback scrubber: drag the knob to seek, tap the middle to play or pause. Ticks on the outer ring are marks, and tapping one jumps there.</p>
+      <ul><li>The right button follows the state: "Send" (kept on Wave), "Send again" (failed), hidden (sent).</li></ul>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Connections</h2>
+<p class="sub">Wi-Fi keeps today's QR setup flow. Uploads replaces the Webhook screen and adds the choice of what happens after each recording.</p>
+<div class="gallery">
+
+  <figure class="screen" id="wifi">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer">
+        <path data-arc="200 132 48 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 132 35 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 132 22 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 132 9 -42 42" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:34</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Wi-Fi</div>
+      <div class="c t-title" style="top:140px">Office-5G</div>
+      <div class="c t-small live" style="top:164px">Connected, signal good</div>
+      <div class="c t-small dim num" style="top:182px">192.168.1.42</div>
+      <div class="btn" style="left:120px;top:204px;width:160px;height:40px">Change network</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Wi-Fi <span class="id">screens/wifi_provisioning.rs</span></h3>
+      <p>The signal arcs are drawn and grey out as the signal drops. The network name gets the full centre width and ends in "…" when too long.</p>
+      <ul><li>"Change network" warns first: Wave leaves Office-5G while the setup network is open.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="wifi-setup">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><span class="num">14:35</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Set up Wi-Fi</div>
+      <div class="qr" style="left:66px;top:72px;width:124px;height:124px"><svg data-qr style="position:absolute;left:8px;top:8px;width:108px;height:108px"></svg></div>
+      <div class="steps" style="left:204px;top:76px;width:136px">
+        <div><b>1</b>Scan with your phone</div>
+        <div><b>2</b>Pick your network on the page that opens</div>
+        <div><b>3</b>Wave restarts and connects</div>
+      </div>
+      <div class="c t-small dim" style="top:206px">No camera? Join <span style="color:var(--d-text)">Wave-7F2A</span></div>
+      <div class="c t-small dim" style="top:224px">password <span class="num" style="color:var(--d-text)">k3x9p2vw</span>, then open 10.42.0.1</div>
+      <div class="back">Cancel</div>
+    </div></div></div>
+    <figcaption><h3>Wi-Fi setup <span class="id">screens/wifi_provisioning.rs</span></h3>
+      <p>The steps are a real sequence, so they're numbered. Manual details sit under the code, so a long password can't wrap into it.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="bluetooth">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg class="live"><use href="#i-bt"/></svg><span class="num">14:36</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Bluetooth</div>
+      <div class="c t-micro faint" style="top:62px">Shows up as Wave Boardroom</div>
+      <div class="dev" style="left:60px;top:80px;width:280px;height:48px"><svg><use href="#i-handset"/></svg>iPhone<span class="v live">Connected</span></div>
+      <div class="dev" style="left:60px;top:134px;width:280px;height:48px"><svg><use href="#i-laptop"/></svg>MacBook Pro<span class="v faint">Paired</span></div>
+      <div class="btn" style="left:108px;top:196px;width:184px;height:44px"><svg><use href="#i-bt"/></svg>Pair a device</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Bluetooth <span class="new">new</span> <span class="id">screens/bluetooth.rs</span></h3>
+      <p>Paired devices with their state. Tap one to connect, disconnect or forget it. "Pair a device" makes Wave visible for two minutes with a countdown ring.</p>
+      <ul><li>Depends on the Bluetooth work in the backlog (pairing, audio routing, calls).</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="uploads">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:22</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
+      <div class="title">Uploads</div>
+      <div class="c t-body" style="top:66px">notes.example.com</div>
+      <div class="vrow" style="left:76px;top:88px;width:248px;height:40px"><span class="lbl">After a recording</span><span class="v">Ask me</span><svg><use href="#i-right"/></svg></div>
+      <div style="left:80px;top:130px;width:240px;display:flex;justify-content:space-between;text-align:center">
+        <div style="width:76px"><div class="num" style="font-size:26px;line-height:30px">38</div><div class="t-micro dim">sent</div></div>
+        <div style="width:76px"><div class="num" style="font-size:26px;line-height:30px">1</div><div class="t-micro dim">waiting</div></div>
+        <div style="width:76px"><div class="num warn" style="font-size:26px;line-height:30px">1</div><div class="t-micro warn">failed</div></div>
+      </div>
+      <div class="c t-small dim" style="top:181px">Last sent 12 min ago</div>
+      <div class="btn" style="left:120px;top:202px;width:160px;height:40px"><svg><use href="#i-refresh"/></svg>Retry 1 failed</div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Uploads <span class="id">screens/webhook.rs</span></h3>
+      <p>Counts first, then one action. "Retry" only appears when something failed, and names how many. Times are relative instead of raw ISO timestamps.</p>
+      <ul><li>The reason for a failure lives on that recording in Files, next to the file it belongs to.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="upload-mode">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:22</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
+      <div class="title">After a recording</div>
+      <div class="opt" style="left:52px;top:70px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Send automatically</b><span>As soon as Wi-Fi allows</span></span></div>
+      <div class="opt on" style="left:52px;top:128px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Ask me each time</b><span>Choose Send, Keep or Delete</span></span></div>
+      <div class="opt" style="left:52px;top:186px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Keep on Wave</b><span>Nothing leaves the device</span></span></div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>After a recording <span class="new">new</span> <span class="id">screens/upload_mode.rs</span></h3>
+      <p>The upload mode used to be reachable only from the setup page. It's a privacy choice, so it gets its own screen with one plain sentence per option.</p>
+      <ul><li>Maps to <code>upload_mode = automatic | ask | local_only</code>. The same radio list serves Language, Time zone and Dim after.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="call">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="124" r="80" fill="none" stroke="var(--d-live)" stroke-width="3"/>
+        <circle cx="200" cy="124" r="94" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".35"/>
+        <circle cx="200" cy="124" r="108" fill="none" stroke="var(--d-live)" stroke-width="1.5" opacity=".15"/></svg>
+      <div class="crown"><svg class="live"><use href="#i-bt"/></svg><span class="num">14:36</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="c t-small live" style="top:86px">Incoming call</div>
+      <div class="c num" style="top:110px;font-size:18px;line-height:22px">+32 470 12 34 56</div>
+      <div class="c t-small dim" style="top:138px">via iPhone</div>
+      <div class="btn a fill-rec"><svg><use href="#i-hang"/></svg>Decline</div>
+      <div class="btn b fill-live"><svg><use href="#i-phone"/></svg>Answer</div>
+    </div></div></div>
+    <figcaption><h3>Incoming call <span class="new">new</span> <span class="id">screens/call.rs</span></h3>
+      <p>For Bluetooth calls. The rings ripple outward until someone answers or declines. Only the number is shown: no phone-book sync, by design.</p>
+      <ul><li>Answer and Decline also go to the computer as a HID hook-switch, so softphones follow.</li></ul>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>System</h2>
+<p class="sub">Settings that used to be placeholder rows or were missing. Destructive actions confirm first.</p>
+<div class="gallery">
+
+  <figure class="screen" id="system">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><path data-arc="200 152 180 62 118" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 152 180 98 116" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="list" style="top:34px;height:218px">
+        <div class="row far" style="left:90px;top:0;width:220px;height:34px"><svg><use href="#i-clock"/></svg>Pre-recording<span class="v">On</span></div>
+        <div class="row" style="left:52px;top:40px;width:296px;height:46px"><svg><use href="#i-info"/></svg>About<span class="v">waved 0.9.3</span></div>
+        <div class="row focus" style="left:40px;top:92px;width:320px;height:52px"><svg><use href="#i-refresh"/></svg>Firmware update<span class="v">Up to date</span></div>
+        <div class="row" style="left:52px;top:150px;width:296px;height:46px"><svg><use href="#i-trash"/></svg>Factory reset</div>
+        <div class="row far danger" style="left:90px;top:196px;width:220px;height:34px"><svg><use href="#i-power"/></svg>Power off</div>
+      </div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>System <span class="id">screens/system.rs</span></h3>
+      <p>Same list as the menu. Display, Date and time, Alert tones, Pre-recording, USB storage, PIN, About, Firmware update, Factory reset, Power off.</p>
+      <ul><li>No more off-screen back button at (8,8), and no title hidden under the status bar.</li>
+      <li>Rows that aren't built yet are hidden instead of showing "Bookmark added".</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="display">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><path data-arc="200 146 72 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 146 72 -135 54" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 146 72 54" r="11" fill="var(--d-text)"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:38</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Display</div>
+      <div class="ico" style="left:190px;top:100px"><svg><use href="#i-sun"/></svg></div>
+      <div class="c t-big num" style="top:120px">70<span class="pct">%</span></div>
+      <div class="side l" style="top:120px;width:52px;height:52px;left:34px;font:500 28px/1 var(--f-num)">&minus;</div>
+      <div class="side r" style="top:120px;width:52px;height:52px;left:314px;font:500 28px/1 var(--f-num)">+</div>
+      <div class="vrow" style="left:90px;top:207px;width:220px;height:38px"><span class="lbl">Dim after</span><span class="v">2 min</span><svg><use href="#i-right"/></svg></div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Display <span class="new">new</span> <span class="id">screens/display.rs</span></h3>
+      <p>Brightness drives <code>/sys/class/leds/lcd-backlight</code>, which today is fixed at 255. "Dim after" sets when the resting screen takes over.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="datetime">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div class="title">Date and time</div>
+      <div class="c t-big num" style="top:64px">14:37</div>
+      <div class="c t-body dim" style="top:118px">Saturday 4 October</div>
+      <div class="vrow" style="left:60px;top:146px;width:280px;height:44px"><span class="lbl">Time zone</span><span class="v">Brussels</span><svg><use href="#i-right"/></svg></div>
+      <div class="vrow" style="left:60px;top:196px;width:280px;height:44px"><span class="lbl">24-hour clock</span><span class="switch"></span></div>
+      <div class="back"><svg><use href="#i-left"/></svg>Back</div>
+    </div></div></div>
+    <figcaption><h3>Date and time <span class="new">new</span> <span class="id">screens/datetime.rs</span></h3>
+      <p>The time comes from the network, so only the time zone and the clock format are settable. Fixes the status clock, which shows UTC today.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="confirm">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div style="left:172px;top:58px;width:56px;height:56px;border-radius:50%;background:rgba(255,75,62,.14);display:grid;place-items:center;color:var(--d-rec)"><svg style="width:28px;height:28px"><use href="#i-power"/></svg></div>
+      <div class="c t-dial" style="top:128px">Power off?</div>
+      <div class="c t-small dim" style="top:166px;left:70px;width:260px">A recording in progress is saved first. Turn Wave on again with the power button.</div>
+      <div class="btn a">Cancel</div>
+      <div class="btn b fill-rec">Power off</div>
+    </div></div></div>
+    <figcaption><h3>Confirmation <span class="new">new</span> <span class="id">screens/dialog.rs</span></h3>
+      <p>One component for Power off, Factory reset, Delete recording and Stop USB storage. The button repeats the action's name, and the message afterwards uses it too ("Powering off").</p>
+      <ul><li>A long press on the power key opens this dialog. A short press puts the screen to sleep.</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="pin">
+    <div class="device"><div class="glass"><div class="fb">
+      <div class="c t-title" style="top:22px">Enter PIN</div>
+      <div class="c" style="top:56px;display:flex;justify-content:center;gap:12px">
+        <span class="dot" style="width:12px;height:12px;background:var(--d-text)"></span><span class="dot" style="width:12px;height:12px;background:var(--d-text)"></span><span class="dot" style="width:12px;height:12px;background:transparent;box-shadow:inset 0 0 0 2px var(--d-text3)"></span><span class="dot" style="width:12px;height:12px;background:transparent;box-shadow:inset 0 0 0 2px var(--d-text3)"></span></div>
+      <div class="key" style="left:96px;top:80px">1</div><div class="key" style="left:168px;top:80px">2</div><div class="key" style="left:240px;top:80px">3</div>
+      <div class="key" style="left:96px;top:134px">4</div><div class="key" style="left:168px;top:134px">5</div><div class="key" style="left:240px;top:134px">6</div>
+      <div class="key" style="left:96px;top:188px">7</div><div class="key" style="left:168px;top:188px">8</div><div class="key" style="left:240px;top:188px">9</div>
+      <div class="key alt" style="left:96px;top:242px">Cancel</div><div class="key" style="left:168px;top:242px">0</div><div class="key alt" style="left:240px;top:242px"><svg style="width:22px;height:22px"><use href="#i-backspace"/></svg></div>
+    </div></div></div>
+    <figcaption><h3>PIN <span class="new">new</span> <span class="id">screens/pin.rs</span></h3>
+      <p>Opens when someone taps a locked row. Files, Wi-Fi, Bluetooth, Uploads and System are locked, so a guest can't play back earlier meetings or change where recordings go. Mute, volume, Record, audio mode and noise reduction never ask.</p>
+      <ul><li>Four to six digits, set on the setup page (<code>security.device_password</code>).</li>
+      <li>Unlocked until the screen rests. After five wrong tries the keypad waits one minute: "Wrong PIN. Try again in 1 min."</li></ul>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="usb">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="112" r="56" fill="none" stroke="var(--d-live)" stroke-width="3"/></svg>
+      <div class="crown"><svg class="live"><use href="#i-usb"/></svg><span class="num">14:38</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
+      <div style="left:180px;top:92px;width:40px;height:40px;color:var(--d-live)"><svg style="width:40px;height:40px"><use href="#i-usb"/></svg></div>
+      <div class="c t-title" style="top:180px">USB storage is on</div>
+      <div class="c t-small dim" style="top:206px;left:80px;width:240px">Your computer can open the recordings. Audio is off until you stop.</div>
+      <div class="back" style="left:130px;width:140px">Stop USB storage</div>
+    </div></div></div>
+    <figcaption><h3>USB storage <span class="new">new</span> <span class="id">screens/usb_mode.rs</span></h3>
+      <p>Takes over the screen while the mass-storage gadget is active, because the microphones and speaker are unavailable then. The way out is the only action.</p>
+    </figcaption>
+  </figure>
+
+  <figure class="screen" id="ota">
+    <div class="device"><div class="glass"><div class="fb">
+      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-line)" stroke-width="6"/>
+        <path data-arc="200 132 78 0 230" stroke="var(--d-live)" stroke-width="6" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">02:14</span><span class="bat"><svg><use href="#i-bat-charge"/></svg>100%</span></div>
+      <div class="c t-small dim" style="top:92px">Installing update</div>
+      <div class="c t-big num" style="top:108px">64<span class="pct">%</span></div>
+      <div class="c t-small dim num" style="top:164px">waved 0.10.0</div>
+      <div class="c t-body" style="top:228px">Keep Wave plugged in</div>
+      <div class="c t-small dim" style="top:250px">It restarts by itself when done</div>
+    </div></div></div>
+    <figcaption><h3>Firmware update <span class="new">new</span> <span class="id">screens/ota.rs</span></h3>
+      <p>The dial again, as a progress ring. No buttons, because interrupting would leave Wave unusable. If the update fails: "Update failed. Wave is still on 0.9.3." with Retry.</p>
+    </figcaption>
+  </figure>
+
+</div>
+
+<h2>Messages</h2>
+<p class="sub">Shown at 1:1 in the status position. One line, at most 230 px wide, with an icon for the severity. Success and info stay 2 s, warnings and errors 4 s. The last two show the status pill while charging and on low battery.</p>
+<div class="gallery" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:20px">
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="live"><use href="#i-check"/></svg>Recording sent</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="dim"><use href="#i-info"/></svg>Marked at 42:17</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="dim"><use href="#i-info"/></svg>Hold Stop to end the recording</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="warn"><use href="#i-alert"/></svg>No Wi-Fi, upload waiting</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="warn"><use href="#i-bat-low"/></svg>Battery 10%, plug in Wave</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="rec"><use href="#i-alert"/></svg>Microphones not responding</div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:30px"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat live"><svg><use href="#i-bat-charge"/></svg>64%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:30px"><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat rec"><svg><use href="#i-bat-low"/></svg>8%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
+</div>
+</section>
+
+<h2>Implementation notes</h2>
+<p class="sub">Component sizes, timings, the dial state table and the rollout order are in <code>docs/mockups/README.md</code>. The backlog is in <code>TODO.md</code> at the repository root.</p>
+
+</div>
+
+<script>
+// Geometry helpers. Angles: 0 = top of the screen (device 0°), clockwise, same as the DoA convention.
+function pt(cx, cy, r, a){ const t = a*Math.PI/180; return [cx + r*Math.sin(t), cy - r*Math.cos(t)]; }
+document.querySelectorAll('[data-arc]').forEach(p => {
+  const [cx, cy, r, a1, a2] = p.dataset.arc.split(' ').map(Number);
+  const [x1, y1] = pt(cx, cy, r, a1), [x2, y2] = pt(cx, cy, r, a2);
+  p.setAttribute('d', `M${x1} ${y1} A${r} ${r} 0 ${(a2 - a1) > 180 ? 1 : 0} 1 ${x2} ${y2}`);
+});
+document.querySelectorAll('[data-on-ring]').forEach(c => {
+  const [cx, cy, r, a] = c.dataset.onRing.split(' ').map(Number);
+  const [x, y] = pt(cx, cy, r, a); c.setAttribute('cx', x); c.setAttribute('cy', y);
+});
+document.querySelectorAll('[data-ray]').forEach(l => {
+  const [cx, cy, r, a] = l.dataset.ray.split(' ').map(Number);
+  const [x, y] = pt(cx, cy, r, a);
+  l.setAttribute('x1', cx); l.setAttribute('y1', cy); l.setAttribute('x2', x); l.setAttribute('y2', y);
+});
+// First-order pickup pattern r(θ) = |a + (1-a)cos θ|, rotated by `rot` degrees.
+document.querySelectorAll('[data-polar]').forEach(p => {
+  const [cx, cy, R, a, rot] = p.dataset.polar.split(' ').map(Number);
+  let d = '';
+  for (let th = 0; th <= 360; th += 3){
+    const r = R*Math.abs(a + (1 - a)*Math.cos(th*Math.PI/180));
+    const [x, y] = pt(cx, cy, r, th + rot);
+    d += (th ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+  }
+  p.setAttribute('d', d + 'Z');
+});
+// Radial mode buttons: a 48 px disc behind each glyph group; data-on marks the selected mode.
+document.querySelectorAll('g[data-btn]').forEach(g => {
+  const [x, y] = g.dataset.btn.split(' ').map(Number);
+  const on = g.dataset.on === '1';
+  const disc = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  disc.setAttribute('cx', x); disc.setAttribute('cy', y); disc.setAttribute('r', 24);
+  disc.setAttribute('fill', on ? 'var(--d-surface2)' : 'var(--d-surface)');
+  if (on){ disc.setAttribute('stroke', 'var(--d-live)'); disc.setAttribute('stroke-width', '2'); }
+  g.insertBefore(disc, g.firstChild);
+});
+// Deterministic placeholder QR (finder patterns and seeded modules; not scannable).
+document.querySelectorAll('svg[data-qr]').forEach(svg => {
+  const n = 25, s = 108/n; let seed = 7, out = '';
+  const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  const finder = (x, y) => (x < 7 && y < 7) || (x >= n-7 && y < 7) || (x < 7 && y >= n-7);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++){
+    let on;
+    if (finder(x, y)){
+      const lx = x < 7 ? x : x-(n-7), ly = y < 7 ? y : y-(n-7);
+      on = lx === 0 || ly === 0 || lx === 6 || ly === 6 || (lx >= 2 && lx <= 4 && ly >= 2 && ly <= 4);
+    } else on = rnd() > 0.52;
+    if (on) out += `<rect x="${(x*s).toFixed(2)}" y="${(y*s).toFixed(2)}" width="${(s+0.2).toFixed(2)}" height="${(s+0.2).toFixed(2)}"/>`;
+  }
+  svg.setAttribute('viewBox', '0 0 108 108'); svg.innerHTML = `<g fill="#000">${out}</g>`;
+});
+// Layout-zone overlay on every device framebuffer.
+const OVERLAY = `<svg class="overlay" viewBox="0 0 400 304">
+  <rect x="0" y="0" width="400" height="36" fill="rgba(80,160,255,.14)"/>
+  <rect x="0" y="250" width="400" height="54" fill="rgba(255,120,80,.12)"/>
+  <circle cx="200" cy="152" r="190" fill="none" stroke="#5af" stroke-width="1" stroke-dasharray="3 3"/>
+  <circle cx="200" cy="152" r="182" fill="none" stroke="#fa5" stroke-width="1" stroke-dasharray="2 4"/>
+  <line x1="200" y1="0" x2="200" y2="304" stroke="#5af" stroke-width=".6" opacity=".6"/>
+  <line x1="0" y1="152" x2="400" y2="152" stroke="#5af" stroke-width=".6" opacity=".6"/>
+  <text x="200" y="47" fill="#7bf" font-size="9" text-anchor="middle" font-family="monospace">status 0-36</text>
+  <text x="200" y="301" fill="#fa7" font-size="9" text-anchor="middle" font-family="monospace">base 250-304</text>
+  <text x="300" y="150" fill="#fa7" font-size="9" font-family="monospace">r182 tap limit</text></svg>`;
+document.querySelectorAll('.device .fb').forEach(fb => fb.insertAdjacentHTML('beforeend', OVERLAY));
+const grid = document.getElementById('grid');
+grid.addEventListener('change', () => document.body.classList.toggle('show-grid', grid.checked));
+document.getElementById('theme').addEventListener('click', () => {
+  const r = document.documentElement;
+  const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  r.dataset.theme = dark ? 'light' : 'dark';
+});
+// ?only=<figure id>[&grid=1] renders one device by itself (local PNG export only).
+const q = new URLSearchParams(location.search);
+if (q.get('only')){ document.body.classList.add('only'); document.getElementById(q.get('only'))?.classList.add('target'); }
+if (q.get('grid')) document.body.classList.add('show-grid');
+</script>
+</body>
+</html>

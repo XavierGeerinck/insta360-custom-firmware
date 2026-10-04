@@ -20,7 +20,8 @@ firmwares/
       diff_*.diff SUMMARY.md           # (only in newest version's dir)
   fw_v1.1.6.6/                       # consumer release
   fw_business_v1.0.2.6/              # business/“tob_verify” SKU
-  fw_v3.0.0.1/                       # consumer release (latest)
+  fw_v3.0.0.1/                       # consumer pkg 3.0.0.1 → on-device 1.2.0.6
+  fw_v1.2.2.6/                       # consumer pkg 3.0.0.1 re-spin → on-device 1.2.2.6 (latest, SWU only)
     extracted/
       model_package.bin                # 3 GiB NPU model package (opaque)
       tail_blob.bin                    # 583 MB trailing region (opaque)
@@ -117,8 +118,11 @@ with open('firmwares/fw_v3.0.0.1/Insta360WaveFW_model.bin','rb') as f:
 " | jq '.data.appVersion.version, .data.appVersion.bin_size, .data.appVersion.model_size'
 ```
 
-For `fw_v3.0.0.1` the JSON reports `appVersion: 1.2.0.6` — `3.0.0.1` is the
-Wave Controller installer version, the on-device firmware is `1.2.0.6`.
+For `fw_v3.0.0.1` the JSON reports `appVersion: 1.2.0.6`. `3.0.0.1` is the
+firmware *package* version (not Wave Controller — that line is at 1.1.0), and
+Insta360 re-published it as `1.2.2.6` under the same label. Check the vendor
+catalog for new releases:
+`curl -s 'https://openapi.insta360.com/app/appDownload/getGroupApp?group=insta360-wave&X-Language=en-us' | jq`
 
 ## 3. Decompile
 
@@ -179,8 +183,10 @@ add a new version. The script is idempotent — re-running overwrites.
 
 ## Gotchas
 
-- Cpio extraction will silently truncate the last file (`udisk_s.exfat`)
-  if the input stream is capped to `bin_size`. Always feed the entire SWU
+- Cpio extraction will silently truncate `udisk_s.exfat` **and drop
+  `BT.bin`/`MCU.bin`/`DONGLE.bin`** (they come after it, past `bin_size`)
+  if the input stream is capped to `bin_size`. When range-fetching, grab
+  ~80 MB beyond `bin_size`. Always feed the entire SWU
   to cpio — it stops cleanly at TRAILER.
 - The `appVersion` in the JSON header drives the actual on-device version
   string; don't trust the directory name or filename.
