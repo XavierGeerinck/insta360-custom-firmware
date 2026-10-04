@@ -335,6 +335,10 @@ mod tests {
                     "child {index} overflows the row"
                 );
             }
+            let value = host.value;
+            assert!(value.text().ends_with("..."), "long value is cut with dots: {:?}", value.text());
+            let a = value.coords();
+            assert!(a.x2 - a.x1 + 1 >= 100, "value label is only {} px wide", a.x2 - a.x1 + 1);
         });
     }
 
