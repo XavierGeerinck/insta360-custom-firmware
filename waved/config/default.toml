@@ -1,13 +1,32 @@
-config_version = 1
+config_version = 2
 
 [device]
 name = "Wave Open"
 language = "en"
+first_run_done = false
 
 [audio]
 mode = "omni"
-speaker_volume = 150
+speaker_volume = 100
 mic_volume = 200
+nr_level = "off"
+beam_aim_deg = 0.0
+
+[display]
+brightness_pct = 80
+dim_after_s = 120
+off_after_s = 600
+
+[time]
+zone = "UTC"
+clock_24h = true
+
+[recording]
+pre_recording = true
+ask_timeout_s = 60
+
+[tones]
+enabled = true
 
 [api]
 endpoint = ""

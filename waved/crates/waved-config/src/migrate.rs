@@ -19,6 +19,9 @@ pub(crate) fn migrate(mut value: toml::Value) -> Result<toml::Value, ConfigError
     if version == 0 {
         migrate_v0_to_v1(root);
     }
+    if version <= 1 {
+        migrate_v1_to_v2(root);
+    }
     root.insert(
         "config_version".into(),
         toml::Value::Integer(CURRENT_CONFIG_VERSION as i64),
@@ -53,6 +56,23 @@ fn migrate_v0_to_v1(root: &mut toml::map::Map<String, toml::Value>) {
     storage
         .entry("minimum_free_mb")
         .or_insert(toml::Value::Integer(2_048));
+}
+
+fn migrate_v1_to_v2(root: &mut toml::map::Map<String, toml::Value>) {
+    // v1 allowed speaker_volume 0..=200 but never applied it; v2 is a percent.
+    if let Some(audio) = root.get_mut("audio").and_then(toml::Value::as_table_mut) {
+        if let Some(volume) = audio
+            .get("speaker_volume")
+            .and_then(toml::Value::as_integer)
+        {
+            audio.insert(
+                "speaker_volume".into(),
+                toml::Value::Integer(volume.clamp(0, 100)),
+            );
+        }
+    }
+    // Anyone with a v1 file has already used the device: skip first start.
+    table_or_insert(root, "device").insert("first_run_done".into(), toml::Value::Boolean(true));
 }
 
 fn table_or_insert<'a>(

@@ -12,11 +12,56 @@ pub fn validate_config(config: &WavedConfig) -> Result<(), Vec<FieldError>> {
         16,
     );
 
-    if config.audio.speaker_volume > 200 {
+    if config.audio.speaker_volume > 100 {
         push(
             &mut errors,
             "audio.speaker_volume",
-            "must be between 0 and 200",
+            "must be between 0 and 100",
+        );
+    }
+    if !config.audio.beam_aim_deg.is_finite() || !(0.0..360.0).contains(&config.audio.beam_aim_deg)
+    {
+        push(
+            &mut errors,
+            "audio.beam_aim_deg",
+            "must be at least 0 and below 360",
+        );
+    }
+    if !(5..=100).contains(&config.display.brightness_pct) {
+        push(
+            &mut errors,
+            "display.brightness_pct",
+            "must be between 5 and 100",
+        );
+    }
+    let dim = config.display.dim_after_s;
+    let off = config.display.off_after_s;
+    if dim != 0 && !(15..=3_600).contains(&dim) {
+        push(
+            &mut errors,
+            "display.dim_after_s",
+            "must be 0 (never) or 15 to 3600",
+        );
+    }
+    if off != 0 && (!(60..=86_400).contains(&off) || (dim != 0 && off < dim)) {
+        push(
+            &mut errors,
+            "display.off_after_s",
+            "must be 0 (never) or 60 to 86400, and not before dimming",
+        );
+    }
+    if !valid_time_zone(&config.time.zone) {
+        push(
+            &mut errors,
+            "time.zone",
+            "must be an IANA time zone such as Europe/Brussels",
+        );
+    }
+    if !(15..=600).contains(&config.recording.ask_timeout_s) {
+        push(
+            &mut errors,
+            "recording.ask_timeout_s",
+            "must be between 15 and 600",
         );
     }
     if config.audio.mic_volume > 800 {
@@ -103,6 +148,16 @@ pub fn validate_config(config: &WavedConfig) -> Result<(), Vec<FieldError>> {
     } else {
         Err(errors)
     }
+}
+
+/// A plain IANA identifier: letters, digits and `/ _ - +`, no path tricks.
+pub fn valid_time_zone(zone: &str) -> bool {
+    (1..=64).contains(&zone.len())
+        && !zone.starts_with('/')
+        && !zone.contains("..")
+        && zone
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
 }
 
 fn validate_endpoint(config: &WavedConfig, errors: &mut Vec<FieldError>) {
@@ -217,5 +272,76 @@ mod tests {
         config.api.endpoint = "https://user:pass@receiver.test/hook".into();
         let errors = validate_config(&config).unwrap_err();
         assert!(errors.iter().any(|error| error.path == "api.endpoint"));
+    }
+
+    fn rejects(config: &WavedConfig, path: &str) -> bool {
+        validate_config(config)
+            .err()
+            .is_some_and(|errors| errors.iter().any(|error| error.path == path))
+    }
+
+    #[test]
+    fn display_time_recording_and_audio_ranges_are_enforced() {
+        let mut c = WavedConfig::default();
+        c.display.brightness_pct = 0;
+        assert!(rejects(&c, "display.brightness_pct"));
+
+        let mut c = WavedConfig::default();
+        c.display.dim_after_s = 5;
+        assert!(rejects(&c, "display.dim_after_s"));
+
+        let mut c = WavedConfig::default();
+        c.display.dim_after_s = 600;
+        c.display.off_after_s = 300;
+        assert!(rejects(&c, "display.off_after_s"));
+
+        let mut c = WavedConfig::default();
+        c.display.dim_after_s = 0;
+        c.display.off_after_s = 0;
+        assert!(
+            validate_config(&c).is_ok(),
+            "never dim and never off is allowed"
+        );
+
+        let mut c = WavedConfig::default();
+        c.time.zone = "../etc/passwd".into();
+        assert!(rejects(&c, "time.zone"));
+
+        let mut c = WavedConfig::default();
+        c.time.zone = "America/Argentina/Buenos_Aires".into();
+        assert!(validate_config(&c).is_ok());
+
+        let mut c = WavedConfig::default();
+        c.recording.ask_timeout_s = 5;
+        assert!(rejects(&c, "recording.ask_timeout_s"));
+
+        let mut c = WavedConfig::default();
+        c.audio.speaker_volume = 101;
+        assert!(rejects(&c, "audio.speaker_volume"));
+
+        let mut c = WavedConfig::default();
+        c.audio.beam_aim_deg = 360.0;
+        assert!(rejects(&c, "audio.beam_aim_deg"));
+    }
+
+    #[test]
+    fn time_zone_names_are_plain_iana_identifiers() {
+        for good in [
+            "UTC",
+            "Europe/Brussels",
+            "Etc/GMT+1",
+            "America/Port-au-Prince",
+        ] {
+            assert!(valid_time_zone(good), "{good}");
+        }
+        for bad in [
+            "",
+            "/etc/localtime",
+            "Europe/../x",
+            "Europe Brussels",
+            &"A".repeat(65),
+        ] {
+            assert!(!valid_time_zone(bad), "{bad}");
+        }
     }
 }

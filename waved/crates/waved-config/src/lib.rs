@@ -6,15 +6,15 @@ mod validate;
 pub use form::{
     apply_form, field_specs, FieldError, FieldKind, FieldSpec, FormSubmission, Section,
 };
-pub use validate::validate_config;
+pub use validate::{valid_time_zone, validate_config};
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
-use waved_state::AudioMode;
 pub use waved_state::UploadMode;
+use waved_state::{AudioMode, NrLevel};
 
-pub const CURRENT_CONFIG_VERSION: u32 = 1;
+pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -36,6 +36,10 @@ pub struct WavedConfig {
     pub config_version: u32,
     pub device: DeviceConfig,
     pub audio: AudioConfig,
+    pub display: DisplayConfig,
+    pub time: TimeConfig,
+    pub recording: RecordingConfig,
+    pub tones: TonesConfig,
     pub api: ApiConfig,
     pub storage: StorageConfig,
     pub security: SecurityConfig,
@@ -47,14 +51,55 @@ pub struct WavedConfig {
 pub struct DeviceConfig {
     pub name: String,
     pub language: String,
+    /// The first-start screen has been finished or skipped.
+    pub first_run_done: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioConfig {
     pub mode: AudioMode,
+    /// Speaker volume in percent, 0..=100.
     pub speaker_volume: u16,
+    /// Linear microphone gain in percent; 100 = unity.
     pub mic_volume: u16,
+    pub nr_level: NrLevel,
+    /// Fixed aim for Focused / Narrow / Two sides, degrees clockwise from the
+    /// top of the screen, 0.0..360.0.
+    pub beam_aim_deg: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DisplayConfig {
+    pub brightness_pct: u8,
+    /// Seconds without a touch before the resting screen; 0 = never.
+    pub dim_after_s: u32,
+    /// Seconds without a touch before the screen turns off; 0 = never.
+    pub off_after_s: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TimeConfig {
+    /// IANA time zone name.
+    pub zone: String,
+    pub clock_24h: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RecordingConfig {
+    /// Keep the last 30 s of audio in RAM so Record can include it.
+    pub pre_recording: bool,
+    /// Seconds before an unanswered "Send this recording?" keeps the file.
+    pub ask_timeout_s: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TonesConfig {
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -157,6 +202,10 @@ impl Default for WavedConfig {
             config_version: CURRENT_CONFIG_VERSION,
             device: DeviceConfig::default(),
             audio: AudioConfig::default(),
+            display: DisplayConfig::default(),
+            time: TimeConfig::default(),
+            recording: RecordingConfig::default(),
+            tones: TonesConfig::default(),
             api: ApiConfig::default(),
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
@@ -170,6 +219,7 @@ impl Default for DeviceConfig {
         Self {
             name: "Wave Open".into(),
             language: "en".into(),
+            first_run_done: false,
         }
     }
 }
@@ -178,9 +228,45 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             mode: AudioMode::Omni,
-            speaker_volume: 150,
+            speaker_volume: 100,
             mic_volume: 200,
+            nr_level: NrLevel::Off,
+            beam_aim_deg: 0.0,
         }
+    }
+}
+
+impl Default for DisplayConfig {
+    fn default() -> Self {
+        Self {
+            brightness_pct: 80,
+            dim_after_s: 120,
+            off_after_s: 600,
+        }
+    }
+}
+
+impl Default for TimeConfig {
+    fn default() -> Self {
+        Self {
+            zone: "UTC".into(),
+            clock_24h: true,
+        }
+    }
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            pre_recording: true,
+            ask_timeout_s: 60,
+        }
+    }
+}
+
+impl Default for TonesConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -270,7 +356,7 @@ servers = ["pool.ntp.org"]
     #[test]
     fn unknown_future_version_is_rejected() {
         let source = include_str!("../../../config/default.toml").replacen(
-            "config_version = 1",
+            "config_version = 2",
             "config_version = 99",
             1,
         );
@@ -278,6 +364,43 @@ servers = ["pool.ntp.org"]
             WavedConfig::parse(&source),
             Err(ConfigError::UnsupportedVersion(99))
         ));
+    }
+
+    #[test]
+    fn v1_config_migrates_to_v2_and_keeps_user_values() {
+        let source = r#"config_version = 1
+
+[device]
+name = "Board room"
+language = "en"
+
+[audio]
+mode = "cardioid"
+speaker_volume = 150
+mic_volume = 300
+"#;
+        let config = WavedConfig::parse(source).unwrap();
+        assert_eq!(config.config_version, 2);
+        assert_eq!(config.device.name, "Board room");
+        assert!(
+            config.device.first_run_done,
+            "an existing install skips first start"
+        );
+        assert_eq!(config.audio.mode, AudioMode::Cardioid);
+        assert_eq!(
+            config.audio.speaker_volume, 100,
+            "v1 0..=200 clamps to percent"
+        );
+        assert_eq!(config.audio.mic_volume, 300);
+        assert_eq!(config.display, DisplayConfig::default());
+        assert_eq!(config.recording, RecordingConfig::default());
+        assert_eq!(config.time, TimeConfig::default());
+    }
+
+    #[test]
+    fn new_installs_show_first_start() {
+        assert!(!WavedConfig::default().device.first_run_done);
+        assert_eq!(WavedConfig::default().config_version, 2);
     }
 
     #[test]
