@@ -203,6 +203,15 @@ Rules for the parallel milestones:
   - Build DFN3 once at start-up instead of on every NR switch, which drops ~50 frames.
   - Profile noise suppression under sustained speech.
   - `ns_frame_ms` stat; remove stale `/tmp/audio_stats.json.tmp`.
+- [ ] **C10 Apply the persisted beam aim** (S) — `waved-audio/src/lib.rs`, needs C3
+  - `SetBeamAim` is clamped, persisted to `audio.beam_aim_deg` and seeded into
+    `AudioState.beam_aim_deg` at boot, but no service consumes the command (D2).
+  - AudioService maps it to the DoA override for Focused / Narrow / Two sides and updates
+    `AudioState.beam_aim_deg`.
+- [ ] **C11 Live recording settings in MeetingService** (S) — `waved-meeting/src/lib.rs:152`, `:170`, `:458`
+  - MeetingService reads `api.upload_mode` and the audio mode for metadata from the boot-time
+    config, so `SetUploadMode` and audio-mode changes only apply after a restart.
+  - Subscribe to `bus.settings` and the audio watch and use the live values.
 
 ## D — Files
 
