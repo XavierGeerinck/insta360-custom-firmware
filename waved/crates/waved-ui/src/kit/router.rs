@@ -68,7 +68,13 @@ impl Router {
                 if *self.current() == Route::Resting {
                     self.stack.pop();
                 }
-                let guarded = route.requires_pin() && snap.settings.pin_enabled && !self.unlocked;
+                // A locked screen opens without the PIN only while unlocked
+                // or when its entry point is already open below it.
+                let guarded = snap.settings.pin_enabled
+                    && !self.unlocked
+                    && route
+                        .guarded_by()
+                        .is_some_and(|entry| !self.stack.contains(&entry));
                 let target = if guarded {
                     Route::Pin(Box::new(route.clone()))
                 } else {
@@ -93,9 +99,15 @@ impl Router {
             UiEvent::Rest => {
                 self.unlocked = false;
                 // Waking must not reopen a locked screen: drop the first
-                // PIN-guarded entry point and everything opened from it.
+                // PIN-guarded screen (entry point or child) and everything
+                // above it. A PIN prompt stays and asks again on waking.
                 if snap.settings.pin_enabled {
-                    if let Some(at) = self.stack.iter().skip(1).position(Route::requires_pin) {
+                    if let Some(at) = self
+                        .stack
+                        .iter()
+                        .skip(1)
+                        .position(|route| route.guarded_by().is_some())
+                    {
                         self.stack.truncate(at + 1);
                     }
                 }
@@ -278,6 +290,85 @@ mod tests {
         assert_eq!(router.current(), &Route::Menu);
         router.handle(&UiEvent::Navigate(Route::System), &snap);
         assert_eq!(router.current(), &Route::Pin(Box::new(Route::System)));
+    }
+
+    fn locked() -> UiSnapshot {
+        let mut snap = ready();
+        snap.settings.pin_enabled = true;
+        snap
+    }
+
+    #[test]
+    fn direct_navigation_to_a_child_asks_for_the_pin() {
+        use crate::kit::route::ConfirmKind;
+        let snap = locked();
+        let id = Uuid::new_v4();
+        for child in [
+            Route::FileDetail(id),
+            Route::Confirm(ConfirmKind::DeleteRecording(id)),
+            Route::WifiSetup,
+            Route::UploadMode,
+            Route::Display,
+            Route::DateTime,
+            Route::About,
+            Route::Update,
+            Route::UsbStorage,
+            Route::Confirm(ConfirmKind::FactoryReset),
+        ] {
+            for path in [vec![], vec![Route::Menu]] {
+                let mut router = started(&snap);
+                for route in path {
+                    router.handle(&UiEvent::Navigate(route), &snap);
+                }
+                router.handle(&UiEvent::Navigate(child.clone()), &snap);
+                assert_eq!(router.current(), &Route::Pin(Box::new(child.clone())));
+            }
+        }
+    }
+
+    #[test]
+    fn a_child_opened_through_its_entry_point_does_not_ask_again() {
+        let snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Files), &snap);
+        router.handle(&UiEvent::PinAccepted, &snap);
+        router.handle(&UiEvent::Navigate(Route::FileDetail(Uuid::new_v4())), &snap);
+        assert!(matches!(router.current(), Route::FileDetail(_)));
+        assert_eq!(router.depth(), 3);
+    }
+
+    #[test]
+    fn resting_drops_a_child_opened_without_its_entry_point() {
+        let snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::FileDetail(Uuid::new_v4())), &snap);
+        router.handle(&UiEvent::PinAccepted, &snap);
+        assert!(matches!(router.current(), Route::FileDetail(_)));
+        router.handle(&UiEvent::Rest, &snap);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!((router.current(), router.depth()), (&Route::Menu, 2));
+    }
+
+    #[test]
+    fn a_pin_prompt_survives_rest_and_asks_again_on_wake() {
+        let snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Files), &snap);
+        router.handle(&UiEvent::Rest, &snap);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.current(), &Route::Pin(Box::new(Route::Files)));
+        router.handle(&UiEvent::PinAccepted, &snap);
+        assert_eq!(router.current(), &Route::Files);
+    }
+
+    #[test]
+    fn power_off_never_asks_for_the_pin() {
+        use crate::kit::route::ConfirmKind;
+        let snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff)), &snap);
+        assert_eq!(router.current(), &Route::Confirm(ConfirmKind::PowerOff));
     }
 
     #[test]

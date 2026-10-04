@@ -50,12 +50,33 @@ impl Route {
         matches!(self, Route::Home | Route::Recording | Route::Decision)
     }
 
+    /// The PIN-protected entry point (D10) this screen belongs to; an entry
+    /// point returns itself. `None` for screens the PIN never locks.
+    pub fn guarded_by(&self) -> Option<Route> {
+        match self {
+            Route::Files
+            | Route::FileDetail(_)
+            | Route::Confirm(ConfirmKind::DeleteRecording(_)) => Some(Route::Files),
+            Route::Wifi | Route::WifiSetup => Some(Route::Wifi),
+            Route::Bluetooth => Some(Route::Bluetooth),
+            Route::Uploads | Route::UploadMode => Some(Route::Uploads),
+            Route::System
+            | Route::Display
+            | Route::DateTime
+            | Route::About
+            | Route::Update
+            | Route::UsbStorage
+            | Route::Confirm(ConfirmKind::FactoryReset | ConfirmKind::StopUsbStorage) => {
+                Some(Route::System)
+            }
+            // Power off stays open: the power key's long press must always work.
+            _ => None,
+        }
+    }
+
     /// Entry points the PIN protects (D10). Screens opened from them inherit the unlock.
     pub fn requires_pin(&self) -> bool {
-        matches!(
-            self,
-            Route::Files | Route::Wifi | Route::Bluetooth | Route::Uploads | Route::System
-        )
+        self.guarded_by().as_ref() == Some(self)
     }
 }
 
@@ -84,6 +105,47 @@ mod tests {
             Route::MicHeight,
         ] {
             assert!(!open.requires_pin(), "{open:?}");
+        }
+    }
+
+    #[test]
+    fn every_screen_under_a_locked_entry_point_is_guarded_by_it() {
+        let id = Uuid::new_v4();
+        let cases = [
+            (Route::Files, Route::Files),
+            (Route::FileDetail(id), Route::Files),
+            (Route::Confirm(ConfirmKind::DeleteRecording(id)), Route::Files),
+            (Route::Wifi, Route::Wifi),
+            (Route::WifiSetup, Route::Wifi),
+            (Route::Bluetooth, Route::Bluetooth),
+            (Route::Uploads, Route::Uploads),
+            (Route::UploadMode, Route::Uploads),
+            (Route::System, Route::System),
+            (Route::Display, Route::System),
+            (Route::DateTime, Route::System),
+            (Route::About, Route::System),
+            (Route::Update, Route::System),
+            (Route::UsbStorage, Route::System),
+            (Route::Confirm(ConfirmKind::FactoryReset), Route::System),
+            (Route::Confirm(ConfirmKind::StopUsbStorage), Route::System),
+        ];
+        for (route, entry) in cases {
+            assert_eq!(route.guarded_by(), Some(entry), "{route:?}");
+        }
+        for open in [
+            Route::Home,
+            Route::Menu,
+            Route::AudioMode,
+            Route::NoiseReduction,
+            Route::Volume,
+            Route::MicLevel,
+            Route::MicHeight,
+            Route::Confirm(ConfirmKind::PowerOff),
+            Route::Pin(Box::new(Route::Files)),
+            Route::Resting,
+            Route::IncomingCall,
+        ] {
+            assert_eq!(open.guarded_by(), None, "{open:?}");
         }
     }
 
