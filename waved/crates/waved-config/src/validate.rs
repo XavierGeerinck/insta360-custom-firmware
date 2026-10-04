@@ -342,6 +342,10 @@ mod tests {
             "/etc/localtime",
             "Europe/../x",
             "Europe Brussels",
+            "-rf",
+            "UTC/",
+            "/Europe",
+            "Europe//Brussels",
             &"A".repeat(65),
         ] {
             assert!(!valid_time_zone(bad), "{bad}");
