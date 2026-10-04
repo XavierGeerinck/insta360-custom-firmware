@@ -151,13 +151,16 @@ pub fn validate_config(config: &WavedConfig) -> Result<(), Vec<FieldError>> {
 }
 
 /// A plain IANA identifier: letters, digits and `/ _ - +`, no path tricks.
+/// `.` is not allowed, so `..` cannot occur.
 pub fn valid_time_zone(zone: &str) -> bool {
     (1..=64).contains(&zone.len())
-        && !zone.starts_with('/')
-        && !zone.contains("..")
-        && zone
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
+        && !zone.starts_with('-')
+        && zone.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '+'))
+        })
 }
 
 fn validate_endpoint(config: &WavedConfig, errors: &mut Vec<FieldError>) {

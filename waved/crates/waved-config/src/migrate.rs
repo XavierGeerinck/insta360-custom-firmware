@@ -36,7 +36,20 @@ fn migrate_v0_to_v1(root: &mut toml::map::Map<String, toml::Value>) {
         }
     }
 
-    let api = table_or_insert(root, "api");
+    if let Some(api) = table_or_insert(root, "api") {
+        migrate_v0_api(api);
+    }
+    if let Some(storage) = table_or_insert(root, "storage") {
+        storage
+            .entry("prune_uploaded_at_percent")
+            .or_insert(toml::Value::Integer(85));
+        storage
+            .entry("minimum_free_mb")
+            .or_insert(toml::Value::Integer(2_048));
+    }
+}
+
+fn migrate_v0_api(api: &mut toml::map::Map<String, toml::Value>) {
     let upload_mode = api
         .remove("auto_upload")
         .and_then(|value| value.as_bool())
@@ -48,14 +61,6 @@ fn migrate_v0_to_v1(root: &mut toml::map::Map<String, toml::Value>) {
         .or_insert(toml::Value::Boolean(false));
     api.entry("retry_max_backoff_ms")
         .or_insert(toml::Value::Integer(60_000));
-
-    let storage = table_or_insert(root, "storage");
-    storage
-        .entry("prune_uploaded_at_percent")
-        .or_insert(toml::Value::Integer(85));
-    storage
-        .entry("minimum_free_mb")
-        .or_insert(toml::Value::Integer(2_048));
 }
 
 fn migrate_v1_to_v2(root: &mut toml::map::Map<String, toml::Value>) {
@@ -72,15 +77,18 @@ fn migrate_v1_to_v2(root: &mut toml::map::Map<String, toml::Value>) {
         }
     }
     // Anyone with a v1 file has already used the device: skip first start.
-    table_or_insert(root, "device").insert("first_run_done".into(), toml::Value::Boolean(true));
+    if let Some(device) = table_or_insert(root, "device") {
+        device.insert("first_run_done".into(), toml::Value::Boolean(true));
+    }
 }
 
+/// The named section as a table, created when missing. A section of the wrong
+/// type yields `None`, so serde reports the parse error instead of a panic.
 fn table_or_insert<'a>(
     root: &'a mut toml::map::Map<String, toml::Value>,
     key: &str,
-) -> &'a mut toml::map::Map<String, toml::Value> {
+) -> Option<&'a mut toml::map::Map<String, toml::Value>> {
     root.entry(key)
         .or_insert_with(|| toml::Value::Table(Default::default()))
         .as_table_mut()
-        .expect("config section must be a table")
 }

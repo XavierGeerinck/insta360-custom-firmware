@@ -404,6 +404,32 @@ mic_volume = 300
     }
 
     #[test]
+    fn v0_config_chains_through_to_v2() {
+        let source = "[audio]\nspeaker_volume = 150\n";
+        let config = WavedConfig::parse(source).unwrap();
+        assert_eq!(config.config_version, 2);
+        assert_eq!(config.audio.speaker_volume, 100);
+    }
+
+    #[test]
+    fn non_table_sections_are_errors_not_panics() {
+        for source in [
+            "config_version = 1\ndevice = \"x\"\n",
+            "config_version = 1\naudio = 3\n",
+            "device = \"x\"\n",
+            "api = 1\n",
+            "storage = 5\n",
+        ] {
+            assert!(WavedConfig::parse(source).is_err(), "{source}");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "config_version = 1\ndevice = \"x\"\n").unwrap();
+        assert_eq!(WavedConfig::load_or_default(&path), WavedConfig::default());
+    }
+
+    #[test]
     fn roundtrip_save_load_creates_secure_backup() {
         use std::os::unix::fs::PermissionsExt;
 
