@@ -516,6 +516,36 @@ pub enum Command {
     /// Internal lifecycle command emitted after setup has persisted settings,
     /// restored station connectivity, and is ready to reload all services.
     RestartForConfig,
+    // --- Settings (persisted by waved-settings) ---
+    /// Backlight brightness in percent; the settings service clamps to 5..=100.
+    SetBrightness(u8),
+    /// Seconds without a touch before the resting screen; 0 = never.
+    SetDimAfter(u32),
+    /// IANA time zone name, e.g. "Europe/Brussels".
+    SetTimeZone(String),
+    SetClock24h(bool),
+    /// Keep the last 30 s of audio in RAM so Record can include it (D3).
+    SetPreRecording(bool),
+    SetUploadMode(UploadMode),
+    SetAlertTones(bool),
+    /// The first-start screen finished (Wi-Fi set up or skipped).
+    MarkFirstRunDone,
+    /// Fixed aim for Focused / Narrow / Two sides, degrees clockwise from the
+    /// top of the screen (D2).
+    SetBeamAim(f32),
+    // --- Recordings ---
+    /// Delete any kept or failed recording from Files. Unlike DiscardRecording
+    /// this is not limited to the pending decision.
+    DeleteRecording(Uuid),
+    PlayRecording(Uuid),
+    PausePlayback,
+    ResumePlayback,
+    /// Seek the active playback to this offset, in milliseconds from the start of the file.
+    SeekPlayback(u32),
+    StopPlayback,
+    // --- System ---
+    /// Erase config, recordings, Wi-Fi and Bluetooth pairings, then restart.
+    FactoryReset,
 }
 
 // --- State Bus ---
@@ -847,5 +877,31 @@ mod tests {
         ] {
             assert!(!ok.needs_attention(), "{ok:?}");
         }
+    }
+
+    #[test]
+    fn redesign_commands_exist_and_clone() {
+        let id = Uuid::new_v4();
+        let commands = vec![
+            Command::SetBrightness(80),
+            Command::SetDimAfter(120),
+            Command::SetTimeZone("Europe/Brussels".into()),
+            Command::SetClock24h(true),
+            Command::SetPreRecording(false),
+            Command::SetUploadMode(UploadMode::Ask),
+            Command::SetAlertTones(true),
+            Command::MarkFirstRunDone,
+            Command::SetBeamAim(300.0),
+            Command::DeleteRecording(id),
+            Command::PlayRecording(id),
+            Command::PausePlayback,
+            Command::ResumePlayback,
+            Command::SeekPlayback(5_000),
+            Command::StopPlayback,
+            Command::FactoryReset,
+        ];
+        let cloned = commands.clone();
+        assert_eq!(cloned.len(), 16);
+        assert!(matches!(cloned[9], Command::DeleteRecording(x) if x == id));
     }
 }
