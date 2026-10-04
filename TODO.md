@@ -16,7 +16,7 @@ Sources:
 
 - Every item has an ID, a size and its location in the repo.
   - **S** is a day or less, **M** is two to five days, **L** is more than a week.
-- ⏸ marks items that still wait on an open decision (D7, D8 below).
+- All decisions are settled. Only the visual confirmation of D8 is left, during the first device pass.
 - **Phase 0** has to land first. It defines the shared contracts: commands, state, config,
   theme and components. After that, workstreams **A–L** can run in parallel. Items inside a
   workstream are in order.
@@ -34,8 +34,8 @@ Sources:
 | D4 | Nobody answers "Send this recording?" | Keep it on Wave after 60 s. |
 | D5 | Scope of this round | **In:** full redesign, Bluetooth audio and calls, Wave Controller, self-hosted OTA, USB storage, Mic height, PIN lock, physical volume buttons. **Later:** more languages. |
 | D6 | Device use during implementation | Agents test on the host (cargo tests and the LVGL snapshot harness). One integration pass on the device per milestone. |
-| D7 | Branching ⏸ | Proposed: new branch `feat/display-redesign` off `feat/wifi-provisioning` (125 commits ahead of `main`, not merged), one worktree per workstream, one PR at the end. |
-| D8 | Panel type ⏸ | Open. One backlight test on the device in milestone 1. |
+| D7 | Branching | `feat/display-redesign` off `feat/wifi-provisioning` (125 commits ahead of `main`, not merged), one worktree per workstream, one PR at the end. |
+| D8 | Panel type | **LCD.** The 1.2.2.6 device tree has an `ilitek,ili79400` touch-and-display controller (`ili79400ts@41` is its touch half) and a PWM `lcd-backlight` under `pwm-leds`. No burn-in protection is needed. Confirm visually in the milestone 1 device pass. |
 | D9 | Wave Controller source | Build from the decompiled stock handlers first. Verify against the official app once a stock capture is possible. |
 | D10 | PIN scope | Locks Files, Wi-Fi, Bluetooth, Uploads and System. Never mute, volume, Record, audio mode or noise reduction. 4–6 digits set on the setup page. Unlocked until the screen rests; five wrong tries means a one-minute wait. |
 
@@ -43,7 +43,7 @@ Sources:
 
 | Milestone | Work | How it runs | Device pass at the end |
 |---|---|---|---|
-| 1 | Phase 0 (P0.1–P0.6), F5 panel test | Serial: one agent plus the integrator | Panel test; theme, fonts and components on the real screen |
+| 1 | Phase 0 (P0.1–P0.6), F5 panel test. Plan: `waved/docs/superpowers/plans/2026-10-04-display-redesign-m1-foundation.md` | Two parallel lanes (contracts, UI kit) plus the integrator | Panel test; theme, fonts and components on the real screen |
 | 2 | A main screens, B settings screens, C recording and audio, D Files, E system services | Parallel, one worktree each | Home, Recording, menus; pause/resume; brightness; power key |
 | 3 | F hardware, G USB storage, H updates, I Bluetooth, J Wave Controller, K security | Parallel, one worktree each | Each feature on the device |
 | 4 | M acceptance, L docs, parity matrix | Parallel | Full regression and the one-hour certification |
@@ -55,7 +55,8 @@ Rules for the parallel milestones:
 ## Phase 0 — shared contracts (serial, lands first)
 
 - [ ] **P0.1 Commands and state** (M) — `waved-state/src/lib.rs`
-  - Replace the ten `Open*` commands with `Navigate(ScreenId)` + `Back`.
+  - Replace the ten `Open*` commands with UI-internal navigation (`kit::Router`, `UiEvent::Navigate` and `Back`).
+    The `Open*` commands are deleted at the milestone 2 runtime switch.
   - Add display commands: `SetBrightness(u8)`, `SetDimAfter(u32)`, `WakeScreen`, `SleepScreen`.
   - Add time commands: `SetTimeZone(String)`, `SetClock24h(bool)`.
   - Add recording-policy commands: `SetPreRecording(bool)`, `SetUploadMode(UploadMode)`.
@@ -90,12 +91,13 @@ Rules for the parallel milestones:
   - Dial with four modes: ring, talker arc, gauge and progress.
   - Lists: rotary list (`lv_example_scroll_6` pattern, bottom fade, arc scrollbar), radio list,
     value row, switch.
-  - Controls: value arc, radial picker, confirmation dialog.
+  - Controls: value arc, confirmation dialog. The radial picker moves to B2, the only screen that uses it.
   - Each component gets a host-side LVGL snapshot test.
 - [ ] **P0.5 Navigation** (M) — `waved-ui/src/nav.rs`, `lib.rs`
   - Navigation stack with `back()`.
   - Gestures: swipe down from the top edge opens Menu; swipe right goes back.
   - Wake guard: the first touch after dimming only wakes the screen.
+  - Gestures and the wake guard land with the milestone 2 runtime switch, when the router drives the screen.
   - Meeting-state routing (Home ↔ Recording ↔ After stop) that works from every screen. Today
     it only works while one of those three is showing.
 - [ ] **P0.6 UI test harness** (M) — host build of `waved-ui` that renders any screen and state
@@ -254,9 +256,8 @@ Rules for the parallel milestones:
 - [ ] **F3 Motor** (S) — verify the `MotorPosition` frames and the obstruction event on
   the device before Mic height ships.
 - [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
-- [ ] **F5 Panel type** (S) ⏸D8 — run the backlight test.
-  - Fix `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
-  - If it's an OLED, add a ±3 px layout shift every 10 minutes.
+- [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
+  fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
 - [ ] **F6 Peripheral blobs** (S) — adopt the 1.2.2.6 `BT.bin` and `DONGLE.bin` (MCU is unchanged).
   Note that 1.2.2.6 also changed the root password hash.
 
