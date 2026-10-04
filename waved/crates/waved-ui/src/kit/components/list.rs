@@ -14,9 +14,12 @@ const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
 
 /// The list area, from under the status to just above Back.
 pub const VIEW: Rect = Rect::new(0, 34, 400, 218);
-/// Every row keeps a 52 px slot. Edge rows shrink their width and text, not
+/// Every row keeps a 48 px slot. Edge rows shrink their width and text, not
 /// their height, so snapping and the scroll position stay exact.
-pub const ROW_H: i32 = 52;
+pub const ROW_H: i32 = 48;
+/// Where the focused row is centred (the mockup's focus line), a little below
+/// the middle of `VIEW` so the top rows stay clear of the fade.
+const FOCUS_Y: i32 = 152;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListItem {
@@ -124,21 +127,23 @@ struct Inner {
 }
 
 pub struct RotaryList {
-    inner: Rc<RefCell<Inner>>,
+    inner: Rc<Inner>,
 }
 
 impl RotaryList {
     pub fn new(parent: Obj, items: Vec<ListItem>, on_select: impl FnMut(usize) + 'static) -> Self {
         let viewport = Obj::plain(parent).rect(VIEW).column_centered(0);
-        let pad = (VIEW.h - ROW_H) / 2;
+        // LVGL snaps to the centre of the padded content area, which is FOCUS_Y.
+        let pad_top = FOCUS_Y - VIEW.y - ROW_H / 2;
+        let pad_bottom = VIEW.h - pad_top - ROW_H;
         // SAFETY: live object.
         unsafe {
             lv_obj_add_flag(viewport.raw(), lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_set_scroll_dir(viewport.raw(), lv_dir_t_LV_DIR_VER);
             lv_obj_set_scroll_snap_y(viewport.raw(), lv_scroll_snap_t_LV_SCROLL_SNAP_CENTER);
             lv_obj_set_scrollbar_mode(viewport.raw(), lv_scrollbar_mode_t_LV_SCROLLBAR_MODE_OFF);
-            lv_obj_set_style_pad_top(viewport.raw(), pad, MAIN);
-            lv_obj_set_style_pad_bottom(viewport.raw(), pad, MAIN);
+            lv_obj_set_style_pad_top(viewport.raw(), pad_top, MAIN);
+            lv_obj_set_style_pad_bottom(viewport.raw(), pad_bottom, MAIN);
         }
         let select = Rc::new(RefCell::new(on_select));
         let rows = items
@@ -167,27 +172,27 @@ impl RotaryList {
         fade(parent, Rect::new(0, VIEW.y, VIEW.w, 18), true);
         fade(parent, Rect::new(0, VIEW.y + VIEW.h - 22, VIEW.w, 22), false);
         let scrollbar = scrollbar(parent);
-        let inner = Rc::new(RefCell::new(Inner { viewport, rows, scrollbar }));
+        let inner = Rc::new(Inner { viewport, rows, scrollbar });
         {
             let inner = inner.clone();
-            on(viewport, lv_event_code_t_LV_EVENT_SCROLL, move |_| inner.borrow().restyle());
+            on(viewport, lv_event_code_t_LV_EVENT_SCROLL, move |_| inner.restyle());
         }
-        inner.borrow().restyle();
+        inner.restyle();
         Self { inner }
     }
 
-    /// Centre the row at `index` without animation.
+    /// Centre the row at `index` without animation. The scroll event restyles
+    /// the rows, so nothing else is needed here.
     pub fn scroll_to(&self, index: usize) {
-        let inner = self.inner.borrow();
+        let inner = &self.inner;
         // SAFETY: live viewport.
         unsafe {
             lv_obj_scroll_to_y(inner.viewport.raw(), index as i32 * ROW_H, lv_anim_enable_t_LV_ANIM_OFF);
         }
-        inner.restyle();
     }
 
     pub fn set_value(&self, index: usize, value: Option<&str>) {
-        let inner = self.inner.borrow();
+        let inner = &self.inner;
         let row = &inner.rows[index];
         *row.full_value.borrow_mut() = value.unwrap_or("").to_string();
         // Forget the band so the next restyle measures the new value.
@@ -196,21 +201,21 @@ impl RotaryList {
     }
 
     pub fn row(&self, index: usize) -> Obj {
-        self.inner.borrow().rows[index].obj
+        self.inner.rows[index].obj
     }
 
     pub fn band(&self, index: usize) -> Band {
-        self.inner.borrow().band_of(index)
+        self.inner.band_of(index)
     }
 }
 
 impl Inner {
     fn band_of(&self, index: usize) -> Band {
         let a = self.rows[index].obj.coords();
-        let distance = ((a.y1 + a.y2) / 2 - (VIEW.y + VIEW.h / 2)).abs();
-        if distance < 26 {
+        let distance = ((a.y1 + a.y2) / 2 - FOCUS_Y).abs();
+        if distance < 24 {
             Band::Focus
-        } else if distance < 80 {
+        } else if distance < 72 {
             Band::Near
         } else {
             Band::Far
@@ -298,6 +303,17 @@ mod tests {
     use super::*;
     use crate::kit::testkit::{assert_golden, lvgl};
 
+    fn assert_children_inside(row: Obj, what: &str) {
+        let bounds = row.coords();
+        for child in 0..row.child_count() {
+            let a = row.child(child as i32).coords();
+            assert!(
+                a.x1 >= bounds.x1 && a.x2 <= bounds.x2 && a.y1 >= bounds.y1 && a.y2 <= bounds.y2,
+                "{what}: child {child} overflows the row"
+            );
+        }
+    }
+
     fn menu() -> Vec<ListItem> {
         vec![
             ListItem::new(icons::FOLDER, "Files").value("12").locked(true),
@@ -325,6 +341,12 @@ mod tests {
             list.row(2).update_layout();
             let a = list.row(2).coords();
             assert_eq!(a.x2 - a.x1 + 1, 320);
+            // Snapping puts the focused row's centre on the focus line, and the
+            // slots below and above sit one pitch apart.
+            for (index, y) in [(0, 56), (1, 104), (2, 152), (3, 200), (4, 248)] {
+                let a = list.row(index).coords();
+                assert_eq!((a.y1 + a.y2 + 1) / 2, y, "row {index}");
+            }
             assert_golden("list_menu", &lv.render());
         });
     }
@@ -383,17 +405,45 @@ mod tests {
             for focus in 0..3 {
                 list.scroll_to(focus);
                 for index in 0..3 {
-                    let row = list.row(index);
-                    let bounds = row.coords();
-                    for child in 0..row.child_count() {
-                        let a = row.child(child as i32).coords();
-                        assert!(
-                            a.x1 >= bounds.x1 && a.x2 <= bounds.x2 && a.y1 >= bounds.y1 && a.y2 <= bounds.y2,
-                            "focus {focus}, row {index}: child {child} overflows the row"
-                        );
-                    }
+                    assert_children_inside(list.row(index), &format!("focus {focus}, row {index}"));
+                    let title = list.row(index).child(1);
+                    let a = title.coords();
+                    assert!(a.x2 - a.x1 + 1 > 0, "focus {focus}, row {index}: title has no width");
                 }
             }
+            // The two-long-text rows really end in dots, in every band.
+            for focus in 0..3 {
+                list.scroll_to(focus);
+                assert!(list.row(0).child(1).text().ends_with("..."), "focus {focus}: long title");
+                assert!(list.row(1).child(2).child(0).text().ends_with("..."), "focus {focus}: long value");
+                assert!(list.row(2).child(2).child(0).text().ends_with("..."), "focus {focus}: long host");
+            }
+        });
+    }
+
+    #[test]
+    fn a_long_value_set_later_stays_inside_the_row() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let list = RotaryList::new(root, menu(), |_| {});
+            list.scroll_to(2);
+            let long = "A value that is far too long for any row";
+            list.set_value(2, Some(long));
+            list.set_value(3, Some(long));
+            for (index, cap) in [(2, Band::Focus), (3, Band::Near)] {
+                assert_eq!(list.band(index), cap);
+                let value = list.row(index).child(2).child(0);
+                let a = value.coords();
+                let width = a.x2 - a.x1 + 1;
+                assert!(width <= cap.look().value_max_w, "row {index}: value too wide");
+                assert!(value.text().ends_with("..."), "row {index}");
+                assert_children_inside(list.row(index), &format!("row {index}"));
+                let title = list.row(index).child(1).coords();
+                assert!(title.x2 - title.x1 + 1 > 0, "row {index}: title has no width");
+            }
+            // Clearing the value hides it and frees the room.
+            list.set_value(2, None);
+            assert!(list.row(2).child(2).child(0).is_hidden());
         });
     }
 
