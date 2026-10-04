@@ -36,6 +36,7 @@ waved-audio = { path = "../waved-audio" }
 waved-meeting = { path = "../waved-meeting" }
 waved-wifi = { path = "../waved-wifi" }
 waved-provision = { path = "../waved-provision" }
+waved-settings = { path = "../waved-settings" }
 waved-ui = { path = "../waved-ui", optional = true }
 tokio.workspace = true
 tracing.workspace = true

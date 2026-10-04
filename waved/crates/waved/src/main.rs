@@ -50,13 +50,10 @@ fn main() {
     // Create state bus
     let bus = Arc::new(StateBus::new());
 
-    // Seed mutable audio state from TOML so apply_mic_volume sees the
-    // user-configured boot value before the first frame is processed.
-    // This must run before any service thread is spawned — the Tokio
-    // runtime is constructed below and all service spawns happen there.
-    bus.audio.send_modify(|s| {
-        s.mic_volume = config.audio.mic_volume;
-    });
+    // Seed live state from TOML: audio mode, noise reduction, volumes, aim and
+    // the display/time/recording settings. Must run before any service is
+    // spawned, because AudioService reads mode and NR from the watch when built.
+    waved_settings::seed_state(&bus, &config);
 
     // --- Hardware services: real or simulated ---
     #[cfg(not(feature = "simulate"))]
@@ -618,6 +615,13 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     }
 
     info!("all services started, waiting for shutdown signal");
+
+    // Persist device-side setting changes (volume, mode, display, time,
+    // recording policy) back to config.toml.
+    tokio::spawn(
+        waved_settings::SettingsService::new(CONFIG_PATH, Arc::clone(&bus.settings))
+            .run(bus.commands.subscribe()),
+    );
 
     // Low battery handler
     let low_battery_bus = Arc::clone(&bus);

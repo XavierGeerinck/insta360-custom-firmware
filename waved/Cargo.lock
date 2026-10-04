@@ -3577,6 +3577,7 @@ dependencies = [
  "waved-mcu",
  "waved-meeting",
  "waved-provision",
+ "waved-settings",
  "waved-state",
  "waved-uart",
  "waved-ui",
