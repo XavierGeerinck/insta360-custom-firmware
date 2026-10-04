@@ -53,6 +53,14 @@ pub struct AudioState {
     /// Host wrote Report 0x06 (Mute LED) — `true` while the host signals
     /// "the call is muted host-side". Informational only.
     pub call_host_muted: bool,
+    /// The host has the USB microphone stream open (UAC "PCM Playback State").
+    /// Drives "Computer is using the mic" and the teal ring on Home.
+    pub host_listening: bool,
+    /// Confidence of the latest DoA estimate, 0..1.
+    pub doa_confidence: f32,
+    /// Fixed aim for Focused / Narrow / Two sides, degrees clockwise from the
+    /// top of the screen (D2).
+    pub beam_aim_deg: f32,
     /// False after the live capture/DSP producer terminates unexpectedly.
     /// A watchdog restart creates a fresh healthy state.
     pub capture_healthy: bool,
@@ -89,6 +97,9 @@ impl Default for AudioState {
             call_off_hook: false,
             call_ringing: false,
             call_host_muted: false,
+            host_listening: false,
+            doa_confidence: 0.0,
+            beam_aim_deg: 0.0,
             capture_healthy: true,
             capture_xruns: 0,
             raw_frames_dropped: 0,
@@ -277,6 +288,14 @@ pub struct MeetingState {
     /// field to switch to the ConfirmationScreen, and clears it via one of
     /// the three new `Command` variants.
     pub pending_decision: Option<PendingDecision>,
+    /// Bookmarks in the active recording.
+    pub marks: u32,
+    /// Per-meeting speaker number currently talking (diarization), if any.
+    pub current_speaker: Option<u8>,
+    /// Seconds left before an unanswered "Send this recording?" keeps the file (D4).
+    pub ask_deadline_secs: Option<u32>,
+    /// The pre-recording buffer is filling (setting on, not recording, not muted).
+    pub pre_recording_active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,6 +306,98 @@ pub struct PendingDecision {
     pub size_bytes: u64,
     /// Snapshot of `config.api.endpoint` at stop time.
     pub endpoint: String,
+}
+
+/// User-facing settings mirrored from config.toml and persisted by waved-settings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SettingsState {
+    /// Backlight brightness, 5..=100.
+    pub brightness_pct: u8,
+    /// Seconds without a touch before the resting screen; 0 = never.
+    pub dim_after_s: u32,
+    /// Seconds without a touch before the screen turns off; 0 = never.
+    pub off_after_s: u32,
+    /// IANA time zone name.
+    pub time_zone: String,
+    pub clock_24h: bool,
+    pub pre_recording: bool,
+    /// Seconds before an unanswered "Send this recording?" keeps the file.
+    pub ask_timeout_s: u32,
+    pub upload_mode: UploadMode,
+    pub tones_enabled: bool,
+    pub first_run_done: bool,
+    /// A device password is set, so Files, Wi-Fi, Bluetooth, Uploads and System ask for it (D10).
+    pub pin_enabled: bool,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            brightness_pct: 80,
+            dim_after_s: 120,
+            off_after_s: 600,
+            time_zone: "UTC".into(),
+            clock_24h: true,
+            pre_recording: true,
+            ask_timeout_s: 60,
+            upload_mode: UploadMode::Automatic,
+            tones_enabled: true,
+            first_run_done: false,
+            pin_enabled: false,
+        }
+    }
+}
+
+/// Where a recording stands, as shown in Files.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordingStatus {
+    AwaitingDecision,
+    LocalOnly,
+    Waiting,
+    Uploading,
+    Uploaded,
+    Failed,
+    Damaged,
+}
+
+impl RecordingStatus {
+    /// Sorted to the top of Files and shown in amber.
+    pub fn needs_attention(&self) -> bool {
+        matches!(self, Self::Failed | Self::Damaged)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordingSummary {
+    pub id: Uuid,
+    /// RFC 3339 start time, when the clock was synchronized.
+    pub started_at: Option<String>,
+    pub duration_secs: u32,
+    pub size_bytes: u64,
+    pub status: RecordingStatus,
+    pub marks: u32,
+    /// Plain-language reason for Failed / Damaged.
+    pub last_error: Option<String>,
+}
+
+/// Recordings on the device, newest first, published by waved-meeting.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FilesState {
+    pub recordings: Vec<RecordingSummary>,
+    pub free_bytes: u64,
+    /// Free space is below the threshold that blocks new recordings.
+    pub low_space: bool,
+}
+
+/// Local playback of a recording through the speaker.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaybackState {
+    pub recording: Option<Uuid>,
+    pub playing: bool,
+    pub position_ms: u32,
+    pub duration_ms: u32,
+    /// Bookmark offsets from the start of the file.
+    pub marks_ms: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -419,6 +530,9 @@ pub struct StateBus {
     pub meeting: Arc<watch::Sender<MeetingState>>,
     pub mcu: Arc<watch::Sender<McuState>>,
     pub puc: Arc<watch::Sender<PucState>>,
+    pub settings: Arc<watch::Sender<SettingsState>>,
+    pub files: Arc<watch::Sender<FilesState>>,
+    pub playback: Arc<watch::Sender<PlaybackState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
     /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
@@ -447,6 +561,9 @@ impl StateBus {
         let (meeting_tx, _) = watch::channel(MeetingState::default());
         let (mcu_tx, _) = watch::channel(McuState::default());
         let (puc_tx, _) = watch::channel(PucState::default());
+        let (settings_tx, _) = watch::channel(SettingsState::default());
+        let (files_tx, _) = watch::channel(FilesState::default());
+        let (playback_tx, _) = watch::channel(PlaybackState::default());
         let (events_tx, _) = broadcast::channel(64);
         let (commands_tx, _) = broadcast::channel(64);
 
@@ -459,6 +576,9 @@ impl StateBus {
             meeting: Arc::new(meeting_tx),
             mcu: Arc::new(mcu_tx),
             puc: Arc::new(puc_tx),
+            settings: Arc::new(settings_tx),
+            files: Arc::new(files_tx),
+            playback: Arc::new(playback_tx),
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
@@ -682,5 +802,50 @@ mod tests {
             serde_json::to_string(&UploadMode::LocalOnly).unwrap(),
             "\"local_only\""
         );
+    }
+
+    #[test]
+    fn state_bus_carries_settings_files_and_playback() {
+        let bus = StateBus::new();
+        assert_eq!(bus.settings.borrow().brightness_pct, 80);
+        assert!(bus.files.borrow().recordings.is_empty());
+        assert!(bus.playback.borrow().recording.is_none());
+    }
+
+    #[test]
+    fn settings_defaults_match_the_design_timings() {
+        let s = SettingsState::default();
+        assert_eq!((s.dim_after_s, s.off_after_s, s.ask_timeout_s), (120, 600, 60));
+        assert!(s.pre_recording && s.clock_24h && s.tones_enabled);
+        assert!(!s.first_run_done && !s.pin_enabled);
+        assert_eq!(s.time_zone, "UTC");
+        assert_eq!(s.upload_mode, UploadMode::Automatic);
+    }
+
+    #[test]
+    fn new_audio_and_meeting_fields_default_to_idle() {
+        let audio = AudioState::default();
+        assert!(!audio.host_listening);
+        assert_eq!((audio.doa_confidence, audio.beam_aim_deg), (0.0, 0.0));
+        let meeting = MeetingState::default();
+        assert_eq!(meeting.marks, 0);
+        assert!(meeting.current_speaker.is_none());
+        assert!(meeting.ask_deadline_secs.is_none());
+        assert!(!meeting.pre_recording_active);
+    }
+
+    #[test]
+    fn only_failed_or_damaged_recordings_need_attention() {
+        assert!(RecordingStatus::Failed.needs_attention());
+        assert!(RecordingStatus::Damaged.needs_attention());
+        for ok in [
+            RecordingStatus::AwaitingDecision,
+            RecordingStatus::LocalOnly,
+            RecordingStatus::Waiting,
+            RecordingStatus::Uploading,
+            RecordingStatus::Uploaded,
+        ] {
+            assert!(!ok.needs_attention(), "{ok:?}");
+        }
     }
 }
