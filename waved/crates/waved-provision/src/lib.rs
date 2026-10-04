@@ -335,12 +335,18 @@ impl ProvisioningService {
 
                     let submission = config_submission(&form);
                     match save_submission(&self.config_path, &config, &submission) {
-                        Ok(next) => {
+                        Ok(saved) => {
                             self.set(ProvisioningState::Saving);
-                            config = next;
+                            config = saved.config;
+                            let kept_as = saved
+                                .kept
+                                .as_deref()
+                                .and_then(Path::file_name)
+                                .map(|name| name.to_string_lossy().into_owned());
                             let response = setup_form::render_ack(
                                 wifi.as_ref().map(|(ssid, _)| ssid.as_str()),
                                 !config.api.endpoint.is_empty(),
+                                kept_as.as_deref(),
                             );
                             let _ = tokio::time::timeout(
                                 HTTP_IO_TIMEOUT,
@@ -354,12 +360,13 @@ impl ProvisioningService {
                             });
                         }
                         Err(SaveError::Config(error)) => {
+                            warn!("setup page save failed: {error}");
                             let response = setup_form::render_page(
                                 &config,
                                 ssids,
                                 csrf,
                                 &[],
-                                Some(&format!("Could not save settings: {error}")),
+                                Some(SAVE_FAILED),
                             );
                             let _ = sock.write_all(response.as_bytes()).await;
                         }
@@ -382,30 +389,53 @@ impl ProvisioningService {
     }
 }
 
+/// Shown whenever config.toml can't be written. Config error text can quote
+/// the file (toml parse errors print the offending line, secrets included), so
+/// it goes to the log and never to the page.
+const SAVE_FAILED: &str =
+    "Wave couldn't save the settings file. Nothing was changed. Try again, or restart Wave.";
+
 enum SaveError {
     Form(Vec<FieldError>),
     Config(ConfigError),
 }
 
+struct Saved {
+    config: WavedConfig,
+    /// Where an unreadable config.toml was kept, if there was one.
+    kept: Option<PathBuf>,
+}
+
 /// Apply a setup-page submission to config.toml as it is on disk now, so
 /// device-side changes saved while the page was open survive. The session
-/// snapshot is used only when the file does not exist; a file that does not
-/// load is not overwritten.
+/// snapshot is used when the file does not exist, and also when it exists but
+/// does not load: the snapshot is what the page showed (the backup or the
+/// defaults), and the unreadable file is kept aside as `config.toml.unloadable`
+/// rather than overwritten. Only this explicit user save does that; the
+/// settings service never writes over a file that does not load.
 fn save_submission(
     path: &Path,
     snapshot: &WavedConfig,
     submission: &FormSubmission,
-) -> Result<WavedConfig, SaveError> {
+) -> Result<Saved, SaveError> {
     let base = match WavedConfig::load(path) {
         Ok(fresh) => fresh,
         Err(ConfigError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             snapshot.clone()
         }
-        Err(error) => return Err(SaveError::Config(error)),
+        Err(error) => {
+            warn!(
+                "{} does not load ({error}); the setup save will keep it aside",
+                path.display()
+            );
+            snapshot.clone()
+        }
     };
     let next = apply_form(&base, submission).map_err(SaveError::Form)?;
-    next.save(path).map_err(SaveError::Config)?;
-    Ok(next)
+    let kept = next
+        .save_replacing_unloadable(path)
+        .map_err(SaveError::Config)?;
+    Ok(Saved { config: next, kept })
 }
 
 fn config_submission(form: &HashMap<String, String>) -> FormSubmission {
@@ -501,7 +531,8 @@ mod tests {
             Err(_) => panic!("save failed"),
         };
         let on_disk = WavedConfig::load(&path).unwrap();
-        assert_eq!(saved, on_disk);
+        assert_eq!(saved.config, on_disk);
+        assert_eq!(saved.kept, None);
         assert_eq!(on_disk.device.name, "Board room");
         assert!(on_disk.device.first_run_done, "device-side value kept");
         assert_eq!(on_disk.audio.beam_aim_deg, 270.0);
@@ -520,18 +551,139 @@ mod tests {
         assert_eq!(on_disk.api.endpoint, "https://notes.example.com/hook");
     }
 
+    const BROKEN_FILES: [(&str, &str); 3] = [
+        ("syntax error", "api]\nauth_token = \"s3cr3t-token\n"),
+        (
+            "newer version",
+            "config_version = 99\nauth_token = \"s3cr3t-token\"\n",
+        ),
+        (
+            "unknown key",
+            "[api]\nauth_token = \"s3cr3t-token\"\nbogus = 1\n",
+        ),
+    ];
+
     #[test]
-    fn a_form_save_refuses_a_file_that_does_not_load() {
+    fn a_form_save_replaces_a_file_that_does_not_load_and_keeps_it() {
+        for (what, broken) in BROKEN_FILES {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, broken).unwrap();
+            let mut snapshot = WavedConfig::default();
+            snapshot.display.brightness_pct = 33;
+
+            let saved = match save_submission(&path, &snapshot, &named("Board room")) {
+                Ok(saved) => saved,
+                Err(_) => panic!("{what}: save failed"),
+            };
+
+            let kept = dir.path().join("config.toml.unloadable");
+            assert_eq!(saved.kept.as_deref(), Some(kept.as_path()), "{what}");
+            assert_eq!(std::fs::read_to_string(&kept).unwrap(), broken, "{what}");
+            let on_disk = WavedConfig::load(&path).unwrap();
+            assert_eq!(on_disk, saved.config, "{what}");
+            assert_eq!(on_disk.device.name, "Board room", "{what}");
+            assert_eq!(on_disk.display.brightness_pct, 33, "{what}: snapshot base");
+        }
+    }
+
+    #[test]
+    fn a_second_unloadable_file_is_kept_beside_the_first() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
+        let snapshot = WavedConfig::default();
         std::fs::write(&path, "config_version = 99\n").unwrap();
-
-        let result = save_submission(&path, &WavedConfig::default(), &named("Board room"));
-        assert!(matches!(result, Err(SaveError::Config(_))));
+        assert!(save_submission(&path, &snapshot, &named("One")).is_ok());
+        std::fs::write(&path, "broken [\n").unwrap();
+        let second = match save_submission(&path, &snapshot, &named("Two")) {
+            Ok(saved) => saved.kept.unwrap(),
+            Err(_) => panic!("second save failed"),
+        };
+        assert_ne!(second, dir.path().join("config.toml.unloadable"));
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "broken [\n");
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            std::fs::read_to_string(dir.path().join("config.toml.unloadable")).unwrap(),
             "config_version = 99\n"
         );
+    }
+
+    async fn post(addr: std::net::SocketAddr, path: &str, body: &str) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: wave\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        sock.write_all(request.as_bytes()).await.unwrap();
+        let mut response = String::new();
+        sock.read_to_string(&mut response).await.unwrap();
+        response
+    }
+
+    #[tokio::test]
+    async fn save_and_connect_works_over_an_unloadable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let broken = "api]\nauth_token = \"s3cr3t-token\n";
+        std::fs::write(&path, broken).unwrap();
+        let service = ProvisioningService::new(Arc::new(StateBus::new()), "mac".into(), &path);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (action, response) = tokio::join!(
+            service.serve(listener, &[], "csrf1", WavedConfig::default()),
+            post(
+                addr,
+                "/save-connect",
+                "csrf=csrf1&ssid=Home&psk=password123&device.name=Board+room"
+            )
+        );
+
+        let action = action.expect("the save should return an action");
+        assert_eq!(
+            action.wifi,
+            Some(("Home".to_string(), "password123".to_string()))
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.toml.unloadable")).unwrap(),
+            broken
+        );
+        assert_eq!(WavedConfig::load(&path).unwrap().device.name, "Board room");
+        assert!(response.contains("config.toml.unloadable"), "{response}");
+        assert!(!response.contains("s3cr3t"), "{response}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_save_shows_a_plain_sentence_and_no_config_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let broken = "api]\nauth_token = \"s3cr3t-token\n";
+        std::fs::write(&path, broken).unwrap();
+        // A directory where the temporary file goes makes the save fail.
+        std::fs::create_dir(dir.path().join("config.toml.new")).unwrap();
+        let service = ProvisioningService::new(Arc::new(StateBus::new()), "mac".into(), &path);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let response = tokio::select! {
+            _ = service.serve(listener, &[], "csrf1", WavedConfig::default()) => {
+                panic!("the save should have failed")
+            }
+            response = post(addr, "/save", "csrf=csrf1&device.name=Board+room") => response,
+        };
+
+        assert!(response.contains(SAVE_FAILED), "{response}");
+        for leaked in [
+            "s3cr3t",
+            "failed to",
+            "Is a directory",
+            "os error",
+            "TOML",
+            "line 1",
+        ] {
+            assert!(!response.contains(leaked), "{leaked}: {response}");
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken, "put back");
     }
 
     #[test]

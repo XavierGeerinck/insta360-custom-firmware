@@ -196,6 +196,25 @@ impl WavedConfig {
         info!("saved config to {}", path.display());
         Ok(())
     }
+
+    /// Save, first moving aside a config.toml that exists but does not load.
+    /// Only an explicit user save (the setup page) should call this; the
+    /// settings service must keep refusing to write over an unloadable file.
+    /// The old file is kept as `config.toml.unloadable` (numbered if that
+    /// name is taken) and its path is returned; `None` means nothing needed
+    /// keeping.
+    pub fn save_replacing_unloadable(&self, path: &Path) -> Result<Option<PathBuf>, ConfigError> {
+        let kept = persist::save_replacing_unloadable(self, path)?;
+        if let Some(kept) = &kept {
+            warn!(
+                "config at {} did not load; kept it as {}",
+                path.display(),
+                kept.display()
+            );
+        }
+        info!("saved config to {}", path.display());
+        Ok(kept)
+    }
 }
 
 fn backup_path(path: &Path) -> PathBuf {

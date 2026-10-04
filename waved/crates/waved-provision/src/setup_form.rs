@@ -90,7 +90,8 @@ pub fn render_page(
     document("Wave Device Setup", &content, Some(SCRIPT))
 }
 
-pub fn render_ack(ssid: Option<&str>, webhook_test: bool) -> String {
+/// `kept_as` is the file name an unreadable config.toml was moved to.
+pub fn render_ack(ssid: Option<&str>, webhook_test: bool, kept_as: Option<&str>) -> String {
     let target = ssid
         .map(|value| format!("Connecting to <strong>{}</strong>.", html_escape(value)))
         .unwrap_or_else(|| "Reconnecting to a saved network.".into());
@@ -99,8 +100,16 @@ pub fn render_ack(ssid: Option<&str>, webhook_test: bool) -> String {
     } else {
         ""
     };
+    let kept = kept_as
+        .map(|name| {
+            format!(
+                "<p class=\"intro\">Wave couldn't read the old settings file, so it kept that file as <strong>{}</strong> and saved the settings you submitted. Anything you didn't change on this page came from the last working backup or the defaults.</p>",
+                html_escape(name)
+            )
+        })
+        .unwrap_or_default();
     let content = format!(
-        r#"<main><div class="brand"><span class="mark">W</span><span>Wave</span></div><fieldset><legend>Settings saved</legend><h1>Wave is reconnecting</h1><p class="intro">{target}{test}</p><p class="security">The Wave setup network will now disappear. You can close this page and follow progress on the Wave screen.</p></fieldset></main>"#
+        r#"<main><div class="brand"><span class="mark">W</span><span>Wave</span></div><fieldset><legend>Settings saved</legend><h1>Wave is reconnecting</h1><p class="intro">{target}{test}</p>{kept}<p class="security">The Wave setup network will now disappear. You can close this page and follow progress on the Wave screen.</p></fieldset></main>"#
     );
     document("Wave is reconnecting", &content, None)
 }
@@ -395,5 +404,13 @@ mod tests {
             "90 seconds"
         );
         assert_eq!(saved_option_label("device.language", "fr"), "fr");
+    }
+
+    #[test]
+    fn the_ack_says_where_an_unreadable_settings_file_went() {
+        let page = render_ack(None, false, Some("config.toml.unloadable"));
+        assert!(page.contains("Wave couldn't read the old settings file"));
+        assert!(page.contains("config.toml.unloadable"));
+        assert!(!render_ack(None, false, None).contains("unloadable"));
     }
 }
