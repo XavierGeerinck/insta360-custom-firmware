@@ -55,15 +55,28 @@ impl Router {
         }
         match event {
             UiEvent::Navigate(route) => {
-                if self.current() == route {
+                if route.is_base() {
+                    self.stack.truncate(1);
                     return;
                 }
+                if matches!(
+                    route,
+                    Route::Resting | Route::Boot | Route::FirstRun | Route::Pin(_)
+                ) {
+                    return;
+                }
+                if *self.current() == Route::Resting {
+                    self.stack.pop();
+                }
                 let guarded = route.requires_pin() && snap.settings.pin_enabled && !self.unlocked;
-                self.stack.push(if guarded {
+                let target = if guarded {
                     Route::Pin(Box::new(route.clone()))
                 } else {
                     route.clone()
-                });
+                };
+                if *self.current() != target {
+                    self.stack.push(target);
+                }
             }
             UiEvent::Back => {
                 if self.stack.len() > 1 {
@@ -79,6 +92,13 @@ impl Router {
             }
             UiEvent::Rest => {
                 self.unlocked = false;
+                // Waking must not reopen a locked screen: drop the first
+                // PIN-guarded entry point and everything opened from it.
+                if snap.settings.pin_enabled {
+                    if let Some(at) = self.stack.iter().skip(1).position(Route::requires_pin) {
+                        self.stack.truncate(at + 1);
+                    }
+                }
                 if *self.current() != Route::Resting {
                     self.stack.push(Route::Resting);
                 }
@@ -179,7 +199,7 @@ mod tests {
         assert_eq!(router.current(), &Route::System, "still unlocked");
         router.handle(&UiEvent::Rest, &snap);
         router.handle(&UiEvent::Wake, &snap);
-        router.handle(&UiEvent::ToBase, &snap);
+        assert_eq!(router.current(), &Route::Home, "the locked screen is gone");
         router.handle(&UiEvent::Navigate(Route::Uploads), &snap);
         assert_eq!(
             router.current(),
@@ -241,5 +261,62 @@ mod tests {
         router.handle(&UiEvent::Rest, &snap);
         router.sync(&snap);
         assert_eq!(router.current(), &Route::Boot);
+    }
+
+    #[test]
+    fn waking_never_reopens_a_locked_screen() {
+        let mut snap = ready();
+        snap.settings.pin_enabled = true;
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::System), &snap);
+        router.handle(&UiEvent::PinAccepted, &snap);
+        router.handle(&UiEvent::Navigate(Route::Display), &snap);
+        assert_eq!(router.current(), &Route::Display);
+        router.handle(&UiEvent::Rest, &snap);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.current(), &Route::Menu);
+        router.handle(&UiEvent::Navigate(Route::System), &snap);
+        assert_eq!(router.current(), &Route::Pin(Box::new(Route::System)));
+    }
+
+    #[test]
+    fn double_tapping_a_locked_entry_asks_for_the_pin_once() {
+        let mut snap = ready();
+        snap.settings.pin_enabled = true;
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Files), &snap);
+        router.handle(&UiEvent::Navigate(Route::Files), &snap);
+        assert_eq!(router.depth(), 2);
+    }
+
+    #[test]
+    fn navigate_only_pushes_screens_that_belong_on_the_stack() {
+        let snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::Home), &snap);
+        assert_eq!((router.current(), router.depth()), (&Route::Home, 1));
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        for route in [
+            Route::Resting,
+            Route::Boot,
+            Route::FirstRun,
+            Route::Pin(Box::new(Route::Files)),
+        ] {
+            router.handle(&UiEvent::Navigate(route), &snap);
+            assert_eq!((router.current(), router.depth()), (&Route::Menu, 2));
+        }
+    }
+
+    #[test]
+    fn navigating_while_resting_leaves_the_resting_screen() {
+        let snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Rest, &snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        assert_eq!((router.current(), router.depth()), (&Route::Menu, 2));
+        router.handle(&UiEvent::Back, &snap);
+        assert_eq!(router.current(), &Route::Home);
     }
 }
