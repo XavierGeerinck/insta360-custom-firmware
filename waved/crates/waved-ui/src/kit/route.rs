@@ -114,7 +114,10 @@ mod tests {
         let cases = [
             (Route::Files, Route::Files),
             (Route::FileDetail(id), Route::Files),
-            (Route::Confirm(ConfirmKind::DeleteRecording(id)), Route::Files),
+            (
+                Route::Confirm(ConfirmKind::DeleteRecording(id)),
+                Route::Files,
+            ),
             (Route::Wifi, Route::Wifi),
             (Route::WifiSetup, Route::Wifi),
             (Route::Bluetooth, Route::Bluetooth),

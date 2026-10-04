@@ -5,7 +5,9 @@ use crate::kit::event::{on, on_click};
 use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::{color, text_width, Obj};
-use crate::kit::tokens::{lvgl_angle, Rect, BG, LINE, LIVE, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3, WHITE};
+use crate::kit::tokens::{
+    lvgl_angle, Rect, BG, LINE, LIVE, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3, WHITE,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -24,7 +26,10 @@ pub struct RadioOption {
 
 impl RadioOption {
     pub fn new(title: impl Into<String>, detail: impl Into<String>) -> Self {
-        Self { title: title.into(), detail: detail.into() }
+        Self {
+            title: title.into(),
+            detail: detail.into(),
+        }
     }
 }
 
@@ -49,7 +54,9 @@ impl RadioList {
         selected: usize,
         on_select: impl FnMut(usize) + 'static,
     ) -> Self {
-        let viewport = Obj::plain(parent).rect(Rect::new(0, top, 400, 248 - top)).column_centered(6);
+        let viewport = Obj::plain(parent)
+            .rect(Rect::new(0, top, 400, 248 - top))
+            .column_centered(6);
         // SAFETY: live object.
         unsafe {
             lv_obj_add_flag(viewport.raw(), lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
@@ -61,9 +68,18 @@ impl RadioList {
             .map(|option| {
                 // The mockup's 2 px border is an inset shadow inside a 16 px inset; LVGL's border
                 // adds to the padding, so pad 14 puts the ring 16 px from the row edge.
-                let obj = Obj::plain(viewport).size(296, 52).radius(20).clickable(true).row_start(12, 14);
+                let obj = Obj::plain(viewport)
+                    .size(296, 52)
+                    .radius(20)
+                    .clickable(true)
+                    .row_start(12, 14);
                 let ring = Obj::plain(obj).size(20, 20).round().border(2, TEXT_3);
-                let dot = Obj::plain(ring).size(10, 10).round().bg(LIVE).center().hidden(true);
+                let dot = Obj::plain(ring)
+                    .size(10, 10)
+                    .round()
+                    .bg(LIVE)
+                    .center()
+                    .hidden(true);
                 let text = Obj::plain(obj).fit().column(2);
                 // Explicit widths: a content-width one-line label collapses to "...".
                 Obj::label(text, &option.title, Font::Body, TEXT)
@@ -75,10 +91,14 @@ impl RadioList {
                 RadioRow { obj, ring, dot }
             })
             .collect();
-        let list = Self { rows: Rc::new(rows), selected: Rc::new(Cell::new(selected)) };
+        let list = Self {
+            rows: Rc::new(rows),
+            selected: Rc::new(Cell::new(selected)),
+        };
         let handler = Rc::new(RefCell::new(on_select));
         for index in 0..list.rows.len() {
-            let (rows, chosen, handler) = (list.rows.clone(), list.selected.clone(), handler.clone());
+            let (rows, chosen, handler) =
+                (list.rows.clone(), list.selected.clone(), handler.clone());
             on_click(list.rows[index].obj, move || {
                 paint_radio(&rows, index);
                 chosen.set(index);
@@ -125,7 +145,13 @@ pub struct ValueRow {
 
 impl ValueRow {
     /// A tappable row: label on the left, current value and a chevron on the right.
-    pub fn new(parent: Obj, rect: Rect, label: &str, value: &str, on_tap: impl FnMut() + 'static) -> Self {
+    pub fn new(
+        parent: Obj,
+        rect: Rect,
+        label: &str,
+        value: &str,
+        on_tap: impl FnMut() + 'static,
+    ) -> Self {
         let obj = Obj::plain(parent)
             .rect(rect)
             .bg(SURFACE)
@@ -133,7 +159,9 @@ impl ValueRow {
             .pressed_bg(RAISED)
             .clickable(true)
             .row_start(8, 16);
-        Obj::label(obj, label, Font::Small, TEXT_2).grow().one_line();
+        Obj::label(obj, label, Font::Small, TEXT_2)
+            .grow()
+            .one_line();
         // An explicit width, not `max_width`: LVGL keeps dotted text when a
         // content-width label grows later, so `set_value` recomputes it.
         let cap = rect.w / 2;
@@ -141,12 +169,17 @@ impl ValueRow {
         value_label.width(text_width(value, Font::Body).min(cap));
         Obj::label(obj, icons::RIGHT, Font::Icon16, TEXT_3);
         on_click(obj, on_tap);
-        Self { obj, value: value_label, cap }
+        Self {
+            obj,
+            value: value_label,
+            cap,
+        }
     }
 
     pub fn set_value(&self, value: &str) {
         self.value.set_text(value);
-        self.value.width(text_width(value, Font::Body).min(self.cap));
+        self.value
+            .width(text_width(value, Font::Body).min(self.cap));
     }
 
     pub fn obj(&self) -> Obj {
@@ -163,7 +196,13 @@ pub struct SwitchRow {
 
 impl SwitchRow {
     /// A row that toggles a setting; the whole row is the target.
-    pub fn new(parent: Obj, rect: Rect, label: &str, on: bool, on_toggle: impl FnMut(bool) + 'static) -> Self {
+    pub fn new(
+        parent: Obj,
+        rect: Rect,
+        label: &str,
+        on: bool,
+        on_toggle: impl FnMut(bool) + 'static,
+    ) -> Self {
         let obj = Obj::plain(parent)
             .rect(rect)
             .bg(SURFACE)
@@ -171,7 +210,9 @@ impl SwitchRow {
             .pressed_bg(RAISED)
             .clickable(true)
             .row_start(8, 16);
-        Obj::label(obj, label, Font::Small, TEXT_2).grow().one_line();
+        Obj::label(obj, label, Font::Small, TEXT_2)
+            .grow()
+            .one_line();
         let track = Obj::plain(obj).size(44, 26).radius(13);
         let knob = Obj::plain(track).size(20, 20).round().bg(WHITE);
         let state = Rc::new(Cell::new(on));
@@ -184,7 +225,12 @@ impl SwitchRow {
             paint_switch(track, knob, next);
             toggle(next);
         });
-        Self { obj, track, knob, on: state }
+        Self {
+            obj,
+            track,
+            knob,
+            on: state,
+        }
     }
 
     pub fn set_on(&self, on: bool) {
@@ -297,14 +343,22 @@ mod tests {
             let root = lv.screen();
             let taps = Rc::new(Cell::new(0));
             let counter = taps.clone();
-            let zone = ValueRow::new(root, Rect::new(60, 146, 280, 44), "Time zone", "Brussels", move || {
-                counter.set(counter.get() + 1)
-            });
+            let zone = ValueRow::new(
+                root,
+                Rect::new(60, 146, 280, 44),
+                "Time zone",
+                "Brussels",
+                move || counter.set(counter.get() + 1),
+            );
             let toggled = Rc::new(Cell::new(None));
             let record = toggled.clone();
-            let clock = SwitchRow::new(root, Rect::new(60, 196, 280, 44), "24-hour clock", true, move |on| {
-                record.set(Some(on))
-            });
+            let clock = SwitchRow::new(
+                root,
+                Rect::new(60, 196, 280, 44),
+                "24-hour clock",
+                true,
+                move |on| record.set(Some(on)),
+            );
             assert_golden("value_and_switch_rows", &lv.render());
             assert_targets_ok(root);
             lv.click(zone.obj());
@@ -331,14 +385,25 @@ mod tests {
             for index in 0..row.child_count() {
                 let a = row.child(index as i32).coords();
                 assert!(
-                    a.x1 >= bounds.x1 && a.x2 <= bounds.x2 && a.y1 >= bounds.y1 && a.y2 <= bounds.y2,
+                    a.x1 >= bounds.x1
+                        && a.x2 <= bounds.x2
+                        && a.y1 >= bounds.y1
+                        && a.y2 <= bounds.y2,
                     "child {index} overflows the row"
                 );
             }
             let value = host.value;
-            assert!(value.text().ends_with("..."), "long value is cut with dots: {:?}", value.text());
+            assert!(
+                value.text().ends_with("..."),
+                "long value is cut with dots: {:?}",
+                value.text()
+            );
             let a = value.coords();
-            assert!(a.x2 - a.x1 + 1 >= 100, "value label is only {} px wide", a.x2 - a.x1 + 1);
+            assert!(
+                a.x2 - a.x1 + 1 >= 100,
+                "value label is only {} px wide",
+                a.x2 - a.x1 + 1
+            );
         });
     }
 

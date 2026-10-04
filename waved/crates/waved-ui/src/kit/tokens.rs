@@ -41,7 +41,10 @@ impl Rect {
         let xs = [self.x, self.x + self.w - 1];
         let ys = [self.y, self.y + self.h - 1];
         xs.iter()
-            .flat_map(|x| ys.iter().map(move |y| (x - PANEL_CX).pow(2) + (y - PANEL_CY).pow(2)))
+            .flat_map(|x| {
+                ys.iter()
+                    .map(move |y| (x - PANEL_CX).pow(2) + (y - PANEL_CY).pow(2))
+            })
             .max()
             .unwrap_or(0)
     }
@@ -110,7 +113,16 @@ mod tests {
     #[test]
     fn every_layout_rect_respects_the_tap_limit() {
         let rects = [
-            STATUS_PILL, BACK, PRIMARY, SIDE_LEFT, SIDE_RIGHT, ROW2[0], ROW2[1], ROW3[0], ROW3[1], ROW3[2],
+            STATUS_PILL,
+            BACK,
+            PRIMARY,
+            SIDE_LEFT,
+            SIDE_RIGHT,
+            ROW2[0],
+            ROW2[1],
+            ROW3[0],
+            ROW3[1],
+            ROW3[2],
         ];
         for rect in rects {
             assert!(rect.within_tap_limit(), "{rect:?}");
@@ -119,7 +131,9 @@ mod tests {
 
     #[test]
     fn targets_meet_the_minimum_size() {
-        for rect in [BACK, SIDE_LEFT, SIDE_RIGHT, ROW2[0], ROW2[1], ROW3[0], ROW3[1], ROW3[2]] {
+        for rect in [
+            BACK, SIDE_LEFT, SIDE_RIGHT, ROW2[0], ROW2[1], ROW3[0], ROW3[1], ROW3[2],
+        ] {
             assert!(rect.w >= MIN_TARGET && rect.h >= MIN_TARGET, "{rect:?}");
         }
         const { assert!(PRIMARY.h >= MIN_PRIMARY) };

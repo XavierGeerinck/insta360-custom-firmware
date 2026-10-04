@@ -367,7 +367,10 @@ mod tests {
         use crate::kit::route::ConfirmKind;
         let snap = locked();
         let mut router = started(&snap);
-        router.handle(&UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff)), &snap);
+        router.handle(
+            &UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff)),
+            &snap,
+        );
         assert_eq!(router.current(), &Route::Confirm(ConfirmKind::PowerOff));
     }
 

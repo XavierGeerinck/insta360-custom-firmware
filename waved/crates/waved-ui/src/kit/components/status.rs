@@ -10,7 +10,8 @@ use crate::kit::obj::{text_width, Obj};
 use crate::kit::route::Route;
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{
-    LIVE, MESSAGE_MAX_W, RAISED, REC, SCREEN_W, STATUS, STATUS_PILL, SURFACE, TEXT, TEXT_2, TEXT_3, WARN,
+    LIVE, MESSAGE_MAX_W, RAISED, REC, SCREEN_W, STATUS, STATUS_PILL, SURFACE, TEXT, TEXT_2, TEXT_3,
+    WARN,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -96,7 +97,10 @@ impl StatusArea {
 
     /// Expire messages and refresh icons, clock and battery when they change.
     pub fn update(&mut self, snap: &UiSnapshot) {
-        if self.message_until_ms.is_some_and(|until| snap.now_ms >= until) {
+        if self
+            .message_until_ms
+            .is_some_and(|until| snap.now_ms >= until)
+        {
             self.message_until_ms = None;
             self.message.hidden(true);
             self.cluster.hidden(false);
@@ -118,7 +122,9 @@ impl StatusArea {
         self.clock.set_text(&next.clock);
         let (glyph, color) = battery_look(next.battery, next.charging);
         self.battery_icon.text_color(color).set_text(glyph);
-        self.battery_text.text_color(color).set_text(&format!("{}%", next.battery));
+        self.battery_text
+            .text_color(color)
+            .set_text(&format!("{}%", next.battery));
         self.shown = Some(next);
     }
 
@@ -133,7 +139,10 @@ impl StatusArea {
         self.message_icon.text_color(color).set_text(glyph);
         // One spare pixel, so text that fits exactly is never cut to "...".
         let text_w = (text_width(&message.text, Font::Small) + 1).min(MESSAGE_MAX_W - 44);
-        self.message_text.width(text_w).one_line().set_text(&message.text);
+        self.message_text
+            .width(text_w)
+            .one_line()
+            .set_text(&message.text);
         let width = (9 + 16 + 6 + text_w + 13).min(MESSAGE_MAX_W);
         self.message
             .size(width, 28)
@@ -240,14 +249,21 @@ mod tests {
             let root = lv.screen();
             let mut status = StatusArea::plain(root);
             status.show(
-                &Message::new(Severity::Warning, "No Wi-Fi, so the upload of the 42-minute recording is waiting"),
+                &Message::new(
+                    Severity::Warning,
+                    "No Wi-Fi, so the upload of the 42-minute recording is waiting",
+                ),
                 0,
             );
             status.message().update_layout();
             let a = status.message().coords();
             assert!(a.x2 - a.x1 < MESSAGE_MAX_W);
             let text = status.message().child(1).coords();
-            assert_eq!(text.y2 - text.y1 + 1, Font::Small.line_height(), "one line, not wrapped");
+            assert_eq!(
+                text.y2 - text.y1 + 1,
+                Font::Small.line_height(),
+                "one line, not wrapped"
+            );
         });
     }
 

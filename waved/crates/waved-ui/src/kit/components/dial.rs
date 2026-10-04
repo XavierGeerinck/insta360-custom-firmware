@@ -154,7 +154,10 @@ impl Dial {
         full_ring(self.ring);
         // SAFETY: live arc.
         unsafe {
-            lv_arc_set_value(self.ring.raw(), (fraction.clamp(0.0, 1.0) * 1000.0).round() as i32);
+            lv_arc_set_value(
+                self.ring.raw(),
+                (fraction.clamp(0.0, 1.0) * 1000.0).round() as i32,
+            );
         }
         arc_style(self.ring, MAIN, LINE, 255, self.width);
         arc_style(self.ring, INDICATOR, LIVE, 255, self.width);
@@ -176,13 +179,19 @@ impl Dial {
     /// Size the ring object so a stroke of `width` is centred on r.
     fn place_ring(&self, width: i32) {
         let size = 2 * self.r + width;
-        self.ring.pos(self.cx - size / 2, self.cy - size / 2).size(size, size);
+        self.ring
+            .pos(self.cx - size / 2, self.cy - size / 2)
+            .size(size, size);
     }
 
     /// Draw the wedge and dot from the stored direction, only while the ring
     /// shows in a style that follows talkers.
     fn draw_talker(&self) {
-        let hex = if self.style == RingStyle::Recording { REC } else { LIVE };
+        let hex = if self.style == RingStyle::Recording {
+            REC
+        } else {
+            LIVE
+        };
         match self.azimuth.get() {
             Some(az) if self.mode == Mode::Ring && self.talks() => {
                 // SAFETY: live arc.
@@ -215,7 +224,11 @@ impl Dial {
                     let start = i as f32 * pitch;
                     // SAFETY: live arc.
                     unsafe {
-                        lv_arc_set_bg_angles(dash.raw(), lvgl_angle(start), lvgl_angle(start + DASH_SPAN));
+                        lv_arc_set_bg_angles(
+                            dash.raw(),
+                            lvgl_angle(start),
+                            lvgl_angle(start + DASH_SPAN),
+                        );
                     }
                     arc_style(dash, MAIN, WARN, 255, self.width);
                     arc_style(dash, INDICATOR, WARN, 0, self.width);
@@ -233,7 +246,9 @@ impl Dial {
 /// device-to-LVGL terms (rotation 0, full background, range 0..1000).
 fn arc(parent: Obj, cx: i32, cy: i32, r: i32, width: i32) -> Obj {
     let size = 2 * r + width;
-    let arc = Obj::arc(parent).pos(cx - size / 2, cy - size / 2).size(size, size);
+    let arc = Obj::arc(parent)
+        .pos(cx - size / 2, cy - size / 2)
+        .size(size, size);
     // SAFETY: live arc.
     unsafe {
         lv_arc_set_rotation(arc.raw(), 0);
@@ -306,11 +321,17 @@ mod tests {
             dial.set_gauge(Some(60));
             assert_golden("dial_gauge_60", &lv.render());
             dial.set_gauge(None);
-            assert!(lv.render().to_png() == ring, "the ring is back after the gauge");
+            assert!(
+                lv.render().to_png() == ring,
+                "the ring is back after the gauge"
+            );
             dial.set_progress(Some(0.64));
             assert_golden("dial_progress_64", &lv.render());
             dial.set_progress(None);
-            assert!(lv.render().to_png() == ring, "the ring is back after progress");
+            assert!(
+                lv.render().to_png() == ring,
+                "the ring is back after progress"
+            );
         });
     }
 
@@ -327,11 +348,20 @@ mod tests {
                 } else {
                     dial.set_progress(Some(0.64));
                 }
-                assert!(!dial.talker_visible(), "the gauge and progress hide the wedge");
+                assert!(
+                    !dial.talker_visible(),
+                    "the gauge and progress hide the wedge"
+                );
                 let shown = lv.render().to_png();
                 dial.set_talker(Some(300.0));
-                assert!(!dial.talker_visible(), "a talker update must not draw over the gauge");
-                assert!(lv.render().to_png() == shown, "the frame is unchanged by the update");
+                assert!(
+                    !dial.talker_visible(),
+                    "a talker update must not draw over the gauge"
+                );
+                assert!(
+                    lv.render().to_png() == shown,
+                    "the frame is unchanged by the update"
+                );
                 if mode == 0 {
                     dial.set_gauge(None);
                 } else {
@@ -339,7 +369,10 @@ mod tests {
                 }
                 assert!(dial.talker_visible(), "the wedge returns with the ring");
                 dial.set_talker(Some(307.0));
-                assert!(lv.render().to_png() == with_wedge, "the ring is back with its wedge");
+                assert!(
+                    lv.render().to_png() == with_wedge,
+                    "the ring is back with its wedge"
+                );
             }
         });
     }
@@ -355,11 +388,17 @@ mod tests {
             dial.set_ring(RingStyle::Recording);
             assert!(dial.talker_visible());
             let [r, g, _] = lv.render().pixel(DIAL_CX + DIAL_R, DIAL_CY);
-            assert!(r > 200 && g < 120, "red wedge right after Live to Recording, got r{r} g{g}");
+            assert!(
+                r > 200 && g < 120,
+                "red wedge right after Live to Recording, got r{r} g{g}"
+            );
             dial.set_ring(RingStyle::Muted);
             assert!(!dial.talker_visible());
             dial.set_ring(RingStyle::Live);
-            assert!(!dial.talker_visible(), "a muted spell forgets the old direction");
+            assert!(
+                !dial.talker_visible(),
+                "a muted spell forgets the old direction"
+            );
         });
     }
 
@@ -372,7 +411,10 @@ mod tests {
             dial.set_talker(Some(90.0));
             assert!(dial.talker_visible());
             let [r, g, b] = lv.render().pixel(DIAL_CX + DIAL_R, DIAL_CY);
-            assert!(g > 180 && r < 100 && [r, g, b] != ring, "full teal at 3 o'clock, got {r},{g},{b}");
+            assert!(
+                g > 180 && r < 100 && [r, g, b] != ring,
+                "full teal at 3 o'clock, got {r},{g},{b}"
+            );
         });
     }
 
@@ -394,7 +436,11 @@ mod tests {
             assert_eq!(ring.len(), 3);
             assert_eq!(gauge.len(), 5);
             // One pixel thicker on each side: the same centre line.
-            assert_eq!((gauge[0], gauge[4]), (ring[0] - 1, ring[2] + 1), "ring {ring:?} gauge {gauge:?}");
+            assert_eq!(
+                (gauge[0], gauge[4]),
+                (ring[0] - 1, ring[2] + 1),
+                "ring {ring:?} gauge {gauge:?}"
+            );
         });
     }
 
@@ -404,7 +450,8 @@ mod tests {
             let root = lv.screen();
             let taps = Rc::new(Cell::new(0));
             let counter = taps.clone();
-            let dial = Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(move || counter.set(counter.get() + 1));
+            let dial = Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3)
+                .on_tap(move || counter.set(counter.get() + 1));
             assert_targets_ok(root);
             lv.click(dial.hit().unwrap());
             assert_eq!(taps.get(), 1);

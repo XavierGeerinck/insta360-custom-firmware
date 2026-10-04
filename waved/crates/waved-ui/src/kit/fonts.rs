@@ -88,7 +88,15 @@ mod tests {
 
     #[test]
     fn text_fonts_cover_the_glyphs_the_copy_uses() {
-        for font in [Font::Micro, Font::Small, Font::Body, Font::Title, Font::Dial, Font::Num13, Font::Num20] {
+        for font in [
+            Font::Micro,
+            Font::Small,
+            Font::Body,
+            Font::Title,
+            Font::Dial,
+            Font::Num13,
+            Font::Num20,
+        ] {
             for ch in ['A', 'z', '0', '…', '·', '’', '“', '−', 'é', '°', '%'] {
                 assert!(glyph(font, ch).is_some(), "{font:?} lacks {ch:?}");
             }
@@ -98,8 +106,13 @@ mod tests {
     #[test]
     fn digits_are_tabular() {
         for font in [Font::Num48, Font::Num26, Font::Body] {
-            let widths: Vec<u16> = ('0'..='9').map(|ch| glyph(font, ch).unwrap().adv_w).collect();
-            assert!(widths.windows(2).all(|pair| pair[0] == pair[1]), "{font:?}: {widths:?}");
+            let widths: Vec<u16> = ('0'..='9')
+                .map(|ch| glyph(font, ch).unwrap().adv_w)
+                .collect();
+            assert!(
+                widths.windows(2).all(|pair| pair[0] == pair[1]),
+                "{font:?}: {widths:?}"
+            );
         }
     }
 
@@ -108,7 +121,11 @@ mod tests {
         for font in [Font::Icon16, Font::Icon20, Font::Icon26, Font::Icon44] {
             for icon in crate::kit::icons::ALL {
                 let ch = icon.chars().next().unwrap();
-                assert!(glyph(font, ch).is_some(), "{font:?} lacks U+{:X}", ch as u32);
+                assert!(
+                    glyph(font, ch).is_some(),
+                    "{font:?} lacks U+{:X}",
+                    ch as u32
+                );
             }
         }
     }

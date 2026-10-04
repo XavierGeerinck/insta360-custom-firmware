@@ -149,13 +149,23 @@ impl Obj {
 
     /// Children in a row, centred both ways, `gap` px apart.
     pub fn row(self, gap: i32) -> Self {
-        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_ROW, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap)
+        self.flex(
+            lv_flex_flow_t_LV_FLEX_FLOW_ROW,
+            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
+            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
+            gap,
+        )
     }
 
     /// Children in a row from the left, vertically centred, with side padding.
     pub fn row_start(self, gap: i32, pad_x: i32) -> Self {
         self.check_live();
-        let row = self.flex(lv_flex_flow_t_LV_FLEX_FLOW_ROW, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap);
+        let row = self.flex(
+            lv_flex_flow_t_LV_FLEX_FLOW_ROW,
+            lv_flex_align_t_LV_FLEX_ALIGN_START,
+            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
+            gap,
+        );
         // SAFETY: live object.
         unsafe {
             lv_obj_set_style_pad_left(self.0, pad_x, MAIN);
@@ -166,15 +176,31 @@ impl Obj {
 
     /// Children in a column, left-aligned, `gap` px apart.
     pub fn column(self, gap: i32) -> Self {
-        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_COLUMN, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_START, gap)
+        self.flex(
+            lv_flex_flow_t_LV_FLEX_FLOW_COLUMN,
+            lv_flex_align_t_LV_FLEX_ALIGN_START,
+            lv_flex_align_t_LV_FLEX_ALIGN_START,
+            gap,
+        )
     }
 
     /// Children in a column, centred across, `gap` px apart.
     pub fn column_centered(self, gap: i32) -> Self {
-        self.flex(lv_flex_flow_t_LV_FLEX_FLOW_COLUMN, lv_flex_align_t_LV_FLEX_ALIGN_START, lv_flex_align_t_LV_FLEX_ALIGN_CENTER, gap)
+        self.flex(
+            lv_flex_flow_t_LV_FLEX_FLOW_COLUMN,
+            lv_flex_align_t_LV_FLEX_ALIGN_START,
+            lv_flex_align_t_LV_FLEX_ALIGN_CENTER,
+            gap,
+        )
     }
 
-    fn flex(self, flow: lv_flex_flow_t, main: lv_flex_align_t, cross: lv_flex_align_t, gap: i32) -> Self {
+    fn flex(
+        self,
+        flow: lv_flex_flow_t,
+        main: lv_flex_align_t,
+        cross: lv_flex_align_t,
+        gap: i32,
+    ) -> Self {
         self.check_live();
         // SAFETY: live object.
         unsafe {
@@ -365,7 +391,11 @@ impl Obj {
         self.assert_label();
         // SAFETY: live label; the pointer is LVGL's NUL-terminated buffer and
         // is copied before anything can change it.
-        unsafe { CStr::from_ptr(lv_label_get_text(self.0)).to_string_lossy().into_owned() }
+        unsafe {
+            CStr::from_ptr(lv_label_get_text(self.0))
+                .to_string_lossy()
+                .into_owned()
+        }
     }
 
     pub fn clickable(self, on: bool) -> Self {
@@ -491,15 +521,28 @@ mod tests {
     fn labels_truncate_inside_their_width() {
         lvgl(|lv| {
             let root = lv.screen();
-            let label = Obj::label(root, "Board room network with a very long name", Font::Body, TEXT)
-                .centered_text(120)
-                .pos(140, 100);
+            let label = Obj::label(
+                root,
+                "Board room network with a very long name",
+                Font::Body,
+                TEXT,
+            )
+            .centered_text(120)
+            .pos(140, 100);
             label.update_layout();
             let a = label.coords();
             let width = a.x2 - a.x1 + 1;
             assert!(width <= 120, "label is {width} px wide");
-            assert!(label.text().ends_with("..."), "long text is cut with dots: {:?}", label.text());
-            assert_eq!(a.y2 - a.y1 + 1, Font::Body.line_height(), "one line, not wrapped");
+            assert!(
+                label.text().ends_with("..."),
+                "long text is cut with dots: {:?}",
+                label.text()
+            );
+            assert_eq!(
+                a.y2 - a.y1 + 1,
+                Font::Body.line_height(),
+                "one line, not wrapped"
+            );
         });
     }
 
@@ -507,7 +550,9 @@ mod tests {
     fn short_labels_keep_their_text() {
         lvgl(|lv| {
             let root = lv.screen();
-            let label = Obj::label(root, "Mic on", Font::Body, TEXT).centered_text(120).pos(140, 100);
+            let label = Obj::label(root, "Mic on", Font::Body, TEXT)
+                .centered_text(120)
+                .pos(140, 100);
             label.update_layout();
             assert_eq!(label.text(), "Mic on");
         });

@@ -55,7 +55,12 @@ pub fn on(obj: Obj, code: lv_event_code_t, handler: impl FnMut(&Event) + 'static
     // ran while the handler was running) frees it on LV_EVENT_DELETE.
     unsafe {
         lv_obj_add_event_cb(obj.raw(), Some(dispatch), code, slot.cast());
-        lv_obj_add_event_cb(obj.raw(), Some(release), lv_event_code_t_LV_EVENT_DELETE, slot.cast());
+        lv_obj_add_event_cb(
+            obj.raw(),
+            Some(release),
+            lv_event_code_t_LV_EVENT_DELETE,
+            slot.cast(),
+        );
     }
 }
 
@@ -145,7 +150,9 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let counter = Rc::new(Cell::new(0));
-            let button = Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            let button = Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             let guard = DropCounter(counter.clone());
             let clicks = counter.clone();
             on_click(button, move || {
@@ -165,13 +172,22 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let seen = Rc::new(Cell::new(0u32));
-            let target = Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            let target = Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             let record = seen.clone();
-            on(target, crate::bindings::lv_event_code_t_LV_EVENT_PRESSED, move |event| {
-                record.set(event.code());
-            });
+            on(
+                target,
+                crate::bindings::lv_event_code_t_LV_EVENT_PRESSED,
+                move |event| {
+                    record.set(event.code());
+                },
+            );
             lv.send(target, crate::bindings::lv_event_code_t_LV_EVENT_PRESSED);
-            assert_eq!(seen.get(), crate::bindings::lv_event_code_t_LV_EVENT_PRESSED);
+            assert_eq!(
+                seen.get(),
+                crate::bindings::lv_event_code_t_LV_EVENT_PRESSED
+            );
         });
     }
 
@@ -180,7 +196,9 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let counter = Rc::new(Cell::new(0));
-            let button = Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            let button = Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             let guard = DropCounter(counter.clone());
             let clicks = counter.clone();
             on_click(button, move || {
@@ -190,7 +208,11 @@ mod tests {
                 clicks.set(clicks.get() + 1);
             });
             lv.click(button);
-            assert_eq!(counter.get(), 101, "handler ran once, then its state was dropped once");
+            assert_eq!(
+                counter.get(),
+                101,
+                "handler ran once, then its state was dropped once"
+            );
         });
     }
 
@@ -199,23 +221,33 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let calls = Rc::new(Cell::new(0u32));
-            let target = Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            let target = Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             let seen = calls.clone();
-            on(target, crate::bindings::lv_event_code_t_LV_EVENT_PRESSED, move |event| {
-                seen.set(seen.get() + 1);
-                // SAFETY: the target is live for the duration of the callback.
-                unsafe {
-                    crate::bindings::lv_obj_send_event(
-                        event.target().raw(),
-                        crate::bindings::lv_event_code_t_LV_EVENT_PRESSED,
-                        std::ptr::null_mut(),
-                    );
-                }
-            });
+            on(
+                target,
+                crate::bindings::lv_event_code_t_LV_EVENT_PRESSED,
+                move |event| {
+                    seen.set(seen.get() + 1);
+                    // SAFETY: the target is live for the duration of the callback.
+                    unsafe {
+                        crate::bindings::lv_obj_send_event(
+                            event.target().raw(),
+                            crate::bindings::lv_event_code_t_LV_EVENT_PRESSED,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                },
+            );
             lv.send(target, crate::bindings::lv_event_code_t_LV_EVENT_PRESSED);
             assert_eq!(calls.get(), 1);
             lv.send(target, crate::bindings::lv_event_code_t_LV_EVENT_PRESSED);
-            assert_eq!(calls.get(), 2, "the handler is back in its slot after a nested send");
+            assert_eq!(
+                calls.get(),
+                2,
+                "the handler is back in its slot after a nested send"
+            );
         });
     }
 
@@ -224,7 +256,9 @@ mod tests {
     fn a_panicking_handler_surfaces_as_a_test_panic() {
         lvgl(|lv| {
             let root = lv.screen();
-            let button = Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            let button = Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             on_click(button, || panic!("handler blew up"));
             lv.click(button);
         });

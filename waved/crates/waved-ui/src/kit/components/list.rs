@@ -32,7 +32,13 @@ pub struct ListItem {
 
 impl ListItem {
     pub fn new(icon: &'static str, title: impl Into<String>) -> Self {
-        Self { icon, title: title.into(), value: None, danger: false, locked: false }
+        Self {
+            icon,
+            title: title.into(),
+            value: None,
+            danger: false,
+            locked: false,
+        }
     }
 
     pub fn value(mut self, value: impl Into<String>) -> Self {
@@ -156,8 +162,15 @@ impl RotaryList {
                     .pressed_bg(RAISED)
                     .clickable(true)
                     .row_start(12, 18);
-                Obj::label(obj, item.icon, Font::Icon20, if item.danger { REC } else { TEXT_2 });
-                let title = Obj::label(obj, &item.title, Font::Body, TEXT_2).grow().one_line();
+                Obj::label(
+                    obj,
+                    item.icon,
+                    Font::Icon20,
+                    if item.danger { REC } else { TEXT_2 },
+                );
+                let title = Obj::label(obj, &item.title, Font::Body, TEXT_2)
+                    .grow()
+                    .one_line();
                 let tail = Obj::plain(obj).fit().row(6);
                 let full_value = item.value.clone().unwrap_or_default();
                 let value = Obj::label(tail, &full_value, Font::Small, TEXT_3);
@@ -166,16 +179,33 @@ impl RotaryList {
                 }
                 let select = select.clone();
                 on_click(obj, move || (select.borrow_mut())(index));
-                Row { obj, title, value, full_value: RefCell::new(full_value), danger: item.danger, band: Cell::new(None) }
+                Row {
+                    obj,
+                    title,
+                    value,
+                    full_value: RefCell::new(full_value),
+                    danger: item.danger,
+                    band: Cell::new(None),
+                }
             })
             .collect();
         fade(parent, Rect::new(0, VIEW.y, VIEW.w, 18), true);
-        fade(parent, Rect::new(0, VIEW.y + VIEW.h - 22, VIEW.w, 22), false);
+        fade(
+            parent,
+            Rect::new(0, VIEW.y + VIEW.h - 22, VIEW.w, 22),
+            false,
+        );
         let scrollbar = scrollbar(parent);
-        let inner = Rc::new(Inner { viewport, rows, scrollbar });
+        let inner = Rc::new(Inner {
+            viewport,
+            rows,
+            scrollbar,
+        });
         {
             let inner = inner.clone();
-            on(viewport, lv_event_code_t_LV_EVENT_SCROLL, move |_| inner.restyle());
+            on(viewport, lv_event_code_t_LV_EVENT_SCROLL, move |_| {
+                inner.restyle()
+            });
         }
         inner.restyle();
         Self { inner }
@@ -187,7 +217,11 @@ impl RotaryList {
         let inner = &self.inner;
         // SAFETY: live viewport.
         unsafe {
-            lv_obj_scroll_to_y(inner.viewport.raw(), index as i32 * ROW_H, lv_anim_enable_t_LV_ANIM_OFF);
+            lv_obj_scroll_to_y(
+                inner.viewport.raw(),
+                index as i32 * ROW_H,
+                lv_anim_enable_t_LV_ANIM_OFF,
+            );
         }
     }
 
@@ -245,9 +279,14 @@ impl Inner {
             // The value gets an explicit width: a content-sized label would
             // measure its own dotted text and stay too narrow after a band change.
             let full = row.full_value.borrow();
-            row.value.font(look.value_font).text_color(look.value_color).hidden(full.is_empty());
+            row.value
+                .font(look.value_font)
+                .text_color(look.value_color)
+                .hidden(full.is_empty());
             row.value.set_text(&full);
-            row.value.width(text_width(&full, look.value_font).min(look.value_max_w)).one_line();
+            row.value
+                .width(text_width(&full, look.value_font).min(look.value_max_w))
+                .one_line();
         }
         if changed {
             self.viewport.update_layout();
@@ -263,14 +302,22 @@ impl Inner {
         let scrolled = unsafe { lv_obj_get_scroll_y(self.viewport.raw()) } as f32;
         let start = 62.0 + (56.0 - thumb) * (scrolled / max_scroll).clamp(0.0, 1.0);
         // SAFETY: live arc.
-        unsafe { lv_arc_set_angles(self.scrollbar.raw(), lvgl_angle(start), lvgl_angle(start + thumb)) };
+        unsafe {
+            lv_arc_set_angles(
+                self.scrollbar.raw(),
+                lvgl_angle(start),
+                lvgl_angle(start + thumb),
+            )
+        };
     }
 }
 
 fn scrollbar(parent: Obj) -> Obj {
     let (r, width) = (180, 4);
     let size = 2 * r + width;
-    let arc = Obj::arc(parent).pos(200 - size / 2, 152 - size / 2).size(size, size);
+    let arc = Obj::arc(parent)
+        .pos(200 - size / 2, 152 - size / 2)
+        .size(size, size);
     // SAFETY: live arc.
     unsafe {
         lv_arc_set_rotation(arc.raw(), 0);
@@ -316,14 +363,22 @@ mod tests {
 
     fn menu() -> Vec<ListItem> {
         vec![
-            ListItem::new(icons::FOLDER, "Files").value("12").locked(true),
+            ListItem::new(icons::FOLDER, "Files")
+                .value("12")
+                .locked(true),
             ListItem::new(icons::PATTERN, "Audio mode").value("Follow talker"),
             ListItem::new(icons::NOISE, "Noise reduction").value("Medium"),
             ListItem::new(icons::VOLUME_HIGH, "Volume").value("60%"),
             ListItem::new(icons::HEIGHT, "Mic height").value("Medium"),
-            ListItem::new(icons::WIFI, "Wi-Fi").value("Office-5G").locked(true),
-            ListItem::new(icons::BLUETOOTH, "Bluetooth").value("iPhone").locked(true),
-            ListItem::new(icons::SEND, "Uploads").value("Ask me").locked(true),
+            ListItem::new(icons::WIFI, "Wi-Fi")
+                .value("Office-5G")
+                .locked(true),
+            ListItem::new(icons::BLUETOOTH, "Bluetooth")
+                .value("iPhone")
+                .locked(true),
+            ListItem::new(icons::SEND, "Uploads")
+                .value("Ask me")
+                .locked(true),
             ListItem::new(icons::SETTINGS, "System").locked(true),
         ]
     }
@@ -378,7 +433,10 @@ mod tests {
                     let centre = (a.y1 + a.y2) / 2;
                     if centre > VIEW.y && centre < VIEW.y + VIEW.h {
                         let rect = Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
-                        assert!(rect.within_tap_limit(), "focus {focus}, row {index}: {rect:?}");
+                        assert!(
+                            rect.within_tap_limit(),
+                            "focus {focus}, row {index}: {rect:?}"
+                        );
                     }
                 }
             }
@@ -392,9 +450,14 @@ mod tests {
             let list = RotaryList::new(
                 root,
                 vec![
-                    ListItem::new(icons::WIFI, "A Wi-Fi network with an unusually long name for a meeting room")
-                        .value("Connected"),
-                    ListItem::new(icons::WIFI, "Wi-Fi").value("Board room network with a long name").locked(true),
+                    ListItem::new(
+                        icons::WIFI,
+                        "A Wi-Fi network with an unusually long name for a meeting room",
+                    )
+                    .value("Connected"),
+                    ListItem::new(icons::WIFI, "Wi-Fi")
+                        .value("Board room network with a long name")
+                        .locked(true),
                     ListItem::new(icons::SEND, "Uploads to a server with a long name")
                         .value("recordings.example-company.internal")
                         .locked(true),
@@ -408,15 +471,27 @@ mod tests {
                     assert_children_inside(list.row(index), &format!("focus {focus}, row {index}"));
                     let title = list.row(index).child(1);
                     let a = title.coords();
-                    assert!(a.x2 - a.x1 + 1 > 0, "focus {focus}, row {index}: title has no width");
+                    assert!(
+                        a.x2 - a.x1 + 1 > 0,
+                        "focus {focus}, row {index}: title has no width"
+                    );
                 }
             }
             // The two-long-text rows really end in dots, in every band.
             for focus in 0..3 {
                 list.scroll_to(focus);
-                assert!(list.row(0).child(1).text().ends_with("..."), "focus {focus}: long title");
-                assert!(list.row(1).child(2).child(0).text().ends_with("..."), "focus {focus}: long value");
-                assert!(list.row(2).child(2).child(0).text().ends_with("..."), "focus {focus}: long host");
+                assert!(
+                    list.row(0).child(1).text().ends_with("..."),
+                    "focus {focus}: long title"
+                );
+                assert!(
+                    list.row(1).child(2).child(0).text().ends_with("..."),
+                    "focus {focus}: long value"
+                );
+                assert!(
+                    list.row(2).child(2).child(0).text().ends_with("..."),
+                    "focus {focus}: long host"
+                );
             }
         });
     }
@@ -435,11 +510,17 @@ mod tests {
                 let value = list.row(index).child(2).child(0);
                 let a = value.coords();
                 let width = a.x2 - a.x1 + 1;
-                assert!(width <= cap.look().value_max_w, "row {index}: value too wide");
+                assert!(
+                    width <= cap.look().value_max_w,
+                    "row {index}: value too wide"
+                );
                 assert!(value.text().ends_with("..."), "row {index}");
                 assert_children_inside(list.row(index), &format!("row {index}"));
                 let title = list.row(index).child(1).coords();
-                assert!(title.x2 - title.x1 + 1 > 0, "row {index}: title has no width");
+                assert!(
+                    title.x2 - title.x1 + 1 > 0,
+                    "row {index}: title has no width"
+                );
             }
             // Clearing the value hides it and frees the room.
             list.set_value(2, None);

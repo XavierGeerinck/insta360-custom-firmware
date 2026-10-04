@@ -139,7 +139,11 @@ impl Frame {
             let r = u32::from((value >> 11) & 0x1f);
             let g = u32::from((value >> 5) & 0x3f);
             let b = u32::from(value & 0x1f);
-            rgb.extend_from_slice(&[(r * 255 / 31) as u8, (g * 255 / 63) as u8, (b * 255 / 31) as u8]);
+            rgb.extend_from_slice(&[
+                (r * 255 / 31) as u8,
+                (g * 255 / 63) as u8,
+                (b * 255 / 31) as u8,
+            ]);
         }
         Self { rgb }
     }
@@ -237,12 +241,16 @@ pub fn target_problems(root: Obj) -> Vec<String> {
         let a = obj.coords();
         let visible = Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
         if !visible.within_tap_limit() {
-            problems.push(format!("{visible:?} reaches past the r{TAP_LIMIT_R} tap limit"));
+            problems.push(format!(
+                "{visible:?} reaches past the r{TAP_LIMIT_R} tap limit"
+            ));
         }
         let c = obj.click_area();
         let (w, h) = (c.x2 - c.x1 + 1, c.y2 - c.y1 + 1);
         if w < MIN_TARGET || h < MIN_TARGET {
-            problems.push(format!("{visible:?} is a {w}x{h} target, below {MIN_TARGET} px"));
+            problems.push(format!(
+                "{visible:?} is a {w}x{h} target, below {MIN_TARGET} px"
+            ));
         }
     });
     problems
@@ -250,7 +258,11 @@ pub fn target_problems(root: Obj) -> Vec<String> {
 
 pub fn assert_targets_ok(root: Obj) {
     let problems = target_problems(root);
-    assert!(problems.is_empty(), "tap target problems:\n{}", problems.join("\n"));
+    assert!(
+        problems.is_empty(),
+        "tap target problems:\n{}",
+        problems.join("\n")
+    );
 }
 
 fn visit(obj: Obj, f: &mut dyn FnMut(Obj)) {
@@ -280,7 +292,9 @@ mod tests {
     fn renders_a_coloured_box() {
         lvgl(|lv| {
             let root = lv.screen();
-            Obj::plain(root).rect(Rect::new(10, 20, 30, 40)).bg(0xff0000);
+            Obj::plain(root)
+                .rect(Rect::new(10, 20, 30, 40))
+                .bg(0xff0000);
             let frame = lv.render();
             assert_eq!(frame.pixel(25, 40), [255, 0, 0]);
             assert_eq!(frame.pixel(5, 5), [0, 0, 0]);
@@ -298,7 +312,10 @@ mod tests {
                 lv_obj_set_size(card, 100, 60);
             }
             let [r, g, b] = lv.render().pixel(150, 130);
-            assert!(r < 100 && g < 100 && b < 100, "theme card is dark, got {r},{g},{b}");
+            assert!(
+                r < 100 && g < 100 && b < 100,
+                "theme card is dark, got {r},{g},{b}"
+            );
         });
     }
 
@@ -306,9 +323,15 @@ mod tests {
     fn target_check_flags_far_and_small_targets() {
         lvgl(|lv| {
             let root = lv.screen();
-            Obj::plain(root).rect(Rect::new(8, 8, 56, 64)).clickable(true);
-            Obj::plain(root).rect(Rect::new(180, 140, 30, 30)).clickable(true);
-            Obj::plain(root).rect(Rect::new(150, 120, 100, 60)).clickable(true);
+            Obj::plain(root)
+                .rect(Rect::new(8, 8, 56, 64))
+                .clickable(true);
+            Obj::plain(root)
+                .rect(Rect::new(180, 140, 30, 30))
+                .clickable(true);
+            Obj::plain(root)
+                .rect(Rect::new(150, 120, 100, 60))
+                .clickable(true);
             let problems = target_problems(root);
             assert_eq!(problems.len(), 2, "{problems:#?}");
         });

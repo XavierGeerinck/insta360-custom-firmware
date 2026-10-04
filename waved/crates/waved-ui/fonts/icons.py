@@ -52,7 +52,11 @@ def main():
             print(f'pub const {const}: &str = "\\u{{{cp:x}}}";')
         print()
         print("/// Every icon, for glyph-coverage tests.")
-        print("pub const ALL: &[&str] = &[" + ", ".join(c for c, _, _ in icons) + "];")
+        # One name per line, as rustfmt lays out a list this long.
+        print("pub const ALL: &[&str] = &[")
+        for const, _, _ in icons:
+            print(f"    {const},")
+        print("];")
     else:
         sys.exit("usage: icons.py range|rust <tabler-icons.css>")
 

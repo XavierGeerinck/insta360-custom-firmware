@@ -17,7 +17,11 @@ pub struct ButtonSpec {
 
 impl ButtonSpec {
     pub fn new(icon: Option<&'static str>, text: impl Into<String>, tone: Tone) -> Self {
-        Self { icon, text: text.into(), tone }
+        Self {
+            icon,
+            text: text.into(),
+            tone,
+        }
     }
 }
 
@@ -52,14 +56,23 @@ impl ButtonRow {
         Self::build(parent, &ROW3, &specs, on_tap)
     }
 
-    fn build(parent: Obj, rects: &[Rect], specs: &[ButtonSpec], on_tap: impl FnMut(usize) + 'static) -> Self {
+    fn build(
+        parent: Obj,
+        rects: &[Rect],
+        specs: &[ButtonSpec],
+        on_tap: impl FnMut(usize) + 'static,
+    ) -> Self {
         let handler = Rc::new(RefCell::new(on_tap));
         let buttons = rects
             .iter()
             .zip(specs)
             .enumerate()
             .map(|(index, (rect, spec))| {
-                let obj = Obj::plain(parent).rect(*rect).radius(rect.h / 2).clickable(true).row(6);
+                let obj = Obj::plain(parent)
+                    .rect(*rect)
+                    .radius(rect.h / 2)
+                    .clickable(true)
+                    .row(6);
                 let icon = Obj::label(obj, "", Font::Icon20, TEXT);
                 let text = Obj::label(obj, "", Font::Body, TEXT);
                 let handler = handler.clone();
@@ -112,10 +125,18 @@ pub fn confirm_dialog(
     on_cancel: impl FnMut() + 'static,
 ) -> ButtonRow {
     let accent = spec.tone.accent();
-    let disc = Obj::plain(root).rect(Rect::new(172, 58, 56, 56)).round().bg(tint(accent, 36));
+    let disc = Obj::plain(root)
+        .rect(Rect::new(172, 58, 56, 56))
+        .round()
+        .bg(tint(accent, 36));
     Obj::label(disc, spec.icon, Font::Icon26, accent).center();
-    Obj::label(root, &spec.title, Font::Dial, TEXT).centered_text(SCREEN_W).pos(0, 128);
-    Obj::label(root, &spec.body, Font::Small, TEXT_2).wrapped_text(260).max_lines(3).pos(70, 166);
+    Obj::label(root, &spec.title, Font::Dial, TEXT)
+        .centered_text(SCREEN_W)
+        .pos(0, 128);
+    Obj::label(root, &spec.body, Font::Small, TEXT_2)
+        .wrapped_text(260)
+        .max_lines(3)
+        .pos(70, 166);
     let (mut confirm, mut cancel) = (on_confirm, on_cancel);
     ButtonRow::two(
         root,
@@ -162,7 +183,10 @@ mod tests {
             assert_eq!(*taps.borrow(), vec![2, 0]);
 
             row.set_enabled(0, false);
-            row.set(1, &ButtonSpec::new(Some(icons::PLAY), "Resume", Tone::WarnText));
+            row.set(
+                1,
+                &ButtonSpec::new(Some(icons::PLAY), "Resume", Tone::WarnText),
+            );
             assert!(!row.obj(0).is_clickable());
             assert_golden("row_paused", &lv.render());
         });

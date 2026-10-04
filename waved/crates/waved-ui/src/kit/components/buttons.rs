@@ -2,7 +2,8 @@
 //! side buttons (Quieter and Louder).
 
 use crate::bindings::{
-    lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, lv_event_code_t_LV_EVENT_PRESSED, lv_tick_elaps, lv_tick_get,
+    lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, lv_event_code_t_LV_EVENT_PRESSED, lv_tick_elaps,
+    lv_tick_get,
 };
 use crate::kit::dispatch::Dispatcher;
 use crate::kit::event::{on, on_click};
@@ -10,7 +11,8 @@ use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{
-    Rect, BACK, LIVE, ON_LIVE, RAISED, REC, SIDE_LABEL_Y, SIDE_LEFT, SIDE_RIGHT, SURFACE, TEXT, TEXT_2, WARN, WHITE,
+    Rect, BACK, LIVE, ON_LIVE, RAISED, REC, SIDE_LABEL_Y, SIDE_LEFT, SIDE_RIGHT, SURFACE, TEXT,
+    TEXT_2, WARN, WHITE,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -115,11 +117,16 @@ impl PrimaryButton {
             .opa(217)
             .hidden(subtitle.is_none());
         on_click(obj, on_tap);
-        Self { obj, subtitle: subtitle_label }
+        Self {
+            obj,
+            subtitle: subtitle_label,
+        }
     }
 
     pub fn set_subtitle(&self, subtitle: Option<&str>) {
-        self.subtitle.hidden(subtitle.is_none()).set_text(subtitle.unwrap_or(""));
+        self.subtitle
+            .hidden(subtitle.is_none())
+            .set_text(subtitle.unwrap_or(""));
     }
 
     pub fn obj(&self) -> Obj {
@@ -145,7 +152,13 @@ pub struct SideButton {
 impl SideButton {
     /// A 60 px circle at the left or right edge with a 12 px label below.
     /// `on_step` runs on press and every 300 ms while held.
-    pub fn new(parent: Obj, side: Side, icon: &str, label: &str, on_step: impl FnMut() + 'static) -> Self {
+    pub fn new(
+        parent: Obj,
+        side: Side,
+        icon: &str,
+        label: &str,
+        on_step: impl FnMut() + 'static,
+    ) -> Self {
         let rect = match side {
             Side::Left => SIDE_LEFT,
             Side::Right => SIDE_RIGHT,
@@ -171,14 +184,22 @@ impl SideButton {
                 (step.borrow_mut())();
             });
         }
-        on(obj, lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, move |_| {
-            // SAFETY: LVGL tick reads on the UI thread.
-            if unsafe { lv_tick_elaps(last.get()) } >= REPEAT_MS {
-                last.set(unsafe { lv_tick_get() });
-                (step.borrow_mut())();
-            }
-        });
-        Self { obj, icon: icon_label, label: label_obj }
+        on(
+            obj,
+            lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT,
+            move |_| {
+                // SAFETY: LVGL tick reads on the UI thread.
+                if unsafe { lv_tick_elaps(last.get()) } >= REPEAT_MS {
+                    last.set(unsafe { lv_tick_get() });
+                    (step.borrow_mut())();
+                }
+            },
+        );
+        Self {
+            obj,
+            icon: icon_label,
+            label: label_obj,
+        }
     }
 
     pub fn set_icon(&self, icon: &str) {
@@ -197,7 +218,9 @@ impl SideButton {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::{lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, lv_event_code_t_LV_EVENT_PRESSED};
+    use crate::bindings::{
+        lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, lv_event_code_t_LV_EVENT_PRESSED,
+    };
     use crate::kit::dispatch::UiEvent;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
     use crate::kit::tokens::PRIMARY;
@@ -246,9 +269,10 @@ mod tests {
             let steps = Rc::new(Cell::new(0));
             let counter = steps.clone();
             SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", || {});
-            let louder = SideButton::new(root, Side::Right, icons::VOLUME_HIGH, "Louder", move || {
-                counter.set(counter.get() + 1)
-            });
+            let louder =
+                SideButton::new(root, Side::Right, icons::VOLUME_HIGH, "Louder", move || {
+                    counter.set(counter.get() + 1)
+                });
             assert_golden("side_buttons", &lv.render());
             assert_targets_ok(root);
             lv.send(louder.obj(), lv_event_code_t_LV_EVENT_PRESSED);
