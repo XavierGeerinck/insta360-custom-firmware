@@ -5,6 +5,7 @@
 //! initializes it once and serializes access with a mutex.
 
 use crate::bindings::*;
+use crate::kit::event::resume_handler_panic;
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{
     Rect, MIN_TARGET, PANEL_CX, PANEL_CY, PANEL_R, SCREEN_H, SCREEN_W, TAP_LIMIT_R,
@@ -74,7 +75,7 @@ impl Lvgl {
         // SAFETY: both screens are valid; the old one is no longer active.
         unsafe {
             lv_screen_load(root.raw());
-            if !self.inner.screen.is_null() {
+            if !self.inner.screen.is_null() && lv_obj_is_valid(self.inner.screen) {
                 lv_obj_delete(self.inner.screen);
             }
         }
@@ -87,6 +88,10 @@ impl Lvgl {
         // SAFETY: the buffer holds SCREEN_W * SCREEN_H RGB565 pixels.
         unsafe {
             lv_refr_now(self.inner.disp);
+        }
+        resume_handler_panic();
+        // SAFETY: the buffer holds SCREEN_W * SCREEN_H RGB565 pixels.
+        unsafe {
             let px = std::slice::from_raw_parts(self.inner.buf, (SCREEN_W * SCREEN_H) as usize);
             Frame::from_rgb565(px)
         }
@@ -108,6 +113,7 @@ impl Lvgl {
         unsafe {
             lv_obj_send_event(obj.raw(), code, std::ptr::null_mut());
         }
+        resume_handler_panic();
     }
 
     /// Advance LVGL's clock and run due timers.
@@ -117,6 +123,7 @@ impl Lvgl {
             lv_tick_inc(ms);
             lv_timer_handler();
         }
+        resume_handler_panic();
     }
 }
 

@@ -36,6 +36,7 @@ fn main() {
         .allowlist_function("lv_.*")
         .allowlist_type("lv_.*")
         .allowlist_var("LV_.*")
+        .allowlist_var("lv_.*_class")
         .derive_debug(true)
         .derive_default(true)
         .generate()

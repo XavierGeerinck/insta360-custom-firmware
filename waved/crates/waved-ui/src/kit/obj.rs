@@ -15,12 +15,29 @@ pub fn color(hex: u32) -> lv_color_t {
     unsafe { lv_color_hex(hex) }
 }
 
+/// A handle to an LVGL object. It is `Copy`, so every copy dangles once the
+/// object is deleted (by `delete()` or because an ancestor was deleted); don't
+/// use a handle after that.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Obj(*mut lv_obj_t);
 
 impl Obj {
-    pub fn from_raw(raw: *mut lv_obj_t) -> Self {
+    /// Wrap a raw LVGL object.
+    ///
+    /// # Safety
+    /// `raw` must be null or point to a live `lv_obj_t`, and must not be used
+    /// through this handle after the object is deleted.
+    pub unsafe fn from_raw(raw: *mut lv_obj_t) -> Self {
         Self(raw)
+    }
+
+    /// Debug-build check that this is a label, for the label-only methods.
+    fn assert_label(self) {
+        debug_assert!(
+            // SAFETY: live object; `lv_label_class` is a static class descriptor.
+            unsafe { lv_obj_check_type(self.0, &raw const lv_label_class) },
+            "this Obj is not a label"
+        );
     }
 
     pub fn raw(self) -> *mut lv_obj_t {
@@ -155,6 +172,7 @@ impl Obj {
 
     /// Centre the text across `width` on one line, ending in "..." if too long.
     pub fn centered_text(self, width: i32) -> Self {
+        self.assert_label();
         // SAFETY: live label.
         unsafe { lv_obj_set_style_text_align(self.0, lv_text_align_t_LV_TEXT_ALIGN_CENTER, MAIN) };
         self.width(width).one_line()
@@ -166,6 +184,7 @@ impl Obj {
     /// the height to one line of the current font: call it after `font`, and
     /// again whenever the font changes.
     pub fn one_line(self) -> Self {
+        self.assert_label();
         // SAFETY: live label. LV_STYLE_TEXT_FONT always resolves to a font
         // (inherited, or LV_FONT_DEFAULT).
         unsafe {
@@ -188,13 +207,19 @@ impl Obj {
     }
 
     pub fn set_text(self, text: &str) {
+        self.assert_label();
         let text = CString::new(text.replace('\0', "")).expect("NUL bytes removed");
         // SAFETY: live label; LVGL copies the text.
         unsafe { lv_label_set_text(self.0, text.as_ptr()) };
     }
 
+    /// The label's current text. For a label that ends in "..." after layout
+    /// this is LVGL's internal buffer, which holds the truncated text with the
+    /// dots, not the string passed to `set_text`.
     pub fn text(self) -> String {
-        // SAFETY: live label; LVGL returns its own NUL-terminated copy.
+        self.assert_label();
+        // SAFETY: live label; the pointer is LVGL's NUL-terminated buffer and
+        // is copied before anything can change it.
         unsafe { CStr::from_ptr(lv_label_get_text(self.0)).to_string_lossy().into_owned() }
     }
 
@@ -317,7 +342,18 @@ mod tests {
             let a = label.coords();
             let width = a.x2 - a.x1 + 1;
             assert!(width <= 120, "label is {width} px wide");
+            assert!(label.text().ends_with("..."), "long text is cut with dots: {:?}", label.text());
             assert_eq!(a.y2 - a.y1 + 1, Font::Body.line_height(), "one line, not wrapped");
+        });
+    }
+
+    #[test]
+    fn short_labels_keep_their_text() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let label = Obj::label(root, "Mic on", Font::Body, TEXT).centered_text(120).pos(140, 100);
+            label.update_layout();
+            assert_eq!(label.text(), "Mic on");
         });
     }
 
