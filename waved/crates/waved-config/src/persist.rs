@@ -4,6 +4,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// The settings service and the setup page both save config.toml from
+/// different tasks; they share the temporary and backup names, so one save
+/// runs at a time.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 pub(crate) fn save_atomic(config: &WavedConfig, path: &Path) -> Result<(), ConfigError> {
     validate_config(config).map_err(|errors| {
@@ -15,6 +21,7 @@ pub(crate) fn save_atomic(config: &WavedConfig, path: &Path) -> Result<(), Confi
                 .join("; "),
         )
     })?;
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -59,4 +66,34 @@ fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     let mut name: OsString = path.file_name().unwrap_or_default().to_os_string();
     name.push(suffix);
     path.with_file_name(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::WavedConfig;
+
+    #[test]
+    fn concurrent_saves_do_not_collide() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        WavedConfig::default().save(&path).unwrap();
+        let threads: Vec<_> = (0..4u8)
+            .map(|writer| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut config = WavedConfig::default();
+                    config.display.brightness_pct = 10 + writer;
+                    (0..15)
+                        .map(|_| config.save(&path).map_err(|error| error.to_string()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for thread in threads {
+            for result in thread.join().unwrap() {
+                assert!(result.is_ok(), "{result:?}");
+            }
+        }
+        assert!(WavedConfig::load(&path).is_ok());
+    }
 }

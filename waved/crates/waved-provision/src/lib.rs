@@ -13,7 +13,7 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tracing::{info, warn};
-use waved_config::{apply_form, field_specs, FormSubmission, WavedConfig};
+use waved_config::{apply_form, field_specs, ConfigError, FieldError, FormSubmission, WavedConfig};
 use waved_state::{Command, ProvisioningState, StateBus};
 
 const PROV_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
@@ -334,38 +334,36 @@ impl ProvisioningService {
                     };
 
                     let submission = config_submission(&form);
-                    match apply_form(&config, &submission) {
-                        Ok(next) => match next.save(&self.config_path) {
-                            Ok(()) => {
-                                self.set(ProvisioningState::Saving);
-                                config = next;
-                                let response = setup_form::render_ack(
-                                    wifi.as_ref().map(|(ssid, _)| ssid.as_str()),
-                                    !config.api.endpoint.is_empty(),
-                                );
-                                let _ = tokio::time::timeout(
-                                    HTTP_IO_TIMEOUT,
-                                    sock.write_all(response.as_bytes()),
-                                )
-                                .await;
-                                let _ = sock.shutdown().await;
-                                return Some(SetupAction {
-                                    wifi,
-                                    test_webhook: !config.api.endpoint.is_empty(),
-                                });
-                            }
-                            Err(error) => {
-                                let response = setup_form::render_page(
-                                    &config,
-                                    ssids,
-                                    csrf,
-                                    &[],
-                                    Some(&format!("Could not save settings: {error}")),
-                                );
-                                let _ = sock.write_all(response.as_bytes()).await;
-                            }
-                        },
-                        Err(errors) => {
+                    match save_submission(&self.config_path, &config, &submission) {
+                        Ok(next) => {
+                            self.set(ProvisioningState::Saving);
+                            config = next;
+                            let response = setup_form::render_ack(
+                                wifi.as_ref().map(|(ssid, _)| ssid.as_str()),
+                                !config.api.endpoint.is_empty(),
+                            );
+                            let _ = tokio::time::timeout(
+                                HTTP_IO_TIMEOUT,
+                                sock.write_all(response.as_bytes()),
+                            )
+                            .await;
+                            let _ = sock.shutdown().await;
+                            return Some(SetupAction {
+                                wifi,
+                                test_webhook: !config.api.endpoint.is_empty(),
+                            });
+                        }
+                        Err(SaveError::Config(error)) => {
+                            let response = setup_form::render_page(
+                                &config,
+                                ssids,
+                                csrf,
+                                &[],
+                                Some(&format!("Could not save settings: {error}")),
+                            );
+                            let _ = sock.write_all(response.as_bytes()).await;
+                        }
+                        Err(SaveError::Form(errors)) => {
                             let response =
                                 setup_form::render_page(&config, ssids, csrf, &errors, None);
                             let _ = sock.write_all(response.as_bytes()).await;
@@ -382,6 +380,32 @@ impl ProvisioningService {
             let _ = sock.shutdown().await;
         }
     }
+}
+
+enum SaveError {
+    Form(Vec<FieldError>),
+    Config(ConfigError),
+}
+
+/// Apply a setup-page submission to config.toml as it is on disk now, so
+/// device-side changes saved while the page was open survive. The session
+/// snapshot is used only when the file does not exist; a file that does not
+/// load is not overwritten.
+fn save_submission(
+    path: &Path,
+    snapshot: &WavedConfig,
+    submission: &FormSubmission,
+) -> Result<WavedConfig, SaveError> {
+    let base = match WavedConfig::load(path) {
+        Ok(fresh) => fresh,
+        Err(ConfigError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            snapshot.clone()
+        }
+        Err(error) => return Err(SaveError::Config(error)),
+    };
+    let next = apply_form(&base, submission).map_err(SaveError::Form)?;
+    next.save(path).map_err(SaveError::Config)?;
+    Ok(next)
 }
 
 fn config_submission(form: &HashMap<String, String>) -> FormSubmission {
@@ -450,6 +474,64 @@ mod tests {
             "00:11:22:33:44:55".into(),
             "/tmp/waved-test-config.toml",
         )
+    }
+
+    fn named(name: &str) -> FormSubmission {
+        FormSubmission {
+            values: BTreeMap::from([("device.name".to_string(), name.to_string())]),
+            clear_secrets: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn a_form_save_keeps_device_side_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        WavedConfig::default().save(&path).unwrap();
+        let snapshot = WavedConfig::load(&path).unwrap();
+
+        // The settings service writes while the setup page is open.
+        let mut device_side = WavedConfig::load(&path).unwrap();
+        device_side.device.first_run_done = true;
+        device_side.audio.beam_aim_deg = 270.0;
+        device_side.save(&path).unwrap();
+
+        let saved = match save_submission(&path, &snapshot, &named("Board room")) {
+            Ok(saved) => saved,
+            Err(_) => panic!("save failed"),
+        };
+        let on_disk = WavedConfig::load(&path).unwrap();
+        assert_eq!(saved, on_disk);
+        assert_eq!(on_disk.device.name, "Board room");
+        assert!(on_disk.device.first_run_done, "device-side value kept");
+        assert_eq!(on_disk.audio.beam_aim_deg, 270.0);
+    }
+
+    #[test]
+    fn a_form_save_without_a_file_starts_from_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut snapshot = WavedConfig::default();
+        snapshot.api.endpoint = "https://notes.example.com/hook".into();
+
+        assert!(save_submission(&path, &snapshot, &named("Board room")).is_ok());
+        let on_disk = WavedConfig::load(&path).unwrap();
+        assert_eq!(on_disk.device.name, "Board room");
+        assert_eq!(on_disk.api.endpoint, "https://notes.example.com/hook");
+    }
+
+    #[test]
+    fn a_form_save_refuses_a_file_that_does_not_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "config_version = 99\n").unwrap();
+
+        let result = save_submission(&path, &WavedConfig::default(), &named("Board room"));
+        assert!(matches!(result, Err(SaveError::Config(_))));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "config_version = 99\n"
+        );
     }
 
     #[test]

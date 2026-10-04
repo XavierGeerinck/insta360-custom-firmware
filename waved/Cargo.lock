@@ -3800,6 +3800,7 @@ name = "waved-provision"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
