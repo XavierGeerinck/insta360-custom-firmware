@@ -136,6 +136,15 @@ fn main() {
 }
 
 async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
+    // Persist device-side setting changes (volume, mode, display, time,
+    // recording policy) back to config.toml. Subscribe before anything else
+    // awaits: the host sends SET_CUR volume at USB enumeration, while audio
+    // and meeting init are still running.
+    tokio::spawn(
+        waved_settings::SettingsService::new(CONFIG_PATH, Arc::clone(&bus.settings))
+            .run(bus.commands.subscribe()),
+    );
+
     // Meeting frame channel: DSP-processed frames for recording.
     // Non-simulate: ALSA capture → AudioFrame → AudioService (VU + AEC + NS) →
     //               ProcessedAudioFrame → meeting channel → MeetingService.
@@ -615,13 +624,6 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
     }
 
     info!("all services started, waiting for shutdown signal");
-
-    // Persist device-side setting changes (volume, mode, display, time,
-    // recording policy) back to config.toml.
-    tokio::spawn(
-        waved_settings::SettingsService::new(CONFIG_PATH, Arc::clone(&bus.settings))
-            .run(bus.commands.subscribe()),
-    );
 
     // Low battery handler
     let low_battery_bus = Arc::clone(&bus);
