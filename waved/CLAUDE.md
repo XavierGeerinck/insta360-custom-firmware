@@ -44,6 +44,11 @@ testing with injected env vars, kill the watchdog first (see
 ## Testing Conventions
 
 - Unit tests run in `cargo test -p <crate> --lib`.
+- `waved-meeting` and the `waved` binary depend on sqlx, whose proc-macro dylib
+  macOS (Xcode 27 linker) refuses to load. Build and test them in Linux:
+  `scripts/linux-test.sh test -p waved-meeting --lib`,
+  `scripts/linux-test.sh check -p waved --features ui,capture-alsa`.
+  Every other crate tests on the host with `cargo test -p <crate> --lib`.
 - On-device acceptance: scripts in `scripts/` (e.g. `test-beamforming.sh`,
   `test-audio-smoke.sh`).
 - Stats are written to `/tmp/audio_stats.json` every 500 ms;
