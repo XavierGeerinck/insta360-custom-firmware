@@ -177,7 +177,8 @@ impl BigNumber {
 }
 
 /// A − / + step circle: the kit's round button (Surface, Raised with a 2 px
-/// Live ring while pressed) filling `rect`, with a 26 px Text icon and no
+/// Live ring while pressed) filling `rect`, with a 20 px Text icon (the
+/// mockup draws the − / + at about 12 px; the 26 px glyph is too big) and no
 /// label. Taps only, no repeat. Its parent must be the screen root (the
 /// round button's empty label is a sibling, see `RoundButton`).
 pub(crate) fn step_button(
@@ -187,7 +188,9 @@ pub(crate) fn step_button(
     on_tap: impl FnMut() + 'static,
 ) -> Obj {
     let label = (rect.x + rect.w / 2 - ROUND_LABEL_W / 2, rect.y + rect.h);
-    RoundButton::at(parent, rect, label, icon, "", Tone::Neutral, on_tap).obj()
+    RoundButton::at(parent, rect, label, icon, "", Tone::Neutral, on_tap)
+        .icon_font(Font::Icon20)
+        .obj()
 }
 
 pub struct VolumeScreen {
