@@ -2,4 +2,5 @@
 //! time zone and RTC, alert tones, factory reset and About. Device access sits
 //! behind small types and injected paths so everything runs in host tests.
 
+pub mod backlight;
 pub mod display;
