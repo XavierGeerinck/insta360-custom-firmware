@@ -1,7 +1,7 @@
 # waved — Insta360 Wave firmware replacement
 
 This repository is an open-source firmware replacement for the Insta360 Wave.
-Target device: ARM64 Linux (custom PSP userspace) with circular OLED, 8-mic
+Target device: ARM64 Linux (custom PSP userspace) with circular LCD, 8-mic
 array, touch input, Bluetooth and Wi-Fi.
 
 ## Device Hardware References
@@ -11,7 +11,7 @@ from on-device measurement and are hard to rederive.
 
 | Area              | Doc                                   |
 |-------------------|---------------------------------------|
-| Circular OLED     | [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md) |
+| Circular LCD      | [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md) |
 | 8-mic array, DOA  | [`docs/AUDIO_HARDWARE.md`](docs/AUDIO_HARDWARE.md)     |
 | Compute (NPU/DSP) | [`docs/COMPUTE_HARDWARE.md`](docs/COMPUTE_HARDWARE.md) |
 | UI assets         | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md)               |

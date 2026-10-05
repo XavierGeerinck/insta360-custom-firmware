@@ -1,23 +1,33 @@
-# Display Hardware — fb_ili79400 Circular OLED
+# Display Hardware — fb_ili79400 Circular LCD
 
 ## Hardware
 
 - **Driver**: `fb_ili79400` (confirmed via `/proc/fb`)
 - **Framebuffer**: 400×304 px, 16 bpp RGB565, stride 800 bytes
-- **Physical shape**: circular OLED, radius ≈190 px centred at **(200, 152)** in framebuffer coordinates
-- The circle is larger than the framebuffer height — it is clipped top and bottom by the 304 px limit
+- **Physical shape**: circular LCD with a PWM backlight (`/sys/class/leds/lcd-backlight`, 0–255)
+- **Panel type confirmed on the device (2026-10-05):** writing 0 to `/sys/class/leds/lcd-backlight/brightness` blanks the image completely. It is an LCD (the device tree lists an `ilitek,ili79400` TDDI controller and a `pwm-leds` `lcd-backlight`), so there is no burn-in and brightness means backlight level
 
-## Visible Area
+## Visible Area (measured on the device, 2026-10-05)
+
+The visible image is a **circle of radius ≈198 px centred at ≈(200, 106)** in framebuffer coordinates, **cut off flat at the top by framebuffer row 0** (the area above it is glass under the stand's notch, with no pixels). Left and right, the bezel sits just outside the framebuffer edges at the widest row; at the bottom the circle ends at about y 304.
+
+Measured with calibration patterns written straight to `/dev/fb0` (waved stopped) and straight-down photos: a circle of r 196 around (200, 105) hugs the bezel all the way round the curve, r 202 and r 208 fall outside it; the y = 0 row is visible from about x 20 to 380.
+
+> The earlier assumption here — a circle of r 190 centred at (200, 152) — was wrong by about 46 px vertically. Layouts built on it sit too low and leave the top third unused.
 
 | y   | visible x range | width |
 |-----|-----------------|-------|
-| 0   | ~86 → ~314      | ~228  |
-| 32  | ~67 → ~333      | ~266  |
-| 152 | ~10 → ~390      | ~380  |
-| 272 | ~67 → ~333      | ~266  |
-| 304 | ~86 → ~314      | ~228  |
+| 0   | 33 → 367 | 335 |
+| 32  | 16 → 384 | 369 |
+| 64  | 7 → 393 | 387 |
+| 106 | 2 → 398 | 397 |
+| 160 | 10 → 390 | 381 |
+| 220 | 38 → 362 | 325 |
+| 260 | 76 → 324 | 249 |
+| 290 | 127 → 273 | 147 |
+| 303 | 180 → 220 | 41 |
 
-**Safe content zone**: keep content within x ≈ 90–310 at the top/bottom thirds; the full centre row (~380 px) is usable.
+The table is computed from the measured circle (r 198 at (200, 106)), clipped to the framebuffer. Keep tap targets ~8 px inside the curve.
 
 ## flush() — Rotation + Byte-Swap
 
