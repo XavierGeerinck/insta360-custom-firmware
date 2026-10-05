@@ -50,7 +50,8 @@ below y 304 do not exist, so the bottom of the circle is cut by the framebuffer 
   `STATUS_PILL_HIT` is 44 tall and ends at y 50, where the dial's tap circle begins); title
   at `TITLE_Y` 38; content from `CONTENT_TOP` 70 (`RADIO_TOP` 68 for radio rows); Back at
   `BACK` (144, 244).
-- **Dial:** r 70 at (200, 121) (`DIAL_CX/CY/R`), tap circle r 71, talker stroke 6 with its
+- **Dial:** r 70 at (200, 121) (`DIAL_CX/CY/R`), tap circle r 71, gauge stroke 5, progress stroke 6;
+  the talker wedge spans 38° (plus round caps) at stroke 6 with its
   dot on r 82; the Home text stack uses `DIAL_ICON_Y`, `DIAL_TITLE_Y`, `DIAL_LINE_Y`,
   `DIAL_HINT_Y`. Side buttons (`SIDE_LEFT/RIGHT`) share its centre line, labels at
   `SIDE_LABEL_Y`.

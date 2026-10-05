@@ -11,7 +11,11 @@ use std::cell::Cell;
 const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
 const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
 const TALKER_WIDTH: i32 = 6;
-const TALKER_SPAN: f32 = 44.0;
+/// The wedge's angle span; its rounded caps add about 2.5° at each end, so it
+/// reads as about 44° (the mockup draws 38° with round caps).
+const TALKER_SPAN: f32 = 38.0;
+/// The update / start-up progress ring and its track.
+const PROGRESS_WIDTH: i32 = 6;
 /// The talker dot sits just outside the ring, on r + 12 (r 82 on Home).
 const TALKER_DOT_OFFSET: i32 = 12;
 /// The tap circle reaches 1 px past the ring radius (r 71, diameter 142 on Home).
@@ -20,6 +24,9 @@ const HIT_OFFSET: i32 = 1;
 /// 10° on r 70, and a 4 px stroke about 3°.
 const DASHES: usize = 36;
 const DASH_SPAN: f32 = 3.0;
+/// Where the first dash starts, so dash centres fall on 6.5°, 16.5°, ... as
+/// in the mockup (its dash pattern starts at 3 o'clock).
+const DASH_PHASE: f32 = 5.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RingStyle {
@@ -154,7 +161,7 @@ impl Dial {
         self.mode = Mode::Progress;
         self.draw_talker();
         self.show_dashes(false);
-        self.place_ring(self.width);
+        self.place_ring(PROGRESS_WIDTH);
         full_ring(self.ring);
         // SAFETY: live arc.
         unsafe {
@@ -163,8 +170,8 @@ impl Dial {
                 (fraction.clamp(0.0, 1.0) * 1000.0).round() as i32,
             );
         }
-        arc_style(self.ring, MAIN, LINE, 255, self.width);
-        arc_style(self.ring, INDICATOR, LIVE, 255, self.width);
+        arc_style(self.ring, MAIN, LINE, 255, PROGRESS_WIDTH);
+        arc_style(self.ring, INDICATOR, LIVE, 255, PROGRESS_WIDTH);
     }
 
     pub fn hit(&self) -> Option<Obj> {
@@ -225,7 +232,7 @@ impl Dial {
             self.dashes = (0..DASHES)
                 .map(|i| {
                     let dash = arc(self.parent, self.cx, self.cy, self.r, self.width);
-                    let start = i as f32 * pitch;
+                    let start = DASH_PHASE + i as f32 * pitch;
                     // SAFETY: live arc.
                     unsafe {
                         lv_arc_set_bg_angles(
@@ -445,6 +452,40 @@ mod tests {
                 (ring[0] - 1, ring[2] + 1),
                 "ring {ring:?} gauge {gauge:?}"
             );
+        });
+    }
+
+    #[test]
+    fn the_progress_ring_is_stroke_6_on_the_ring_radius() {
+        lvgl(|lv| {
+            let (_root, mut dial) = home_dial(lv);
+            dial.set_progress(Some(0.64));
+            let frame = lv.render();
+            // 3 o'clock is lit by the indicator; the track at 9 o'clock.
+            for (sign, what) in [(1, "progress"), (-1, "track")] {
+                let lit: Vec<i32> = (-6..=6)
+                    .filter(|dr| frame.pixel(DIAL_CX + sign * (DIAL_R + dr), DIAL_CY) != [0, 0, 0])
+                    .collect();
+                assert_eq!(lit.len(), 6, "{what}: {lit:?}");
+                assert!(lit[0] >= -3 && lit[5] <= 3, "{what} centred on r: {lit:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn paused_dashes_follow_the_mockup_phase() {
+        lvgl(|lv| {
+            let (_root, mut dial) = home_dial(lv);
+            dial.set_ring(RingStyle::Paused);
+            let frame = lv.render();
+            // Dash centres at 6.5°, 16.5°, ...; gaps around 1.5°, 11.5°, ...
+            for k in 0..4 {
+                let lit = polar(DIAL_CX, DIAL_CY, DIAL_R as f32, 6.5 + 10.0 * k as f32);
+                let gap = polar(DIAL_CX, DIAL_CY, DIAL_R as f32, 1.5 + 10.0 * k as f32);
+                let [r, g, _] = frame.pixel(lit.0, lit.1);
+                assert!(r > 200 && g > 120, "amber dash at {lit:?}, got r{r} g{g}");
+                assert_eq!(frame.pixel(gap.0, gap.1), [0, 0, 0], "gap at {gap:?}");
+            }
         });
     }
 

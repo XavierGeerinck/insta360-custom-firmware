@@ -8,13 +8,16 @@ use crate::kit::event::on_click;
 use crate::kit::fonts::Font;
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{Rect, BOTTOM_PILL_PAIR, ROW3, SCREEN_W, TEXT, TEXT_2};
-
-/// The confirmation's icon disc, title top and body box (top, left, width).
-const CONFIRM_DISC: Rect = Rect::new(172, 40, 56, 56);
-const CONFIRM_TITLE_Y: i32 = 104;
-const CONFIRM_BODY: Rect = Rect::new(65, 142, 270, 0);
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// The confirmation's icon disc, title top and body box (left, top, width;
+/// the height follows the text, at most three lines).
+const CONFIRM_DISC: Rect = Rect::new(172, 40, 56, 56);
+const CONFIRM_TITLE_Y: i32 = 104;
+const CONFIRM_BODY_X: i32 = 65;
+const CONFIRM_BODY_Y: i32 = 142;
+const CONFIRM_BODY_W: i32 = 270;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonSpec {
@@ -142,9 +145,9 @@ pub fn confirm_dialog(
         .centered_text(SCREEN_W)
         .pos(0, CONFIRM_TITLE_Y);
     Obj::label(root, &spec.body, Font::Small, TEXT_2)
-        .wrapped_text(CONFIRM_BODY.w)
+        .wrapped_text(CONFIRM_BODY_W)
         .max_lines(3)
-        .pos(CONFIRM_BODY.x, CONFIRM_BODY.y);
+        .pos(CONFIRM_BODY_X, CONFIRM_BODY_Y);
     let (mut confirm, mut cancel) = (on_confirm, on_cancel);
     ButtonRow::two(
         root,

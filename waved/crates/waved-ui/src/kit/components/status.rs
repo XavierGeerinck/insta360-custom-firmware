@@ -7,6 +7,7 @@
 //! not `SettingsState::pre_recording` (the setting), so the dot never claims
 //! audio is buffered while it is not.
 
+use crate::bindings::{lv_obj_set_style_margin_left, lv_style_selector_t, LV_PART_MAIN};
 use crate::kit::dispatch::{Dispatcher, Message, Severity};
 use crate::kit::event::on_click;
 use crate::kit::fonts::Font;
@@ -19,8 +20,15 @@ use crate::kit::tokens::{
     SURFACE, TEXT, TEXT_2, TEXT_3, WARN,
 };
 
-/// Space between the cluster's items (the mockup's `.crown` gap).
-const GAP: i32 = 8;
+/// Space between the cluster's items. The mockup's `.crown` gap is 8 with
+/// 15 px icons; the kit's 16 px glyph boxes carry more side bearing, so 7
+/// puts the items within about 1.5 px of home.png and menu.png.
+const GAP: i32 = 7;
+/// The pill's chevron: the mockup draws it 12 px with a -1 px margin. The
+/// kit's 16 px glyph box is cut to 14 and pulled 2 px towards the battery
+/// (both cuts are empty side bearing).
+const CHEVRON_W: i32 = 14;
+const CHEVRON_MARGIN: i32 = -2;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
@@ -81,7 +89,8 @@ impl StatusArea {
                 (cluster, cluster)
             }
         };
-        let pre_recording = is_pill.then(|| Obj::plain(cluster).size(7, 7).round().bg(LIVE));
+        let pre_recording =
+            is_pill.then(|| Obj::plain(cluster).size(7, 7).round().bg(LIVE).hidden(true));
         let icon = |glyph: &str| Obj::label(cluster, glyph, Font::Icon16, TEXT_2);
         let usb = icon(icons::USB);
         let wifi = icon(icons::WIFI);
@@ -91,7 +100,15 @@ impl StatusArea {
         let battery_icon = Obj::label(battery, icons::BATTERY_4, Font::Icon16, TEXT_2);
         let battery_text = Obj::label(battery, "", Font::Num13, TEXT_2);
         if is_pill {
-            Obj::label(cluster, icons::DOWN, Font::Icon16, TEXT_3);
+            let chevron = Obj::label(cluster, icons::DOWN, Font::Icon16, TEXT_3).width(CHEVRON_W);
+            // SAFETY: live object.
+            unsafe {
+                lv_obj_set_style_margin_left(
+                    chevron.raw(),
+                    CHEVRON_MARGIN,
+                    LV_PART_MAIN as lv_style_selector_t,
+                )
+            };
         }
         let message = Obj::plain(parent)
             .size(MESSAGE_MAX_W, STATUS_PILL.h)
@@ -273,9 +290,10 @@ mod tests {
             let root = lv.screen();
             let (dispatch, _bus, _ui) = Dispatcher::test();
             let mut status = StatusArea::pill(root, &dispatch);
+            let dot = status.pre_recording_dot().expect("the pill has a dot");
+            assert!(dot.is_hidden(), "no dot before the first update");
             let mut snap = snap();
             status.update(&snap);
-            let dot = status.pre_recording_dot().expect("the pill has a dot");
             assert!(dot.is_hidden(), "no dot while the buffer is idle");
             snap.meeting.pre_recording_active = true;
             status.update(&snap);
