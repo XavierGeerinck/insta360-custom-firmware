@@ -147,11 +147,23 @@ mod tests {
         let (mut p, _) = rig();
         p.tick(&at(2 * MIN));
         let wake = p.on_touch(true, 2 * MIN + 10);
-        assert_eq!(wake, TouchGate { deliver: false, event: Some(UiEvent::Wake) });
+        assert_eq!(
+            wake,
+            TouchGate {
+                deliver: false,
+                event: Some(UiEvent::Wake)
+            }
+        );
         assert!(!p.on_touch(true, 2 * MIN + 50).deliver, "held");
         assert!(!p.on_touch(false, 2 * MIN + 90).deliver, "released");
         let next = p.on_touch(true, 2 * MIN + 500);
-        assert_eq!(next, TouchGate { deliver: true, event: None });
+        assert_eq!(
+            next,
+            TouchGate {
+                deliver: true,
+                event: None
+            }
+        );
     }
 
     #[test]
@@ -166,10 +178,16 @@ mod tests {
     #[test]
     fn power_key_short_sleeps_and_wakes() {
         let (mut p, writes) = rig();
-        assert_eq!(p.on_power_key(PowerKeyPress::Short, &at(1_000)), [UiEvent::Rest]);
+        assert_eq!(
+            p.on_power_key(PowerKeyPress::Short, &at(1_000)),
+            [UiEvent::Rest]
+        );
         p.tick(&at(1_000));
         assert_eq!(writes.borrow().last(), Some(&0));
-        assert_eq!(p.on_power_key(PowerKeyPress::Short, &at(2_000)), [UiEvent::Wake]);
+        assert_eq!(
+            p.on_power_key(PowerKeyPress::Short, &at(2_000)),
+            [UiEvent::Wake]
+        );
         p.tick(&at(2_000));
         assert_eq!(writes.borrow().last(), Some(&80));
     }

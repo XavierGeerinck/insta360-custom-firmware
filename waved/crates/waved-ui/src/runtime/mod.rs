@@ -157,20 +157,23 @@ impl Runtime {
     }
 
     /// One UI loop iteration, after the touch samples and before
-    /// `lv_timer_handler`.
+    /// `lv_timer_handler`. In order: the message slot hears the snapshot,
+    /// then the service events (power keys are held back); BootDone once
+    /// `BOOT_MIN_MS` has passed; the ui channel (taps, touch wakes, swipes);
+    /// then the power keys, so a key's Rest is not undone by a Wake or a tap
+    /// from the same iteration; the power tick; the meeting sync; then the
+    /// routed screen is shown and the top screen updated.
     pub fn step(&mut self, mut snap: UiSnapshot, events: &[DeviceEvent]) {
-        // No PIN screen until milestone 3 (R13): nothing locks yet, even with
-        // a device password set on the setup page.
-        snap.settings.pin_enabled = false;
+        // R13: no PIN screen until milestone 3, so routing treats the device
+        // password as off. Screens get the real value back below (Menu's
+        // lock icon shows it).
+        let pin_enabled = std::mem::replace(&mut snap.settings.pin_enabled, false);
         // Before the events, so an event's message in this step wins.
         self.slot.on_snapshot(&snap);
+        let mut keys = Vec::new();
         for event in events {
             match event {
-                DeviceEvent::PowerKey(press) => {
-                    for ui in self.power.on_power_key(*press, &snap) {
-                        self.route(&ui, &snap);
-                    }
-                }
+                DeviceEvent::PowerKey(press) => keys.push(*press),
                 other => self.slot.on_event(other, &snap),
             }
         }
@@ -181,11 +184,17 @@ impl Runtime {
         while let Ok(event) = self.ui_rx.try_recv() {
             self.route(&event, &snap);
         }
+        for press in keys {
+            for event in self.power.on_power_key(press, &snap) {
+                self.route(&event, &snap);
+            }
+        }
         // After keys and touches: the backlight is written only here.
         if let Some(event) = self.power.tick(&snap) {
             self.route(&event, &snap);
         }
         self.router.sync(&snap);
+        snap.settings.pin_enabled = pin_enabled;
         snap.message = self.slot.current(snap.now_ms);
         self.show_current(&snap);
         if let Some(shown) = self.shown.as_mut() {
@@ -224,7 +233,10 @@ impl Runtime {
             let Some(mut screen) = (self.registry)(&route) else {
                 warn!("no screen for {route:?} yet; going back");
                 if self.router.depth() > 1 {
-                    self.router.handle(&UiEvent::Back, snap);
+                    // Routing sees the PIN as off (R13), here too.
+                    let mut masked = snap.clone();
+                    masked.settings.pin_enabled = false;
+                    self.router.handle(&UiEvent::Back, &masked);
                     continue;
                 }
                 return;
@@ -309,6 +321,8 @@ mod tests {
     thread_local! {
         static BUILDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static LAST_NOW: Cell<Option<u64>> = const { Cell::new(None) };
+        /// `settings.pin_enabled` as the Probe saw it in (build, update).
+        static PIN_SEEN: Cell<(Option<bool>, Option<bool>)> = const { Cell::new((None, None)) };
     }
 
     fn builds() -> Vec<String> {
@@ -324,6 +338,7 @@ mod tests {
     impl Screen for Probe {
         fn build(&mut self, root: Obj, _ctx: &ScreenCtx, snap: &UiSnapshot) {
             BUILDS.with(|b| b.borrow_mut().push(self.name.clone()));
+            PIN_SEEN.with(|p| p.set((Some(snap.settings.pin_enabled), p.get().1)));
             self.status = Some(StatusArea::plain(root));
             Obj::label(root, &self.name, Font::Body, TEXT).pos(100, 140);
             Obj::plain(root).rect(KNOB).clickable(true).keep_gestures();
@@ -333,6 +348,7 @@ mod tests {
 
         fn update(&mut self, snap: &UiSnapshot) {
             LAST_NOW.with(|n| n.set(Some(snap.now_ms)));
+            PIN_SEEN.with(|p| p.set((p.get().0, Some(snap.settings.pin_enabled))));
             if let Some(status) = self.status.as_mut() {
                 status.update(snap);
             }
@@ -367,6 +383,7 @@ mod tests {
     fn runtime_with_bus() -> (Runtime, broadcast::Receiver<Command>) {
         BUILDS.with(|b| b.borrow_mut().clear());
         LAST_NOW.with(|n| n.set(None));
+        PIN_SEEN.with(|p| p.set((None, None)));
         let (bus, bus_rx) = broadcast::channel(16);
         let rt = Runtime::new(
             bus,
@@ -587,6 +604,11 @@ mod tests {
             rt.dispatcher().navigate(Route::Files);
             rt.step(snap, &[]);
             assert_eq!(rt.shown_route(), Some(&Route::Files));
+            assert_eq!(
+                PIN_SEEN.with(Cell::get),
+                (Some(true), Some(true)),
+                "R13: screens still see the setting (Menu's lock icon)"
+            );
             rt.close();
         });
     }
@@ -694,6 +716,29 @@ mod tests {
                 rt.shown_route(),
                 Some(&Route::Confirm(ConfirmKind::PowerOff))
             );
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn the_power_key_wins_over_touches_queued_in_the_same_step() {
+        lvgl(|lv| {
+            let mut rt = booted(lv);
+            rt.dispatcher().navigate(Route::Menu);
+            rt.step(ready(2_000), &[DeviceEvent::PowerKey(PowerKeyPress::Short)]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting), "a tap's Navigate");
+            rt.close();
+
+            let mut rt = booted(lv);
+            rt.step(ready(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            rt.touch(down(200, 150), &ready(2 * MIN + 10));
+            rt.touch(up(), &ready(2 * MIN + 60));
+            rt.step(
+                ready(2 * MIN + 100),
+                &[DeviceEvent::PowerKey(PowerKeyPress::Short)],
+            );
+            assert_eq!(rt.shown_route(), Some(&Route::Resting), "a touch's Wake");
             rt.close();
         });
     }
