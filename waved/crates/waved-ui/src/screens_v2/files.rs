@@ -2,11 +2,17 @@
 //! with the free space under the title. The copy helpers here are shared
 //! with the recording detail.
 
-use crate::kit::components::file_row::RowLook;
+use crate::kit::components::buttons::back_button;
+use crate::kit::components::file_row::{FileList, RowLook};
+use crate::kit::components::status::StatusArea;
 use crate::kit::dispatch::{Message, Severity};
+use crate::kit::fonts::Font;
 use crate::kit::icons;
+use crate::kit::obj::Obj;
+use crate::kit::route::Route;
+use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::{format_clock, UiSnapshot};
-use crate::kit::tokens::{LIVE, TEXT_2, WARN};
+use crate::kit::tokens::{LIVE, SCREEN_W, SUBTITLE_Y, TEXT, TEXT_2, TEXT_3, TITLE_Y, WARN};
 #[cfg(test)]
 use uuid::Uuid;
 use waved_state::{FilesState, RecordingStatus, RecordingSummary, CLOCK_VALID_AFTER_UNIX_S};
@@ -244,6 +250,55 @@ pub fn rows_for(snap: &UiSnapshot) -> Vec<RowLook> {
 pub fn low_space_notice(before: &FilesState, after: &FilesState) -> Option<Message> {
     (after.low_space && !before.low_space)
         .then(|| Message::new(Severity::Warning, LOW_SPACE_MESSAGE))
+}
+
+#[derive(Default)]
+pub struct FilesScreen {
+    status: Option<StatusArea>,
+    free: Option<Obj>,
+    list: Option<FileList>,
+    /// The free line as last drawn (text, colour, shown), to skip restyling.
+    free_shown: Option<(String, u32, bool)>,
+}
+
+impl Screen for FilesScreen {
+    fn build(&mut self, root: Obj, ctx: &ScreenCtx, snap: &UiSnapshot) {
+        self.status = Some(StatusArea::plain(root));
+        Obj::label(root, "Files", Font::Title, TEXT)
+            .centered_text(SCREEN_W)
+            .pos(0, TITLE_Y);
+        self.free = Some(
+            Obj::label(root, "", Font::Micro, TEXT_3)
+                .centered_text(SCREEN_W)
+                .pos(0, SUBTITLE_Y),
+        );
+        let dispatch = ctx.dispatch.clone();
+        self.list = Some(FileList::new(root, move |id| {
+            dispatch.navigate(Route::FileDetail(id))
+        }));
+        back_button(root, &ctx.dispatch);
+        self.update(snap);
+    }
+
+    fn update(&mut self, snap: &UiSnapshot) {
+        if let Some(status) = self.status.as_mut() {
+            status.update(snap);
+        }
+        if let Some(free) = self.free {
+            // Before the first storage report free_bytes is 0 and low_space
+            // false: show nothing rather than "0 MB free".
+            let shown = snap.files.free_bytes > 0 || snap.files.low_space;
+            let colour = if snap.files.low_space { WARN } else { TEXT_3 };
+            let next = (free_space_label(snap.files.free_bytes), colour, shown);
+            if self.free_shown.as_ref() != Some(&next) {
+                free.hidden(!next.2).text_color(next.1).set_text(&next.0);
+                self.free_shown = Some(next);
+            }
+        }
+        if let Some(list) = self.list.as_mut() {
+            list.set_rows(rows_for(snap));
+        }
+    }
 }
 
 /// A recording fixture for this module's tests and the detail's.
@@ -498,5 +553,159 @@ mod tests {
         assert_eq!(low_space_notice(&low, &low), None);
         assert_eq!(low_space_notice(&low, &calm), None);
         assert_eq!(low_space_notice(&calm, &calm), None);
+    }
+
+    use crate::kit::dispatch::{Dispatcher, UiEvent};
+    use crate::kit::route::Route;
+    use crate::kit::screen::{Screen, ScreenCtx};
+    use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+    use std::sync::Arc;
+    use waved_config::WavedConfig;
+
+    /// files.png: three recordings at 15:20, 3.2 GB free. Wi-Fi is down so the
+    /// second row reads "waiting for Wi-Fi" as in the mockup (which also draws
+    /// a Wi-Fi glyph in the status; the kit hides it while disconnected).
+    fn files_snap() -> UiSnapshot {
+        let mut failed = recording(
+            Uuid::from_u128(1),
+            RecordingStatus::Failed,
+            "2026-10-05T14:02:00Z",
+            2_537,
+        );
+        failed.last_error = Some("server didn't answer".into());
+        UiSnapshot {
+            clock: "15:20".into(),
+            now_unix_s: NOW,
+            mcu: waved_state::McuState {
+                usb_connected: true,
+                ..Default::default()
+            },
+            battery: waved_state::BatteryState {
+                level: 79,
+                ..Default::default()
+            },
+            files: FilesState {
+                free_bytes: 3_200_000_000,
+                recordings: vec![
+                    failed,
+                    recording(
+                        Uuid::from_u128(2),
+                        RecordingStatus::Waiting,
+                        "2026-10-05T10:30:00Z",
+                        1_080,
+                    ),
+                    recording(
+                        Uuid::from_u128(3),
+                        RecordingStatus::Uploaded,
+                        "2026-10-04T16:45:00Z",
+                        3_900,
+                    ),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn ctx(dispatch: Dispatcher) -> ScreenCtx {
+        ScreenCtx {
+            dispatch,
+            config: Arc::new(WavedConfig::default()),
+        }
+    }
+
+    #[test]
+    fn files_matches_the_mockup() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut screen = FilesScreen::default();
+            screen.build(root, &ctx(dispatch), &files_snap());
+            let list = screen.list.as_ref().unwrap();
+            assert_eq!(list.len(), 3);
+            assert_eq!(list.card(0).child(1).child(0).text(), "Today, 14:02");
+            assert_eq!(
+                list.card(1).child(1).child(1).text(),
+                "18 min, waiting for Wi-Fi"
+            );
+            assert_eq!(list.card(2).child(1).child(1).text(), "1 h 05 min, sent");
+            let free = screen.free.unwrap();
+            assert_eq!(free.text(), "3.2 GB free");
+            assert_golden("files", &lv.render());
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn an_empty_device_says_how_to_start() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut snap = files_snap();
+            snap.files.recordings.clear();
+            let mut screen = FilesScreen::default();
+            screen.build(root, &ctx(dispatch), &snap);
+            assert!(!screen.list.as_ref().unwrap().empty_state().is_hidden());
+            assert_golden("files_empty", &lv.render());
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn low_space_turns_the_free_line_amber() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut snap = files_snap();
+            snap.files.free_bytes = 850_000_000;
+            snap.files.low_space = true;
+            snap.files.recordings.truncate(1);
+            let mut screen = FilesScreen::default();
+            screen.build(root, &ctx(dispatch), &snap);
+            assert_eq!(screen.free.unwrap().text(), "850 MB free");
+            assert_golden("files_low_space", &lv.render());
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn the_free_line_waits_for_the_first_storage_report() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut snap = files_snap();
+            snap.files = FilesState::default();
+            let mut screen = FilesScreen::default();
+            screen.build(root, &ctx(dispatch), &snap);
+            assert!(
+                screen.free.unwrap().is_hidden(),
+                "no report yet: no '0 MB free'"
+            );
+            snap.files.low_space = true;
+            screen.update(&snap);
+            assert!(!screen.free.unwrap().is_hidden(), "a full disk is reported");
+            assert_eq!(screen.free.unwrap().text(), "0 MB free");
+        });
+    }
+
+    #[test]
+    fn tapping_a_card_opens_its_detail_and_updates_follow_the_snapshot() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, ui) = Dispatcher::test();
+            let mut snap = files_snap();
+            let mut screen = FilesScreen::default();
+            screen.build(root, &ctx(dispatch), &snap);
+            lv.click(screen.list.as_ref().unwrap().card(2));
+            assert_eq!(
+                ui.try_recv().unwrap(),
+                UiEvent::Navigate(Route::FileDetail(Uuid::from_u128(3)))
+            );
+            // An upload finishing re-sorts: the failed row becomes "sending".
+            snap.files.recordings[0].status = RecordingStatus::Uploading;
+            screen.update(&snap);
+            let list = screen.list.as_ref().unwrap();
+            assert_eq!(list.card(0).child(1).child(1).text(), "42 min, sending");
+        });
     }
 }
