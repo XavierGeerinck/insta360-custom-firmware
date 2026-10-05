@@ -168,6 +168,8 @@ mod tests {
             duration_secs: 2537,
             size_bytes: 184_000_000,
             endpoint: "https://notes.example.com/hook".into(),
+            speakers: 0,
+            marks: 0,
         }
     }
 

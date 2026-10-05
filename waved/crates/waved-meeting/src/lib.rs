@@ -173,6 +173,9 @@ impl RecordingFinalizer {
             duration_secs: duration,
             size_bytes: finalized.size_bytes,
             endpoint: self.config.api.endpoint.clone(),
+            // Workstream C fills these from the bookmarks and the diarizer.
+            speakers: 0,
+            marks: 0,
         });
 
         self.meeting_tx.send_modify(|state| {

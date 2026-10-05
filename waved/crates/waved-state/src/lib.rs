@@ -70,6 +70,8 @@ pub struct AudioState {
     pub raw_frames_dropped: u64,
     /// Processed frames dropped before the meeting recorder since process start.
     pub processed_frames_dropped: u64,
+    /// Result of the start-up microphone check (C6).
+    pub mic_health: MicHealth,
 }
 
 impl Default for AudioState {
@@ -104,8 +106,27 @@ impl Default for AudioState {
             capture_xruns: 0,
             raw_frames_dropped: 0,
             processed_frames_dropped: 0,
+            mic_health: MicHealth::Unknown,
         }
     }
+}
+
+/// Start-up microphone check (C6). Masks use ALSA channel order:
+/// bit n = ALSA channel n (see docs/AUDIO_HARDWARE.md "ALSA → Physical Permutation").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MicHealth {
+    /// Not judged yet, or the room stayed too quiet to judge.
+    #[default]
+    Unknown,
+    Ok,
+    /// Every element answers, but these are much quieter than the rest.
+    Degraded {
+        low_mask: u8,
+    },
+    /// These elements are silent; the UI shows "Microphones not responding".
+    NotResponding {
+        dead_mask: u8,
+    },
 }
 
 #[repr(u8)]
@@ -306,6 +327,10 @@ pub struct PendingDecision {
     pub size_bytes: u64,
     /// Snapshot of `config.api.endpoint` at stop time.
     pub endpoint: String,
+    /// Distinct speakers the diarizer numbered in this recording (0 = unknown).
+    pub speakers: u8,
+    /// Bookmarks in this recording.
+    pub marks: u32,
 }
 
 /// User-facing settings mirrored from config.toml and persisted by waved-settings.
@@ -376,6 +401,9 @@ pub struct RecordingSummary {
     pub size_bytes: u64,
     pub status: RecordingStatus,
     pub marks: u32,
+    /// Bookmark offsets from the start of the file in milliseconds, ascending
+    /// (the same scale as `PlaybackState::marks_ms`). Empty when there are none.
+    pub marks_ms: Vec<u32>,
     /// Plain-language reason for Failed / Damaged.
     pub last_error: Option<String>,
 }
@@ -421,6 +449,32 @@ pub struct PucState {
     pub auto_framing: bool,
 }
 
+/// Wall-clock time before 2020-01-01 is not believable (no NTP, no RTC yet).
+pub const CLOCK_VALID_AFTER_UNIX_S: i64 = 1_577_836_800;
+
+/// What About shows, collected by waved-system (TODO E7).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AboutInfo {
+    /// "0.1.0 (374015f)": crate version and git build id.
+    pub version: String,
+    /// Device serial; empty when the device exposes none.
+    pub serial: String,
+    /// The recordings filesystem.
+    pub storage_free_bytes: u64,
+    pub storage_total_bytes: u64,
+    /// One line per component, e.g. "LVGL: MIT".
+    pub licences: Vec<String>,
+}
+
+/// Produced by waved-system's SystemService.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SystemState {
+    /// Minutes east of UTC of `SettingsState::time_zone` now, DST included.
+    /// Refreshed every minute and on a zone change.
+    pub utc_offset_min: i32,
+    pub about: AboutInfo,
+}
+
 // --- Discrete Event Types (broadcast channel) ---
 
 #[derive(Clone, Debug)]
@@ -443,6 +497,17 @@ pub enum DeviceEvent {
     },
     LowBattery(u8),
     MotorObstruction,
+    /// The power key was pressed (waved-system power_key reader).
+    PowerKey(PowerKeyPress),
+}
+
+/// The power key, decoded by waved-system (TODO E2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerKeyPress {
+    /// Released before 2 s: sleep or wake the screen.
+    Short,
+    /// Held for 2 s (sent while still held): ask to power off.
+    Long,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -563,6 +628,8 @@ pub struct StateBus {
     pub settings: Arc<watch::Sender<SettingsState>>,
     pub files: Arc<watch::Sender<FilesState>>,
     pub playback: Arc<watch::Sender<PlaybackState>>,
+    /// Time zone offset and About values (waved-system).
+    pub system: Arc<watch::Sender<SystemState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
     /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
@@ -594,6 +661,7 @@ impl StateBus {
         let (settings_tx, _) = watch::channel(SettingsState::default());
         let (files_tx, _) = watch::channel(FilesState::default());
         let (playback_tx, _) = watch::channel(PlaybackState::default());
+        let (system_tx, _) = watch::channel(SystemState::default());
         let (events_tx, _) = broadcast::channel(64);
         let (commands_tx, _) = broadcast::channel(64);
 
@@ -609,6 +677,7 @@ impl StateBus {
             settings: Arc::new(settings_tx),
             files: Arc::new(files_tx),
             playback: Arc::new(playback_tx),
+            system: Arc::new(system_tx),
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
@@ -840,6 +909,88 @@ mod tests {
         assert_eq!(bus.settings.borrow().brightness_pct, 80);
         assert!(bus.files.borrow().recordings.is_empty());
         assert!(bus.playback.borrow().recording.is_none());
+        assert_eq!(bus.system.borrow().utc_offset_min, 0);
+    }
+
+    #[test]
+    fn system_state_defaults_to_utc_and_an_empty_about() {
+        let bus = StateBus::new();
+        let system = bus.system.subscribe();
+        assert_eq!(*system.borrow(), SystemState::default());
+        assert_eq!(system.borrow().about, AboutInfo::default());
+        assert!(system.borrow().about.serial.is_empty());
+        assert!(system.borrow().about.licences.is_empty());
+        bus.system.send_modify(|s| {
+            s.utc_offset_min = 120;
+            s.about.serial = "IWB0123".into();
+        });
+        assert_eq!(system.borrow().utc_offset_min, 120);
+        assert_eq!(system.borrow().about.serial, "IWB0123");
+    }
+
+    #[test]
+    fn the_clock_is_believable_from_2020_on() {
+        // 2020-01-01T00:00:00Z.
+        assert_eq!(CLOCK_VALID_AFTER_UNIX_S, 1_577_836_800);
+    }
+
+    #[tokio::test]
+    async fn power_key_presses_travel_as_device_events() {
+        let bus = StateBus::new();
+        let mut rx = bus.events.subscribe();
+        bus.events
+            .send(DeviceEvent::PowerKey(PowerKeyPress::Long))
+            .unwrap();
+        assert!(matches!(
+            rx.recv().await.unwrap(),
+            DeviceEvent::PowerKey(PowerKeyPress::Long)
+        ));
+        assert_ne!(PowerKeyPress::Short, PowerKeyPress::Long);
+    }
+
+    #[test]
+    fn mic_health_starts_unknown() {
+        assert_eq!(MicHealth::default(), MicHealth::Unknown);
+        assert_eq!(AudioState::default().mic_health, MicHealth::Unknown);
+        let dead = MicHealth::NotResponding {
+            dead_mask: 0b0000_0100,
+        };
+        assert!(matches!(dead, MicHealth::NotResponding { dead_mask: 4 }));
+        assert_ne!(
+            dead,
+            MicHealth::Degraded {
+                low_mask: 0b0000_0100
+            }
+        );
+    }
+
+    #[test]
+    fn pending_decisions_carry_speakers_and_marks() {
+        let decision = PendingDecision {
+            id: Uuid::new_v4(),
+            audio_path: PathBuf::from("/mnt/udisk/recordings/x/audio.wav"),
+            duration_secs: 2537,
+            size_bytes: 184_000_000,
+            endpoint: String::new(),
+            speakers: 3,
+            marks: 4,
+        };
+        assert_eq!((decision.speakers, decision.marks), (3, 4));
+    }
+
+    #[test]
+    fn recording_summaries_carry_mark_offsets() {
+        let summary = RecordingSummary {
+            id: Uuid::new_v4(),
+            started_at: None,
+            duration_secs: 60,
+            size_bytes: 1_000,
+            status: RecordingStatus::LocalOnly,
+            marks: 2,
+            marks_ms: vec![1_500, 42_000],
+            last_error: None,
+        };
+        assert_eq!(summary.marks_ms.len() as u32, summary.marks);
     }
 
     #[test]
