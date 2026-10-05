@@ -62,7 +62,7 @@ Each M2.0 item gets tests in the owning crate; goldens must stay byte-identical 
 - Mic level on the device: **0–200 %** (100 % in the middle); the host can still set up to 800 %.
 - Execution approved: M2.0 contracts, then A–E in parallel, then the runtime switch and a device pass.
 
-## Landed names (M2.0-1, commits 0721549..df466b8) — use these, not the plan text
+## Landed names (M2.0-1, commits 0721549..df466b8; M2.0-2, commits 1dfb53f..7fc75be) — use these, not the plan text
 
 | Plan | Plan text | Use instead |
 |---|---|---|
@@ -70,5 +70,11 @@ Each M2.0 item gets tests in the owning crate; goldens must stay byte-identical 
 | B | `snap.device.serial` | `snap.system.about.serial` |
 | A | `snap.audio.mic_fault` / `mic_fault: bool` | `matches!(snap.audio.mic_health, MicHealth::NotResponding { .. })` (`waved_state::MicHealth`) |
 | Z1 | `ActiveMessage.id` in `kit::dispatch`; 4-argument `capture(.., utc_offset)` | `ActiveMessage.seq` in `kit::snapshot` (with `until_ms()`); `capture` keeps 3 arguments and reads the offset from `bus.system` |
+| B | `on_swipe` via `LV_EVENT_GESTURE` + `lv_indev_get_gesture_dir` | Same `on_swipe(obj, Swipe, FnMut())` signature, delivered on a kit event code by `kit::event::send_swipe(obj, dir) -> bool`; LVGL's `LV_EVENT_GESTURE` is not used. Tests: `lv.swipe(obj, dir)` |
+| Z3 | Own `SWIPE_MIN_PX`, `SWIPE_MAX_MS` and direction rule in `runtime/gesture.rs` | Reuse `kit::event::{Swipe, Swipe::recognise, SwipeTracker, SWIPE_MIN_PX, SWIPE_MAX_MS}` (60 px along one axis, at most half across, within 700 ms, once per press). Hand every swipe the runtime does not take itself to `send_swipe(object under the press start, dir)` |
+| Z3 | — | The runtime blocks swipes that start on a `keep_gestures` object before recognising anything |
+| Z3 | — | If `send_swipe` returns true, cancel the press (`lv_indev_wait_release`) exactly as for the runtime's own gestures, so a swipe never also fires a tap |
+| B | `volume::LevelScreen::speaker()` / `::mic()` | `volume::VolumeScreen::speaker()` / `::mic()` (R9; README "Registering a screen") |
+| B, D | — | `Obj::parent() -> Option<Obj>` exists. `RadioList` shows whole rows only (three from `RADIO_TOP`, y 68–231) and snaps to rows; `scroll_to(index)` puts that row at the top, or shows the last rows when it is near the end. It does not centre the row |
 
 Note for B (Date and time): `local_unix_s()` has no validity guard; before the clock is valid (`now_unix_s < CLOCK_VALID_AFTER_UNIX_S`) show the date as "--" like the clock.

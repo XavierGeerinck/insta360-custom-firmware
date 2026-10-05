@@ -152,7 +152,12 @@ axis, at most half that across, within `SWIPE_MAX_MS` 700), applied per press by
 `SwipeTracker`. The runtime feeds it the touch samples and hands a swipe it does not take
 itself to `send_swipe(obj_under_the_press, direction)`, which delivers it as LVGL routes
 gestures: to the nearest object from the pressed one up that keeps its drags, else to the
-screen. LVGL's own `LV_EVENT_GESTURE` is not used.
+screen. LVGL's own `LV_EVENT_GESTURE` is not used. Two runtime rules go with it:
+
+- The runtime blocks swipes that start on a `keep_gestures` object before recognising anything:
+  such a press never swipes, in any direction.
+- If `send_swipe` returns true (a screen took the swipe), the runtime cancels the press
+  (`lv_indev_wait_release`) exactly as for its own gestures, so a swipe never also fires a tap.
 
 ## Components
 
