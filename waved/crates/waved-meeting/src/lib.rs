@@ -4,6 +4,7 @@ pub mod metadata;
 pub mod model;
 pub mod reconcile;
 pub mod recorder;
+mod removal;
 pub mod retention;
 pub mod upload;
 pub mod worker;
@@ -332,6 +333,10 @@ impl MeetingService {
         inputs: MeetingPipelineInputs,
     ) -> Result<Self, sqlx::Error> {
         let pool = db::init_pool(db_path).await?;
+        let finished = removal::finish_interrupted(&pool, &recordings_dir).await;
+        if finished > 0 {
+            info!("finished {finished} interrupted delete(s)");
+        }
         if let Err(error) = reconcile::run(&pool, &recordings_dir).await {
             warn!("recording reconciliation failed: {error}");
         }
@@ -786,6 +791,13 @@ impl MeetingService {
                                 Command::DiscardRecording(id) => {
                                     self.handle_discard_recording(id).await;
                                 }
+                                Command::DeleteRecording(id) => {
+                                    if active.as_ref().is_some_and(|rec| rec.id == id) {
+                                        warn!("delete ignored: recording {id} is still running");
+                                        continue;
+                                    }
+                                    self.handle_delete_recording(id).await;
+                                }
                                 Command::RetryUpload(id) => {
                                     if let Err(error) =
                                         db::reset_attempt_cycle(&self.pool, &id).await
@@ -1095,11 +1107,6 @@ impl MeetingService {
         });
     }
 
-    /// Returns the recording dir for an id under self.recordings_dir.
-    fn dir_for(&self, id: &Uuid) -> PathBuf {
-        self.recordings_dir.join(id.to_string())
-    }
-
     /// Verify the carried id matches the active pending_decision and
     /// return the decision. None if mismatch / absent — caller should
     /// warn and ignore (stale tap).
@@ -1165,16 +1172,39 @@ impl MeetingService {
         if self.validate_pending(&id).is_none() {
             return;
         }
-        if let Err(e) = db::delete_meeting_cascade(&self.pool, &id).await {
-            warn!("discard: db delete failed for {id}: {e}");
-        }
-        let dir = self.dir_for(&id);
-        match tokio::fs::remove_dir_all(&dir).await {
-            Ok(()) => info!("discard: {id} dir removed ({})", dir.display()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => warn!("discard: rm -rf {} failed: {e}", dir.display()),
-        }
+        self.handle_delete_recording(id).await;
+        // The question is answered even if the files could not be removed.
         self.clear_pending();
+    }
+
+    async fn handle_delete_recording(&self, id: Uuid) {
+        let was_pending = self
+            .meeting_tx
+            .borrow()
+            .pending_decision
+            .as_ref()
+            .is_some_and(|decision| decision.id == id);
+        match removal::remove_recording(&self.pool, &self.recordings_dir, id).await {
+            Ok(removal::RemoveOutcome::Removed { previous_status }) => {
+                info!("audit: recording {id} deleted on request (was {previous_status})");
+                if was_pending {
+                    self.clear_pending();
+                }
+                // Space was freed: lift a storage block now, not at the next Record.
+                retention::enforce(
+                    &self.pool,
+                    &self.recordings_dir,
+                    &self.config.storage,
+                    &self.meeting_tx,
+                )
+                .await;
+            }
+            Ok(removal::RemoveOutcome::Uploading) => {
+                warn!("delete refused: recording {id} is uploading right now")
+            }
+            Ok(removal::RemoveOutcome::NotFound) => warn!("delete ignored: no recording {id}"),
+            Err(error) => warn!("delete of recording {id} failed: {error}"),
+        }
     }
 }
 

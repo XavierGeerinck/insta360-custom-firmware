@@ -522,6 +522,52 @@ pub async fn keep_stale_decisions(pool: &SqlitePool) -> Result<u64, sqlx::Error>
     Ok(result.rows_affected())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum RemovalClaim {
+    Claimed { previous_status: String },
+    Uploading,
+    NotFound,
+}
+
+/// Mark a recording `deleting` unless it is uploading right now. The worker
+/// only claims queued and retry_wait rows, so a claimed row is never picked
+/// up for delivery while its files go away.
+pub async fn claim_for_removal(pool: &SqlitePool, id: &Uuid) -> Result<RemovalClaim, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+        .bind(id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let claim = match row {
+        None => RemovalClaim::NotFound,
+        Some((status,)) if status == MeetingStatus::Uploading.as_str() => RemovalClaim::Uploading,
+        Some((previous_status,)) => {
+            sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ?")
+                .bind(MeetingStatus::Deleting.as_str())
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?;
+            RemovalClaim::Claimed { previous_status }
+        }
+    };
+    tx.commit().await?;
+    Ok(claim)
+}
+
+pub async fn ids_with_status(
+    pool: &SqlitePool,
+    status: MeetingStatus,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM meetings WHERE upload_status = ?")
+        .bind(status.as_str())
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id,)| id.parse().ok())
+        .collect())
+}
+
 fn truncate_diagnostic(value: &str) -> String {
     let mut output = value
         .chars()

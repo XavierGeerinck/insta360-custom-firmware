@@ -777,3 +777,133 @@ async fn send_without_a_server_keeps_the_take_on_wave() {
     assert_eq!(meeting.ask_deadline_secs, None);
     assert_eq!(meeting.pending_uploads, 0);
 }
+
+async fn wait_gone(path: &std::path::Path) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while path.exists() {
+        assert!(tokio::time::Instant::now() < deadline, "{} still exists", path.display());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn delete_removes_a_kept_recording() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::AddBookmark);
+    rig.wait_for("mark", |s| s.marks == 1).await;
+    rig.stop().await;
+    rig.send(Command::DeleteRecording(id));
+    wait_gone(&rig.dir(id)).await;
+    rig.wait_status(id, None).await;
+    let pool = rig.pool().await;
+    let (bookmarks,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM bookmarks WHERE meeting_id = ?")
+        .bind(id.to_string())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bookmarks, 0);
+    let leftovers: Vec<_> = std::fs::read_dir(&rig.recordings_dir).unwrap().collect();
+    assert!(leftovers.is_empty(), "no .deleted-* directory left behind");
+}
+
+#[tokio::test]
+async fn delete_is_refused_while_uploading() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    db::set_status(&rig.pool().await, &id, MeetingStatus::Uploading).await.unwrap();
+    rig.send(Command::DeleteRecording(id));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(rig.dir(id).join("audio.wav").exists());
+    assert_eq!(rig.status(id).await.as_deref(), Some("uploading"));
+}
+
+#[tokio::test]
+async fn delete_of_the_pending_recording_discards_it() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    rig.send(Command::DeleteRecording(id));
+    rig.wait_for("cleared", |s| s.pending_decision.is_none() && s.ask_deadline_secs.is_none())
+        .await;
+    wait_gone(&rig.dir(id)).await;
+}
+
+#[tokio::test]
+async fn delete_of_the_running_recording_is_ignored() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.send(Command::DeleteRecording(id));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(rig.meeting.borrow().recording);
+    assert!(rig.dir(id).exists());
+}
+
+#[tokio::test]
+async fn interrupted_delete_finishes_on_boot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rec = tmp.path().join("rec");
+    let pool = db::init_pool(tmp.path().join("t.db").to_str().unwrap()).await.unwrap();
+    // Power cut after the rename: the row still says local_only.
+    let renamed = Uuid::new_v4();
+    let trash = rec.join(format!("{}{renamed}", removal::DELETED_PREFIX));
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("audio.wav"), b"RIFF").unwrap();
+    std::fs::write(trash.join("metadata.json"), b"{}").unwrap();
+    db::insert_meeting(&pool, &renamed, "Omni", &rec.join(renamed.to_string()).to_string_lossy())
+        .await
+        .unwrap();
+    db::set_status(&pool, &renamed, MeetingStatus::LocalOnly).await.unwrap();
+    // Power cut right after the claim: the directory is intact.
+    let claimed = Uuid::new_v4();
+    let dir = rec.join(claimed.to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("audio.wav"), b"RIFF").unwrap();
+    std::fs::write(dir.join("metadata.json"), b"{}").unwrap();
+    db::insert_meeting(&pool, &claimed, "Omni", &dir.to_string_lossy()).await.unwrap();
+    db::set_status(&pool, &claimed, MeetingStatus::Deleting).await.unwrap();
+    pool.close().await;
+
+    let rig = start_rig_in(tmp, quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    assert!(!trash.exists());
+    assert!(!rig.dir(renamed).exists(), "reconciliation must not bring it back");
+    assert!(!rig.dir(claimed).exists());
+    assert_eq!(rig.status(renamed).await, None);
+    assert_eq!(rig.status(claimed).await, None);
+}
+
+// Ruling: freeing space through Files must lift the storage block at once.
+// statvfs cannot be pushed over a limit from a test, so the block is set
+// by hand; the limits in quiet_config are within reach, so the recompute
+// after the removal is what clears it. Nothing else recomputes it here: no
+// server is configured, so the upload worker never runs.
+#[tokio::test]
+async fn delete_recomputes_the_storage_block() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    rig.meeting.send_modify(|s| s.storage_blocked = true);
+    rig.send(Command::DeleteRecording(id));
+    wait_gone(&rig.dir(id)).await;
+    rig.wait_for("unblocked", |s| !s.storage_blocked).await;
+}
+
+#[tokio::test]
+async fn discard_recomputes_the_storage_block() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    rig.meeting.send_modify(|s| s.storage_blocked = true);
+    rig.send(Command::DiscardRecording(id));
+    wait_gone(&rig.dir(id)).await;
+    rig.wait_for("unblocked", |s| !s.storage_blocked && s.pending_decision.is_none())
+        .await;
+}
