@@ -424,11 +424,15 @@ fn paint_glyph(canvas: &Canvas, glyph: &Glyph, selected: bool) {
 
 /// An `lv_canvas` with a buffer that lives exactly as long as the object:
 /// RGB565 and opaque for the preview, ARGB8888 and transparent for glyphs.
-/// Relies on LVGL's default stride alignment of 1 (lv_conf.h sets none).
+/// The buffer is sized and indexed by LVGL's row stride
+/// (`lv_draw_buf_width_to_stride`), so a stride alignment set in lv_conf.h
+/// can't overrun it.
 struct Canvas {
     obj: Obj,
     w: i32,
     h: i32,
+    /// Bytes per buffer row, as LVGL computes it for this width and format.
+    stride: usize,
     /// Screen position of the buffer's top-left, to map screen points.
     origin: (i32, i32),
     pixels: *mut u32,
@@ -437,23 +441,25 @@ struct Canvas {
 
 impl Canvas {
     fn new(parent: Obj, rect: Rect, argb: bool) -> Self {
-        let bytes = if argb { 4 } else { 2 };
-        let words = ((rect.w * rect.h * bytes) as usize).div_ceil(4);
+        let format = if argb {
+            lv_color_format_t_LV_COLOR_FORMAT_ARGB8888
+        } else {
+            lv_color_format_t_LV_COLOR_FORMAT_RGB565
+        };
+        // SAFETY: a pure calculation from LVGL's draw-buffer settings (LVGL is initialised).
+        let stride = unsafe { lv_draw_buf_width_to_stride(rect.w as u32, format) } as usize;
+        let words = (stride * rect.h as usize).div_ceil(4);
         let pixels: *mut [u32] = Box::into_raw(vec![0u32; words].into_boxed_slice());
         // SAFETY: parent is a live object (callers created it just before).
         let obj = unsafe { Obj::from_raw(lv_canvas_create(parent.raw())) };
-        // SAFETY: live canvas; the buffer holds rect.w × rect.h pixels of the format.
+        // SAFETY: live canvas; the buffer holds rect.h rows of `stride` bytes,
+        // the stride lv_canvas_set_buffer computes for this width and format.
         unsafe {
             lv_obj_remove_style(
                 obj.raw(),
                 std::ptr::null(),
                 (LV_PART_ANY | LV_STATE_ANY) as lv_style_selector_t,
             );
-            let format = if argb {
-                lv_color_format_t_LV_COLOR_FORMAT_ARGB8888
-            } else {
-                lv_color_format_t_LV_COLOR_FORMAT_RGB565
-            };
             lv_canvas_set_buffer(obj.raw(), pixels.cast(), rect.w, rect.h, format);
         }
         let obj = obj
@@ -472,6 +478,7 @@ impl Canvas {
             obj,
             w: rect.w,
             h: rect.h,
+            stride,
             origin: (rect.x, rect.y),
             pixels: pixels.cast(),
             argb,
@@ -504,15 +511,18 @@ impl Canvas {
     /// coordinates) satisfies `inside`. RGB565 canvases only.
     fn tint(&self, hex: u32, opa: u8, inside: impl Fn(f32, f32) -> bool) {
         debug_assert!(!self.argb, "tint works on the RGB565 preview");
-        let pixels = self.pixels.cast::<u16>();
+        let rows = self.pixels.cast::<u8>();
         for y in 0..self.h {
+            // SAFETY: y < h; the buffer holds h rows of `stride` bytes.
+            let row = unsafe { rows.add(y as usize * self.stride).cast::<u16>() };
             for x in 0..self.w {
                 let sx = (self.origin.0 + x) as f32 + 0.5;
                 let sy = (self.origin.1 + y) as f32 + 0.5;
                 if inside(sx, sy) {
-                    // SAFETY: x < w and y < h; the buffer holds w × h RGB565 pixels.
+                    // SAFETY: x < w, and a row holds at least w RGB565 pixels
+                    // (stride ≥ 2w, even, so the u16 access is aligned).
                     unsafe {
-                        let pixel = pixels.add((y * self.w + x) as usize);
+                        let pixel = row.add(x as usize);
                         *pixel = blend565(*pixel, hex, opa);
                     }
                 }
@@ -849,6 +859,21 @@ mod picker_tests {
             let area = picker.aim_area();
             assert!(!area.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE));
             assert!(area.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_PRESS_LOCK));
+        });
+    }
+
+    #[test]
+    fn canvas_buffers_follow_lvgls_stride() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let picker = ModePicker::new(root, mockup_glyphs(), 2, |_| {}, |_| {});
+            let inner = &picker.inner;
+            for canvas in std::iter::once(&inner.preview).chain(&inner.glyphs) {
+                // SAFETY: live canvas with a buffer set.
+                let header = unsafe { (*lv_canvas_get_draw_buf(canvas.obj.raw())).header };
+                assert_eq!(canvas.stride, header.stride() as usize);
+                assert!(canvas.stride >= canvas.w as usize * if canvas.argb { 4 } else { 2 });
+            }
         });
     }
 
