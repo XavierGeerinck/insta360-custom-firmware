@@ -18,6 +18,7 @@ thiserror.workspace = true
 libc = "0.2"
 waved-state = { path = "../waved-state" }
 waved-config = { path = "../waved-config" }
+waved-system = { path = "../waved-system" }
 uuid.workspace = true
 
 [build-dependencies]

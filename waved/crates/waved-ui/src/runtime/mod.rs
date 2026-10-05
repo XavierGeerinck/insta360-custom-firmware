@@ -2,5 +2,6 @@
 //! dispatcher, fed by one snapshot per loop iteration.
 
 pub mod gesture;
+pub mod power;
 pub mod slot;
 pub mod touch;

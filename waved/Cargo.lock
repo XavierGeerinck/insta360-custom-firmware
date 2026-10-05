@@ -3871,6 +3871,7 @@ dependencies = [
  "uuid",
  "waved-config",
  "waved-state",
+ "waved-system",
 ]
 
 [[package]]
