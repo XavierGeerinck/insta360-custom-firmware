@@ -16,6 +16,7 @@ recording-integrity-test-hooks = []
 waved-state = { path = "../waved-state" }
 waved-config = { path = "../waved-config" }
 waved-audio = { path = "../waved-audio" }
+waved-settings = { path = "../waved-settings" }
 tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros", "rt"] }
 uuid.workspace = true
 serde.workspace = true

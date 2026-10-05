@@ -8,6 +8,9 @@ pub mod retention;
 pub mod upload;
 pub mod worker;
 
+#[cfg(test)]
+mod service_tests;
+
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
@@ -26,7 +29,8 @@ use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::{UploadMode, WavedConfig};
 use waved_state::{
-    Command, DeviceEvent, MeetingState, PendingDecision, RecordingIntegrityFault, WifiState,
+    AudioState, Command, DeviceEvent, MeetingState, PendingDecision, RecordingIntegrityFault,
+    SettingsState, WifiState,
 };
 
 pub struct MeetingService {
@@ -45,6 +49,14 @@ pub struct MeetingService {
     integrity_rx: mpsc::UnboundedReceiver<IntegritySignal>,
     device_id: String,
     webhook_test_marker: PathBuf,
+    /// Live user settings (upload mode, pre-recording, ask timeout). Seeded
+    /// from the boot config; `with_live_inputs` swaps in the bus watch.
+    settings_rx: watch::Receiver<SettingsState>,
+    /// Live audio state: the mode recorded in metadata, plus mute and capture
+    /// health for the pre-recording indicator.
+    audio_state_rx: watch::Receiver<AudioState>,
+    /// Keeps the boot-config fallback channels open until live inputs replace them.
+    _fallback: Option<(watch::Sender<SettingsState>, watch::Sender<AudioState>)>,
 }
 
 pub struct MeetingPipelineInputs {
@@ -52,6 +64,19 @@ pub struct MeetingPipelineInputs {
     pub doa_rx: broadcast::Receiver<DoaFrame>,
     pub integrity: Arc<RecordingIntegrity>,
     pub integrity_rx: mpsc::UnboundedReceiver<IntegritySignal>,
+}
+
+/// Bus watches that make recording policy follow the device settings live
+/// (C11). Without them the service uses the boot-time config.
+pub struct MeetingLiveInputs {
+    pub settings: watch::Receiver<SettingsState>,
+    pub audio: watch::Receiver<AudioState>,
+}
+
+/// What happens to a take at Stop, read from the live settings at that moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct StopPolicy {
+    upload_mode: UploadMode,
 }
 
 #[derive(Clone)]
@@ -82,7 +107,7 @@ impl From<&MeetingService> for RecordingFinalizer {
 impl RecordingFinalizer {
     /// Finalize both durable artifacts before making this take eligible for
     /// either a user decision or background delivery.
-    async fn stop_recording(self, rec: recorder::ActiveRecording) {
+    async fn stop_recording(self, rec: recorder::ActiveRecording, policy: StopPolicy) {
         let duration = rec.duration_secs();
         let id = rec.id;
         let finalized = match tokio::task::spawn_blocking(move || rec.finalize()).await {
@@ -149,7 +174,7 @@ impl RecordingFinalizer {
         #[cfg(feature = "recording-integrity-test-hooks")]
         finalization_test_checkpoint(FinalizationCheckpoint::MetadataFinalized, id).await;
 
-        let status = match self.config.api.upload_mode {
+        let status = match policy.upload_mode {
             UploadMode::Automatic => MeetingStatus::Queued,
             UploadMode::Ask => MeetingStatus::AwaitingDecision,
             UploadMode::LocalOnly => MeetingStatus::LocalOnly,
@@ -167,7 +192,7 @@ impl RecordingFinalizer {
             return;
         }
         let _ = self.events_tx.send(DeviceEvent::RecordingStopped(id));
-        let decision = (self.config.api.upload_mode == UploadMode::Ask).then(|| PendingDecision {
+        let decision = (policy.upload_mode == UploadMode::Ask).then(|| PendingDecision {
             id,
             audio_path: finalized.audio_path.clone(),
             duration_secs: duration,
@@ -278,6 +303,12 @@ impl MeetingService {
                 warn!("failed to requeue deliveries after configuration change: {error}");
             }
         }
+        let (settings_fallback, settings_rx) =
+            watch::channel(waved_settings::settings_from_config(&config));
+        let (audio_fallback, audio_state_rx) = watch::channel(AudioState {
+            mode: config.audio.mode.clone(),
+            ..AudioState::default()
+        });
         Ok(Self {
             config,
             pool,
@@ -290,7 +321,28 @@ impl MeetingService {
             integrity_rx: inputs.integrity_rx,
             device_id: metadata::stable_device_id(),
             webhook_test_marker,
+            settings_rx,
+            audio_state_rx,
+            _fallback: Some((settings_fallback, audio_fallback)),
         })
+    }
+
+    /// Follow the live settings and audio state instead of the boot config.
+    pub fn with_live_inputs(mut self, inputs: MeetingLiveInputs) -> Self {
+        self.settings_rx = inputs.settings;
+        self.audio_state_rx = inputs.audio;
+        self._fallback = None;
+        self
+    }
+
+    fn stop_policy(&self) -> StopPolicy {
+        StopPolicy {
+            upload_mode: self.settings_rx.borrow().upload_mode,
+        }
+    }
+
+    fn live_audio_mode(&self) -> String {
+        format!("{:?}", self.audio_state_rx.borrow().mode)
     }
 
     pub async fn run(
@@ -456,9 +508,10 @@ impl MeetingService {
                                         warn!("recording start blocked by configured storage limits");
                                         continue;
                                     }
+                                    let audio_mode = self.live_audio_mode();
                                     match recorder::ActiveRecording::start_with_integrity_epoch(
                                         &self.recordings_dir,
-                                        &format!("{:?}", self.config.audio.mode),
+                                        &audio_mode,
                                         self.integrity.epoch(),
                                     )
                                     .await
@@ -467,7 +520,7 @@ impl MeetingService {
                                             let id = rec.id;
                                             let _ = db::insert_meeting(
                                                 &self.pool, &id,
-                                                &format!("{:?}", self.config.audio.mode),
+                                                &audio_mode,
                                                 &rec.dir.to_string_lossy(),
                                             ).await;
                                             let _ = self.events_tx.send(DeviceEvent::RecordingStarted(id));
@@ -534,7 +587,7 @@ impl MeetingService {
                                         if let Some(fault) = fault {
                                             self.abort_recording(rec, fault).await;
                                         } else {
-                                            let finalization = self.stop_recording(rec);
+                                            let finalization = self.stop_recording(rec, self.stop_policy());
                                             self.await_finalization_with_drain(
                                                 &mut prebuffer,
                                                 &mut doa_closed,
@@ -597,7 +650,7 @@ impl MeetingService {
                                         }
                                         prebuffer.clear();
                                         prebuffer.resume();
-                                        let finalization = self.stop_recording(rec);
+                                        let finalization = self.stop_recording(rec, self.stop_policy());
                                         self.await_finalization_with_drain(
                                             &mut prebuffer,
                                             &mut doa_closed,
@@ -645,8 +698,9 @@ impl MeetingService {
     fn stop_recording(
         &self,
         rec: recorder::ActiveRecording,
+        policy: StopPolicy,
     ) -> impl Future<Output = ()> + Send + 'static {
-        RecordingFinalizer::from(self).stop_recording(rec)
+        RecordingFinalizer::from(self).stop_recording(rec, policy)
     }
 
     async fn await_finalization_with_drain<F>(

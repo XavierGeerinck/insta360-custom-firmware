@@ -3764,6 +3764,7 @@ dependencies = [
  "uuid",
  "waved-audio",
  "waved-config",
+ "waved-settings",
  "waved-state",
 ]
 
