@@ -69,6 +69,8 @@ pub enum SetupView {
     },
     Busy(String),
     Failed(String),
+    /// The setup network went away without a result (the service's timeout).
+    Closed,
 }
 
 /// Whether opening the screen starts provisioning: not while it already runs.
@@ -83,11 +85,15 @@ pub fn should_start(state: &ProvisioningState) -> bool {
 
 /// What to show. `starting` is set from sending the start command until the
 /// service reports progress, so a stale Idle / Connected / Failed isn't shown.
-pub fn view(state: &ProvisioningState, starting: bool) -> SetupView {
+/// `session` is set once the service has reported progress: an Idle after
+/// that means the setup network closed (the service gives up after its
+/// timeout), not that it is about to start.
+pub fn view(state: &ProvisioningState, starting: bool, session: bool) -> SetupView {
     if starting && should_start(state) {
         return SetupView::Starting;
     }
     match state {
+        ProvisioningState::Idle if session => SetupView::Closed,
         ProvisioningState::Idle | ProvisioningState::Scanning => SetupView::Starting,
         ProvisioningState::ApActive {
             ssid,
@@ -146,6 +152,8 @@ pub struct WifiSetupScreen {
     #[cfg(test)]
     cancel: Option<Obj>,
     started: Rc<Cell<bool>>,
+    /// The service has reported progress since this screen was built.
+    session: bool,
     shown: Option<SetupView>,
 }
 
@@ -216,7 +224,10 @@ impl Screen for WifiSetupScreen {
         if self.started.get() && !should_start(&snap.provisioning) {
             self.started.set(false); // the service took over
         }
-        let next = view(&snap.provisioning, self.started.get());
+        if !should_start(&snap.provisioning) {
+            self.session = true;
+        }
+        let next = view(&snap.provisioning, self.started.get(), self.session);
         if self.shown.as_ref() == Some(&next) {
             return;
         }
@@ -232,11 +243,14 @@ impl Screen for WifiSetupScreen {
                 SetupView::Failed(reason) => {
                     message.set_text(&format!("Couldn't connect: {reason}"))
                 }
+                SetupView::Closed => {
+                    message.set_text("The setup network closed. Try again to reopen it.")
+                }
                 SetupView::Code { .. } => {}
             }
         }
         if let Some(retry) = self.retry {
-            retry.hidden(!matches!(next, SetupView::Failed(_)));
+            retry.hidden(!matches!(next, SetupView::Failed(_) | SetupView::Closed));
         }
         match (
             &next,
@@ -355,6 +369,65 @@ mod tests {
         });
     }
 
+    const CLOSED: &str = "The setup network closed. Try again to reopen it.";
+
+    #[test]
+    fn the_setup_network_timing_out_offers_try_again() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            let mut screen = WifiSetupScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+            snap.provisioning = ap("Wave-7F2A", "k3x9p2vw");
+            screen.update(&snap);
+            // The service gives up after its timeout and goes back to Idle.
+            snap.provisioning = ProvisioningState::Idle;
+            screen.update(&snap);
+            assert_targets_ok(root);
+            assert_eq!(screen.message.unwrap().text(), CLOSED);
+            assert!(!screen.message.unwrap().is_hidden());
+            assert!(!screen.retry.unwrap().is_hidden());
+            assert!(f.commands().is_empty());
+            lv.click(screen.retry.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+            screen.update(&snap);
+            assert_eq!(screen.message.unwrap().text(), "Starting the setup network");
+            assert!(screen.retry.unwrap().is_hidden());
+        });
+    }
+
+    #[test]
+    fn a_screen_rebuilt_during_setup_shows_the_network_closing() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.provisioning = ap("Wave-7F2A", "k3x9p2vw");
+            let mut screen = WifiSetupScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert!(f.commands().is_empty());
+            snap.provisioning = ProvisioningState::Idle;
+            screen.update(&snap);
+            assert_targets_ok(root);
+            assert_eq!(screen.message.unwrap().text(), CLOSED);
+            assert!(!screen.retry.unwrap().is_hidden());
+            lv.click(screen.retry.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+        });
+    }
+
     #[test]
     fn a_failure_offers_try_again() {
         lvgl(|lv| {
@@ -443,20 +516,32 @@ mod tests {
             "WIFI:T:WPA;S:Wave\\:guest\\;lab;P:p\\,ass\\\\\\\"word;H:false;;"
         );
         assert_eq!(
-            view(&ap("W", "p"), false),
+            view(&ap("W", "p"), false, false),
             SetupView::Code {
                 ssid: "W".into(),
                 passphrase: "p".into(),
                 host: "10.42.0.1".into()
             }
         );
-        assert_eq!(view(&ProvisioningState::Idle, true), SetupView::Starting);
+        assert_eq!(
+            view(&ProvisioningState::Idle, true, true),
+            SetupView::Starting
+        );
+        assert_eq!(
+            view(&ProvisioningState::Idle, false, false),
+            SetupView::Starting
+        );
+        assert_eq!(
+            view(&ProvisioningState::Idle, false, true),
+            SetupView::Closed
+        );
         assert_eq!(
             view(
                 &ProvisioningState::Connecting {
                     ssid: "Office".into()
                 },
-                false
+                false,
+                true
             ),
             SetupView::Busy("Connecting to Office".into())
         );
