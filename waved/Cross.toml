@@ -11,4 +11,6 @@ passthrough = [
     "LD_LIBRARY_PATH=/opt/rh/llvm-toolset-7.0/root/usr/lib64",
     "PKG_CONFIG_ALLOW_CROSS=1",
     "PKG_CONFIG_LIBDIR=/opt/alsa/lib/pkgconfig",
+    # About shows it; the container has no git (crates/waved-system/build.rs).
+    "WAVED_BUILD_ID",
 ]

@@ -38,6 +38,16 @@ fn main() {
         )
         .init();
 
+    // A factory reset requested before the last restart erases before
+    // anything opens config.toml, the database or the recordings.
+    let reset_paths = waved_system::reset::ResetPaths::new(CONFIG_PATH, DB_PATH, RECORDINGS_DIR);
+    #[cfg(not(feature = "simulate"))]
+    let reset_paths = reset_paths.on_device();
+    match waved_system::reset::complete_pending(&reset_paths) {
+        waved_system::reset::ResetOutcome::NothingPending => {}
+        outcome => info!("factory reset at start-up: {outcome:?}"),
+    }
+
     #[cfg(feature = "simulate")]
     info!("waved v{} starting [SIMULATION MODE]", env!("CARGO_PKG_VERSION"));
     #[cfg(not(feature = "simulate"))]
@@ -130,12 +140,16 @@ fn main() {
         .build()
         .expect("failed to build tokio runtime");
 
-    rt.block_on(run_async(config, bus));
+    rt.block_on(run_async(config, bus, reset_paths));
 
     info!("waved shutdown complete");
 }
 
-async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
+async fn run_async(
+    config: waved_config::WavedConfig,
+    bus: Arc<StateBus>,
+    reset_paths: waved_system::reset::ResetPaths,
+) {
     // Persist device-side setting changes (volume, mode, display, time,
     // recording policy) back to config.toml. Subscribe before anything else
     // awaits: the host sends SET_CUR volume at USB enumeration, while audio
@@ -144,6 +158,29 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         waved_settings::SettingsService::new(CONFIG_PATH, Arc::clone(&bus.settings))
             .run(bus.commands.subscribe()),
     );
+
+    // Factory reset (E6): on Command::FactoryReset, leave the marker and
+    // restart; `complete_pending` erases at the next start-up.
+    tokio::spawn(waved_system::reset::run(reset_paths, bus.commands.subscribe(), bus.commands.clone()));
+
+    // Time zone, RTC and About (E3, E4, E7) on `bus.system`.
+    #[cfg(not(feature = "simulate"))]
+    let system = waved_system::SystemService::device(Arc::clone(&bus.system), RECORDINGS_DIR);
+    #[cfg(feature = "simulate")]
+    let system = waved_system::SystemService::new(Arc::clone(&bus.system), RECORDINGS_DIR);
+    tokio::spawn(system.run(bus.settings.subscribe(), bus.wifi.subscribe()));
+
+    // Power key (E2, RS7): opt-in until the device pass confirms that the
+    // `vad_keypad` node is the physical key and not voice activity.
+    #[cfg(not(feature = "simulate"))]
+    {
+        if power_key_opted_in(std::env::var(POWER_KEY_ENV).ok().as_deref()) {
+            let started = waved_system::power_key::start(bus.events.clone());
+            info!("power key: {POWER_KEY_ENV}=1, reader started: {started}");
+        } else {
+            info!("power key: not read; set {POWER_KEY_ENV}=1 to enable it");
+        }
+    }
 
     // Meeting frame channel: DSP-processed frames for recording.
     // Non-simulate: ALSA capture → AudioFrame → AudioService (VU + AEC + NS) →
@@ -314,6 +351,26 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             // batches while keeping the service alive for the rest of the
             // process lifetime.
             let playback = Arc::new(playback);
+            // H1–H3 (lane C) land here: H2
+            // Recording start and stop tones (E5) through the playback path.
+            struct PlaybackTones(Arc<waved_audio::playback::PlaybackService>);
+            impl waved_system::tones::ToneSink for PlaybackTones {
+                fn format(&self) -> waved_system::tones::PcmFormat {
+                    waved_system::tones::PcmFormat {
+                        sample_rate: self.0.sample_rate(),
+                        channels: self.0.channels() as usize,
+                        period_frames: self.0.period_frames(),
+                    }
+                }
+                fn submit(&self, period: Vec<i16>) -> bool {
+                    self.0.play_batch(period).is_ok()
+                }
+            }
+            tokio::spawn(waved_system::tones::run(
+                bus.meeting.subscribe(),
+                bus.settings.subscribe(),
+                Arc::new(PlaybackTones(Arc::clone(&playback))),
+            ));
             dsp_metrics_handle = Some(playback.dsp_metrics());
             audio_svc.set_dsp_metrics(playback.dsp_metrics());
             // SP#5: forward preset commands from the bus to the playback loop.
@@ -364,6 +421,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     Arc::clone(&uac_stats),
                 );
                 std::mem::forget(upstream);
+                // H1–H3 (lane C) land here: H3
 
                 let control_cfg = waved_audio::uac::control::UacControlConfig {
                     mixer_card: uac_cfg.mixer_card.clone(),
@@ -616,6 +674,7 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
         },
     ).await {
         Ok(meeting_svc) => {
+            // H1–H3 (lane C) land here: H1
             let meeting_cmd_rx = bus.commands.subscribe();
             let wifi_rx = bus.wifi.subscribe();
             tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await });
@@ -707,21 +766,27 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
             match lifecycle_commands.recv().await {
                 Ok(Command::RestartForConfig) => {
                     info!("received configuration restart request");
-                    return;
+                    return ExitCause::Other;
                 }
                 Ok(Command::Shutdown) => {
                     info!("received shutdown command");
-                    return;
+                    return ExitCause::Shutdown;
                 }
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return ExitCause::Other,
             }
         }
     };
-    tokio::select! {
-        _ = sigterm.recv() => info!("received SIGTERM"),
-        _ = sigint.recv() => info!("received SIGINT"),
-        _ = lifecycle => {}
+    let cause = tokio::select! {
+        _ = sigterm.recv() => {
+            info!("received SIGTERM");
+            ExitCause::Other
+        }
+        _ = sigint.recv() => {
+            info!("received SIGINT");
+            ExitCause::Other
+        }
+        cause = lifecycle => cause,
         fault = pipeline_fatal_rx.recv() => {
             if let Some(fault) = fault {
                 bus.audio.send_modify(|state| {
@@ -742,14 +807,57 @@ async fn run_async(config: waved_config::WavedConfig, bus: Arc<StateBus>) {
                     warn!("meeting service did not acknowledge audio fault before restart");
                 }
             }
+            ExitCause::Other
         }
-    }
+    };
 
     info!("shutdown signal received");
     let _ = bus.commands.send(Command::Shutdown);
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let wait = exit_wait(cause);
+    if cause == ExitCause::Shutdown {
+        info!("waiting {} ms for the MCU to power the device off", wait.as_millis());
+    }
+    tokio::time::sleep(wait).await;
+}
+
+/// Why `run_async` returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExitCause {
+    /// `Command::Shutdown`: the user powered off, or the battery is critical.
+    Shutdown,
+    /// SIGTERM, SIGINT, `RestartForConfig`, a pipeline fault, a closed bus.
+    Other,
+}
+
+/// The exit wait after every exit except a power-off. The Shutdown that
+/// `run_async` sends on the way out makes waved-mcu start retracting the
+/// motor, and the process exits before waved-mcu's power-off frame, so
+/// `killall waved` (deploys, the S60waved respawn) never powers the device off.
+const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// R10: the exit wait after `Command::Shutdown`. waved-mcu's Shutdown handler
+/// (`crates/waved-mcu/src/lib.rs:113–121`) sends the motor retract, sleeps
+/// 3 s, then sends the power-off frame. It sends no acknowledgement, so the
+/// wait is time-based: 3 s plus a margin for the UART write.
+const SHUTDOWN_POWER_OFF_WAIT: std::time::Duration = std::time::Duration::from_millis(3_500);
+
+fn exit_wait(cause: ExitCause) -> std::time::Duration {
+    match cause {
+        ExitCause::Shutdown => SHUTDOWN_POWER_OFF_WAIT,
+        ExitCause::Other => EXIT_WAIT,
+    }
+}
+
+/// The env var that turns the power key reader on (RS7).
+#[cfg(not(feature = "simulate"))]
+const POWER_KEY_ENV: &str = "WAVED_POWER_KEY";
+
+/// Only `WAVED_POWER_KEY=1` starts the power key reader (RS7).
+#[cfg(any(test, not(feature = "simulate")))]
+fn power_key_opted_in(value: Option<&str>) -> bool {
+    value == Some("1")
 }
 
 fn publish_first_pipeline_fault(
@@ -1005,6 +1113,27 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
 fn parse_doa_override(s: &str) -> Option<(f32, f32)> {
     let (a, b) = s.split_once(',')?;
     Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+}
+
+#[cfg(test)]
+mod exit_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_shutdown_waits_for_the_mcu_power_off_frame() {
+        // waved-mcu sends the power-off frame 3 s after Command::Shutdown.
+        assert!(exit_wait(ExitCause::Shutdown) >= std::time::Duration::from_millis(3_500));
+        // Everything else keeps 2 s, so `killall waved` never powers off.
+        assert_eq!(exit_wait(ExitCause::Other), std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn only_waved_power_key_1_starts_the_power_key() {
+        assert!(power_key_opted_in(Some("1")));
+        for value in [None, Some(""), Some("0"), Some("true"), Some(" 1")] {
+            assert!(!power_key_opted_in(value), "{value:?}");
+        }
+    }
 }
 
 #[cfg(test)]

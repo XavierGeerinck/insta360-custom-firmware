@@ -18,6 +18,7 @@ from on-device measurement and are hard to rederive.
 | UI coordinates    | [`docs/ui/COORDINATE_SYSTEM.md`](docs/ui/COORDINATE_SYSTEM.md) |
 | Home screen       | [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md)     |
 | Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
+| System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
@@ -27,7 +28,7 @@ relevant doc. Do not rely on commit messages — they rot.
 ## Build & Deploy
 
 ```bash
-cross build --release --target aarch64-unknown-linux-gnu \
+WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release --target aarch64-unknown-linux-gnu \
     --features "ui,capture-alsa" -p waved
 adb push target/aarch64-unknown-linux-gnu/release/waved /data/waved/waved
 adb shell "killall waved 2>/dev/null; sleep 2; \
@@ -36,6 +37,10 @@ adb shell "killall waved 2>/dev/null; sleep 2; \
 
 `setsid` is required — without it, `adb shell` sends SIGHUP to waved on
 session close.
+
+`WAVED_BUILD_ID` is the build id the About screen shows (`Cross.toml` passes it
+into the container). The power key is read only when waved starts with
+`WAVED_POWER_KEY=1` until the device pass confirms the `vad_keypad` node.
 
 `/etc/init.d/S60waved` auto-respawns waved within ~3 s of any exit. When
 testing with injected env vars, kill the watchdog first (see

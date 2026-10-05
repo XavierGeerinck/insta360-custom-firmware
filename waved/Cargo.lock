@@ -3601,6 +3601,7 @@ dependencies = [
  "waved-provision",
  "waved-settings",
  "waved-state",
+ "waved-system",
  "waved-uart",
  "waved-ui",
  "waved-wifi",
