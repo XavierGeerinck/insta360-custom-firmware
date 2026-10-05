@@ -219,6 +219,7 @@ impl RoundButton {
     /// icon (media glyphs 20 px, as everywhere) and a `ROUND_LABEL_W`-wide
     /// micro label whose top-left is `label`. Taps only; no hold, no repeat
     /// (File detail's Delete and Send, which `SideButton` would repeat).
+    /// Don't chain `.hold` onto it: the hold ring is sized for `BottomSpot::Main`.
     pub fn at(
         parent: Obj,
         rect: Rect,

@@ -168,7 +168,7 @@ screen. LVGL's own `LV_EVENT_GESTURE` is not used.
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Call, Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
-| Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`; `.scroll_to(index)` shows a row without animation | After a recording, Time zone, Dim after |
+| Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`: whole rows only (three from `RADIO_TOP`, y 68–231), snapping to rows when longer; `.scroll_to(index)` puts the row at the top without animation, or shows the last rows | After a recording, Time zone, Dim after |
 | Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
 

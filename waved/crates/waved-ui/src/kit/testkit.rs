@@ -293,20 +293,24 @@ pub fn target_problems(root: Obj) -> Vec<String> {
 }
 
 /// `obj`'s box cut to the boxes of all its ancestors, or `None` when nothing
-/// of it shows. An ancestor with `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not cut.
+/// of it shows. An ancestor with `LV_OBJ_FLAG_OVERFLOW_VISIBLE` still cuts,
+/// as `lv_indev_search_obj` does, but at its box grown by its extra draw size.
 fn shown_area(obj: Obj) -> Option<lv_area_t> {
     let mut area = obj.coords();
     let mut ancestor = obj.parent();
     while let Some(parent) = ancestor {
-        if !parent.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_OVERFLOW_VISIBLE) {
-            let p = parent.coords();
-            area.x1 = area.x1.max(p.x1);
-            area.y1 = area.y1.max(p.y1);
-            area.x2 = area.x2.min(p.x2);
-            area.y2 = area.y2.min(p.y2);
-            if area.x1 > area.x2 || area.y1 > area.y2 {
-                return None;
-            }
+        let mut p = parent.coords();
+        if parent.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_OVERFLOW_VISIBLE) {
+            // SAFETY: live object under the test lock; only measures.
+            let grow = unsafe { lv_obj_calculate_ext_draw_size(parent.raw(), LV_PART_MAIN) };
+            (p.x1, p.y1, p.x2, p.y2) = (p.x1 - grow, p.y1 - grow, p.x2 + grow, p.y2 + grow);
+        }
+        area.x1 = area.x1.max(p.x1);
+        area.y1 = area.y1.max(p.y1);
+        area.x2 = area.x2.min(p.x2);
+        area.y2 = area.y2.min(p.y2);
+        if area.x1 > area.x2 || area.y1 > area.y2 {
+            return None;
         }
         ancestor = parent.parent();
     }
@@ -432,6 +436,21 @@ mod tests {
             let problems = target_problems(root);
             assert_eq!(problems.len(), 1, "{problems:#?}");
             assert!(problems[0].contains("past the r190"), "{problems:#?}");
+        });
+    }
+
+    #[test]
+    fn an_overflow_visible_parent_still_cuts_at_its_drawn_edge() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let viewport = Obj::plain(root)
+                .rect(Rect::new(0, 80, 400, 142))
+                .flag(lv_obj_flag_t_LV_OBJ_FLAG_OVERFLOW_VISIBLE, true);
+            Obj::plain(viewport)
+                .rect(Rect::new(52, 118, 296, 52))
+                .radius(16)
+                .clickable(true);
+            assert_eq!(target_problems(root), Vec::<String>::new());
         });
     }
 

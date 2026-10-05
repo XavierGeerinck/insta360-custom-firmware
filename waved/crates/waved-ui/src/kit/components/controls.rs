@@ -17,6 +17,8 @@ const KNOB: lv_style_selector_t = LV_PART_KNOB as lv_style_selector_t;
 
 /// Text width in a radio row: 296 - 2 × 16 padding - 20 ring - 12 gap.
 const TEXT_W: i32 = 232;
+/// A radio row and the gap below it.
+const RADIO_PITCH: i32 = 56;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RadioOption {
@@ -41,13 +43,17 @@ struct RadioRow {
 
 pub struct RadioList {
     viewport: Obj,
+    /// Scroll offset that shows the last rows (0 when everything fits).
+    max_scroll: i32,
     rows: Rc<Vec<RadioRow>>,
     selected: Rc<Cell<usize>>,
 }
 
 impl RadioList {
-    /// Option rows (296×52, 4 px apart: y 68 / 124 / 180) from `top` (`RADIO_TOP` under a title),
-    /// scrolling if they don't fit above Back.
+    /// Option rows (296×52, 4 px apart: y 68 / 124 / 180) from `top` (`RADIO_TOP` under a title).
+    /// The viewport holds as many whole rows as fit above Back (three from `RADIO_TOP`, y 68–231);
+    /// a longer list scrolls and snaps to whole rows, so a row is never cut where the panel
+    /// edge is past the tap limit.
     pub fn new(
         parent: Obj,
         top: i32,
@@ -55,13 +61,15 @@ impl RadioList {
         selected: usize,
         on_select: impl FnMut(usize) + 'static,
     ) -> Self {
+        let visible_rows = ((BACK.y - top + 4) / RADIO_PITCH).max(1);
         let viewport = Obj::plain(parent)
-            .rect(Rect::new(0, top, 400, BACK.y - top))
+            .rect(Rect::new(0, top, 400, visible_rows * RADIO_PITCH - 4))
             .column_centered(4);
         // SAFETY: live object.
         unsafe {
             lv_obj_add_flag(viewport.raw(), lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
             lv_obj_set_scroll_dir(viewport.raw(), lv_dir_t_LV_DIR_VER);
+            lv_obj_set_scroll_snap_y(viewport.raw(), lv_scroll_snap_t_LV_SCROLL_SNAP_START);
             lv_obj_set_scrollbar_mode(viewport.raw(), lv_scrollbar_mode_t_LV_SCROLLBAR_MODE_OFF);
         }
         let rows: Vec<RadioRow> = options
@@ -92,8 +100,10 @@ impl RadioList {
                 RadioRow { obj, ring, dot }
             })
             .collect();
+        let max_scroll = (rows.len() as i32 - visible_rows).max(0) * RADIO_PITCH;
         let list = Self {
             viewport,
+            max_scroll,
             rows: Rc::new(rows),
             selected: Rc::new(Cell::new(selected)),
         };
@@ -120,11 +130,14 @@ impl RadioList {
         self.selected.get()
     }
 
-    /// Scroll the list so the row at `index` is fully visible, without
-    /// animation (Time zone and Dim after open on the selected row).
+    /// Scroll the list without animation so the row at `index` is the top
+    /// row, or as far as the list goes (the last rows then fill the
+    /// viewport). Time zone and Dim after open on the selected row.
     pub fn scroll_to(&self, index: usize) {
-        // SAFETY: live row inside the live viewport.
-        unsafe { lv_obj_scroll_to_view(self.rows[index].obj.raw(), lv_anim_enable_t_LV_ANIM_OFF) };
+        let y = (index as i32 * RADIO_PITCH).min(self.max_scroll);
+        // SAFETY: live viewport. `lv_obj_scroll_to_view` overscrolls with
+        // snapping on, so the offset is set directly.
+        unsafe { lv_obj_scroll_to_y(self.viewport.raw(), y, lv_anim_enable_t_LV_ANIM_OFF) };
         self.viewport.update_layout();
     }
 
@@ -359,32 +372,88 @@ mod tests {
         });
     }
 
+    fn zones(count: usize) -> Vec<RadioOption> {
+        (0..count)
+            .map(|i| RadioOption::new(format!("Zone {i}"), "UTC+01:00"))
+            .collect()
+    }
+
+    /// The rows at least partly inside the viewport, and whether each is whole.
+    fn shown(list: &RadioList, count: usize, viewport: Obj) -> Vec<(usize, bool)> {
+        let view = viewport.coords();
+        (0..count)
+            .filter_map(|i| {
+                let a = list.row(i).coords();
+                (a.y2 >= view.y1 && a.y1 <= view.y2)
+                    .then_some((i, a.y1 >= view.y1 && a.y2 <= view.y2))
+            })
+            .collect()
+    }
+
     #[test]
-    fn a_long_radio_list_opens_on_the_selected_row() {
+    fn a_long_radio_list_shows_whole_rows_only() {
         lvgl(|lv| {
             let root = lv.screen();
-            let options = (0..12)
-                .map(|i| RadioOption::new(format!("Zone {i}"), "UTC+01:00"))
-                .collect();
-            let list = RadioList::new(root, RADIO_TOP, options, 9, |_| {});
+            let list = RadioList::new(root, RADIO_TOP, zones(12), 9, |_| {});
+            let viewport = root.child(0);
             root.update_layout();
-            let viewport = root.child(0).coords();
-            let fully_visible = |index: usize| {
-                let a = list.row(index).coords();
-                a.y1 >= viewport.y1 && a.y2 <= viewport.y2
-            };
-            assert!(
-                fully_visible(0) && !fully_visible(9),
+            let view = viewport.coords();
+            // Three whole rows: y 68-231, above Back.
+            assert_eq!((view.y1, view.y2), (RADIO_TOP, 231));
+            assert_eq!(
+                shown(&list, 12, viewport),
+                vec![(0, true), (1, true), (2, true)],
                 "lists open at the top"
             );
-            list.scroll_to(9);
-            assert!(fully_visible(9), "row 9 shows without animation");
+            assert_targets_ok(root);
+            // Every snap position shows three whole rows inside the tap limit.
+            for first in 0..=9 {
+                // SAFETY: live viewport under the test lock.
+                unsafe {
+                    lv_obj_scroll_to_y(
+                        viewport.raw(),
+                        first as i32 * 56,
+                        lv_anim_enable_t_LV_ANIM_OFF,
+                    )
+                };
+                root.update_layout();
+                assert_eq!(
+                    shown(&list, 12, viewport),
+                    vec![(first, true), (first + 1, true), (first + 2, true)],
+                    "snap {first}"
+                );
+                assert_targets_ok(root);
+            }
+        });
+    }
+
+    #[test]
+    fn scroll_to_shows_the_row_without_overscrolling() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let list = RadioList::new(root, RADIO_TOP, zones(12), 9, |_| {});
+            let viewport = root.child(0);
             list.scroll_to(11);
-            assert!(fully_visible(11), "the last row");
-            list.scroll_to(1);
-            assert!(fully_visible(1));
+            assert_eq!(
+                shown(&list, 12, viewport),
+                vec![(9, true), (10, true), (11, true)],
+                "the last rows fill the viewport"
+            );
+            list.scroll_to(4);
+            assert_eq!(
+                list.row(4).coords().y1,
+                RADIO_TOP,
+                "the row comes to the top"
+            );
+            assert_eq!(shown(&list, 12, viewport).len(), 3);
             list.scroll_to(0);
             assert_eq!(list.row(0).coords().y1, RADIO_TOP, "back at the top");
+            assert_targets_ok(root);
+            // A short list never scrolls.
+            let root = lv.screen();
+            let short = RadioList::new(root, RADIO_TOP, zones(2), 1, |_| {});
+            short.scroll_to(1);
+            assert_eq!(short.row(0).coords().y1, RADIO_TOP);
         });
     }
 
