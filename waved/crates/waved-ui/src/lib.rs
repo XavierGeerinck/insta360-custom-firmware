@@ -151,9 +151,7 @@ fn ui_thread_main(
         unsafe {
             lv_tick_inc(elapsed_ms);
         }
-        unsafe {
-            (*touch_ptr).poll();
-        }
+        let _ = unsafe { (*touch_ptr).poll() };
 
         {
             let batt = battery_rx.borrow();
@@ -603,15 +601,15 @@ unsafe extern "C" fn flush_cb(disp: *mut lv_display_t, area: *const lv_area_t, p
 }
 
 unsafe extern "C" fn touch_read_cb(indev: *mut lv_indev_t, data: *mut lv_indev_data_t) {
-    let touch = lv_indev_get_user_data(indev) as *const input::TouchInput;
+    let touch = lv_indev_get_user_data(indev) as *mut input::TouchInput;
     if touch.is_null() {
         (*data).state = lv_indev_state_t_LV_INDEV_STATE_RELEASED;
         return;
     }
-    let touch = &*touch;
-    (*data).point.x = touch.x;
-    (*data).point.y = touch.y;
-    (*data).state = if touch.pressed {
+    let sample = (*touch).poll();
+    (*data).point.x = sample.x;
+    (*data).point.y = sample.y;
+    (*data).state = if sample.pressed {
         lv_indev_state_t_LV_INDEV_STATE_PRESSED
     } else {
         lv_indev_state_t_LV_INDEV_STATE_RELEASED

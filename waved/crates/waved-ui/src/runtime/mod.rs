@@ -3,6 +3,7 @@
 //! by one snapshot per loop iteration. `step` and `touch` are host-testable;
 //! the device loop (Z8) adds LVGL's tick, input and display around them.
 
+pub mod device;
 pub mod gesture;
 pub mod power;
 pub mod registry;

@@ -2,6 +2,7 @@
 //!
 //! Reads ABS_MT_POSITION_X/Y + BTN_TOUCH events and converts to LVGL lv_indev_data_t.
 
+use crate::runtime::touch::TouchSample;
 use tracing::info;
 
 /// Evdev event structure (matches kernel input_event).
@@ -22,12 +23,22 @@ const BTN_TOUCH: u16 = 0x14a;
 const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
 
+/// ILITEK_TDDI reports native screen pixels (x 0-399), not 0-2047, and the
+/// touch panel is mounted upside down like the display (`display.rs` flips
+/// 180 degrees in `flush`).
+pub fn flip_x(raw: i32) -> i32 {
+    399 - raw.clamp(0, 399)
+}
+
+/// See `flip_x`; y runs 0-303.
+pub fn flip_y(raw: i32) -> i32 {
+    303 - raw.clamp(0, 303)
+}
+
 pub struct TouchInput {
     #[cfg(not(feature = "simulate"))]
     fd: std::os::unix::io::RawFd,
-    pub x: i32,
-    pub y: i32,
-    pub pressed: bool,
+    sample: TouchSample,
 }
 
 impl TouchInput {
@@ -79,27 +90,26 @@ impl TouchInput {
                 }
             }
 
-            return Ok(Self {
+            Ok(Self {
                 fd,
-                x: 0,
-                y: 0,
-                pressed: false,
-            });
+                sample: TouchSample::default(),
+            })
         }
         #[cfg(feature = "simulate")]
         {
             info!("[touch] SIMULATE MODE — no real touch input");
             Ok(Self {
-                x: 0,
-                y: 0,
-                pressed: false,
+                sample: TouchSample::default(),
             })
         }
     }
 
-    /// Poll for pending events. Call this once per LVGL tick before `lv_timer_handler`.
-    pub fn poll(&mut self) {
+    /// Read every pending event and return the latest touch in LVGL
+    /// coordinates. Call once per loop iteration.
+    pub fn poll(&mut self) -> TouchSample {
         #[cfg(not(feature = "simulate"))]
+        // SAFETY: `fd` is the open, non-blocking evdev file; each read fills
+        // at most one `InputEvent`.
         unsafe {
             let mut ev = std::mem::zeroed::<InputEvent>();
             let sz = std::mem::size_of::<InputEvent>();
@@ -109,24 +119,14 @@ impl TouchInput {
                     break;
                 }
                 match ev.r#type {
-                    EV_KEY if ev.code == BTN_TOUCH => {
-                        self.pressed = ev.value != 0;
-                    }
-                    EV_ABS => {
-                        if ev.code == ABS_MT_POSITION_X {
-                            // ILITEK_TDDI reports native screen pixels (0–399), not 0–2047.
-                            // Apply 180° flip to match the display flush() orientation.
-                            self.x = 399 - ev.value.clamp(0, 399);
-                        } else if ev.code == ABS_MT_POSITION_Y {
-                            // ILITEK_TDDI reports native screen pixels (0–303), not 0–2047.
-                            // Apply 180° flip to match the display flush() orientation.
-                            self.y = 303 - ev.value.clamp(0, 303);
-                        }
-                    }
+                    EV_KEY if ev.code == BTN_TOUCH => self.sample.pressed = ev.value != 0,
+                    EV_ABS if ev.code == ABS_MT_POSITION_X => self.sample.x = flip_x(ev.value),
+                    EV_ABS if ev.code == ABS_MT_POSITION_Y => self.sample.y = flip_y(ev.value),
                     _ => {}
                 }
             }
         }
+        self.sample
     }
 }
 
@@ -136,5 +136,20 @@ impl Drop for TouchInput {
         unsafe {
             libc::close(self.fd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn touch_axes_flip_native_pixels() {
+        // ILITEK_TDDI reports native pixels (0..399, 0..303), not 0..2047,
+        // and the panel is mounted upside down like the display.
+        assert_eq!((flip_x(0), flip_x(399)), (399, 0));
+        assert_eq!((flip_y(0), flip_y(303)), (303, 0));
+        assert_eq!((flip_x(200), flip_y(152)), (199, 151));
+        assert_eq!((flip_x(2047), flip_y(-4)), (0, 303), "out-of-range values clamp");
     }
 }
