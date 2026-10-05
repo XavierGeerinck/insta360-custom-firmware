@@ -7,6 +7,7 @@ pub mod backlight;
 mod civil;
 pub mod display;
 pub mod power_key;
+pub mod reset;
 pub mod rtc;
 mod service;
 pub mod tones;
