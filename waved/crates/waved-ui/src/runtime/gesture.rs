@@ -691,10 +691,7 @@ mod tests {
                 .clickable(true);
             root.update_layout();
             let mut g = Gestures::default();
-            assert_eq!(
-                g.sample(down(230, 150), 0, root, &Route::Volume, 2),
-                None
-            );
+            assert_eq!(g.sample(down(230, 150), 0, root, &Route::Volume, 2), None);
             assert_eq!(press_target(root, 230, 150), Some(button));
             page.delete();
             assert_eq!(

@@ -66,6 +66,9 @@ pub struct Runtime {
     gestures: Gestures,
     boot_done: bool,
     shown: Option<Shown>,
+    /// The screen the resting screen covers, kept alive for the wake (at
+    /// most one; see `replace_shown`).
+    parked: Option<Shown>,
     /// The router stack after the last step: a route missing from it now has
     /// left, by whatever path, and sends its leave commands.
     last_stack: Vec<Route>,
@@ -92,6 +95,7 @@ impl Runtime {
             gestures: Gestures::default(),
             boot_done: false,
             shown: None,
+            parked: None,
             last_stack: Vec::new(),
         }
     }
@@ -222,17 +226,32 @@ impl Runtime {
     /// This is the one place leave commands are sent.
     fn send_leave_commands(&self, snap: &UiSnapshot) {
         let stack = self.router.stack();
-        for route in self.last_stack.iter().filter(|route| !stack.contains(route)) {
+        for route in self
+            .last_stack
+            .iter()
+            .filter(|route| !stack.contains(route))
+        {
             for command in leave_commands(route, snap) {
                 self.ctx.dispatch.command(command);
             }
         }
     }
 
-    /// Build the routed screen if it is not the one on display, load it,
-    /// then delete the old root with every handler. A route with no screen
-    /// yet (milestone 3) goes back.
+    /// Show the routed screen if it is not the one on display: the parked
+    /// screen is re-loaded as it was (no rebuild, so a screen that acts in
+    /// `build` does not act again on waking); any other route is built on a
+    /// new root and loaded. A route with no screen yet (milestone 3) goes
+    /// back. A parked screen whose route left the stack is deleted first.
     fn show_current(&mut self, snap: &UiSnapshot) {
+        if self
+            .parked
+            .as_ref()
+            .is_some_and(|parked| !self.router.stack().contains(&parked.route))
+        {
+            if let Some(parked) = self.parked.take() {
+                parked.root.delete();
+            }
+        }
         for _ in 0..MAX_BACK_OUTS {
             let route = self.router.current().clone();
             if self
@@ -240,6 +259,17 @@ impl Runtime {
                 .as_ref()
                 .is_some_and(|shown| shown.route == route)
             {
+                return;
+            }
+            if self
+                .parked
+                .as_ref()
+                .is_some_and(|parked| parked.route == route)
+            {
+                if let Some(parked) = self.parked.take() {
+                    load(parked.root);
+                    self.replace_shown(parked);
+                }
                 return;
             }
             let Some(mut screen) = (self.registry)(&route) else {
@@ -256,10 +286,7 @@ impl Runtime {
             let root = Obj::screen();
             screen.build(root, &self.ctx, snap);
             load(root);
-            if let Some(old) = self.shown.take() {
-                old.root.delete();
-            }
-            self.shown = Some(Shown {
+            self.replace_shown(Shown {
                 route,
                 root,
                 screen,
@@ -268,11 +295,34 @@ impl Runtime {
         }
     }
 
+    /// `next` (already loaded) becomes the screen on display. The old one is
+    /// parked when `next` is the resting screen pushed right on top of its
+    /// route and nothing is parked yet; otherwise it is deleted with every
+    /// handler.
+    fn replace_shown(&mut self, next: Shown) {
+        if let Some(old) = self.shown.take() {
+            let stack = self.router.stack();
+            let parks = next.route == Route::Resting
+                && self.parked.is_none()
+                && stack.len() >= 2
+                && stack[stack.len() - 2] == old.route;
+            if parks {
+                self.parked = Some(old);
+            } else {
+                old.root.delete();
+            }
+        }
+        self.shown = Some(next);
+    }
+
     /// Delete the screen on display (tests only; the device never stops).
     #[cfg(test)]
     pub fn close(mut self) {
-        if let Some(shown) = self.shown.take() {
-            shown.root.delete();
+        for screen in [self.shown.take(), self.parked.take()]
+            .into_iter()
+            .flatten()
+        {
+            screen.root.delete();
         }
     }
 }
@@ -323,8 +373,9 @@ mod tests {
     use crate::screens_v2::messages::copy;
     use std::cell::{Cell, RefCell};
     use std::path::PathBuf;
+    use std::rc::Rc;
     use uuid::Uuid;
-    use waved_state::{PendingDecision, PowerKeyPress};
+    use waved_state::{PendingDecision, PowerKeyPress, ProvisioningState};
 
     const MIN: u64 = 60_000;
     /// A Probe's drag control (keeps its gestures).
@@ -393,6 +444,10 @@ mod tests {
     }
 
     fn runtime_with_bus() -> (Runtime, broadcast::Receiver<Command>) {
+        runtime_with(Box::new(probes))
+    }
+
+    fn runtime_with(registry: Registry) -> (Runtime, broadcast::Receiver<Command>) {
         BUILDS.with(|b| b.borrow_mut().clear());
         LAST_NOW.with(|n| n.set(None));
         PIN_SEEN.with(|p| p.set((None, None)));
@@ -400,7 +455,7 @@ mod tests {
         let rt = Runtime::new(
             bus,
             Arc::new(WavedConfig::default()),
-            Box::new(probes),
+            registry,
             PowerDriver::new(0, Box::new(NoPanel)),
         );
         (rt, bus_rx)
@@ -864,6 +919,121 @@ mod tests {
                 send(&mut rt, UiEvent::Navigate(Route::Home), 2_600),
                 Some(Route::Home)
             );
+            assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+            rt.close();
+        });
+    }
+
+    /// The real Wi-Fi setup screen (it starts provisioning from `build`),
+    /// Probes elsewhere.
+    fn with_setup(route: &Route) -> Option<Box<dyn Screen>> {
+        match route {
+            Route::WifiSetup => registry::screen_for(route),
+            other => probes(other),
+        }
+    }
+
+    fn setup_failed(now_ms: u64) -> UiSnapshot {
+        let mut snap = ready(now_ms);
+        snap.provisioning = ProvisioningState::Failed {
+            reason: "wrong password".into(),
+        };
+        snap
+    }
+
+    /// Booted with the real Wi-Fi setup screen open; its start command drained.
+    fn on_wifi_setup(lv: &mut Lvgl) -> (Runtime, broadcast::Receiver<Command>) {
+        lv.screen();
+        let (mut rt, mut bus) = runtime_with(Box::new(with_setup));
+        rt.step(ready(0), &[]);
+        rt.step(ready(BOOT_MIN_MS), &[]);
+        send(&mut rt, UiEvent::Navigate(Route::Wifi), 2_000);
+        send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_100);
+        assert_eq!(drain(&mut bus), [Command::OpenWifiProvisioning]);
+        (rt, bus)
+    }
+
+    /// Alive while `obj` is: the kit drops a handler (and the clone it holds)
+    /// when its object is deleted. Unlike `lv_obj_is_valid`, a new object at
+    /// a reused address does not fool it.
+    struct Life(Rc<()>);
+
+    impl Life {
+        fn of(obj: Obj) -> Self {
+            let life = Rc::new(());
+            let held = life.clone();
+            crate::kit::event::on(
+                obj,
+                crate::bindings::lv_event_code_t_LV_EVENT_CLICKED,
+                move |_| {
+                    let _ = &held;
+                },
+            );
+            Self(life)
+        }
+
+        fn alive(&self) -> bool {
+            Rc::strong_count(&self.0) > 1
+        }
+    }
+
+    #[test]
+    fn waking_on_wifi_setup_shows_the_same_screen_without_restarting_provisioning() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = on_wifi_setup(lv);
+            let mut serving = ready(2_200);
+            serving.provisioning = ProvisioningState::ApActive {
+                ssid: "Wave-setup".into(),
+                passphrase: "12345678".into(),
+                url: "http://192.168.4.1/".into(),
+            };
+            rt.step(serving, &[]);
+            rt.step(setup_failed(3_000), &[]);
+            let setup = rt.root().unwrap();
+            let setup_life = Life::of(setup);
+            let failure = "Couldn't connect: wrong password";
+            assert!(shows_text(setup, failure));
+
+            rt.step(setup_failed(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            assert!(setup_life.alive(), "parked under the resting screen");
+            let ambient = Life::of(rt.root().unwrap());
+
+            let at = 2 * MIN + 10;
+            rt.touch(down(200, 150), &setup_failed(at));
+            rt.step(setup_failed(at + 10), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::WifiSetup));
+            assert!(setup_life.alive());
+            assert_eq!(rt.root(), Some(setup), "re-loaded, not rebuilt");
+            // SAFETY: reads LVGL's active screen pointer.
+            assert_eq!(unsafe { lv_screen_active() }, setup.raw());
+            assert!(!ambient.alive(), "the resting screen is gone");
+            assert!(
+                drain(&mut bus).is_empty(),
+                "waking does not restart provisioning"
+            );
+            assert!(shows_text(setup, failure), "the failure still shows");
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_parked_screen_whose_route_leaves_the_stack_is_deleted_and_sends_its_leave_commands() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = on_wifi_setup(lv);
+            let setup = Life::of(rt.root().unwrap());
+            rt.step(ready(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            assert!(setup.alive(), "parked");
+            let ambient = Life::of(rt.root().unwrap());
+            assert!(drain(&mut bus).is_empty(), "resting leaves nothing");
+
+            let mut takeover = ready(2 * MIN + 100);
+            takeover.meeting.pending_decision = Some(decision());
+            rt.step(takeover, &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Decision));
+            assert!(!setup.alive(), "the parked screen is deleted");
+            assert!(!ambient.alive());
             assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
             rt.close();
         });
