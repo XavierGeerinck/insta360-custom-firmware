@@ -6,7 +6,7 @@ use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::{color, text_width, Obj};
 use crate::kit::tokens::{
-    lvgl_angle, Rect, BG, LINE, LIVE, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3, WHITE,
+    lvgl_angle, Rect, BACK, BG, LINE, LIVE, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3, WHITE,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -45,8 +45,8 @@ pub struct RadioList {
 }
 
 impl RadioList {
-    /// Option rows (296×52, 6 px apart) from `top`, scrolling if they don't
-    /// fit above Back.
+    /// Option rows (296×52, 4 px apart: y 68 / 124 / 180) from `top` (`RADIO_TOP` under a title),
+    /// scrolling if they don't fit above Back.
     pub fn new(
         parent: Obj,
         top: i32,
@@ -55,8 +55,8 @@ impl RadioList {
         on_select: impl FnMut(usize) + 'static,
     ) -> Self {
         let viewport = Obj::plain(parent)
-            .rect(Rect::new(0, top, 400, 248 - top))
-            .column_centered(6);
+            .rect(Rect::new(0, top, 400, BACK.y - top))
+            .column_centered(4);
         // SAFETY: live object.
         unsafe {
             lv_obj_add_flag(viewport.raw(), lv_obj_flag_t_LV_OBJ_FLAG_SCROLLABLE);
@@ -312,6 +312,7 @@ impl ValueArc {
 mod tests {
     use super::*;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+    use crate::kit::tokens::RADIO_TOP;
 
     #[test]
     fn a_radio_list_selects_one_option() {
@@ -321,7 +322,7 @@ mod tests {
             let chosen = picked.clone();
             let list = RadioList::new(
                 root,
-                70,
+                RADIO_TOP,
                 vec![
                     RadioOption::new("Send automatically", "As soon as Wi-Fi allows"),
                     RadioOption::new("Ask me each time", "Choose Send, Keep or Delete"),
@@ -332,6 +333,16 @@ mod tests {
             );
             assert_golden("radio_after_recording", &lv.render());
             assert_targets_ok(root);
+            // Rows 296 × 52 at x 52, y 68 / 124 / 180, all above Back.
+            for (index, y) in [(0, 68), (1, 124), (2, 180)] {
+                let a = list.row(index).coords();
+                assert_eq!(
+                    (a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1),
+                    (52, y, 296, 52)
+                );
+            }
+            let viewport = root.child(0);
+            assert!(viewport.coords().y2 < BACK.y, "the list stops above Back");
             lv.click(list.row(2));
             assert_eq!((picked.get(), list.selected()), (2, 2));
         });

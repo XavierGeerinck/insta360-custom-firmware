@@ -10,11 +10,15 @@ use std::cell::Cell;
 
 const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
 const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
-const TALKER_WIDTH: i32 = 7;
+const TALKER_WIDTH: i32 = 6;
 const TALKER_SPAN: f32 = 44.0;
-/// The mockup dashes the ring `4 8` with round caps: a 12 px pitch is 9° on
-/// r 78, and a 4 px stroke is 3°.
-const DASHES: usize = 40;
+/// The talker dot sits just outside the ring, on r + 12 (r 82 on Home).
+const TALKER_DOT_OFFSET: i32 = 12;
+/// The tap circle reaches 1 px past the ring radius (r 71, diameter 142 on Home).
+const HIT_OFFSET: i32 = 1;
+/// The mockup dashes the ring `4 8` with round caps: a 12 px pitch is about
+/// 10° on r 70, and a 4 px stroke about 3°.
+const DASHES: usize = 36;
 const DASH_SPAN: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +83,7 @@ impl Dial {
 
     /// Make the whole disc one tap target.
     pub fn on_tap(mut self, tap: impl FnMut() + 'static) -> Self {
-        let size = 2 * self.r + 8;
+        let size = 2 * (self.r + HIT_OFFSET);
         let disc = Obj::plain(self.parent)
             .pos(self.cx - size / 2, self.cy - size / 2)
             .size(size, size)
@@ -204,7 +208,7 @@ impl Dial {
                 }
                 arc_style(self.talker, MAIN, hex, 255, TALKER_WIDTH);
                 arc_style(self.talker, INDICATOR, hex, 0, TALKER_WIDTH);
-                let (x, y) = polar(self.cx, self.cy, (self.r + 14) as f32, az);
+                let (x, y) = polar(self.cx, self.cy, (self.r + TALKER_DOT_OFFSET) as f32, az);
                 self.dot.pos(x - 4, y - 4).bg(hex).hidden(false);
                 self.talker.hidden(false);
             }
@@ -441,6 +445,48 @@ mod tests {
                 (ring[0] - 1, ring[2] + 1),
                 "ring {ring:?} gauge {gauge:?}"
             );
+        });
+    }
+
+    #[test]
+    fn the_talker_wedge_and_dot_follow_the_dial_table() {
+        lvgl(|lv| {
+            let (_root, mut dial) = home_dial(lv);
+            dial.set_ring(RingStyle::Live);
+            dial.set_talker(Some(90.0));
+            let frame = lv.render();
+            let lit: Vec<i32> = (-6..=6)
+                .filter(|dx| frame.pixel(DIAL_CX + DIAL_R + dx, DIAL_CY) != [0, 0, 0])
+                .collect();
+            // Stroke 6 on the ring (one more pixel either side would be 7)...
+            assert_eq!(lit.len(), 6, "{lit:?}");
+            assert!(lit[0] >= -3 && lit[5] <= 3, "centred on r: {lit:?}");
+            // ...and the 8 px dot on r 82, clear of the wedge.
+            let (x, y) = (DIAL_CX + DIAL_R + 12, DIAL_CY);
+            let [r, g, _] = frame.pixel(x, y);
+            assert!(g > 180 && r < 100, "teal dot at r 82, got r{r} g{g}");
+            assert_eq!(
+                frame.pixel(x - 5, y),
+                [0, 0, 0],
+                "a gap between wedge and dot"
+            );
+            assert_eq!(frame.pixel(x + 5, y), [0, 0, 0]);
+        });
+    }
+
+    #[test]
+    fn the_tap_circle_is_r_71() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let dial = Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(|| {});
+            let hit = dial.hit().unwrap();
+            hit.update_layout();
+            let a = hit.coords();
+            assert_eq!(
+                (a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1),
+                (DIAL_CX - 71, DIAL_CY - 71, 142, 142)
+            );
+            assert_eq!(a.y1, 50, "it begins where the status pill's hit area ends");
         });
     }
 

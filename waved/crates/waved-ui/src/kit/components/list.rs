@@ -5,21 +5,32 @@ use crate::kit::event::{on, on_click};
 use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::{color, text_width, Obj};
-use crate::kit::tokens::{lvgl_angle, Rect, BG, LINE, RAISED, REC, SURFACE, TEXT, TEXT_2, TEXT_3};
+use crate::kit::tokens::{
+    lvgl_angle, Rect, BG, LINE, PANEL_CX, PANEL_CY, RAISED, REC, SURFACE, TEXT, TEXT_2, TEXT_3,
+};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
 const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
 
-/// The list area, from under the status to just above Back.
-pub const VIEW: Rect = Rect::new(0, 34, 400, 218);
+/// The list area, from under the status to 4 px above Back (y 34–240).
+pub const VIEW: Rect = Rect::new(0, 34, 400, 206);
 /// Every row keeps a 48 px slot. Edge rows shrink their width and text, not
 /// their height, so snapping and the scroll position stay exact.
 pub const ROW_H: i32 = 48;
 /// Where the focused row is centred (the mockup's focus line), a little below
 /// the middle of `VIEW` so the top rows stay clear of the fade.
-const FOCUS_Y: i32 = 152;
+const FOCUS_Y: i32 = 144;
+/// The black gradients over the top and bottom edges of `VIEW`.
+const FADE_TOP: i32 = 14;
+const FADE_BOTTOM: i32 = 16;
+/// The arc scrollbar hugs the bezel: r 188 around the panel centre, stroke 4,
+/// over device angles 62°–122° (y 18–206 on the right edge).
+const SCROLLBAR_R: i32 = 188;
+const SCROLLBAR_WIDTH: i32 = 4;
+const SCROLLBAR_FROM: f32 = 62.0;
+const SCROLLBAR_SPAN: f32 = 60.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ListItem {
@@ -189,10 +200,10 @@ impl RotaryList {
                 }
             })
             .collect();
-        fade(parent, Rect::new(0, VIEW.y, VIEW.w, 18), true);
+        fade(parent, Rect::new(0, VIEW.y, VIEW.w, FADE_TOP), true);
         fade(
             parent,
-            Rect::new(0, VIEW.y + VIEW.h - 22, VIEW.w, 22),
+            Rect::new(0, VIEW.y + VIEW.h - FADE_BOTTOM, VIEW.w, FADE_BOTTOM),
             false,
         );
         let scrollbar = scrollbar(parent);
@@ -296,11 +307,12 @@ impl Inner {
 
     fn update_scrollbar(&self) {
         let rows = self.rows.len().max(1) as f32;
-        let thumb = (56.0 * (4.2 / rows).min(1.0)).max(10.0);
+        let thumb = (SCROLLBAR_SPAN * (4.2 / rows).min(1.0)).max(10.0);
         let max_scroll = ((rows - 1.0) * ROW_H as f32).max(1.0);
         // SAFETY: live viewport.
         let scrolled = unsafe { lv_obj_get_scroll_y(self.viewport.raw()) } as f32;
-        let start = 62.0 + (56.0 - thumb) * (scrolled / max_scroll).clamp(0.0, 1.0);
+        let start =
+            SCROLLBAR_FROM + (SCROLLBAR_SPAN - thumb) * (scrolled / max_scroll).clamp(0.0, 1.0);
         // SAFETY: live arc.
         unsafe {
             lv_arc_set_angles(
@@ -313,15 +325,19 @@ impl Inner {
 }
 
 fn scrollbar(parent: Obj) -> Obj {
-    let (r, width) = (180, 4);
+    let (r, width) = (SCROLLBAR_R, SCROLLBAR_WIDTH);
     let size = 2 * r + width;
     let arc = Obj::arc(parent)
-        .pos(200 - size / 2, 152 - size / 2)
+        .pos(PANEL_CX - size / 2, PANEL_CY - size / 2)
         .size(size, size);
     // SAFETY: live arc.
     unsafe {
         lv_arc_set_rotation(arc.raw(), 0);
-        lv_arc_set_bg_angles(arc.raw(), lvgl_angle(62.0), lvgl_angle(118.0));
+        lv_arc_set_bg_angles(
+            arc.raw(),
+            lvgl_angle(SCROLLBAR_FROM),
+            lvgl_angle(SCROLLBAR_FROM + SCROLLBAR_SPAN),
+        );
         for (part, hex) in [(MAIN, LINE), (INDICATOR, TEXT_2)] {
             lv_obj_set_style_arc_color(arc.raw(), color(hex), part);
             lv_obj_set_style_arc_width(arc.raw(), width, part);
@@ -349,6 +365,7 @@ fn fade(parent: Obj, rect: Rect, top: bool) {
 mod tests {
     use super::*;
     use crate::kit::testkit::{assert_golden, lvgl};
+    use crate::kit::tokens::polar;
 
     fn assert_children_inside(row: Obj, what: &str) {
         let bounds = row.coords();
@@ -398,11 +415,35 @@ mod tests {
             assert_eq!(a.x2 - a.x1 + 1, 320);
             // Snapping puts the focused row's centre on the focus line, and the
             // slots below and above sit one pitch apart.
-            for (index, y) in [(0, 56), (1, 104), (2, 152), (3, 200), (4, 248)] {
+            for (index, y) in [(0, 48), (1, 96), (2, 144), (3, 192), (4, 240)] {
                 let a = list.row(index).coords();
                 assert_eq!((a.y1 + a.y2 + 1) / 2, y, "row {index}");
             }
             assert_golden("list_menu", &lv.render());
+        });
+    }
+
+    #[test]
+    fn the_list_fits_the_measured_panel() {
+        assert_eq!((VIEW.y, VIEW.y + VIEW.h), (34, 240));
+        lvgl(|lv| {
+            let root = lv.screen();
+            let list = RotaryList::new(root, menu(), |_| {});
+            list.scroll_to(0);
+            let frame = lv.render();
+            // The arc scrollbar hugs the bezel: r 188 around (200, 106), 62°–122°.
+            for deg in [64.0, 90.0, 120.0] {
+                let (x, y) = polar(PANEL_CX, PANEL_CY, 188.0, deg);
+                assert_ne!(frame.pixel(x, y), [0, 0, 0], "scrollbar at {deg}°");
+            }
+            for deg in [56.0, 128.0] {
+                let (x, y) = polar(PANEL_CX, PANEL_CY, 188.0, deg);
+                assert_eq!(frame.pixel(x, y), [0, 0, 0], "no scrollbar at {deg}°");
+            }
+            // The first row sits on the focus line, under no fade.
+            let a = list.row(0).coords();
+            assert_eq!((a.y1 + a.y2 + 1) / 2, 144);
+            assert_ne!(frame.pixel(60, 144), [0, 0, 0], "the focused row is filled");
         });
     }
 
@@ -429,10 +470,12 @@ mod tests {
             for focus in 0..count {
                 list.scroll_to(focus);
                 for index in 0..count {
+                    // Only the part of a row inside the viewport takes taps
+                    // (LVGL hit-tests children within their parent's box).
                     let a = list.row(index).coords();
-                    let centre = (a.y1 + a.y2) / 2;
-                    if centre > VIEW.y && centre < VIEW.y + VIEW.h {
-                        let rect = Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
+                    let (top, bottom) = (a.y1.max(VIEW.y), a.y2.min(VIEW.y + VIEW.h - 1));
+                    if top <= bottom {
+                        let rect = Rect::new(a.x1, top, a.x2 - a.x1 + 1, bottom - top + 1);
                         assert!(
                             rect.within_tap_limit(),
                             "focus {focus}, row {index}: {rect:?}"

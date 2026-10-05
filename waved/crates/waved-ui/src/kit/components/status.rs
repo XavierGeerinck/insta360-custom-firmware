@@ -1,6 +1,11 @@
 //! The status slot at the top: a plain cluster on sub-screens, a tappable pill
 //! on Home and Recording, and one-line messages that replace it for a few
 //! seconds without covering a button.
+//!
+//! The pill leads with a teal dot while the pre-recording buffer fills. It
+//! follows `MeetingState::pre_recording_active` (the buffer is filling now),
+//! not `SettingsState::pre_recording` (the setting), so the dot never claims
+//! audio is buffered while it is not.
 
 use crate::kit::dispatch::{Dispatcher, Message, Severity};
 use crate::kit::event::on_click;
@@ -10,9 +15,12 @@ use crate::kit::obj::{text_width, Obj};
 use crate::kit::route::Route;
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{
-    LIVE, MESSAGE_MAX_W, RAISED, REC, SCREEN_W, STATUS, STATUS_PILL, SURFACE, TEXT, TEXT_2, TEXT_3,
-    WARN,
+    Rect, LIVE, MESSAGE_MAX_W, RAISED, REC, SCREEN_W, STATUS, STATUS_PILL, STATUS_PILL_HIT,
+    SURFACE, TEXT, TEXT_2, TEXT_3, WARN,
 };
+
+/// Space between the cluster's items (the mockup's `.crown` gap).
+const GAP: i32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Shown {
@@ -22,10 +30,13 @@ struct Shown {
     clock: String,
     battery: u8,
     charging: bool,
+    pre_recording: bool,
 }
 
 pub struct StatusArea {
-    cluster: Obj,
+    /// What hides while a message shows: the cluster, or the pill's hit area.
+    slot: Obj,
+    pre_recording: Option<Obj>,
     usb: Obj,
     wifi: Obj,
     bt: Obj,
@@ -52,13 +63,25 @@ impl StatusArea {
 
     fn build(parent: Obj, dispatch: Option<Dispatcher>) -> Self {
         let is_pill = dispatch.is_some();
-        let cluster = Obj::plain(parent)
-            .rect(if is_pill { STATUS_PILL } else { STATUS })
-            .row(7);
-        if let Some(dispatch) = dispatch {
-            cluster.bg(SURFACE).radius(14).clickable(true).ext_click(8);
-            on_click(cluster, move || dispatch.navigate(Route::Menu));
-        }
+        let (slot, cluster) = match dispatch {
+            Some(dispatch) => {
+                // The hit area reaches 16 px below the pill, down to the dial's
+                // tap circle; LVGL's extended click area would grow it upwards too.
+                let hit = Obj::plain(parent).rect(STATUS_PILL_HIT).clickable(true);
+                on_click(hit, move || dispatch.navigate(Route::Menu));
+                let pill = Obj::plain(hit)
+                    .rect(Rect::new(0, 0, STATUS_PILL.w, STATUS_PILL.h))
+                    .bg(SURFACE)
+                    .radius(STATUS_PILL.h / 2)
+                    .row(GAP);
+                (hit, pill)
+            }
+            None => {
+                let cluster = Obj::plain(parent).rect(STATUS).row(GAP);
+                (cluster, cluster)
+            }
+        };
+        let pre_recording = is_pill.then(|| Obj::plain(cluster).size(7, 7).round().bg(LIVE));
         let icon = |glyph: &str| Obj::label(cluster, glyph, Font::Icon16, TEXT_2);
         let usb = icon(icons::USB);
         let wifi = icon(icons::WIFI);
@@ -71,8 +94,8 @@ impl StatusArea {
             Obj::label(cluster, icons::DOWN, Font::Icon16, TEXT_3);
         }
         let message = Obj::plain(parent)
-            .size(MESSAGE_MAX_W, 28)
-            .pos((SCREEN_W - MESSAGE_MAX_W) / 2, 7)
+            .size(MESSAGE_MAX_W, STATUS_PILL.h)
+            .pos((SCREEN_W - MESSAGE_MAX_W) / 2, STATUS_PILL.y)
             .bg(RAISED)
             .radius(14)
             .row(6)
@@ -80,7 +103,8 @@ impl StatusArea {
         let message_icon = Obj::label(message, icons::INFO, Font::Icon16, TEXT_2);
         let message_text = Obj::label(message, "", Font::Small, TEXT);
         Self {
-            cluster,
+            slot,
+            pre_recording,
             usb,
             wifi,
             bt,
@@ -103,7 +127,7 @@ impl StatusArea {
         {
             self.message_until_ms = None;
             self.message.hidden(true);
-            self.cluster.hidden(false);
+            self.slot.hidden(false);
         }
         let next = Shown {
             usb: snap.mcu.usb_connected,
@@ -112,9 +136,13 @@ impl StatusArea {
             clock: snap.clock.clone(),
             battery: snap.battery.level,
             charging: snap.battery.is_charging,
+            pre_recording: snap.meeting.pre_recording_active,
         };
         if self.shown.as_ref() == Some(&next) {
             return;
+        }
+        if let Some(dot) = self.pre_recording {
+            dot.hidden(!next.pre_recording);
         }
         self.usb.hidden(!next.usb);
         self.wifi.hidden(!next.wifi);
@@ -145,15 +173,21 @@ impl StatusArea {
             .set_text(&message.text);
         let width = (9 + 16 + 6 + text_w + 13).min(MESSAGE_MAX_W);
         self.message
-            .size(width, 28)
-            .pos((SCREEN_W - width) / 2, 7)
+            .size(width, STATUS_PILL.h)
+            .pos((SCREEN_W - width) / 2, STATUS_PILL.y)
             .hidden(false);
-        self.cluster.hidden(true);
+        self.slot.hidden(true);
         self.message_until_ms = Some(now_ms + message.severity.duration_ms());
     }
 
+    /// The cluster, or on the pill its hit area (the tap target; the pill is child 0).
     pub fn cluster(&self) -> Obj {
-        self.cluster
+        self.slot
+    }
+
+    /// The pill's pre-recording dot; the plain cluster has none.
+    pub fn pre_recording_dot(&self) -> Option<Obj> {
+        self.pre_recording
     }
 
     pub fn message(&self) -> Obj {
@@ -208,17 +242,58 @@ mod tests {
         });
     }
 
+    fn area(obj: Obj) -> Rect {
+        obj.update_layout();
+        let a = obj.coords();
+        Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1)
+    }
+
     #[test]
     fn the_pill_opens_the_menu() {
         lvgl(|lv| {
             let root = lv.screen();
             let (dispatch, _bus, ui) = Dispatcher::test();
             let mut status = StatusArea::pill(root, &dispatch);
-            status.update(&snap());
+            let mut snap = snap();
+            snap.meeting.pre_recording_active = true;
+            status.update(&snap);
             assert_golden("status_pill", &lv.render());
             assert_targets_ok(root);
+            // A 28 px pill with a 44 px hit area below it, ending at the dial.
+            assert_eq!(area(status.cluster()), STATUS_PILL_HIT);
+            assert_eq!(area(status.cluster().child(0)), STATUS_PILL);
             lv.click(status.cluster());
             assert_eq!(ui.try_recv().unwrap(), UiEvent::Navigate(Route::Menu));
+        });
+    }
+
+    #[test]
+    fn the_pre_recording_dot_leads_the_pill_while_buffering() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut status = StatusArea::pill(root, &dispatch);
+            let mut snap = snap();
+            status.update(&snap);
+            let dot = status.pre_recording_dot().expect("the pill has a dot");
+            assert!(dot.is_hidden(), "no dot while the buffer is idle");
+            snap.meeting.pre_recording_active = true;
+            status.update(&snap);
+            assert!(!dot.is_hidden());
+            let a = area(dot);
+            assert_eq!((a.w, a.h), (7, 7));
+            assert_eq!(
+                status.cluster().child(0).child(0),
+                dot,
+                "the dot leads the contents"
+            );
+            let [r, g, b] = lv.render().pixel(a.x + 3, a.y + 3);
+            assert!(g > 180 && r < 100 && b > 140, "teal dot, got {r},{g},{b}");
+            snap.meeting.pre_recording_active = false;
+            status.update(&snap);
+            assert!(dot.is_hidden());
+            // The plain cluster on sub-screens has no dot.
+            assert!(StatusArea::plain(root).pre_recording_dot().is_none());
         });
     }
 
@@ -244,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn long_messages_stay_within_230_px() {
+    fn long_messages_stay_within_240_px_in_the_status_slot() {
         lvgl(|lv| {
             let root = lv.screen();
             let mut status = StatusArea::plain(root);
@@ -256,8 +331,9 @@ mod tests {
                 0,
             );
             status.message().update_layout();
-            let a = status.message().coords();
-            assert!(a.x2 - a.x1 < MESSAGE_MAX_W);
+            let a = area(status.message());
+            assert_eq!((a.w, a.y, a.h), (MESSAGE_MAX_W, STATUS_PILL.y, 28));
+            assert_eq!(a.x * 2 + a.w, SCREEN_W, "centred");
             let text = status.message().child(1).coords();
             assert_eq!(
                 text.y2 - text.y1 + 1,

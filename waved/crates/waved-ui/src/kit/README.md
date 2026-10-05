@@ -35,6 +35,31 @@ deleted when the runtime switches over.
 - Every screen test calls `assert_targets_ok(root)` and `assert_golden(..)`, and the
   golden is checked against the screen's mockup PNG.
 
+## Geometry
+
+The panel shows a circle of **r 198 around (200, 106)**, cut flat at framebuffer row 0
+(`PANEL_CX`, `PANEL_CY`, `PANEL_R`; see `docs/DISPLAY_HARDWARE.md`, "Visible Area"). Rows
+below y 304 do not exist, so the bottom of the circle is cut by the framebuffer too.
+
+- **Tap limit:** every tappable pixel lies within `TAP_LIMIT_R` (190) of (200, 106) and at
+  or below `TAP_MIN_Y` (6). `Rect::within_tap_limit()` checks a square box;
+  `within_tap_limit_rounded(radius)` counts only the pixels a rounded box draws, which is
+  what `assert_targets_ok` uses (it reads each object's style radius). The third radio row
+  and the left confirmation pill pass only because their corners are rounded.
+- **Zones:** status 6–34 (`STATUS`, `STATUS_PILL` 240 wide; the pill's hit area
+  `STATUS_PILL_HIT` is 44 tall and ends at y 50, where the dial's tap circle begins); title
+  at `TITLE_Y` 38; content from `CONTENT_TOP` 70 (`RADIO_TOP` 68 for radio rows); Back at
+  `BACK` (144, 244).
+- **Dial:** r 70 at (200, 121) (`DIAL_CX/CY/R`), tap circle r 71, talker stroke 6 with its
+  dot on r 82; the Home text stack uses `DIAL_ICON_Y`, `DIAL_TITLE_Y`, `DIAL_LINE_Y`,
+  `DIAL_HINT_Y`. Side buttons (`SIDE_LEFT/RIGHT`) share its centre line, labels at
+  `SIDE_LABEL_Y`.
+- **Bottom actions:** round buttons centred on `BOTTOM_ARC_R` (135) around the panel centre:
+  `BOTTOM_MAIN` (Record and Stop, Send, Set up Wi-Fi), `BOTTOM_LEFT/RIGHT` companions,
+  `BOTTOM_PAIR_LEFT/RIGHT` (Decline / Answer), each with a `*_LABEL` position for a
+  `BOTTOM_LABEL_W`-wide label; `BOTTOM_PILL_WIDE` and `BOTTOM_PILL_PAIR` for actions whose
+  words matter. Content above companions ends by y 166, above the main button by y 193.
+
 ## A screen
 
 ```rust
@@ -71,16 +96,16 @@ impl Screen for AboutScreen {
 
 | Component | Constructor | Used by |
 |---|---|---|
-| Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)` | every screen |
+| Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active` | every screen |
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
-| Primary | `PrimaryButton::new(root, PRIMARY, Tone::Rec, icons::RECORD, "Record", Some("includes last 30 s"), on_tap)` | Home, After stop, First start |
+| Primary (milestone 1 pill, replaced by round bottom buttons) | `PrimaryButton::new(root, PRIMARY, Tone::Rec, icons::RECORD, "Record", None, on_tap)` | Home, After stop, First start |
 | Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` | Home, Recording, File detail |
-| Button rows | `ButtonRow::two/three(root, [ButtonSpec; N], on_tap)` | Recording, After stop, Call |
+| Button rows | `ButtonRow::two(..)` is the pill pair at `BOTTOM_PILL_PAIR`; `ButtonRow::three(..)` is the milestone 1 row (replaced by round bottom buttons) | Confirmation; Recording, After stop, Call until then |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Call, Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
-| Radio list | `RadioList::new(root, top, options, selected, on_select)` | After a recording, Time zone, Dim after |
+| Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)` | After a recording, Time zone, Dim after |
 | Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
 
@@ -91,8 +116,11 @@ Notes on the parts that carry state:
   (`None`) returns to the ring.
 - `Tone` picks a button's fill and text colour (`Tone::colors()`). `Tone::accent()` is the colour a
   dialog uses for that tone: red for destructive tones, teal otherwise.
-- The rotary list has 48 px slots centred on y 152 inside `list::VIEW`. Rows fade and change
-  band with distance from the focus line.
+- The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
+  with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
+  centre over 62°–122°. Rows fade and change band with distance from the focus line.
+- The status pill's pre-recording dot follows `MeetingState::pre_recording_active` (the buffer
+  is filling now), not the `SettingsState::pre_recording` setting.
 
 The radial audio-mode picker (B2), the PIN keypad (K2), file rows (D1) and Bluetooth device rows (I4)
 are owned by their workstreams.
@@ -122,9 +150,9 @@ fn about_matches_the_mockup() {
 ```
 
 - `UPDATE_GOLDEN=1 cargo test -p waved-ui --lib` writes the goldens to `golden/`.
-- `UI_PREVIEW=1` also writes panel-masked copies to `target/ui-preview/` for comparison
-  with `docs/mockups/png/`. The mockup PNGs are 880×880 at 2×; the 400×304 framebuffer
-  sits at x 40..840, y 136..744.
+- `UI_PREVIEW=1` also writes copies dimmed outside the visible circle to `target/ui-preview/`
+  for comparison with `docs/mockups/png/`. The mockup PNGs are 880×880 at 2×; the 400×304
+  framebuffer sits at x 40..840, y 228..836.
 - A mismatch writes the actual frame to `target/golden-diff/<name>.actual.png`.
 - A new screen needs a `Route` variant in `kit/route.rs` (the router builds screens from it);
   `Route::About` already exists.

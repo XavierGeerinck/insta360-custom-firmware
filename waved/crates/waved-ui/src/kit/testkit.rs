@@ -8,7 +8,7 @@ use crate::bindings::*;
 use crate::kit::event::resume_handler_panic;
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{
-    Rect, MIN_TARGET, PANEL_CX, PANEL_CY, PANEL_R, SCREEN_H, SCREEN_W, TAP_LIMIT_R,
+    Rect, MIN_TARGET, PANEL_CX, PANEL_CY, PANEL_R, SCREEN_H, SCREEN_W, TAP_LIMIT_R, TAP_MIN_Y,
 };
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -157,7 +157,8 @@ impl Frame {
         encode(&self.rgb)
     }
 
-    /// The frame with everything outside the round panel dimmed, for review.
+    /// The frame with everything outside the visible circle dimmed, for review.
+    /// (Row 0 is the flat top of that circle, so nothing above it needs dimming.)
     fn masked(&self) -> Vec<u8> {
         let mut rgb = self.rgb.clone();
         for y in 0..SCREEN_H {
@@ -229,7 +230,8 @@ pub fn assert_golden(name: &str, frame: &Frame) {
     }
 }
 
-/// Clickable objects under `root` that reach past the tap limit or are
+/// Clickable objects under `root` whose drawn box (corners rounded by its
+/// style radius) reaches past the tap limit or above `TAP_MIN_Y`, or that are
 /// smaller than 44 px (counting any extended click area). Hidden subtrees are skipped.
 pub fn target_problems(root: Obj) -> Vec<String> {
     root.update_layout();
@@ -240,9 +242,16 @@ pub fn target_problems(root: Obj) -> Vec<String> {
         }
         let a = obj.coords();
         let visible = Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
-        if !visible.within_tap_limit() {
+        // SAFETY: live object under the test lock.
+        let radius = unsafe {
+            lv_obj_get_style_prop(obj.raw(), LV_PART_MAIN, LV_STYLE_RADIUS as lv_style_prop_t).num
+        };
+        if visible.y < TAP_MIN_Y {
+            problems.push(format!("{visible:?} reaches above y {TAP_MIN_Y}"));
+        } else if !visible.within_tap_limit_rounded(radius) {
             problems.push(format!(
-                "{visible:?} reaches past the r{TAP_LIMIT_R} tap limit"
+                "{visible:?} (radius {radius}) reaches {:.1} px, past the r{TAP_LIMIT_R} tap limit",
+                visible.farthest(radius)
             ));
         }
         let c = obj.click_area();
@@ -323,17 +332,52 @@ mod tests {
     fn target_check_flags_far_and_small_targets() {
         lvgl(|lv| {
             let root = lv.screen();
+            // Past r 190: the revision 1 corner button and milestone 1's Back.
             Obj::plain(root)
                 .rect(Rect::new(8, 8, 56, 64))
                 .clickable(true);
             Obj::plain(root)
+                .rect(Rect::new(144, 252, 112, 44))
+                .radius(22)
+                .clickable(true);
+            // Above the first tappable row.
+            Obj::plain(root)
+                .rect(Rect::new(150, 2, 100, 44))
+                .clickable(true);
+            // Too small.
+            Obj::plain(root)
                 .rect(Rect::new(180, 140, 30, 30))
                 .clickable(true);
+            // Fine: a central box, and the third radio row whose box corner is
+            // past the limit but whose rounded corner is not.
             Obj::plain(root)
                 .rect(Rect::new(150, 120, 100, 60))
                 .clickable(true);
+            Obj::plain(root)
+                .rect(Rect::new(52, 180, 296, 52))
+                .radius(20)
+                .clickable(true);
             let problems = target_problems(root);
-            assert_eq!(problems.len(), 2, "{problems:#?}");
+            assert_eq!(problems.len(), 4, "{problems:#?}");
+            assert!(problems[2].contains("above y 6"), "{problems:#?}");
+        });
+    }
+
+    #[test]
+    fn the_review_mask_dims_outside_the_measured_circle() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            Obj::plain(root)
+                .rect(Rect::new(0, 0, SCREEN_W, SCREEN_H))
+                .bg(0xffffff);
+            let masked = lv.render().masked();
+            let at = |x: i32, y: i32| masked[((y * SCREEN_W + x) * 3) as usize];
+            // The flat top edge is visible from x 33 to 367.
+            assert_eq!((at(200, 0), at(40, 0), at(360, 0)), (255, 255, 255));
+            assert_eq!((at(20, 0), at(380, 0)), (63, 63));
+            // r 198 around (200, 106).
+            assert_eq!((at(2, 106), at(1, 106)), (255, 63));
+            assert_eq!((at(200, 303), at(120, 290)), (255, 63));
         });
     }
 

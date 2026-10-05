@@ -1,5 +1,6 @@
 //! Components assembled like real screens. The goldens are compared against
 //! docs/mockups/png/home.png and upload-mode.png before milestone 2 starts.
+//! (Home's Record is still the milestone 1 pill until Task 2's round button.)
 
 use crate::kit::components::buttons::{back_button, PrimaryButton, Side, SideButton, Tone};
 use crate::kit::components::controls::{RadioList, RadioOption};
@@ -12,8 +13,8 @@ use crate::kit::obj::Obj;
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
 use crate::kit::tokens::{
-    CONTENT_TOP, DIAL_CX, DIAL_CY, DIAL_HINT_Y, DIAL_ICON_X, DIAL_ICON_Y, DIAL_LINE_Y, DIAL_R,
-    DIAL_TITLE_Y, LIVE, PRIMARY, SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y,
+    DIAL_CX, DIAL_CY, DIAL_HINT_Y, DIAL_ICON_X, DIAL_ICON_Y, DIAL_LINE_Y, DIAL_R, DIAL_TITLE_Y,
+    LIVE, PRIMARY, RADIO_TOP, SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y,
 };
 
 #[test]
@@ -27,6 +28,7 @@ fn home_from_kit_parts() {
         snap.clock = "14:32".into();
         snap.battery.level = 82;
         snap.audio.call_off_hook = true;
+        snap.meeting.pre_recording_active = true;
 
         let mut status = StatusArea::pill(root, &dispatch);
         status.update(&snap);
@@ -51,7 +53,7 @@ fn home_from_kit_parts() {
             Tone::Rec,
             icons::RECORD,
             "Record",
-            Some("includes last 30 s"),
+            None,
             || {},
         );
 
@@ -78,7 +80,7 @@ fn after_a_recording_from_kit_parts() {
             .pos(0, TITLE_Y);
         RadioList::new(
             root,
-            CONTENT_TOP,
+            RADIO_TOP,
             vec![
                 RadioOption::new("Send automatically", "As soon as Wi-Fi allows"),
                 RadioOption::new("Ask me each time", "Choose Send, Keep or Delete"),

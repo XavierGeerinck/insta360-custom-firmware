@@ -1,10 +1,18 @@
 //! Rows of two or three equal buttons, and the shared confirmation dialog.
+//! `ButtonRow::two` is the confirmation's pill pair (`BOTTOM_PILL_PAIR`);
+//! `ButtonRow::three` is the milestone 1 row that Task 2 replaces with round
+//! bottom buttons.
 
 use crate::kit::components::buttons::Tone;
 use crate::kit::event::on_click;
 use crate::kit::fonts::Font;
 use crate::kit::obj::Obj;
-use crate::kit::tokens::{Rect, ROW2, ROW3, SCREEN_W, TEXT, TEXT_2};
+use crate::kit::tokens::{Rect, BOTTOM_PILL_PAIR, ROW3, SCREEN_W, TEXT, TEXT_2};
+
+/// The confirmation's icon disc, title top and body box (top, left, width).
+const CONFIRM_DISC: Rect = Rect::new(172, 40, 56, 56);
+const CONFIRM_TITLE_Y: i32 = 104;
+const CONFIRM_BODY: Rect = Rect::new(65, 142, 270, 0);
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -49,7 +57,7 @@ pub struct ButtonRow {
 
 impl ButtonRow {
     pub fn two(parent: Obj, specs: [ButtonSpec; 2], on_tap: impl FnMut(usize) + 'static) -> Self {
-        Self::build(parent, &ROW2, &specs, on_tap)
+        Self::build(parent, &BOTTOM_PILL_PAIR, &specs, on_tap)
     }
 
     pub fn three(parent: Obj, specs: [ButtonSpec; 3], on_tap: impl FnMut(usize) + 'static) -> Self {
@@ -126,17 +134,17 @@ pub fn confirm_dialog(
 ) -> ButtonRow {
     let accent = spec.tone.accent();
     let disc = Obj::plain(root)
-        .rect(Rect::new(172, 58, 56, 56))
+        .rect(CONFIRM_DISC)
         .round()
         .bg(tint(accent, 36));
     Obj::label(disc, spec.icon, Font::Icon26, accent).center();
     Obj::label(root, &spec.title, Font::Dial, TEXT)
         .centered_text(SCREEN_W)
-        .pos(0, 128);
+        .pos(0, CONFIRM_TITLE_Y);
     Obj::label(root, &spec.body, Font::Small, TEXT_2)
-        .wrapped_text(260)
+        .wrapped_text(CONFIRM_BODY.w)
         .max_lines(3)
-        .pos(70, 166);
+        .pos(CONFIRM_BODY.x, CONFIRM_BODY.y);
     let (mut confirm, mut cancel) = (on_confirm, on_cancel);
     ButtonRow::two(
         root,
@@ -159,6 +167,7 @@ mod tests {
     use super::*;
     use crate::kit::icons;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+    use crate::kit::tokens::BOTTOM_PILL_PAIR;
     use std::cell::Cell;
 
     #[test]
@@ -229,6 +238,16 @@ mod tests {
             );
             assert_golden("confirm_power_off", &lv.render());
             assert_targets_ok(root);
+            let rect = |obj: Obj| {
+                let a = obj.coords();
+                Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1)
+            };
+            // Icon disc, title, body, then the pill pair.
+            assert_eq!(rect(root.child(0)), Rect::new(172, 40, 56, 56));
+            assert_eq!(rect(root.child(1)).y, 104);
+            let body = rect(root.child(2));
+            assert_eq!((body.x, body.y, body.w), (65, 142, 270));
+            assert_eq!([rect(row.obj(0)), rect(row.obj(1))], BOTTOM_PILL_PAIR);
             lv.click(row.obj(1));
             assert!(confirmed.get());
         });
@@ -255,7 +274,7 @@ mod tests {
             );
             lv.render();
             let body = root.child(2);
-            assert!(body.coords().y2 < ROW2[0].y);
+            assert!(body.coords().y2 < BOTTOM_PILL_PAIR[0].y);
             assert!(body.text().ends_with("..."), "{}", body.text());
         });
     }
