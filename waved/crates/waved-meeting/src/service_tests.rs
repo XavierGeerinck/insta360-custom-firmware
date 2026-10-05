@@ -1228,3 +1228,47 @@ async fn files_list_tracks_takes_marks_and_deletes() {
         "the finished removal refreshes Files, not only the 5 s tick"
     );
 }
+
+/// Lets a reader blocked on a FIFO go on: opening it read-write never blocks
+/// on Linux and counts as the writer the reader waits for.
+struct FifoRelease(PathBuf);
+
+impl Drop for FifoRelease {
+    fn drop(&mut self) {
+        use std::io::Write;
+        if let Ok(mut fifo) = std::fs::OpenOptions::new().read(true).write(true).open(&self.0) {
+            let _ = fifo.write_all(b"{}");
+        }
+    }
+}
+
+/// Building the Files list never holds up a running take. The listed
+/// recording's metadata.json is a FIFO nobody writes to, so reading it
+/// blocks until the test ends; the take must keep draining its frames
+/// meanwhile (a full frame channel would end it).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stuck_files_refresh_never_holds_up_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let take = rig.start().await;
+    rig.feed(10, 0.2).await;
+
+    let listed = Uuid::new_v4();
+    let dir = rig.dir(listed);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("audio.wav"), b"RIFF").unwrap();
+    let fifo = dir.join("metadata.json");
+    nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
+    let _release = FifoRelease(fifo);
+    let pool = rig.pool().await;
+    db::insert_meeting(&pool, &listed, "Omni", &dir.to_string_lossy()).await.unwrap();
+    db::set_status(&pool, &listed, MeetingStatus::LocalOnly).await.unwrap();
+    db::add_bookmark(&pool, &listed, 1).await.unwrap();
+
+    // Changes the recordings, so the list is refreshed right away.
+    rig.send(Command::RetryFailedUploads);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    rig.feed(50, 0.2).await;
+    rig.stop().await;
+    assert_eq!(rig.status(take).await.as_deref(), Some("local_only"));
+    assert_eq!(rig.wav_samples(take), 60 * 480);
+}

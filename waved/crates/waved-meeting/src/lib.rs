@@ -60,8 +60,8 @@ pub struct MeetingService {
     audio_state_rx: watch::Receiver<AudioState>,
     /// Keeps the boot-config fallback channels open until live inputs replace them.
     _fallback: Option<(watch::Sender<SettingsState>, watch::Sender<AudioState>)>,
-    /// Where the Files list is published, when someone listens.
-    files_tx: Option<Arc<watch::Sender<FilesState>>>,
+    /// Publishes the Files list, when someone listens.
+    files: Option<Arc<files::FilesPublisher>>,
     /// Asks the loop to republish the Files list: a removal finished off-loop.
     files_refresh: Arc<Notify>,
 }
@@ -381,7 +381,7 @@ impl MeetingService {
             settings_rx,
             audio_state_rx,
             _fallback: Some((settings_fallback, audio_fallback)),
-            files_tx: None,
+            files: None,
             files_refresh: Arc::new(Notify::new()),
         })
     }
@@ -397,34 +397,22 @@ impl MeetingService {
     /// Publish the Files list on this watch (refreshed every 5 s and after
     /// any command that changes a recording).
     pub fn with_files_publisher(mut self, files: Arc<watch::Sender<FilesState>>) -> Self {
-        self.files_tx = Some(files);
+        self.files = Some(Arc::new(files::FilesPublisher::new(
+            files,
+            Arc::clone(&self.meeting_tx),
+            self.pool.clone(),
+            self.recordings_dir.clone(),
+            self.config.storage.clone(),
+            self.config.api.retry_max,
+        )));
         self
     }
 
-    async fn publish_files(&self) {
-        let Some(files_tx) = self.files_tx.as_ref() else {
-            return;
-        };
-        let storage_blocked = self.meeting_tx.borrow().storage_blocked;
-        match files::snapshot(
-            &self.pool,
-            &self.recordings_dir,
-            &self.config.storage,
-            self.config.api.retry_max,
-            storage_blocked,
-        )
-        .await
-        {
-            Ok(state) => {
-                files_tx.send_if_modified(|current| {
-                    if *current == state {
-                        return false;
-                    }
-                    *current = state;
-                    true
-                });
-            }
-            Err(error) => warn!("failed to publish the recordings list: {error}"),
+    /// Republish the Files list. The list is built off the loop, so this
+    /// returns at once.
+    fn publish_files(&self) {
+        if let Some(files) = self.files.as_ref() {
+            files.request();
         }
     }
 
@@ -600,7 +588,7 @@ impl MeetingService {
                             0 => {
                                 ask_deadline = None;
                                 self.keep_unanswered().await;
-                                self.publish_files().await;
+                                self.publish_files();
                             }
                             left => {
                                 self.meeting_tx.send_if_modified(|s| {
@@ -614,11 +602,11 @@ impl MeetingService {
                         }
                     }
                 }
-                _ = files_tick.tick(), if self.files_tx.is_some() => {
-                    self.publish_files().await;
+                _ = files_tick.tick(), if self.files.is_some() => {
+                    self.publish_files();
                 }
-                _ = files_refresh.notified(), if self.files_tx.is_some() => {
-                    self.publish_files().await;
+                _ = files_refresh.notified(), if self.files.is_some() => {
+                    self.publish_files();
                 }
                 cmd_result = cmd_rx.recv() => {
                     match cmd_result {
@@ -921,7 +909,7 @@ impl MeetingService {
                                 _ => {}
                             }
                             if refresh_files {
-                                self.publish_files().await;
+                                self.publish_files();
                             }
                         }
                         Err(broadcast::error::RecvError::Closed) => return,

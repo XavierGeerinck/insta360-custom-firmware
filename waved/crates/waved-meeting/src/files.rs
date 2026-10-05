@@ -6,9 +6,16 @@ use crate::db;
 use crate::model::MeetingStatus;
 use crate::retention;
 use sqlx::SqlitePool;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use tokio::sync::watch;
+use tracing::warn;
+use uuid::Uuid;
 use waved_config::StorageConfig;
-use waved_state::{FilesState, RecordingStatus, RecordingSummary, CLOCK_VALID_AFTER_UNIX_S};
+use waved_state::{
+    FilesState, MeetingState, RecordingStatus, RecordingSummary, CLOCK_VALID_AFTER_UNIX_S,
+};
 
 /// What Files shows for a database status. `None` hides the row: the
 /// recording is still running, between WAV and decision, or being deleted.
@@ -75,43 +82,183 @@ fn audio_size(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Mark offsets by recording id. A listed recording's metadata.json never
+/// changes after Stop, so each one is read at most once.
+#[derive(Clone, Default)]
+pub(crate) struct MarksCache(Arc<Mutex<HashMap<Uuid, Vec<u32>>>>);
+
+impl MarksCache {
+    fn marks_ms(&self, id: Uuid, dir: &Path) -> Vec<u32> {
+        let mut cache = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache
+            .entry(id)
+            .or_insert_with(|| crate::metadata::marks_from_metadata(&dir.join("metadata.json")))
+            .clone()
+    }
+
+    /// Forget recordings that are no longer listed (deleted).
+    fn keep_only(&self, listed: &[RecordingSummary]) {
+        let mut cache = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.retain(|id, _| listed.iter().any(|recording| recording.id == *id));
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.0.lock().unwrap().len()
+    }
+}
+
+/// The Files list as it is now. The database read is async; the per-row
+/// file work (size, marks) and free space run on the blocking pool.
 pub(crate) async fn snapshot(
     pool: &SqlitePool,
     recordings_dir: &Path,
     storage: &StorageConfig,
     retry_max: u32,
     storage_blocked: bool,
-) -> Result<FilesState, sqlx::Error> {
-    let rows = db::recording_rows(pool).await?;
-    let mut recordings = Vec::with_capacity(rows.len());
-    for row in rows {
-        let Some(status) = MeetingStatus::parse(&row.status) else {
-            continue;
-        };
-        let Some(summary) = summary_status(status, row.attempt_cycle, retry_max) else {
-            continue;
-        };
-        let dir = Path::new(&row.dir);
-        recordings.push(RecordingSummary {
-            id: row.id,
-            started_at: started_at(&row.start_time),
-            duration_secs: row.duration_secs,
-            size_bytes: audio_size(dir),
-            status: summary,
-            marks: row.marks,
-            marks_ms: crate::metadata::marks_from_metadata(&dir.join("metadata.json")),
-            last_error: plain_reason(status, summary, row.last_status_code),
+    marks: &MarksCache,
+) -> std::io::Result<FilesState> {
+    let rows = db::recording_rows(pool)
+        .await
+        .map_err(std::io::Error::other)?;
+    let recordings_dir = recordings_dir.to_path_buf();
+    let minimum_free_mb = storage.minimum_free_mb;
+    let marks = marks.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut recordings = Vec::with_capacity(rows.len());
+        for row in rows {
+            let Some(status) = MeetingStatus::parse(&row.status) else {
+                continue;
+            };
+            let Some(summary) = summary_status(status, row.attempt_cycle, retry_max) else {
+                continue;
+            };
+            let dir = Path::new(&row.dir);
+            recordings.push(RecordingSummary {
+                id: row.id,
+                started_at: started_at(&row.start_time),
+                duration_secs: row.duration_secs,
+                size_bytes: audio_size(dir),
+                status: summary,
+                marks: row.marks,
+                marks_ms: if row.marks > 0 {
+                    marks.marks_ms(row.id, dir)
+                } else {
+                    Vec::new()
+                },
+                last_error: plain_reason(status, summary, row.last_status_code),
+            });
+        }
+        marks.keep_only(&recordings);
+        // Unknown free space reads as none left, so Files warns rather than hides it.
+        let (free_bytes, free_mb) = retention::disk_usage(&recordings_dir)
+            .map(|usage| (usage.free_bytes, usage.free_mb))
+            .unwrap_or((0, 0));
+        FilesState {
+            recordings,
+            free_bytes,
+            low_space: storage_blocked || free_mb < minimum_free_mb,
+        }
+    })
+    .await
+    .map_err(std::io::Error::other)
+}
+
+/// Publishes the Files list off the meeting loop, which must keep draining a
+/// running take's frames. One snapshot runs at a time; a request made while
+/// one runs makes another start right after it, so every request is answered
+/// by a snapshot taken after it and an older list never replaces a newer one.
+pub(crate) struct FilesPublisher {
+    files_tx: Arc<watch::Sender<FilesState>>,
+    meeting_tx: Arc<watch::Sender<MeetingState>>,
+    pool: SqlitePool,
+    recordings_dir: PathBuf,
+    storage: StorageConfig,
+    retry_max: u32,
+    marks: MarksCache,
+    refresh: Mutex<Refresh>,
+}
+
+#[derive(Default)]
+struct Refresh {
+    running: bool,
+    again: bool,
+}
+
+impl FilesPublisher {
+    pub(crate) fn new(
+        files_tx: Arc<watch::Sender<FilesState>>,
+        meeting_tx: Arc<watch::Sender<MeetingState>>,
+        pool: SqlitePool,
+        recordings_dir: PathBuf,
+        storage: StorageConfig,
+        retry_max: u32,
+    ) -> Self {
+        Self {
+            files_tx,
+            meeting_tx,
+            pool,
+            recordings_dir,
+            storage,
+            retry_max,
+            marks: MarksCache::default(),
+            refresh: Mutex::new(Refresh::default()),
+        }
+    }
+
+    /// Ask for the list to be republished. Returns at once.
+    pub(crate) fn request(self: &Arc<Self>) {
+        {
+            let mut refresh = self.lock_refresh();
+            if refresh.running {
+                refresh.again = true;
+                return;
+            }
+            refresh.running = true;
+        }
+        let publisher = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                publisher.publish_once().await;
+                let mut refresh = publisher.lock_refresh();
+                if !std::mem::take(&mut refresh.again) {
+                    refresh.running = false;
+                    return;
+                }
+            }
         });
     }
-    // Unknown free space reads as none left, so Files warns rather than hides it.
-    let (free_bytes, free_mb) = retention::disk_usage(recordings_dir)
-        .map(|usage| (usage.free_bytes, usage.free_mb))
-        .unwrap_or((0, 0));
-    Ok(FilesState {
-        recordings,
-        free_bytes,
-        low_space: storage_blocked || free_mb < storage.minimum_free_mb,
-    })
+
+    fn lock_refresh(&self) -> std::sync::MutexGuard<'_, Refresh> {
+        self.refresh
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    async fn publish_once(&self) {
+        let storage_blocked = self.meeting_tx.borrow().storage_blocked;
+        match snapshot(
+            &self.pool,
+            &self.recordings_dir,
+            &self.storage,
+            self.retry_max,
+            storage_blocked,
+            &self.marks,
+        )
+        .await
+        {
+            Ok(state) => {
+                self.files_tx.send_if_modified(|current| {
+                    if *current == state {
+                        return false;
+                    }
+                    *current = state;
+                    true
+                });
+            }
+            Err(error) => warn!("failed to publish the recordings list: {error}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -263,7 +410,7 @@ mod tests {
             prune_uploaded_at_percent: 100,
             minimum_free_mb: 0,
         };
-        let files = snapshot(&pool, &recordings, &storage, 5, false)
+        let files = snapshot(&pool, &recordings, &storage, 5, false, &MarksCache::default())
             .await
             .unwrap();
         let ids: Vec<_> = files.recordings.iter().map(|r| r.id).collect();
@@ -292,7 +439,7 @@ mod tests {
 
         assert!(files.free_bytes > 0);
         assert!(!files.low_space);
-        let blocked = snapshot(&pool, &recordings, &storage, 5, true)
+        let blocked = snapshot(&pool, &recordings, &storage, 5, true, &MarksCache::default())
             .await
             .unwrap();
         assert!(blocked.low_space, "storage blocked");
@@ -300,9 +447,55 @@ mod tests {
             minimum_free_mb: u64::MAX,
             ..storage
         };
-        let low = snapshot(&pool, &recordings, &demanding, 5, false)
+        let low = snapshot(&pool, &recordings, &demanding, 5, false, &MarksCache::default())
             .await
             .unwrap();
         assert!(low.low_space, "below storage.minimum_free_mb");
+    }
+
+    /// metadata.json is read only for rows with marks, once per recording
+    /// (it never changes after Stop), and a deleted recording leaves the cache.
+    #[tokio::test]
+    async fn marks_are_read_once_and_only_for_rows_with_marks() {
+        let temp = tempfile::tempdir().unwrap();
+        let recordings = temp.path().join("rec");
+        std::fs::create_dir_all(&recordings).unwrap();
+        let pool = db::init_pool(temp.path().join("t.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let storage = StorageConfig {
+            prune_uploaded_at_percent: 100,
+            minimum_free_mb: 0,
+        };
+        let marks = |offset_ms: u32| {
+            format!(r#"{{"recording":{{"pre_roll_duration_ms":0}},"bookmarks":[{{"offset_ms":{offset_ms}}}]}}"#)
+        };
+
+        let (marked, marked_dir) = add_row(&pool, &recordings, M::LocalOnly, 0).await;
+        std::fs::write(marked_dir.join("metadata.json"), marks(1_000)).unwrap();
+        db::add_bookmark(&pool, &marked, 1).await.unwrap();
+        // No mark rows: whatever metadata.json says is never read.
+        let (_unmarked, unmarked_dir) = add_row(&pool, &recordings, M::LocalOnly, 0).await;
+        std::fs::write(unmarked_dir.join("metadata.json"), marks(2_000)).unwrap();
+
+        let cache = MarksCache::default();
+        let first = snapshot(&pool, &recordings, &storage, 5, false, &cache)
+            .await
+            .unwrap();
+        assert!(first.recordings[0].marks_ms.is_empty(), "no marks, not read");
+        assert_eq!(first.recordings[1].marks_ms, vec![1_000]);
+
+        std::fs::write(marked_dir.join("metadata.json"), marks(9_000)).unwrap();
+        let second = snapshot(&pool, &recordings, &storage, 5, false, &cache)
+            .await
+            .unwrap();
+        assert_eq!(second.recordings[1].marks_ms, vec![1_000], "served from the cache");
+        assert_eq!(cache.len(), 1);
+
+        db::delete_meeting_cascade(&pool, &marked).await.unwrap();
+        snapshot(&pool, &recordings, &storage, 5, false, &cache)
+            .await
+            .unwrap();
+        assert_eq!(cache.len(), 0, "a deleted recording leaves the cache");
     }
 }
