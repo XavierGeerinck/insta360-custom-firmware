@@ -69,6 +69,14 @@ pub struct Runtime {
     /// The screen the resting screen covers, kept alive for the wake (at
     /// most one; see `replace_shown`).
     parked: Option<Shown>,
+    /// Routes built since they entered the router stack: building one of
+    /// these again is a rebuild (`UiSnapshot::rebuilt`). Pruned to the stack
+    /// before each show, so a route that left and comes back is new again.
+    built: Vec<Route>,
+    /// A decision was pending after the last step: a new one wakes the screen.
+    had_decision: bool,
+    /// The host signalled an incoming call after the last step.
+    had_ringing: bool,
     /// The router stack after the last step: a route missing from it now has
     /// left, by whatever path, and sends its leave commands.
     last_stack: Vec<Route>,
@@ -100,6 +108,9 @@ impl Runtime {
             boot_done: false,
             shown: None,
             parked: None,
+            built: Vec::new(),
+            had_decision: false,
+            had_ringing: false,
             last_stack: Vec::new(),
             pressed: false,
             cancel_press: false,
@@ -196,6 +207,7 @@ impl Runtime {
             self.boot_done = true;
             self.router.handle(&UiEvent::BootDone, &snap);
         }
+        self.wake_for_arrivals(&snap);
         while let Ok(event) = self.ui_rx.try_recv() {
             self.route(&event, &snap);
         }
@@ -216,6 +228,23 @@ impl Runtime {
         self.last_stack = self.router.stack().to_vec();
         if let Some(shown) = self.shown.as_mut() {
             shown.screen.update(&snap);
+        }
+    }
+
+    /// A new pending decision (a recording stopped) or an incoming call
+    /// counts as activity: the screen wakes and the router shows what the
+    /// state asks for. Only the rising edge counts, so a decision left
+    /// unanswered does not keep the screen awake. No press is delivered.
+    fn wake_for_arrivals(&mut self, snap: &UiSnapshot) {
+        let decision = snap.meeting.pending_decision.is_some();
+        let ringing = snap.audio.call_ringing;
+        let arrived = (decision && !self.had_decision) || (ringing && !self.had_ringing);
+        self.had_decision = decision;
+        self.had_ringing = ringing;
+        if arrived {
+            if let Some(event) = self.power.on_activity(snap.now_ms) {
+                self.route(&event, snap);
+            }
         }
     }
 
@@ -250,6 +279,8 @@ impl Runtime {
     /// new root and loaded. A route with no screen yet (milestone 3) goes
     /// back. A parked screen whose route left the stack is deleted first.
     fn show_current(&mut self, snap: &UiSnapshot) {
+        let stack = self.router.stack();
+        self.built.retain(|route| stack.contains(route));
         if self
             .parked
             .as_ref()
@@ -291,7 +322,12 @@ impl Runtime {
                 return;
             };
             let root = Obj::screen();
-            screen.build(root, &self.ctx, snap);
+            let mut build_snap = snap.clone();
+            build_snap.rebuilt = self.built.contains(&route);
+            screen.build(root, &self.ctx, &build_snap);
+            if !build_snap.rebuilt {
+                self.built.push(route.clone());
+            }
             load(root);
             self.replace_shown(Shown {
                 route,
@@ -759,6 +795,94 @@ mod tests {
         });
     }
 
+    struct Panel(Rc<RefCell<Vec<u8>>>);
+
+    impl BacklightOut for Panel {
+        fn set_percent(&mut self, pct: u8) -> std::io::Result<bool> {
+            self.0.borrow_mut().push(pct);
+            Ok(true)
+        }
+    }
+
+    /// Booted, with every backlight level written so far recorded.
+    fn booted_lit(lv: &mut Lvgl) -> (Runtime, Rc<RefCell<Vec<u8>>>) {
+        lv.screen();
+        BUILDS.with(|b| b.borrow_mut().clear());
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let (bus, _bus_rx) = broadcast::channel(16);
+        let mut rt = Runtime::new(
+            bus,
+            Arc::new(WavedConfig::default()),
+            Box::new(probes),
+            PowerDriver::new(0, Box::new(Panel(writes.clone()))),
+        );
+        rt.step(ready(0), &[]);
+        rt.step(ready(BOOT_MIN_MS), &[]);
+        (rt, writes)
+    }
+
+    #[test]
+    fn a_decision_arriving_while_the_screen_rests_wakes_it() {
+        for off in [false, true] {
+            lvgl(|lv| {
+                let (mut rt, writes) = booted_lit(lv);
+                let resting_at = if off { 10 * MIN } else { 2 * MIN };
+                rt.step(ready(resting_at), &[]);
+                assert_eq!(rt.shown_route(), Some(&Route::Resting));
+                assert_ne!(writes.borrow().last(), Some(&80), "dim or dark");
+
+                let mut arrived = ready(resting_at + 100);
+                arrived.meeting.pending_decision = Some(decision());
+                rt.step(arrived.clone(), &[]);
+                assert_eq!(rt.shown_route(), Some(&Route::Decision));
+                assert_eq!(writes.borrow().last(), Some(&80), "the screen is on");
+
+                // Nothing was swallowed or delivered: the next press is a
+                // normal press on the decision screen.
+                arrived.now_ms += 100;
+                let press = rt.touch(down(120, 160), &arrived);
+                assert_eq!(press.sample, down(120, 160));
+                rt.close();
+            });
+        }
+    }
+
+    #[test]
+    fn a_decision_left_pending_does_not_keep_the_screen_awake() {
+        lvgl(|lv| {
+            let (mut rt, writes) = booted_lit(lv);
+            rt.step(ready(2 * MIN), &[]);
+            let mut arrived = ready(2 * MIN + 100);
+            arrived.meeting.pending_decision = Some(decision());
+            rt.step(arrived.clone(), &[]);
+            assert_eq!(writes.borrow().last(), Some(&80));
+            // Unanswered for the dim time: it rests again, once.
+            arrived.now_ms = 2 * MIN + 100 + 2 * MIN;
+            rt.step(arrived.clone(), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            arrived.now_ms += 100;
+            rt.step(arrived, &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting), "not re-woken");
+            assert_ne!(writes.borrow().last(), Some(&80));
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn an_incoming_call_wakes_a_resting_screen() {
+        lvgl(|lv| {
+            let (mut rt, writes) = booted_lit(lv);
+            rt.step(ready(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            let mut ringing = ready(2 * MIN + 100);
+            ringing.audio.call_ringing = true;
+            rt.step(ringing, &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Home));
+            assert_eq!(writes.borrow().last(), Some(&80));
+            rt.close();
+        });
+    }
+
     #[test]
     fn the_first_touch_on_the_resting_screen_only_wakes() {
         lvgl(|lv| {
@@ -1037,6 +1161,36 @@ mod tests {
                 "waking does not restart provisioning"
             );
             assert!(shows_text(setup, failure), "the failure still shows");
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn back_from_the_power_off_confirmation_rebuilds_wifi_setup_without_restarting_it() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = on_wifi_setup(lv);
+            // The setup network timed out: Idle again, as on a first visit.
+            rt.step(ready(2_200), &[]);
+            let confirm = UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff));
+            assert_eq!(
+                send(&mut rt, confirm, 2_300),
+                Some(Route::Confirm(ConfirmKind::PowerOff))
+            );
+            let before = builds().len();
+            rt.dispatcher().back();
+            rt.step(ready(2_400), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::WifiSetup));
+            assert_eq!(builds().len(), before, "the real screen, not a probe");
+            let closed = "The setup network closed. Try again to reopen it.";
+            assert!(shows_text(rt.root().unwrap(), closed));
+            assert!(drain(&mut bus).is_empty(), "no restart on a rebuild");
+
+            // Leaving and opening it again is a first visit again.
+            send(&mut rt, UiEvent::Back, 2_500);
+            assert_eq!(rt.shown_route(), Some(&Route::Wifi));
+            assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+            send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_600);
+            assert_eq!(drain(&mut bus), [Command::OpenWifiProvisioning]);
             rt.close();
         });
     }

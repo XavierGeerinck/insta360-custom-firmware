@@ -73,7 +73,7 @@ pub enum SetupView {
     Closed,
 }
 
-/// Whether opening the screen starts provisioning: not while it already runs.
+/// Whether the service is not running a session (Try again may start one).
 pub fn should_start(state: &ProvisioningState) -> bool {
     matches!(
         state,
@@ -211,7 +211,12 @@ impl Screen for WifiSetupScreen {
         }
         #[cfg(not(test))]
         let _ = cancel;
-        if should_start(&snap.provisioning) {
+        if snap.rebuilt {
+            // Back from a screen on top (the power-off confirmation): this
+            // is not a first visit. Idle now means the setup network closed,
+            // so offer Try again instead of restarting it unasked.
+            self.session = true;
+        } else if matches!(snap.provisioning, ProvisioningState::Idle) {
             start(&ctx.dispatch, &self.started);
         }
         self.update(snap);
@@ -351,6 +356,81 @@ mod tests {
     }
 
     #[test]
+    fn a_rebuild_after_the_setup_network_closed_does_not_restart_it() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            // Idle again after a session: the same state as a first visit.
+            snap.provisioning = ProvisioningState::Idle;
+            snap.rebuilt = true;
+            let mut screen = WifiSetupScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            assert!(f.commands().is_empty(), "the user taps Try again");
+            assert_eq!(screen.shown, Some(SetupView::Closed));
+            assert_eq!(screen.message.unwrap().text(), CLOSED);
+            assert!(!screen.retry.unwrap().is_hidden());
+            lv.click(screen.retry.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+        });
+    }
+
+    #[test]
+    fn a_rebuild_during_a_session_shows_it_and_sends_nothing() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.provisioning = ap("Wave-7F2A", "k3x9p2vw");
+            snap.rebuilt = true;
+            let mut screen = WifiSetupScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert!(f.commands().is_empty());
+            assert!(matches!(screen.shown, Some(SetupView::Code { .. })));
+        });
+    }
+
+    #[test]
+    fn only_a_first_visit_from_idle_starts_setup() {
+        lvgl(|lv| {
+            for (state, rebuilt, starts) in [
+                (ProvisioningState::Idle, false, true),
+                (ProvisioningState::Idle, true, false),
+                (
+                    ProvisioningState::Failed {
+                        reason: "Wrong password".into(),
+                    },
+                    false,
+                    false,
+                ),
+                (
+                    ProvisioningState::Connected {
+                        ssid: "Office".into(),
+                    },
+                    false,
+                    false,
+                ),
+            ] {
+                let root = lv.screen();
+                let mut f = fixture();
+                let mut snap = snap();
+                snap.provisioning = state.clone();
+                snap.rebuilt = rebuilt;
+                WifiSetupScreen::default().build(root, &f.ctx, &snap);
+                assert_eq!(
+                    f.commands().len(),
+                    usize::from(starts),
+                    "{state:?}, rebuilt {rebuilt}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn cancel_stops_setup_and_goes_back() {
         lvgl(|lv| {
             let root = lv.screen();
@@ -439,13 +519,8 @@ mod tests {
             };
             let mut screen = WifiSetupScreen::default();
             screen.build(root, &f.ctx, &snap);
-            // Opening on a stale Failed state retries at once.
-            assert!(matches!(
-                f.commands().as_slice(),
-                [Command::OpenWifiProvisioning]
-            ));
-            screen.started.set(false);
-            screen.update(&snap);
+            // A stale Failed state is shown, not retried unasked.
+            assert!(f.commands().is_empty());
             assert_golden("screen_wifi_setup_failed", &lv.render());
             assert_targets_ok(root);
             assert_eq!(

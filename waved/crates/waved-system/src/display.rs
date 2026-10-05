@@ -112,6 +112,14 @@ impl DisplayPower {
         }
     }
 
+    /// Something other than a touch or a key needs the screen (a decision
+    /// arrived, a call is ringing): wake it, or restart the dim timer when it
+    /// is awake. It leaves the touch state alone, so no press is delivered
+    /// and a press that is down stays swallowed.
+    pub fn on_activity(&mut self, now_ms: u64) -> Option<Transition> {
+        self.wake(now_ms)
+    }
+
     /// Short: sleep (off, or resting while `keep_lit`) or wake. Long: wake and
     /// ask to power off.
     pub fn on_power_key(&mut self, press: PowerKeyPress, now_ms: u64, keep_lit: bool) -> PowerKeyOutcome {
@@ -212,6 +220,29 @@ mod tests {
             off_after_s,
             ..SettingsState::default()
         }
+    }
+
+    #[test]
+    fn activity_wakes_from_resting_or_off_without_touching_the_press_state() {
+        let s = SettingsState::default();
+        let mut p = DisplayPower::new(0);
+        p.tick(10 * MIN, &s, false);
+        assert_eq!(p.state(), ScreenPower::Off);
+        let wake = p.on_activity(10 * MIN + 5).unwrap();
+        assert!(wake.wakes());
+        assert_eq!(p.state(), ScreenPower::Awake);
+        assert_eq!(p.on_activity(10 * MIN + 6), None, "already awake");
+        assert_eq!(p.tick(10 * MIN + 6 + 2 * MIN - 1, &s, false), None);
+        assert!(p.tick(10 * MIN + 6 + 2 * MIN, &s, false).unwrap().rests());
+        // A press that woke the screen stays swallowed until released.
+        let mut p = DisplayPower::new(0);
+        p.tick(2 * MIN, &s, false);
+        p.on_touch(true, 2 * MIN + 1);
+        p.on_activity(2 * MIN + 2);
+        assert_eq!(
+            p.on_touch(true, 2 * MIN + 3).disposition,
+            TouchDisposition::Swallow
+        );
     }
 
     #[test]

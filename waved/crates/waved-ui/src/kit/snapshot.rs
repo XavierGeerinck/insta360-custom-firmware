@@ -48,6 +48,12 @@ pub struct UiSnapshot {
     pub clock: String,
     /// Set by the runtime from `UiEvent::Show`; `capture` leaves it `None`.
     pub message: Option<ActiveMessage>,
+    /// Set by the runtime for a screen's `build` only (it is `false` in
+    /// `update`): the route has been built before since it entered the router
+    /// stack, and this is a rebuild (Back from a screen that was on top of
+    /// it). A screen that acts in `build` (Wi-Fi setup starts provisioning)
+    /// must not act again. `capture` leaves it `false`.
+    pub rebuilt: bool,
 }
 
 impl UiSnapshot {
@@ -76,6 +82,7 @@ impl UiSnapshot {
             now_ms,
             clock,
             message: None,
+            rebuilt: false,
         }
     }
 

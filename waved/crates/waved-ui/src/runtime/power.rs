@@ -71,6 +71,13 @@ impl PowerDriver {
         }
     }
 
+    /// Something other than a touch or a key needs the screen (a decision
+    /// arrived, a call is ringing): wake it and restart the dim timer. No
+    /// touch sample is involved, so no press is delivered to LVGL.
+    pub fn on_activity(&mut self, now_ms: u64) -> Option<UiEvent> {
+        event_for(self.power.on_activity(now_ms))
+    }
+
     /// Rest or Wake for the screen change, then the power-off confirmation
     /// when the controller asks for it.
     pub fn on_power_key(&mut self, press: PowerKeyPress, snap: &UiSnapshot) -> Vec<UiEvent> {
@@ -164,6 +171,21 @@ mod tests {
                 event: None
             }
         );
+    }
+
+    #[test]
+    fn an_arrival_wakes_without_a_press() {
+        let (mut p, writes) = rig();
+        assert_eq!(p.tick(&at(2 * MIN)), Some(UiEvent::Rest));
+        assert_eq!(p.on_activity(2 * MIN + 10), Some(UiEvent::Wake));
+        assert_eq!(p.tick(&at(2 * MIN + 10)), None);
+        assert_eq!(writes.borrow().last(), Some(&80));
+        assert!(p.on_touch(true, 2 * MIN + 500).deliver, "nothing swallowed");
+        // Awake already: only the dim timer restarts.
+        let (mut p, _) = rig();
+        assert_eq!(p.on_activity(100_000), None);
+        assert_eq!(p.tick(&at(2 * MIN)), None, "activity at 100 s");
+        assert_eq!(p.tick(&at(100_000 + 2 * MIN)), Some(UiEvent::Rest));
     }
 
     #[test]
