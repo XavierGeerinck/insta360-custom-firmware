@@ -1,9 +1,11 @@
 //! UAC2 upstream sink — mic → host.
 //!
 //! Subscribes to `AudioService::subscribe_processed()` (post-AEC,
-//! post-beamform, post-NS mono `f32`). Duplicates each sample to L = R = mono
-//! and writes interleaved S16 to `hw:1,0` playback (kernel `f_uac2` IN
-//! terminal — what the host reads as the microphone).
+//! post-beamform, post-NS mono `f32`). Writes the frame's uplink pair
+//! (`ProcessedAudioFrame::uplink_interleaved_i16`): the rebuilt Stereo pair
+//! in Stereo mode, the mono signal on both channels otherwise. The pair goes
+//! out as interleaved S16 to `hw:1,0` playback (kernel `f_uac2` IN terminal —
+//! what the host reads as the microphone).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -107,7 +109,7 @@ fn pump_loop(
                 if !stats.upstream_active.load(Ordering::Relaxed) {
                     continue;
                 }
-                mono_to_stereo_i16(&frame.mic_mono_f32, &mut stereo);
+                frame.uplink_interleaved_i16(&mut stereo);
                 let io = pcm.io_i16()?;
                 match io.writei(&stereo) {
                     Ok(_) => {}
@@ -132,16 +134,6 @@ fn pump_loop(
     }
 }
 
-fn mono_to_stereo_i16(mono: &[f32], out: &mut Vec<i16>) {
-    out.clear();
-    out.reserve(mono.len() * 2);
-    for &v in mono {
-        let s = (v.clamp(-1.0, 1.0) * 32767.0) as i16;
-        out.push(s);
-        out.push(s);
-    }
-}
-
 #[cfg(target_os = "linux")]
 fn set_realtime_priority(prio: i32) {
     let param = libc::sched_param { sched_priority: prio };
@@ -154,23 +146,3 @@ fn set_realtime_priority(prio: i32) {
 
 #[cfg(not(target_os = "linux"))]
 fn set_realtime_priority(_prio: i32) {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mono_to_stereo_duplicates_and_clamps() {
-        let mono = vec![0.0_f32, 0.5, -0.5, 1.5, -1.5];
-        let mut out = Vec::new();
-        mono_to_stereo_i16(&mono, &mut out);
-        assert_eq!(out.len(), mono.len() * 2);
-        // Each input sample becomes two identical i16 outputs.
-        assert_eq!(out[0], 0);            assert_eq!(out[1], 0);
-        assert_eq!(out[2], (0.5 * 32767.0) as i16); assert_eq!(out[3], out[2]);
-        assert_eq!(out[4], (-0.5 * 32767.0) as i16); assert_eq!(out[5], out[4]);
-        // 1.5 and -1.5 clamp to ±1 → ±32767.
-        assert_eq!(out[6], 32767);  assert_eq!(out[7], 32767);
-        assert_eq!(out[8], -32767); assert_eq!(out[9], -32767);
-    }
-}

@@ -56,6 +56,9 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
                     | MeetingStatus::ArtifactError
                     | MeetingStatus::ConfigurationError,
                 ) => None,
+                // An unfinished delete: removal::finish_interrupted retries it
+                // at the next boot. It never comes back as a recording.
+                Some(MeetingStatus::Deleting) => None,
                 _ if legacy_opus && !wav => Some(MeetingStatus::LegacyUnsupported),
                 _ if partial && !wav => Some(MeetingStatus::ArtifactError),
                 _ if !wav || !metadata => Some(MeetingStatus::MissingArtifact),
@@ -200,6 +203,31 @@ mod tests {
                     .unwrap();
             assert_eq!(status, expected.as_str());
         }
+    }
+
+    #[tokio::test]
+    async fn a_delete_left_unfinished_stays_deleting() {
+        // The boot completion of a delete failed after its directory was
+        // renamed away: the row must wait for the next boot, not come back
+        // as a missing recording.
+        let (temp, pool) = fixture().await;
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+        let id = insert(&pool, &recordings, MeetingStatus::Deleting, &[]).await;
+        tokio::fs::remove_dir(recordings.join(id.to_string()))
+            .await
+            .unwrap();
+
+        let report = run(&pool, &recordings).await.unwrap();
+
+        assert_eq!(report, ReconcileReport::default());
+        let (status,): (String,) =
+            sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, MeetingStatus::Deleting.as_str());
     }
 
     #[tokio::test]

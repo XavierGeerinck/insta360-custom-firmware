@@ -22,6 +22,8 @@ pub(crate) struct PreBuffer {
     /// recording is active (the take's own writer owns the audio) and resumed
     /// once idle, so a take's audio never bleeds into the next pre-roll.
     paused: bool,
+    /// The user's pre-recording setting (D3). Off means nothing is buffered.
+    enabled: bool,
 }
 
 impl PreBuffer {
@@ -31,6 +33,7 @@ impl PreBuffer {
             samples: VecDeque::with_capacity(capacity),
             capacity,
             paused: false,
+            enabled: true,
         }
     }
 
@@ -42,6 +45,19 @@ impl PreBuffer {
     /// Re-arm the pre-roll so `push` accumulates again.
     pub(crate) fn resume(&mut self) {
         self.paused = false;
+    }
+
+    /// Turn pre-recording on or off. Off drops everything buffered at once,
+    /// because the setting is a privacy control, and frees the ring's memory.
+    pub(crate) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.samples = VecDeque::new();
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     #[cfg(test)]
@@ -59,7 +75,7 @@ impl PreBuffer {
     }
 
     pub(crate) fn push(&mut self, samples: &[f32]) {
-        if self.capacity == 0 || self.paused {
+        if self.capacity == 0 || self.paused || !self.enabled {
             return;
         }
         // If the incoming slice itself exceeds capacity, only the last
@@ -83,6 +99,17 @@ impl PreBuffer {
 
 pub const RECORDING_SAMPLE_RATE: u32 = 48_000;
 
+/// One pause in a take. `offset_ms` is where the pause began on the
+/// recording timeline (pre-roll excluded, like bookmark offsets);
+/// `duration_ms` is how long it lasted on the wall clock. Paused audio is
+/// not in the file, so the file is shorter than the wall-clock take by the
+/// sum of the durations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PauseSpan {
+    pub offset_ms: u64,
+    pub duration_ms: u64,
+}
+
 pub struct ActiveRecording {
     pub id: Uuid,
     pub dir: PathBuf,
@@ -92,6 +119,9 @@ pub struct ActiveRecording {
     integrity_epoch: u64,
     total_samples: u64,
     pre_roll_samples: u64,
+    pauses: Vec<PauseSpan>,
+    /// Set while paused: when the pause began and its recording-timeline offset.
+    paused_since: Option<(std::time::Instant, u64)>,
     /// Open WAV writer. `Some` while recording, `None` once finalized.
     /// We keep the writer hot so each `ProcessedAudioFrame` appends with
     /// no per-frame open/seek overhead.
@@ -109,6 +139,7 @@ pub struct FinalizedRecording {
     pub clock_synchronized: bool,
     pub total_samples: u64,
     pub pre_roll_samples: u64,
+    pub pauses: Vec<PauseSpan>,
     pub size_bytes: u64,
 }
 
@@ -166,6 +197,8 @@ impl ActiveRecording {
             integrity_epoch,
             total_samples: 0,
             pre_roll_samples: 0,
+            pauses: Vec::new(),
+            paused_since: None,
             writer: Some(writer),
             #[cfg(test)]
             fail_writes_after_samples: None,
@@ -175,6 +208,37 @@ impl ActiveRecording {
     pub fn duration_secs(&self) -> u32 {
         (self.total_samples.saturating_sub(self.pre_roll_samples) / RECORDING_SAMPLE_RATE as u64)
             as u32
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused_since.is_some()
+    }
+
+    pub fn pauses(&self) -> &[PauseSpan] {
+        &self.pauses
+    }
+
+    /// Start a pause. Returns false when already paused.
+    pub fn pause_at(&mut self, now: std::time::Instant) -> bool {
+        if self.paused_since.is_some() {
+            return false;
+        }
+        let offset_ms = samples_to_ms(self.total_samples.saturating_sub(self.pre_roll_samples));
+        self.paused_since = Some((now, offset_ms));
+        true
+    }
+
+    /// End the current pause. Returns false when not paused.
+    pub fn resume_at(&mut self, now: std::time::Instant) -> bool {
+        let Some((since, offset_ms)) = self.paused_since.take() else {
+            return false;
+        };
+        let duration_ms = now.saturating_duration_since(since).as_millis() as u64;
+        self.pauses.push(PauseSpan {
+            offset_ms,
+            duration_ms,
+        });
+        true
     }
 
     pub fn audio_path(&self) -> PathBuf {
@@ -189,6 +253,11 @@ impl ActiveRecording {
         self.integrity_epoch
     }
 
+    /// Accept faults that happened while paused, when nothing was written.
+    pub(crate) fn rebase_integrity_epoch(&mut self, epoch: u64) {
+        self.integrity_epoch = epoch;
+    }
+
     pub fn append_pre_roll(&mut self, samples: &[f32]) -> std::io::Result<u64> {
         let written = self.append_samples_inner(samples)?;
         self.pre_roll_samples = self.pre_roll_samples.saturating_add(written);
@@ -199,6 +268,10 @@ impl ActiveRecording {
     /// Any write error is returned so the meeting service can fail the take
     /// closed and preserve the partial WAV for diagnosis.
     pub fn append_samples(&mut self, samples: &[f32]) -> std::io::Result<u64> {
+        if self.is_paused() {
+            // Paused audio never reaches the file (C1).
+            return Ok(0);
+        }
         self.append_samples_inner(samples)
     }
 
@@ -250,6 +323,10 @@ impl ActiveRecording {
 
     /// Close and sync the WAV, then atomically expose it as `audio.wav`.
     pub fn finalize(mut self) -> std::io::Result<FinalizedRecording> {
+        if self.is_paused() {
+            // Stop while paused: close the span at the moment of Stop.
+            self.resume_at(std::time::Instant::now());
+        }
         let writer = self
             .writer
             .take()
@@ -271,6 +348,7 @@ impl ActiveRecording {
             clock_synchronized: self.clock_synchronized,
             total_samples: self.total_samples,
             pre_roll_samples: self.pre_roll_samples,
+            pauses: std::mem::take(&mut self.pauses),
             size_bytes,
         })
     }
@@ -504,5 +582,69 @@ mod tests {
         assert!(partial.exists());
         assert!(!partial.with_file_name("audio.wav").exists());
         assert_eq!(hound::WavReader::open(partial).unwrap().duration(), 1);
+    }
+
+    #[test]
+    fn prebuffer_disabled_drops_buffered_audio_and_ignores_pushes() {
+        let mut pb = PreBuffer::new(1, 100, 1);
+        pb.push(&[0.1; 50]);
+        pb.set_enabled(false);
+        assert!(!pb.is_enabled());
+        assert_eq!(pb.len(), 0, "turning it off drops what was buffered");
+        pb.push(&[0.2; 10]);
+        assert_eq!(pb.len(), 0, "nothing is buffered while off");
+        pb.set_enabled(true);
+        pb.push(&[0.3; 10]);
+        assert_eq!(pb.drain_all(), vec![0.3; 10]);
+    }
+
+    #[tokio::test]
+    async fn paused_audio_never_reaches_the_file() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        let t0 = Instant::now();
+        rec.append_samples(&vec![0.25; 48_000]).unwrap();
+        assert!(rec.pause_at(t0));
+        assert!(!rec.pause_at(t0), "a second pause is a no-op");
+        assert!(rec.is_paused());
+        assert_eq!(rec.append_samples(&vec![0.5; 48_000]).unwrap(), 0);
+        assert_eq!(rec.duration_secs(), 1, "the timer is frozen while paused");
+        assert!(rec.resume_at(t0 + Duration::from_secs(5)));
+        assert!(
+            !rec.resume_at(t0 + Duration::from_secs(6)),
+            "not paused any more"
+        );
+        rec.append_samples(&vec![0.75; 48_000]).unwrap();
+        assert_eq!(rec.duration_secs(), 2);
+
+        let finalized = rec.finalize().unwrap();
+        assert_eq!(
+            finalized.pauses,
+            vec![PauseSpan {
+                offset_ms: 1_000,
+                duration_ms: 5_000
+            }]
+        );
+        let mut reader = hound::WavReader::open(&finalized.audio_path).unwrap();
+        let samples: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+        assert_eq!(samples.len(), 96_000);
+        // 0.5 * 32768 = 0x4000: the paused value must not appear.
+        assert!(samples.iter().all(|&s| s != 0x4000));
+    }
+
+    #[tokio::test]
+    async fn stop_while_paused_closes_the_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        rec.append_pre_roll(&vec![0.1; 4_800]).unwrap();
+        rec.append_samples(&vec![0.1; 24_000]).unwrap();
+        rec.pause_at(std::time::Instant::now());
+        let finalized = rec.finalize().unwrap();
+        assert_eq!(finalized.pauses.len(), 1);
+        assert_eq!(
+            finalized.pauses[0].offset_ms, 500,
+            "the offset excludes the pre-roll"
+        );
     }
 }

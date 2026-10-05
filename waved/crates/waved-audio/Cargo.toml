@@ -11,6 +11,7 @@ recording-integrity-test-hooks = []
 
 [dependencies]
 waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
 waved-npu = { path = "../waved-npu" }
 waved-hid = { path = "../waved-hid" }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }

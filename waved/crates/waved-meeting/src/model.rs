@@ -12,6 +12,7 @@ pub enum MeetingStatus {
     MissingArtifact,
     LegacyUnsupported,
     ArtifactError,
+    Deleting,
 }
 
 impl MeetingStatus {
@@ -29,6 +30,7 @@ impl MeetingStatus {
             Self::MissingArtifact => "missing_artifact",
             Self::LegacyUnsupported => "legacy_unsupported",
             Self::ArtifactError => "artifact_error",
+            Self::Deleting => "deleting",
         }
     }
 
@@ -46,6 +48,7 @@ impl MeetingStatus {
             "missing_artifact" => Self::MissingArtifact,
             "legacy_unsupported" => Self::LegacyUnsupported,
             "artifact_error" => Self::ArtifactError,
+            "deleting" => Self::Deleting,
             _ => return None,
         })
     }

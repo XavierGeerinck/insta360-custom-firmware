@@ -84,6 +84,19 @@ pub struct RecordingIntegritySnapshot {
 }
 
 impl RecordingIntegrity {
+    /// Count `fault` and move the epoch on by one; returns the new epoch.
+    ///
+    /// Contract with the meeting service: every call made by the audio
+    /// pipeline (capture thread, `AudioService`, the binary's watchers) is
+    /// followed by exactly one [`IntegritySignal`] for that fault. The
+    /// meeting service depends on it: a signal tolerated while a take is
+    /// paused accepts exactly one fault (the take's epoch moves on by one),
+    /// and Pause is refused while the epoch is ahead of the take, because
+    /// the signal still on its way will end the take. A fault recorded
+    /// without a signal would keep that take from ever pausing; one signal
+    /// for two faults would let a capture failure through as a pause fault.
+    /// The meeting service's own calls end the take on the spot and send no
+    /// signal.
     pub fn record_fault(&self, fault: RecordingIntegrityFault) -> u64 {
         match fault {
             RecordingIntegrityFault::CaptureXrun => {

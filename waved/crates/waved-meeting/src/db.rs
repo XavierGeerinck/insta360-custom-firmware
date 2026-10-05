@@ -159,9 +159,11 @@ pub async fn set_upload_status(
     id: &Uuid,
     status: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ?")
+    // A row being deleted only ever goes away (see `claim_for_removal`).
+    sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ? AND upload_status != ?")
         .bind(status)
         .bind(id.to_string())
+        .bind(MeetingStatus::Deleting.as_str())
         .execute(pool)
         .await?;
     Ok(())
@@ -270,13 +272,30 @@ pub async fn reset_attempt_cycle(pool: &SqlitePool, id: &Uuid) -> Result<(), sql
     sqlx::query(
         "UPDATE meetings SET upload_status = ?, attempt_cycle = 0, \
          last_error = NULL, last_status_code = NULL, next_attempt_at_ms = NULL \
-         WHERE id = ?",
+         WHERE id = ? AND upload_status != ?",
+    )
+    .bind(MeetingStatus::Queued.as_str())
+    .bind(id.to_string())
+    .bind(MeetingStatus::Deleting.as_str())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Queue a kept or failed recording for delivery again ("Send" / "Send
+/// again" in Files). Uploaded, damaged, pending, in-flight and deleting
+/// recordings are left alone. Returns true when the row was queued.
+pub async fn requeue_for_delivery(pool: &SqlitePool, id: &Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE meetings SET upload_status = ?, attempt_cycle = 0, \
+         last_error = NULL, last_status_code = NULL, next_attempt_at_ms = NULL \
+         WHERE id = ? AND upload_status IN ('local_only', 'retry_wait', 'configuration_error')",
     )
     .bind(MeetingStatus::Queued.as_str())
     .bind(id.to_string())
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(result.rows_affected() == 1)
 }
 
 pub async fn reset_retryable_failures(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
@@ -511,6 +530,108 @@ pub async fn delete_meeting_cascade(pool: &SqlitePool, id: &Uuid) -> Result<(), 
     tx.commit().await
 }
 
+/// Recordings a restart left waiting for "Send this recording?". The
+/// question is gone after a restart, so they are kept on Wave, the D4 default.
+pub async fn keep_stale_decisions(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("UPDATE meetings SET upload_status = ? WHERE upload_status = ?")
+        .bind(MeetingStatus::LocalOnly.as_str())
+        .bind(MeetingStatus::AwaitingDecision.as_str())
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum RemovalClaim {
+    Claimed { previous_status: String },
+    Uploading,
+    NotFound,
+}
+
+/// Mark a recording `deleting` unless it is uploading right now. The worker
+/// only claims queued and retry_wait rows, so a claimed row is never picked
+/// up for delivery while its files go away, and status writes skip it.
+pub async fn claim_for_removal(pool: &SqlitePool, id: &Uuid) -> Result<RemovalClaim, sqlx::Error> {
+    // IMMEDIATE takes the write lock up front: a deferred transaction that
+    // reads and then writes gets SQLITE_BUSY at once under contention
+    // instead of waiting out the busy timeout.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let row: Option<(String,)> = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+        .bind(id.to_string())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let claim = match row {
+        None => RemovalClaim::NotFound,
+        Some((status,)) if status == MeetingStatus::Uploading.as_str() => RemovalClaim::Uploading,
+        Some((previous_status,)) => {
+            sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ?")
+                .bind(MeetingStatus::Deleting.as_str())
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?;
+            RemovalClaim::Claimed { previous_status }
+        }
+    };
+    tx.commit().await?;
+    Ok(claim)
+}
+
+pub async fn ids_with_status(
+    pool: &SqlitePool,
+    status: MeetingStatus,
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM meetings WHERE upload_status = ?")
+        .bind(status.as_str())
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(id,)| id.parse().ok())
+        .collect())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordingRow {
+    pub id: Uuid,
+    pub start_time: String,
+    pub duration_secs: u32,
+    pub status: String,
+    pub attempt_cycle: u32,
+    pub last_status_code: Option<i64>,
+    pub dir: String,
+    pub marks: u32,
+}
+
+/// Every recording row with its bookmark count, newest first.
+pub async fn recording_rows(pool: &SqlitePool) -> Result<Vec<RecordingRow>, sqlx::Error> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, String, i64, String, i64, Option<i64>, String, i64)> = sqlx::query_as(
+        "SELECT m.id, m.start_time, COALESCE(m.duration_secs, 0), m.upload_status, \
+         COALESCE(m.attempt_cycle, 0), m.last_status_code, m.file_path, \
+         (SELECT COUNT(*) FROM bookmarks b WHERE b.meeting_id = m.id) \
+         FROM meetings m ORDER BY m.rowid DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(
+            |(id, start_time, duration, status, attempt_cycle, last_status_code, dir, marks)| {
+                Some(RecordingRow {
+                    id: id.parse().ok()?,
+                    start_time,
+                    duration_secs: duration.max(0) as u32,
+                    status,
+                    attempt_cycle: attempt_cycle.max(0) as u32,
+                    last_status_code,
+                    dir,
+                    marks: marks.max(0) as u32,
+                })
+            },
+        )
+        .collect())
+}
+
 fn truncate_diagnostic(value: &str) -> String {
     let mut output = value
         .chars()
@@ -689,6 +810,34 @@ mod tests {
                 .unwrap();
         assert_eq!(meeting_count.0, 0);
         assert_eq!(bookmark_count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_writes_over_a_deleting_row() {
+        let pool = fresh_pool().await;
+        let id = Uuid::new_v4();
+        insert_meeting(&pool, &id, "Omni", "/tmp/x").await.unwrap();
+        set_status(&pool, &id, MeetingStatus::AwaitingDecision)
+            .await
+            .unwrap();
+        assert_eq!(
+            claim_for_removal(&pool, &id).await.unwrap(),
+            RemovalClaim::Claimed {
+                previous_status: "awaiting_decision".into()
+            }
+        );
+        // Save, Send, the auto-Keep and the shutdown save use set_status;
+        // Retry uses reset_attempt_cycle.
+        set_status(&pool, &id, MeetingStatus::LocalOnly)
+            .await
+            .unwrap();
+        reset_attempt_cycle(&pool, &id).await.unwrap();
+        assert_eq!(
+            ids_with_status(&pool, MeetingStatus::Deleting)
+                .await
+                .unwrap(),
+            vec![id]
+        );
     }
 
     #[tokio::test]

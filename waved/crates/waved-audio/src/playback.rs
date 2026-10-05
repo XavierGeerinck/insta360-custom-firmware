@@ -84,6 +84,8 @@ pub struct DspMetrics {
 
 pub struct PlaybackService {
     cmd_tx: mpsc::Sender<Vec<i16>>,
+    /// Local playback (recordings), mixed with the host stream each period.
+    local_tx: mpsc::Sender<Vec<i16>>,
     preset_tx: mpsc::Sender<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     channels: u32,
@@ -101,6 +103,19 @@ impl PlaybackService {
         self.cmd_tx
             .try_send(samples)
             .map_err(|_| PlaybackError::Stopped)
+    }
+
+    /// Submit one period of local playback (Files → Play). It is mixed with
+    /// whatever the host sends, so neither stream interrupts the other.
+    pub fn play_local(&self, samples: Vec<i16>) -> Result<(), PlaybackError> {
+        self.local_tx
+            .try_send(samples)
+            .map_err(|_| PlaybackError::Stopped)
+    }
+
+    /// Local periods queued and not played yet.
+    pub fn local_queue_depth(&self) -> usize {
+        self.local_tx.max_capacity() - self.local_tx.capacity()
     }
 
     /// Submit a preset switch. Drops silently if the playback thread has exited.
@@ -140,6 +155,7 @@ impl PlaybackService {
 pub fn run_playback_loop<S: PlaybackSink>(
     mut sink: S,
     mut cmd_rx: mpsc::Receiver<Vec<i16>>,
+    mut local_rx: mpsc::Receiver<Vec<i16>>,
     mut preset_rx: mpsc::Receiver<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     stats: Arc<PlaybackStats>,
@@ -177,7 +193,7 @@ pub fn run_playback_loop<S: PlaybackSink>(
             info!("playback preset switched → {:?}", p);
         }
 
-        let (batch, is_silence) = match cmd_rx.try_recv() {
+        let (batch, mut is_silence) = match cmd_rx.try_recv() {
             Ok(b) => (b, false),
             Err(mpsc::error::TryRecvError::Empty) => (silence.clone(), true),
             Err(mpsc::error::TryRecvError::Disconnected) => {
@@ -198,6 +214,13 @@ pub fn run_playback_loop<S: PlaybackSink>(
             warn!("playback batch truncated: {} > {}", batch.len(), period_samples);
             batch.into_iter().take(period_samples).collect()
         };
+
+        // Local playback rides on the same period, before the DSP chain, so
+        // volume, limiting and the AEC reference cover it too.
+        if let Ok(local) = local_rx.try_recv() {
+            mix_into(&mut normalized, &local);
+            is_silence = false;
+        }
 
         // SP#5: DSP applied before the ALSA write. AEC reference broadcast
         // taps the post-DSP buffer so the cancellation reference matches what
@@ -254,6 +277,14 @@ pub fn run_playback_loop<S: PlaybackSink>(
                 return;
             }
         }
+    }
+}
+
+/// Add `src` into `dst` sample by sample, saturating at the i16 limits.
+/// A shorter `src` leaves the tail of `dst` unchanged.
+pub fn mix_into(dst: &mut [i16], src: &[i16]) {
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d = d.saturating_add(*s);
     }
 }
 
@@ -361,6 +392,7 @@ mod alsa_impl {
     ) -> Result<PlaybackService, PlaybackError> {
         let sink = AlsaPlaybackSink::open(&cfg)?;
         let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(64);
+        let (local_tx, local_rx) = mpsc::channel::<Vec<i16>>(8);
         let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(32);
         let stats = Arc::new(PlaybackStats::default());
@@ -377,7 +409,7 @@ mod alsa_impl {
             .spawn(move || {
                 super::set_realtime_priority();
                 run_playback_loop(
-                    sink, cmd_rx, preset_rx, ref_tx_thread, stats_thread,
+                    sink, cmd_rx, local_rx, preset_rx, ref_tx_thread, stats_thread,
                     period_samples, sample_rate, initial_preset, dsp_metrics_thread,
                     state_rx,
                 );
@@ -386,6 +418,7 @@ mod alsa_impl {
 
         Ok(PlaybackService {
             cmd_tx,
+            local_tx,
             preset_tx,
             ref_tx,
             channels: cfg.channels,
@@ -456,6 +489,7 @@ mod tests {
         stop_after: usize,
         fail_once: bool,
         prefill: Vec<Vec<i16>>,
+        local_prefill: Vec<Vec<i16>>,
         period_samples: usize,
         channels: u32,
     ) -> (Vec<Vec<i16>>, Arc<PlaybackStats>, Vec<Vec<i16>>) {
@@ -469,6 +503,10 @@ mod tests {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(16);
         for b in prefill {
             cmd_tx.try_send(b).unwrap();
+        }
+        let (local_tx, local_rx) = mpsc::channel::<Vec<i16>>(8);
+        for b in local_prefill {
+            local_tx.try_send(b).unwrap();
         }
         let (preset_tx, preset_rx) = mpsc::channel::<PlaybackPreset>(8);
         // Drop preset_tx immediately so no preset switches happen during the test.
@@ -485,7 +523,7 @@ mod tests {
         });
         let handle = std::thread::spawn(move || {
             run_playback_loop(
-                sink, cmd_rx, preset_rx, ref_tx, stats_thread,
+                sink, cmd_rx, local_rx, preset_rx, ref_tx, stats_thread,
                 period_samples, 48_000, PlaybackPreset::Voice,
                 Arc::new(DspMetrics::default()),
                 state_rx,
@@ -495,6 +533,7 @@ mod tests {
         // join waits for it.
         handle.join().unwrap();
         drop(cmd_tx);
+        drop(local_tx);
 
         let mut ref_batches = Vec::new();
         while let Ok(b) = ref_rx.try_recv() {
@@ -506,7 +545,7 @@ mod tests {
 
     #[test]
     fn silence_when_queue_empty() {
-        let (batches, stats, ref_batches) = run_with_mock(3, false, vec![], 8, 2);
+        let (batches, stats, ref_batches) = run_with_mock(3, false, vec![], vec![], 8, 2);
         assert!(batches.len() >= 3);
         for b in &batches {
             assert_eq!(b.len(), 8);
@@ -522,7 +561,7 @@ mod tests {
     fn submitted_batch_is_played_and_referenced() {
         let payload = vec![1i16, 2, 3, 4, 5, 6, 7, 8];
         let (batches, stats, ref_batches) =
-            run_with_mock(2, false, vec![payload.clone()], 8, 2);
+            run_with_mock(2, false, vec![payload.clone()], vec![], 8, 2);
         // Post-SP#5: the limiter's 96-frame lookahead means the first batch
         // emerges as silence during warmup. We can't byte-compare. Instead,
         // verify the plumbing: the batch flowed through DSP, advanced stats,
@@ -539,7 +578,7 @@ mod tests {
 
     #[test]
     fn short_batch_is_padded_with_silence() {
-        let (batches, _, _) = run_with_mock(1, false, vec![vec![99, 99]], 8, 2);
+        let (batches, _, _) = run_with_mock(1, false, vec![vec![99, 99]], vec![], 8, 2);
         let first = &batches[0];
         assert_eq!(first.len(), 8, "short batch padded to period");
         // Don't assert specific sample values — DSP warmup obscures the first batch.
@@ -548,7 +587,7 @@ mod tests {
     #[test]
     fn underrun_increments_stat_and_continues() {
         // First write returns Underrun; loop recovers and writes on subsequent iterations.
-        let (batches, stats, _) = run_with_mock(3, true, vec![], 4, 1);
+        let (batches, stats, _) = run_with_mock(3, true, vec![], vec![], 4, 1);
         assert_eq!(stats.underruns.load(Ordering::Relaxed), 1);
         assert!(batches.len() >= 3);
     }
@@ -561,9 +600,11 @@ mod tests {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Vec<i16>>(4);
         let (preset_tx, _preset_rx) =
             mpsc::channel::<crate::playback::preset::PlaybackPreset>(2);
+        let (local_tx, _local_rx) = mpsc::channel::<Vec<i16>>(4);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(2);
         let svc = PlaybackService {
             cmd_tx: cmd_tx.clone(),
+            local_tx: local_tx.clone(),
             preset_tx,
             ref_tx,
             channels: 2,
@@ -579,5 +620,29 @@ mod tests {
         // Read one back via the receiver — depth drops by one.
         let _ = cmd_rx.try_recv().ok();
         assert_eq!(svc.queue_depth(), 1);
+        assert_eq!(svc.local_queue_depth(), 0);
+        svc.play_local(vec![0; 4]).unwrap();
+        assert_eq!(svc.local_queue_depth(), 1);
+    }
+
+    #[test]
+    fn mix_into_adds_and_saturates() {
+        let mut dst = vec![1_000i16, -1_000, 30_000, -30_000];
+        mix_into(&mut dst, &[500, -500, 10_000, -10_000]);
+        assert_eq!(dst, vec![1_500, -1_500, i16::MAX, i16::MIN]);
+        let mut short = vec![1i16, 2, 3];
+        mix_into(&mut short, &[1]);
+        assert_eq!(short, vec![2, 2, 3], "a short local batch leaves the rest alone");
+    }
+
+    #[test]
+    fn local_batch_plays_without_host_audio() {
+        let (batches, stats, _ref_batches) =
+            run_with_mock(2, false, vec![], vec![vec![100; 8]], 8, 2);
+        assert_eq!(batches.len(), 2);
+        assert!(
+            stats.frames_written.load(Ordering::Relaxed) > 0,
+            "local audio counts as written, not silence"
+        );
     }
 }

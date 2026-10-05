@@ -14,6 +14,8 @@
 //! channels report [`MicStatus::Ok`] (no false positives). Drive it with some
 //! signal present for a meaningful result.
 
+use waved_state::MicHealth;
+
 /// Per-channel verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicStatus {
@@ -161,6 +163,85 @@ fn median(values: &[f32]) -> f32 {
     }
 }
 
+/// Runs `MicCheck` over the first seconds of capture and turns it into one
+/// `MicHealth` verdict (C6). Feed raw frames before mic mute.
+pub struct MicHealthMonitor {
+    check: MicCheck,
+    channels: usize,
+    window_frames: u64,
+    attempts_left: u32,
+    scratch: Vec<f32>,
+    done: bool,
+}
+
+impl MicHealthMonitor {
+    pub const WINDOW_MS: u64 = 3_000;
+    /// Quiet-room windows before giving up (30 s with the default window).
+    pub const MAX_ATTEMPTS: u32 = 10;
+
+    pub fn new(channels: usize, sample_rate: u32) -> Self {
+        Self {
+            check: MicCheck::new(channels.max(1)),
+            channels,
+            window_frames: u64::from(sample_rate) * Self::WINDOW_MS / 1_000,
+            attempts_left: Self::MAX_ATTEMPTS,
+            scratch: Vec::new(),
+            done: channels == 0,
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.done
+    }
+
+    /// Accumulate interleaved samples; returns the verdict once, when a
+    /// window is conclusive.
+    pub fn push_i16(&mut self, interleaved: &[i16], channels: usize) -> Option<MicHealth> {
+        if self.done || channels != self.channels {
+            return None;
+        }
+        self.scratch.clear();
+        self.scratch
+            .extend(interleaved.iter().map(|&s| f32::from(s) / 32_768.0));
+        self.check.push_interleaved(&self.scratch);
+        if self.check.samples_per_channel() < self.window_frames {
+            return None;
+        }
+        let verdict = self.check.verdict();
+        self.check.reset();
+        let zero = mask(verdict.rms.iter().map(|&rms| rms == 0.0));
+        let dead = mask(verdict.per_channel.iter().map(|&s| s == MicStatus::Dead));
+        let low = mask(verdict.per_channel.iter().map(|&s| s == MicStatus::Low));
+        if zero != 0 {
+            self.done = true;
+            return Some(MicHealth::NotResponding {
+                dead_mask: zero | dead,
+            });
+        }
+        if verdict.inconclusive {
+            self.attempts_left = self.attempts_left.saturating_sub(1);
+            self.done = self.attempts_left == 0;
+            return None;
+        }
+        self.done = true;
+        Some(if dead != 0 {
+            MicHealth::NotResponding { dead_mask: dead }
+        } else if low != 0 {
+            MicHealth::Degraded { low_mask: low }
+        } else {
+            MicHealth::Ok
+        })
+    }
+}
+
+/// Bit n set when the n-th flag is true (first 8 channels).
+fn mask(flags: impl Iterator<Item = bool>) -> u8 {
+    flags
+        .take(8)
+        .enumerate()
+        .fold(0u8, |m, (i, set)| if set { m | (1 << i) } else { m })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +316,85 @@ mod tests {
         assert_eq!(median(&[3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(&[1.0, 2.0, 3.0, 4.0]), 2.5);
         assert_eq!(median(&[]), 0.0);
+    }
+
+    use waved_state::MicHealth;
+
+    /// `frames` of interleaved i16 with channel c at ±amps[c] (RMS = |amp|).
+    fn frames_i16(amps: &[i16], frames: usize) -> Vec<i16> {
+        let mut out = Vec::with_capacity(amps.len() * frames);
+        for f in 0..frames {
+            let sign = if f % 2 == 0 { 1 } else { -1 };
+            out.extend(amps.iter().map(|&a| a * sign));
+        }
+        out
+    }
+
+    #[test]
+    fn healthy_array_is_ok_after_one_window() {
+        let mut m = MicHealthMonitor::new(8, 1_000); // 3 000-frame window
+        assert_eq!(m.push_i16(&frames_i16(&[3_000; 8], 2_000), 8), None);
+        assert_eq!(
+            m.push_i16(&frames_i16(&[3_000; 8], 1_000), 8),
+            Some(MicHealth::Ok)
+        );
+        assert!(m.is_done());
+        assert_eq!(
+            m.push_i16(&frames_i16(&[0; 8], 3_000), 8),
+            None,
+            "the verdict is final"
+        );
+    }
+
+    #[test]
+    fn a_dead_element_is_not_responding() {
+        let mut amps = [3_000i16; 8];
+        amps[3] = 0;
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        assert_eq!(
+            m.push_i16(&frames_i16(&amps, 3_000), 8),
+            Some(MicHealth::NotResponding {
+                dead_mask: 0b0000_1000
+            })
+        );
+    }
+
+    #[test]
+    fn a_quiet_element_is_degraded() {
+        let mut amps = [3_000i16; 8];
+        amps[5] = 750; // 0.25 × median
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        assert_eq!(
+            m.push_i16(&frames_i16(&amps, 3_000), 8),
+            Some(MicHealth::Degraded {
+                low_mask: 0b0010_0000
+            })
+        );
+    }
+
+    #[test]
+    fn an_all_zero_capture_is_not_responding() {
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        assert_eq!(
+            m.push_i16(&frames_i16(&[0; 8], 3_000), 8),
+            Some(MicHealth::NotResponding { dead_mask: 0xFF })
+        );
+    }
+
+    #[test]
+    fn a_quiet_room_retries_then_gives_up() {
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        for _ in 0..MicHealthMonitor::MAX_ATTEMPTS {
+            assert!(!m.is_done());
+            assert_eq!(m.push_i16(&frames_i16(&[1; 8], 3_000), 8), None);
+        }
+        assert!(m.is_done(), "stays Unknown after the last attempt");
+    }
+
+    #[test]
+    fn frames_with_another_channel_count_are_ignored() {
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        assert_eq!(m.push_i16(&frames_i16(&[0; 2], 3_000), 2), None);
+        assert!(!m.is_done());
     }
 }

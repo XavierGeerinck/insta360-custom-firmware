@@ -3634,6 +3634,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "waved-config",
  "waved-hid",
  "waved-npu",
  "waved-state",
@@ -3765,6 +3766,7 @@ dependencies = [
  "uuid",
  "waved-audio",
  "waved-config",
+ "waved-settings",
  "waved-state",
 ]
 

@@ -15,6 +15,7 @@
 //! See `weights.rs` for the partitioning; see SP#3 design doc for the physics.
 
 pub mod geometry;
+pub mod aim;
 pub mod delays;
 pub mod steered;
 pub mod weights;
@@ -86,6 +87,11 @@ impl Beamformer {
             self.doa_el_deg = el_deg;
             self.recompute();
         }
+    }
+
+    /// Where the pattern points now (azimuth, elevation), in degrees.
+    pub fn direction(&self) -> (f32, f32) {
+        (self.doa_az_deg, self.doa_el_deg)
     }
 
     pub fn set_omni_mix(&mut self, mix: f32) {
