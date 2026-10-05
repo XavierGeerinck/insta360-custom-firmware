@@ -145,12 +145,23 @@ impl Screen for RecordingScreen {
                 },
             )
         };
+        // Set by the first completed hold: Stop is one-shot until the screen changes.
+        let stopped = Rc::new(Cell::new(false));
         let stop = {
-            let (tap, done, live) = (ctx.dispatch.clone(), ctx.dispatch.clone(), live.clone());
+            let (tap, done) = (ctx.dispatch.clone(), ctx.dispatch.clone());
+            let (tap_stopped, done_stopped, live) =
+                (stopped.clone(), stopped.clone(), live.clone());
             RoundButton::stop(
                 root,
-                move || tap.show(Severity::Info, copy::HOLD_STOP),
                 move || {
+                    if !tap_stopped.get() {
+                        tap.show(Severity::Info, copy::HOLD_STOP);
+                    }
+                },
+                move || {
+                    if done_stopped.replace(true) {
+                        return;
+                    }
                     done.command(Command::StopRecording);
                     // Also replaces "Keep holding to stop" before the screen changes.
                     let message = copy::after_stop(live.get().upload_mode);
@@ -159,9 +170,9 @@ impl Screen for RecordingScreen {
             )
         };
         {
-            let (dispatch, obj) = (ctx.dispatch.clone(), stop.obj());
+            let (dispatch, obj, stopped) = (ctx.dispatch.clone(), stop.obj(), stopped.clone());
             on(obj, lv_event_code_t_LV_EVENT_PRESSED, move |_| {
-                if obj.is_clickable() {
+                if obj.is_clickable() && !stopped.get() {
                     dispatch.show(Severity::Info, copy::KEEP_HOLDING);
                 }
             });
@@ -421,6 +432,81 @@ mod tests {
                 events(&ui).last(),
                 Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic)))
             );
+        });
+    }
+
+    #[test]
+    fn stop_is_one_shot() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (ctx, mut bus, ui) = ctx();
+            let snap = recording(2_537);
+            let mut screen = RecordingScreen::default();
+            screen.build(root, &ctx, &snap);
+            let stop = screen.parts.as_ref().unwrap().stop.obj();
+            for _ in 0..2 {
+                lv.send(stop, lv_event_code_t_LV_EVENT_PRESSED);
+                lv.advance(HOLD_TO_STOP_MS as u32 + 100);
+            }
+            assert_eq!(sent(&mut bus), ["StopRecording"], "one StopRecording");
+            let stops = events(&ui)
+                .into_iter()
+                .filter(|e| *e == UiEvent::Show(copy::after_stop(UploadMode::Automatic)))
+                .count();
+            assert_eq!(stops, 1, "one after_stop message");
+            let before = events(&ui).len();
+            lv.click(stop);
+            assert!(sent(&mut bus).is_empty());
+            assert_eq!(events(&ui).len(), before, "taps after Stop say nothing");
+        });
+    }
+
+    #[test]
+    fn the_stop_message_follows_the_live_upload_mode() {
+        for mode in [
+            UploadMode::Ask,
+            UploadMode::LocalOnly,
+            UploadMode::Automatic,
+        ] {
+            lvgl(|lv| {
+                let root = lv.screen();
+                let (ctx, mut bus, ui) = ctx();
+                let mut snap = recording(2_537);
+                let mut screen = RecordingScreen::default();
+                screen.build(root, &ctx, &snap);
+                snap.settings.upload_mode = mode;
+                screen.update(&snap);
+                let stop = screen.parts.as_ref().unwrap().stop.obj();
+                lv.send(stop, lv_event_code_t_LV_EVENT_PRESSED);
+                lv.advance(HOLD_TO_STOP_MS as u32 + 100);
+                assert_eq!(sent(&mut bus), ["StopRecording"]);
+                assert_eq!(
+                    events(&ui).last(),
+                    Some(&UiEvent::Show(copy::after_stop(mode))),
+                    "{mode:?}"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn every_speaker_line_fits_inside_the_ring() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (ctx, _bus, _ui) = ctx();
+            let mut screen = RecordingScreen::default();
+            let mut snap = recording(2_537);
+            screen.build(root, &ctx, &snap);
+            let line = screen.parts.as_ref().unwrap().line;
+            for speaker in [1u8, 9, 10, 99, 188, 255] {
+                snap.meeting.current_speaker = Some(speaker);
+                screen.update(&snap);
+                line.update_layout();
+                let text = line.text();
+                assert_eq!(text, format!("Speaker {speaker} talking"));
+                let width = text_width(&text, Font::Small);
+                assert!(width <= RING_TEXT_W, "{text:?} is {width} px");
+            }
         });
     }
 
