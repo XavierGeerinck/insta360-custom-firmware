@@ -64,7 +64,13 @@ pub struct MeetingService {
     files: Option<Arc<files::FilesPublisher>>,
     /// Asks the loop to republish the Files list: a removal finished off-loop.
     files_refresh: Arc<Notify>,
+    /// The take the auto-Keep kept last, and when: a Discard that lost the
+    /// race to it still deletes it.
+    auto_kept: Option<(Uuid, tokio::time::Instant)>,
 }
+
+/// How long after the auto-Keep a Discard of that take still counts.
+const DISCARD_AFTER_AUTO_KEEP: Duration = Duration::from_secs(2);
 
 pub struct MeetingPipelineInputs {
     pub audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
@@ -383,6 +389,7 @@ impl MeetingService {
             _fallback: Some((settings_fallback, audio_fallback)),
             files: None,
             files_refresh: Arc::new(Notify::new()),
+            auto_kept: None,
         })
     }
 
@@ -434,12 +441,13 @@ impl MeetingService {
     }
 
     /// Nobody answered "Send this recording?": keep it on Wave (D4).
-    async fn keep_unanswered(&self) {
+    async fn keep_unanswered(&mut self) {
         let Some(id) = self.meeting_tx.borrow().pending_decision.as_ref().map(|d| d.id) else {
             return;
         };
         info!("no answer to \"Send this recording?\" for {id}; keeping it on Wave");
         self.handle_save_recording(id).await;
+        self.auto_kept = Some((id, tokio::time::Instant::now()));
     }
 
     fn live_audio_mode(&self) -> String {
@@ -842,7 +850,7 @@ impl MeetingService {
                                     }
                                 }
                                 Command::DiscardRecording(id) => {
-                                    self.handle_discard_recording(id);
+                                    self.handle_discard_recording(id).await;
                                 }
                                 Command::DeleteRecording(id) => {
                                     if active.as_ref().is_some_and(|rec| rec.id == id) {
@@ -1302,63 +1310,142 @@ impl MeetingService {
         self.clear_pending();
     }
 
-    fn handle_discard_recording(&self, id: Uuid) {
-        if self.validate_pending(&id).is_none() {
+    async fn handle_discard_recording(&self, id: Uuid) {
+        let pending = self
+            .meeting_tx
+            .borrow()
+            .pending_decision
+            .as_ref()
+            .is_some_and(|decision| decision.id == id);
+        if !pending {
+            let just_kept = self.auto_kept.is_some_and(|(kept, at)| {
+                kept == id && at.elapsed() <= DISCARD_AFTER_AUTO_KEEP
+            });
+            if just_kept {
+                info!("discard of {id} came just after it was kept; deleting it");
+                self.spawn_removal(id);
+            } else {
+                // Warns about the stale answer.
+                let _ = self.validate_pending(&id);
+            }
             return;
         }
-        // Answered here, before the removal runs, so the commands that follow
-        // (Record, a stray Send) already see no pending decision. The question
-        // is answered even if the files cannot be removed.
-        self.clear_pending();
-        self.spawn_removal(id);
+        // The claim is saved before the question is answered: answered first,
+        // a power cut before the claim would leave the row awaiting a
+        // decision, and boot keeps those (D4). No take runs while a decision
+        // is pending, so this short transaction holds up no audio. The
+        // commands that follow (Record, a stray Send) see no pending decision
+        // and a row claimed for deletion.
+        match db::claim_for_removal(&self.pool, &id).await {
+            Ok(db::RemovalClaim::Claimed { previous_status }) => {
+                self.clear_pending();
+                let remover = self.remover();
+                tokio::spawn(async move {
+                    let outcome = removal::finish_claimed(&remover.pool, &remover.recordings_dir, id)
+                        .await
+                        .map(|()| removal::RemoveOutcome::Removed { previous_status });
+                    remover.finish(id, outcome).await;
+                });
+            }
+            Ok(other) => {
+                warn!("discard of {id}: nothing to delete ({other:?})");
+                self.clear_pending();
+            }
+            Err(error) => {
+                // Without the claim, moving the files aside is what keeps the
+                // take from coming back: boot finishes any `.deleted-<id>`.
+                warn!("discard of {id}: cannot mark it for deletion ({error}); moving its files aside");
+                if let Err(error) = removal::move_aside(&self.recordings_dir, id).await {
+                    error!(
+                        "discard of {id}: files not moved aside ({error}); \
+                         it comes back as kept after a restart unless the delete below succeeds"
+                    );
+                }
+                self.clear_pending();
+                self.spawn_removal(id);
+            }
+        }
+    }
+
+    fn remover(&self) -> Remover {
+        Remover {
+            pool: self.pool.clone(),
+            recordings_dir: self.recordings_dir.clone(),
+            storage: self.config.storage.clone(),
+            retry_max: self.config.api.retry_max,
+            meeting_tx: Arc::clone(&self.meeting_tx),
+            files_refresh: Arc::clone(&self.files_refresh),
+        }
     }
 
     /// Remove a recording off the service loop: the removal syncs the disk,
     /// deletes a WAV of up to hundreds of MB and waits for the database,
     /// while the loop must keep draining a running take's frames.
     fn spawn_removal(&self, id: Uuid) {
-        let pool = self.pool.clone();
-        let recordings_dir = self.recordings_dir.clone();
-        let storage = self.config.storage.clone();
-        let meeting_tx = Arc::clone(&self.meeting_tx);
-        let files_refresh = Arc::clone(&self.files_refresh);
+        let remover = self.remover();
         tokio::spawn(async move {
-            let outcome = removal::remove_recording(&pool, &recordings_dir, id).await;
-            // A Delete of the pending take answers its question once the row
-            // is claimed (`deleting` even if the files remain) or the attempt
-            // failed, so the auto-Keep never writes over it.
-            let answered = !matches!(
-                outcome,
-                Ok(removal::RemoveOutcome::Uploading | removal::RemoveOutcome::NotFound)
-            );
-            match &outcome {
-                Ok(removal::RemoveOutcome::Removed { previous_status }) => {
-                    info!("audit: recording {id} deleted on request (was {previous_status})")
-                }
-                Ok(removal::RemoveOutcome::Uploading) => {
-                    warn!("delete refused: recording {id} is uploading right now")
-                }
-                Ok(removal::RemoveOutcome::NotFound) => warn!("delete ignored: no recording {id}"),
-                Err(error) => warn!("delete of recording {id} failed: {error}"),
-            }
-            if answered {
-                meeting_tx.send_if_modified(|state| {
-                    if !state.pending_decision.as_ref().is_some_and(|d| d.id == id) {
-                        return false;
-                    }
-                    state.pending_decision = None;
-                    state.ask_deadline_secs = None;
-                    true
-                });
-            }
-            if matches!(outcome, Ok(removal::RemoveOutcome::Removed { .. })) {
-                // Space was freed: lift a storage block now, not at the next Record.
-                retention::enforce(&pool, &recordings_dir, &storage, &meeting_tx).await;
-            }
-            // The loop's refresh after the command may have run before the
-            // removal finished; publish the list as it is now.
-            files_refresh.notify_one();
+            let outcome = removal::remove_recording(&remover.pool, &remover.recordings_dir, id).await;
+            remover.finish(id, outcome).await;
         });
+    }
+}
+
+/// What a removal task needs after the loop hands it a recording.
+struct Remover {
+    pool: SqlitePool,
+    recordings_dir: PathBuf,
+    storage: waved_config::StorageConfig,
+    retry_max: u32,
+    meeting_tx: Arc<watch::Sender<MeetingState>>,
+    files_refresh: Arc<Notify>,
+}
+
+impl Remover {
+    /// Log the outcome and publish what it changed.
+    async fn finish(&self, id: Uuid, outcome: std::io::Result<removal::RemoveOutcome>) {
+        // A Delete of the pending take answers its question once the row
+        // is claimed (`deleting` even if the files remain) or the attempt
+        // failed, so the auto-Keep never writes over it.
+        let answered = !matches!(
+            outcome,
+            Ok(removal::RemoveOutcome::Uploading | removal::RemoveOutcome::NotFound)
+        );
+        match &outcome {
+            Ok(removal::RemoveOutcome::Removed { previous_status }) => {
+                info!("audit: recording {id} deleted on request (was {previous_status})")
+            }
+            Ok(removal::RemoveOutcome::Uploading) => {
+                warn!("delete refused: recording {id} is uploading right now")
+            }
+            Ok(removal::RemoveOutcome::NotFound) => warn!("delete ignored: no recording {id}"),
+            Err(error) => warn!("delete of recording {id} failed: {error}"),
+        }
+        if answered {
+            self.meeting_tx.send_if_modified(|state| {
+                if !state.pending_decision.as_ref().is_some_and(|d| d.id == id) {
+                    return false;
+                }
+                state.pending_decision = None;
+                state.ask_deadline_secs = None;
+                true
+            });
+        }
+        if matches!(outcome, Ok(removal::RemoveOutcome::Removed { .. })) {
+            // Space was freed: lift a storage block now, not at the next Record.
+            retention::enforce(&self.pool, &self.recordings_dir, &self.storage, &self.meeting_tx)
+                .await;
+            // A queued or failed take no longer counts, as the worker would publish.
+            match db::upload_counts(&self.pool, self.retry_max).await {
+                Ok((pending, failed)) => self.meeting_tx.send_modify(|state| {
+                    state.pending_uploads = pending;
+                    state.failed_uploads = failed;
+                }),
+                Err(error) => warn!("failed to publish webhook queue counts: {error}"),
+            }
+        }
+        // The loop's refresh after the command may have run before the
+        // removal finished; publish the list as it is now.
+        self.files_refresh.notify_one();
     }
 }
 

@@ -44,6 +44,25 @@ pub(crate) async fn remove_recording(
     Ok(RemoveOutcome::Removed { previous_status })
 }
 
+/// Steps 2–4 for a row the caller already claimed (`deleting`).
+pub(crate) async fn finish_claimed(
+    pool: &SqlitePool,
+    recordings_dir: &Path,
+    id: Uuid,
+) -> std::io::Result<()> {
+    finish_one(pool, recordings_dir, id).await
+}
+
+/// Step 2 alone, for when the claim cannot be saved: boot finishes the
+/// delete of a `.deleted-<id>` directory whatever its row says.
+pub(crate) async fn move_aside(recordings_dir: &Path, id: Uuid) -> std::io::Result<()> {
+    let parent = recordings_dir.to_path_buf();
+    let trash = recordings_dir.join(format!("{DELETED_PREFIX}{id}"));
+    tokio::task::spawn_blocking(move || move_to_trash(&parent, id, &trash))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
 async fn finish_one(pool: &SqlitePool, recordings_dir: &Path, id: Uuid) -> std::io::Result<()> {
     let trash = recordings_dir.join(format!("{DELETED_PREFIX}{id}"));
     let parent = recordings_dir.to_path_buf();

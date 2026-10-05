@@ -1069,12 +1069,35 @@ async fn start_right_after_discard_starts_the_next_take() {
     wait_gone(&rig.dir(discarded)).await;
 }
 
-/// A Send that lands right after Discard finds no question to answer, so a
-/// discarded take is never queued, even while its removal still waits for
-/// the database (the test holds the write lock).
+/// A Send that lands right after Discard finds no question to answer and a
+/// row already claimed for deletion, so a discarded take is never queued.
+/// The removal cannot finish here (`.deleted-<id>` is in the way), so the
+/// claim stays for the test to read.
 #[tokio::test]
 async fn send_right_after_discard_never_queues_it() {
     let rig = start_rig(with_server(quiet_config(UploadMode::Ask)), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    let trash = rig.recordings_dir.join(format!("{}{id}", removal::DELETED_PREFIX));
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("in-the-way"), b"x").unwrap();
+
+    rig.send(Command::DiscardRecording(id));
+    rig.send(Command::SendRecording(id));
+    // Commands are handled in order: once the next take runs, Send was handled.
+    rig.send(Command::StartRecording);
+    rig.wait_for("next take", |s| s.recording).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("deleting"), "the stray Send must not queue it");
+}
+
+/// Discard is saved (the row claimed for deletion) before the question is
+/// answered: a power cut right after the answer must not bring the take back
+/// as kept. The test holds the database write lock for a moment.
+#[tokio::test]
+async fn discard_is_saved_before_it_is_answered() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
     let id = rig.start().await;
     rig.feed(5, 0.1).await;
     rig.send(Command::StopRecording);
@@ -1084,22 +1107,109 @@ async fn send_right_after_discard_never_queues_it() {
     let mut lock = blocker.acquire().await.unwrap();
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *lock).await.unwrap();
     rig.send(Command::DiscardRecording(id));
-    rig.send(Command::SendRecording(id));
-    rig.wait_for("answered", |s| s.pending_decision.is_none() && s.ask_deadline_secs.is_none())
-        .await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    // Read through the lock holder: opening a new pool writes the schema.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        rig.meeting.borrow().pending_decision.is_some(),
+        "not answered before the claim is saved"
+    );
+    sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
+    drop(lock);
+
+    rig.wait_for("answered", |s| s.pending_decision.is_none()).await;
+    let status = rig.status(id).await;
+    assert!(
+        matches!(status.as_deref(), None | Some("deleting")),
+        "claimed when answered: {status:?}"
+    );
+    wait_gone(&rig.dir(id)).await;
+    rig.wait_status(id, None).await;
+}
+
+/// If the claim cannot be saved (the database stays locked past its busy
+/// timeout), the files are moved to `.deleted-<id>` before the question is
+/// answered: boot finishes such a delete, so the take never comes back as
+/// kept. Takes a little over the 5 s busy timeout.
+#[tokio::test]
+async fn a_discard_whose_claim_fails_is_still_never_kept() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+
+    let blocker = rig.pool().await;
+    let mut lock = blocker.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *lock).await.unwrap();
+    rig.send(Command::DiscardRecording(id));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while rig.meeting.borrow().pending_decision.is_some() {
+        assert!(tokio::time::Instant::now() < deadline, "the question was never answered");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let trash = rig.recordings_dir.join(format!("{}{id}", removal::DELETED_PREFIX));
+    assert!(!rig.dir(id).exists(), "files moved aside before the answer");
+    assert!(trash.join("audio.wav").exists());
+    // Read through the lock holder: the claim never landed.
     let (status,): (String,) = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
         .bind(id.to_string())
         .fetch_one(&mut *lock)
         .await
         .unwrap();
-    assert_eq!(status, "awaiting_decision", "the stray Send must not queue it");
+    assert_eq!(status, "awaiting_decision");
     sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
     drop(lock);
 
+    // What boot does with it: finish the delete before keeping stale decisions.
+    let pool = rig.pool().await;
+    removal::finish_interrupted(&pool, &rig.recordings_dir).await;
+    db::keep_stale_decisions(&pool).await.unwrap();
+    assert_eq!(Rig::status_in(&pool, id).await, None);
+    assert!(!trash.exists());
+}
+
+/// A Discard that loses the race to the auto-Keep (the take was kept a
+/// moment before) still deletes the take; one long after the Keep does not.
+#[tokio::test]
+async fn a_discard_just_after_the_auto_keep_deletes_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), ask_after(1)).await;
+    let late = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("kept", |s| s.pending_decision.is_none() && !s.recording).await;
+    rig.wait_status(late, Some("local_only")).await;
+    tokio::time::sleep(Duration::from_millis(2_300)).await;
+    rig.send(Command::DiscardRecording(late));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.status(late).await.as_deref(), Some("local_only"), "too late to count");
+
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    rig.wait_for("kept", |s| s.pending_decision.is_none()).await;
+    rig.send(Command::DiscardRecording(id));
     wait_gone(&rig.dir(id)).await;
     rig.wait_status(id, None).await;
+}
+
+/// Deleting a failed take updates the upload counts at once, not at the
+/// worker's next 5 s round (no server here, so the worker sends nothing).
+#[tokio::test]
+async fn deleting_a_failed_take_updates_the_upload_counts() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    db::set_status(&rig.pool().await, &id, MeetingStatus::ConfigurationError).await.unwrap();
+    // What the worker publishes for it.
+    rig.meeting.send_modify(|s| s.failed_uploads = 1);
+    rig.send(Command::DeleteRecording(id));
+    rig.wait_status(id, None).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while rig.meeting.borrow().failed_uploads != 0 {
+        assert!(tokio::time::Instant::now() < deadline, "failed_uploads still counts the deleted take");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 #[tokio::test]
