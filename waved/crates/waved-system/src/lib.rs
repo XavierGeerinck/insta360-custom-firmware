@@ -8,4 +8,7 @@ mod civil;
 pub mod display;
 pub mod power_key;
 pub mod rtc;
+mod service;
 pub mod tz;
+
+pub use service::SystemService;
