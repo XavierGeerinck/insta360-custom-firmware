@@ -25,15 +25,18 @@ sits behind a path or a trait so the crate tests on the host:
   timings from the MCU (`mcu_evt_handle`: `BTN_CLICK`, `BTN_LONG_PRESS_2s_5s_UP`).
 - **RTC.** BCD at `0x68` on `/dev/i2c-3`, registers 0–6 = seconds, minutes,
   hours, weekday (0 = Sunday), day, month, year − 2000, in UTC. This is the stock
-  `rtc_gettime` / `rtc_settime` layout. Bit 7 of seconds and of month is masked.
+  `rtc_gettime` / `rtc_settime` layout. Decoding masks seconds and minutes with `0x7f` (bit 7 is the oscillator
+  halt), hours with `0x3f`, day with `0x3f` and month with `0x1f` (bit 7 is the
+  century); a set 12-hour flag (bit 6 of hours) is not a time.
 - **Time zones.** The device ships slim TZif files (`Europe/Brussels` is
   1 103 bytes). Dates after the last transition come from the POSIX footer,
   for example `CET-1CEST,M3.5.0,M10.5.0/3`. A v2+ file whose footer is not
   exactly `\n<tz>\n` (cut off, damaged or missing its newlines) is rejected as
   malformed rather than read as a zone without daylight saving time. The
   service then shows UTC and logs the zone name and the error.
-- **Factory reset.** `request` only leaves `factory-reset.pending` next to
-  `config.toml` and sends `Command::RestartForConfig`. `complete_pending` runs
+- **Factory reset.** `request` only writes `factory-reset.pending` next to
+  `config.toml`; `reset::run` sends `Command::RestartForConfig` once `request`
+  has succeeded. `complete_pending` runs
   first thing at the next start-up and erases four steps in order: `config`,
   `database`, `recordings` and `wifi`.
   - The marker holds `attempts=N` and `done=...` (the finished steps). A retry
@@ -44,7 +47,10 @@ sits behind a path or a trait so the crate tests on the host:
   - The recordings step empties the directory and keeps it. It refuses a
     recordings path that is empty, contains `..` or, when a mount is set (on the
     device, `/mnt/udisk`), is not absolute and strictly inside that mount. It
-    also waits until the mount really is a mount point.
+    does not wait for the mount: while the mount is not a mount point the step
+    fails at once, and that start-up counts as a failed attempt. If the mount
+    has not appeared by the third start-up the reset gives up, removes the
+    marker and the recordings are never erased.
   - `config.toml*` and `meetings.db*` match by name prefix, regular files only,
     so the `waved` binary beside them stays.
 - **Wi-Fi reset.** The `wpa_supplicant.conf` header is taken from the stock image.
@@ -57,10 +63,10 @@ The integrator wires the crate in at the milestone 2 runtime switch. See
 `docs/superpowers/plans/2026-10-05-m2-e-system-services.md`, Integration requests.
 In short:
 
-- `reset::complete_pending(&ResetPaths::new(..).on_device())` first at start-up,
+- `reset::complete_pending(&ResetPaths::new(config, database, recordings).on_device())` first at start-up,
   before the config loads; `reset::run` handles `Command::FactoryReset`.
-- `SystemService::device(..).run(settings, wifi)` publishes `SystemState`.
-- `power_key::start(events)` feeds `DeviceEvent::PowerKey`.
+- `SystemService::device(system_tx, storage_path).run(settings, wifi)` publishes `SystemState`.
+- `power_key::start(events)` (the `DeviceEvent` sender) feeds `DeviceEvent::PowerKey`.
 - `tones::run(meeting, settings, sink)` with a `ToneSink` over the playback service.
 - The UI loop owns one `DisplayPower` and one `Backlight`.
 
