@@ -167,6 +167,23 @@ mod tests {
     }
 
     #[test]
+    fn the_bell_and_the_calendar_are_drawn_distinctly() {
+        use crate::kit::icons::{ALL, BELL, CALENDAR, CLOCK};
+        // Alert tones and Date and time in the System list (system.png).
+        for icon in [BELL, CALENDAR] {
+            assert!(ALL.contains(&icon), "{icon:?} is in the coverage list");
+            let ch = icon.chars().next().unwrap();
+            let dsc = glyph(Font::Icon20, ch).expect("Icon20 has the glyph");
+            assert!(
+                dsc.box_w > 0 && dsc.box_h > 0,
+                "U+{:X} draws something",
+                ch as u32
+            );
+        }
+        assert!(BELL != CALENDAR && CALENDAR != CLOCK);
+    }
+
+    #[test]
     fn line_heights_follow_the_type_scale() {
         // lv_font_conv sizes line_height to the glyphs it embeds, so the 48 px digit
         // face (digits plus a/m/p) is 43 px tall, not the 52 px of the type scale.

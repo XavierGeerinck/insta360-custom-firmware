@@ -30,6 +30,7 @@ ICONS = [  # (Rust constant, Tabler name)
     ("BACKSPACE", "backspace"), ("MINUS", "minus"), ("PLUS", "plus"),
     ("NOISE", "wave-sine"), ("PATTERN", "ear"), ("SETTINGS", "settings"),
     ("HEIGHT", "arrows-vertical"), ("DOT", "circle-dot"),
+    ("BELL", "bell"), ("CALENDAR", "calendar"),
 ]
 
 

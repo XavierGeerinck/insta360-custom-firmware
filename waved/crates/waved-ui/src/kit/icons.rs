@@ -97,6 +97,10 @@ pub const SETTINGS: &str = "\u{eb20}";
 pub const HEIGHT: &str = "\u{eb5b}";
 /// Tabler `circle-dot`
 pub const DOT: &str = "\u{efb1}";
+/// Tabler `bell`
+pub const BELL: &str = "\u{ea35}";
+/// Tabler `calendar`
+pub const CALENDAR: &str = "\u{ea53}";
 
 /// Every icon, for glyph-coverage tests.
 pub const ALL: &[&str] = &[
@@ -148,4 +152,6 @@ pub const ALL: &[&str] = &[
     SETTINGS,
     HEIGHT,
     DOT,
+    BELL,
+    CALENDAR,
 ];
