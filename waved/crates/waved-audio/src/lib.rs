@@ -418,6 +418,9 @@ impl AudioService {
             let s = audio_tx.borrow();
             (s.nr_level.clone(), s.mode.clone(), s.beam_aim_deg)
         };
+        // A bad persisted aim must not steer to garbage: wrap it like a
+        // SetBeamAim, and fall back to straight ahead when it is not a number.
+        let initial_aim = waved_config::wrap_beam_aim(initial_aim).unwrap_or(0.0);
         let aec_config = AecConfig::default();
         let dsp_chain = build_dsp_chain(frame_size, sample_rate, initial_nr, aec_config.clone());
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
@@ -861,6 +864,14 @@ impl AudioService {
             Command::SetMicVolume(v) => {
                 self.audio_tx.send_modify(|s| s.mic_volume = v);
             }
+            Command::SetBeamAim(degrees) => match waved_config::wrap_beam_aim(degrees) {
+                Some(aim) => {
+                    info!("beam aim → {aim:.1}°");
+                    self.beam_aim_deg = aim;
+                    self.audio_tx.send_modify(|s| s.beam_aim_deg = aim);
+                }
+                None => warn!("beam aim ignored: {degrees} is not a direction"),
+            },
             Command::Shutdown => return Some(AudioServiceExit::StopRequested),
             _ => {}
         }
@@ -1815,5 +1826,26 @@ mod tests {
             svc.handle_command(Command::Shutdown),
             Some(AudioServiceExit::StopRequested)
         );
+    }
+
+    #[test]
+    fn set_beam_aim_moves_the_fixed_beam_and_the_state() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Supercardioid, 0.0);
+        svc.handle_command(Command::SetBeamAim(-60.0));
+        assert_eq!(state.borrow().beam_aim_deg, 300.0);
+        svc.process_frame(&plane_wave_8ch(0.0, 480));
+        assert_eq!(svc.beamformer.direction(), (300.0, 0.0));
+        svc.handle_command(Command::SetBeamAim(f32::NAN));
+        assert_eq!(state.borrow().beam_aim_deg, 300.0, "NaN is ignored");
+        svc.handle_command(Command::SetBeamAim(720.0));
+        assert_eq!(state.borrow().beam_aim_deg, 0.0);
+    }
+
+    #[test]
+    fn a_bad_seeded_aim_is_wrapped_or_zeroed() {
+        let (svc, _state) = service_with(waved_state::AudioMode::Cardioid, -90.0);
+        assert_eq!(svc.beam_aim_deg, 270.0);
+        let (svc, _state) = service_with(waved_state::AudioMode::Cardioid, f32::NAN);
+        assert_eq!(svc.beam_aim_deg, 0.0);
     }
 }
