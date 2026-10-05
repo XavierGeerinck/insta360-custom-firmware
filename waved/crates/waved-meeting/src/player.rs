@@ -612,4 +612,45 @@ mod tests {
         commands.send(Command::Shutdown).unwrap();
         task.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn run_pauses_and_refuses_play_while_recording() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = fixture(tmp.path(), &ramp(480_000), 0, &[]);
+        let out = FakeOutput::new(1_024);
+        let (p, mut state) = player(tmp.path(), &out);
+        let (commands, commands_rx) = broadcast::channel(8);
+        let (_audio, audio_rx) = watch::channel(AudioState::default());
+        let (meeting, meeting_rx) = watch::channel(MeetingState::default());
+        let task = tokio::spawn(p.run(commands_rx, audio_rx, meeting_rx));
+        commands.send(Command::PlayRecording(id)).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), state.wait_for(|s| s.playing))
+            .await
+            .unwrap()
+            .unwrap();
+        meeting.send_modify(|m| m.recording = true);
+        tokio::time::timeout(Duration::from_secs(1), state.wait_for(|s| !s.playing))
+            .await
+            .unwrap()
+            .unwrap();
+        commands.send(Command::ResumePlayback).unwrap();
+        // Commands are handled in order: once the seek shows, Resume was handled.
+        commands.send(Command::SeekPlayback(1_000)).unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            state.wait_for(|s| s.position_ms == 1_000),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!state.borrow().playing, "no playback while recording");
+        meeting.send_modify(|m| m.recording = false);
+        commands.send(Command::ResumePlayback).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), state.wait_for(|s| s.playing))
+            .await
+            .unwrap()
+            .unwrap();
+        commands.send(Command::Shutdown).unwrap();
+        task.await.unwrap();
+    }
 }

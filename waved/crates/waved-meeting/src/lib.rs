@@ -544,6 +544,7 @@ impl MeetingService {
                 doa_recv = self.doa_rx.recv(), if !doa_closed => {
                     match doa_recv {
                         Ok(frame) => {
+                            // No active meeting (no diarizer): the frame is dropped.
                             if let Some(diar) = diarizer.as_mut() {
                                 if let Some(seg) = diar.on_doa_frame(&frame) {
                                     if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
@@ -552,7 +553,6 @@ impl MeetingService {
                                 }
                             }
                             self.publish_speaker(diarizer.as_ref().and_then(|d| d.current_speaker()));
-                            // No active meeting → drop the frame silently.
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("diarization receiver lagged {n} frames");
