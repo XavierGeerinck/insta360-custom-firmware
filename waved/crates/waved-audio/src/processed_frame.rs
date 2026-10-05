@@ -4,7 +4,8 @@
 //!
 //! See spec §4 for why we carry both the processed mono and the raw 8-ch
 //! buffer: stats want per-channel RMS on raw mic, meeting replay wants raw
-//! for future reprocessing, and the uplink wants the processed mono.
+//! for future reprocessing, and the uplink wants the processed mono (or, in
+//! Stereo mode, the pair rebuilt around it by `rebuild_stereo`).
 
 use crate::callbacks::AudioFrame;
 use serde::Serialize;
@@ -138,6 +139,28 @@ impl ProcessedAudioFrame {
         self.mic_stereo_f32 = Some((l, r));
         self
     }
+
+    /// Interleaved S16 for the 2-channel USB microphone: the Stereo pair
+    /// when present, otherwise the mono signal on both channels.
+    pub fn uplink_interleaved_i16(&self, out: &mut Vec<i16>) {
+        out.clear();
+        out.reserve(self.mic_mono_f32.len() * 2);
+        match &self.mic_stereo_f32 {
+            Some((left, right)) => {
+                for (l, r) in left.iter().zip(right) {
+                    out.push(to_uplink_i16(*l));
+                    out.push(to_uplink_i16(*r));
+                }
+            }
+            None => {
+                for &m in &self.mic_mono_f32 {
+                    let s = to_uplink_i16(m);
+                    out.push(s);
+                    out.push(s);
+                }
+            }
+        }
+    }
 }
 
 /// Convert i16 → f32 scaled to [-1.0, 1.0]. Division by 32768.0 — not 32767 —
@@ -181,6 +204,58 @@ pub fn mix_to_mono(interleaved: &[i16], channels: usize) -> Vec<i16> {
         *slot = (sum / channels as i32) as i16;
     }
     mono
+}
+
+fn rms_f32(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+/// How much of the beam's side signal to keep: the fraction of the mid that
+/// survived AEC and noise suppression, clamped to [0, 1]. Zero when the beam
+/// was silent.
+pub fn side_gain(raw_mid_rms: f32, processed_mid_rms: f32) -> f32 {
+    if raw_mid_rms <= 1e-6 {
+        return 0.0;
+    }
+    (processed_mid_rms / raw_mid_rms).clamp(0.0, 1.0)
+}
+
+/// Rebuild the Stereo-mode pair around the processed mid (C4). The raw beam
+/// pair comes before AEC and NS, so it is not sent as is:
+/// `L = mid' + g·side`, `R = mid' − g·side`, with `side = (L − R)/2` from
+/// the beam and `g` the mid's suppression ratio, ramped linearly from
+/// `prev_side_gain` across the period so it never clicks. `(L + R)/2` is
+/// the processed mid (before the recording limiters, which run separately
+/// on the mono signal and the pair). Returns the pair and the gain reached.
+pub fn rebuild_stereo(
+    raw_l: &[f32],
+    raw_r: &[f32],
+    processed_mid: &[f32],
+    prev_side_gain: f32,
+) -> (Vec<f32>, Vec<f32>, f32) {
+    let n = processed_mid.len().min(raw_l.len()).min(raw_r.len());
+    let raw_mid: Vec<f32> = raw_l[..n]
+        .iter()
+        .zip(&raw_r[..n])
+        .map(|(l, r)| 0.5 * (l + r))
+        .collect();
+    let target = side_gain(rms_f32(&raw_mid), rms_f32(&processed_mid[..n]));
+    let mut left = Vec::with_capacity(n);
+    let mut right = Vec::with_capacity(n);
+    for i in 0..n {
+        let gain = prev_side_gain + (target - prev_side_gain) * (i + 1) as f32 / n as f32;
+        let side = 0.5 * (raw_l[i] - raw_r[i]) * gain;
+        left.push(processed_mid[i] + side);
+        right.push(processed_mid[i] - side);
+    }
+    (left, right, target)
+}
+
+fn to_uplink_i16(sample: f32) -> i16 {
+    (sample.clamp(-1.0, 1.0) * 32767.0) as i16
 }
 
 #[cfg(test)]
@@ -337,5 +412,67 @@ mod tests {
         let frame = AudioFrame::mic_only(vec![1, 2], 1, 48_000, 0);
         let p = ProcessedAudioFrame::from_raw(&frame, &[1, 2], &[0, 0]);
         assert_eq!(p.aec_metrics, AecFrameMetrics::default());
+    }
+
+    #[test]
+    fn untouched_mid_gives_back_the_beam_pair() {
+        let l = vec![0.4, 0.2, -0.1, 0.0];
+        let r = vec![0.0, 0.2, 0.3, -0.2];
+        let mid: Vec<f32> = l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect();
+        let (sl, sr, gain) = rebuild_stereo(&l, &r, &mid, 1.0);
+        assert!((gain - 1.0).abs() < 1e-6);
+        for i in 0..4 {
+            assert!(
+                (sl[i] - l[i]).abs() < 1e-6 && (sr[i] - r[i]).abs() < 1e-6,
+                "sample {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuilt_pair_averages_to_the_processed_mid() {
+        let l = vec![0.5; 480];
+        let r = vec![-0.1; 480];
+        let processed = vec![0.05; 480]; // AEC/NS took the mid from 0.2 to 0.05
+        let (sl, sr, gain) = rebuild_stereo(&l, &r, &processed, 0.25);
+        assert!((gain - 0.25).abs() < 1e-6);
+        for i in 0..480 {
+            assert!((0.5 * (sl[i] + sr[i]) - processed[i]).abs() < 1e-6);
+        }
+        assert!(
+            (sl[0] - sr[0] - 0.6 * 0.25).abs() < 1e-5,
+            "side ducked like the mid"
+        );
+    }
+
+    #[test]
+    fn side_gain_ramps_across_the_period() {
+        let l = vec![0.5; 100];
+        let r = vec![-0.5; 100];
+        let processed = vec![0.0; 100];
+        // Raw mid is 0: no side at all, whatever came before.
+        let (sl, _, gain) = rebuild_stereo(&l, &r, &processed, 1.0);
+        assert_eq!(gain, 0.0);
+        assert!(sl[0] > sl[99], "ramps down from the previous gain");
+        assert!(sl[99].abs() < 1e-6);
+    }
+
+    #[test]
+    fn side_gain_is_the_mid_suppression_ratio() {
+        assert_eq!(side_gain(0.0, 0.1), 0.0);
+        assert!((side_gain(0.2, 0.05) - 0.25).abs() < 1e-6);
+        assert_eq!(side_gain(0.1, 0.5), 1.0, "never boosts");
+    }
+
+    #[test]
+    fn uplink_sends_the_pair_in_stereo_and_mono_twice_otherwise() {
+        let frame = AudioFrame::mic_only(vec![0; 3], 1, 48_000, 0);
+        let mono = ProcessedAudioFrame::from_raw(&frame, &[0, 16_384, -16_384], &[0, 0, 0]);
+        let mut out = Vec::new();
+        mono.uplink_interleaved_i16(&mut out);
+        assert_eq!(out, vec![0, 0, 16_383, 16_383, -16_383, -16_383]);
+        let stereo = mono.with_stereo(vec![1.5, 0.0, -1.5], vec![-0.5, 0.5, 0.0]);
+        stereo.uplink_interleaved_i16(&mut out);
+        assert_eq!(out, vec![32_767, -16_383, 0, 16_383, -32_767, 0]);
     }
 }

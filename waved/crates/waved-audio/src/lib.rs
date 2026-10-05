@@ -395,6 +395,10 @@ pub struct AudioService {
     /// from AudioState, which main.rs seeds from config before this service
     /// is built.
     beam_aim_deg: f32,
+    /// Side gain the Stereo pair reached at the end of the last period
+    /// (`processed_frame::rebuild_stereo`). Reset to 0 on a mode change so
+    /// Stereo fades its side in.
+    stereo_side_gain: f32,
 }
 
 impl AudioService {
@@ -474,6 +478,7 @@ impl AudioService {
             steered,
             mode: initial_mode,
             beam_aim_deg: initial_aim,
+            stereo_side_gain: 0.0,
         }
     }
 
@@ -691,7 +696,14 @@ impl AudioService {
             );
             p.aec_metrics = metrics;
             if let Some((l, r)) = beam_out.stereo {
-                p = p.with_stereo(l, r);
+                let (left, right, gain) = crate::processed_frame::rebuild_stereo(
+                    &l,
+                    &r,
+                    &p.mic_mono_f32,
+                    self.stereo_side_gain,
+                );
+                self.stereo_side_gain = gain;
+                p = p.with_stereo(left, right);
             }
             apply_gain(self, p)
         } else {
@@ -820,6 +832,7 @@ impl AudioService {
                 self.beamformer.set_mode(mode.clone());
                 self.beamformer.set_omni_mix(0.0); // reset crossfade for non-steered modes
                 self.mode = mode.clone();
+                self.stereo_side_gain = 0.0;
                 self.audio_tx.send_modify(|s| s.mode = mode);
             }
             Command::SetDoaOverride(ov) => {
@@ -1847,5 +1860,27 @@ mod tests {
         assert_eq!(svc.beam_aim_deg, 270.0);
         let (svc, _state) = service_with(waved_state::AudioMode::Cardioid, f32::NAN);
         assert_eq!(svc.beam_aim_deg, 0.0);
+    }
+
+    #[test]
+    fn stereo_uplink_pair_averages_to_the_mono_uplink() {
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Stereo, 0.0);
+        let mut last = None;
+        for _ in 0..4 {
+            last = Some(svc.process_frame(&plane_wave_8ch(60.0, 480)));
+        }
+        let frame = last.unwrap();
+        let (l, r) = frame
+            .mic_stereo_f32
+            .as_ref()
+            .expect("Stereo mode carries a pair");
+        for i in 0..frame.mic_mono_f32.len() {
+            let mid = 0.5 * (l[i] + r[i]);
+            assert!(
+                (mid - frame.mic_mono_f32[i]).abs() < 1e-3,
+                "sample {i}: {mid} vs {}",
+                frame.mic_mono_f32[i]
+            );
+        }
     }
 }
