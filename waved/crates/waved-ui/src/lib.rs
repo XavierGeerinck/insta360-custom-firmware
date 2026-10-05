@@ -6,6 +6,7 @@ pub mod input;
 pub mod kit;
 pub mod nav;
 pub mod screens;
+pub mod screens_v2;
 pub mod status_bar;
 pub mod theme;
 pub mod toast;

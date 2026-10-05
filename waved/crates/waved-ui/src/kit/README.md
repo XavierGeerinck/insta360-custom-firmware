@@ -93,6 +93,47 @@ impl Screen for AboutScreen {
 }
 ```
 
+## Registering a screen
+
+The runtime builds screens from `Route`s through `runtime::registry` at the end of
+milestone 2. Each module in `src/screens_v2/` exports exactly this type and
+constructor (the struct may hold anything; `build` gets the rest from
+`ScreenCtx` and the snapshot):
+
+| Route | Module | Type and constructor |
+|---|---|---|
+| `Boot` | `boot` | `BootScreen::default()` |
+| `FirstRun` | `first_run` | `FirstRunScreen::default()` |
+| `Home` | `home` | `HomeScreen::default()` |
+| `Recording` | `recording` | `RecordingScreen::default()` |
+| `Decision` | `decision` | `DecisionScreen::default()` |
+| `Resting` | `ambient` | `AmbientScreen::default()` |
+| `Menu` | `menu` | `MenuScreen::default()` |
+| `AudioMode` | `audio_mode` | `AudioModeScreen::default()` |
+| `NoiseReduction` | `noise` | `NoiseScreen::default()` |
+| `Volume` / `MicLevel` | `volume` | `VolumeScreen::speaker()` / `VolumeScreen::mic()` |
+| `Files` | `files` | `FilesScreen::default()` |
+| `FileDetail(id)` | `file_detail` | `FileDetailScreen::new(id: Uuid)` |
+| `Wifi` | `wifi` | `WifiScreen::default()` |
+| `WifiSetup` | `wifi_setup` | `WifiSetupScreen::default()` |
+| `Uploads` | `uploads` | `UploadsScreen::default()` |
+| `UploadMode` | `upload_mode` | `UploadModeScreen::default()` |
+| `System` | `system` | `SystemScreen::default()` |
+| `Display` | `display` | `DisplayScreen::default()` |
+| `DimAfter` | `display` | `DimAfterScreen::default()` |
+| `DateTime` | `datetime` | `DateTimeScreen::default()` |
+| `TimeZone` | `datetime` | `TimeZoneScreen::default()` |
+| `About` | `about` | `AboutScreen::default()` |
+| `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
+
+`messages.rs` is not a screen; it holds the message copy screens send. Nor is
+`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Mic height,
+Bluetooth, PIN, USB storage, Update and Incoming call are milestone 3 and have no
+module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
+frame) without panicking. Every screen with a status area calls
+`status.update(snap)` from `update`: that is how runtime messages appear.
+
 ## Components
 
 | Component | Constructor | Used by |
@@ -148,8 +189,10 @@ Notes on the parts that carry state:
 - The status pill's pre-recording dot follows `MeetingState::pre_recording_active` (the buffer
   is filling now), not the `SettingsState::pre_recording` setting.
 
-The radial audio-mode picker (B2), the PIN keypad (K2), file rows (D1) and Bluetooth device rows (I4)
-are owned by their workstreams.
+Some components are owned by their workstreams: the radial audio-mode picker
+(`components/mode_picker.rs`, B2), the Wi-Fi signal arcs and QR code (`components/wifi.rs`, B7),
+file rows (`components/file_row.rs`, D1) and the playback scrubber (`components/scrubber.rs`, D2);
+later the PIN keypad (K2) and Bluetooth device rows (I4).
 
 ## Testing
 
