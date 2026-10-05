@@ -6,6 +6,7 @@ use crate::bindings::LV_STATE_PRESSED;
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::controls::{RadioList, RadioOption, ValueArc, ValueRow};
 use crate::kit::components::status::StatusArea;
+use crate::kit::dispatch::Dispatcher;
 use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::Obj;
@@ -67,6 +68,12 @@ fn brightness_step(value: u8, up: bool) -> u8 {
     (step_level(u16::from(value), up, 100) as u8).max(MIN_BRIGHTNESS)
 }
 
+/// Send `value` and keep it for the next − / + tap.
+fn send(dispatch: &Dispatcher, brightness: &Cell<u8>, value: u8) {
+    brightness.set(value);
+    dispatch.command(Command::SetBrightness(value));
+}
+
 #[derive(Default)]
 pub struct DisplayScreen {
     status: Option<StatusArea>,
@@ -78,30 +85,37 @@ pub struct DisplayScreen {
     minus: Option<Obj>,
     #[cfg(test)]
     plus: Option<Obj>,
+    /// The brightness for the − / + handlers: what the last command sent,
+    /// until the snapshot reports a change (a confirmation or a change made
+    /// elsewhere). A snapshot still reporting the old value doesn't undo a tap.
     brightness: Rc<Cell<u8>>,
+    /// The brightness the snapshot reported last.
+    reported: u8,
     shown: Option<(u8, u32)>,
 }
 
 impl Screen for DisplayScreen {
     fn build(&mut self, root: Obj, ctx: &ScreenCtx, snap: &UiSnapshot) {
-        self.brightness.set(snap.settings.brightness_pct);
+        self.reported = snap.settings.brightness_pct;
+        self.brightness.set(self.reported);
         self.status = Some(StatusArea::plain(root));
         Obj::label(root, "Display", Font::Title, TEXT)
             .centered_text(SCREEN_W)
             .pos(0, TITLE_Y);
-        let dispatch = ctx.dispatch.clone();
+        let (dispatch, brightness) = (ctx.dispatch.clone(), self.brightness.clone());
         self.arc = Some(ValueArc::new(root, ARC_CX, ARC_CY, ARC_R, move |percent| {
-            dispatch.command(Command::SetBrightness(percent.max(MIN_BRIGHTNESS)))
+            send(&dispatch, &brightness, percent.max(MIN_BRIGHTNESS))
         }));
         Obj::label(root, icons::SUN, Font::Icon20, TEXT_2).pos(SUN.0, SUN.1);
         self.value = Some(BigNumber::new(root, VALUE_TOP));
         for (rect, icon, up) in [(MINUS, icons::MINUS, false), (PLUS, icons::PLUS, true)] {
             let (dispatch, brightness) = (ctx.dispatch.clone(), self.brightness.clone());
             let button = step_button(root, rect, icon, move || {
-                dispatch.command(Command::SetBrightness(brightness_step(
-                    brightness.get(),
-                    up,
-                )))
+                send(
+                    &dispatch,
+                    &brightness,
+                    brightness_step(brightness.get(), up),
+                )
             });
             #[cfg(test)]
             if up {
@@ -133,7 +147,10 @@ impl Screen for DisplayScreen {
             status.update(snap);
         }
         let brightness = snap.settings.brightness_pct;
-        self.brightness.set(brightness);
+        if brightness != self.reported {
+            self.brightness.set(brightness);
+            self.reported = brightness;
+        }
         // The arc follows the snapshot unless a finger is on it.
         if let Some(arc) = self.arc.as_ref() {
             if !arc.obj().has_state(LV_STATE_PRESSED) && arc.value() != brightness {
@@ -240,14 +257,14 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             assert_targets_ok(root);
             lv.click(screen.minus.unwrap());
-            lv.click(screen.minus.unwrap()); // the handler only sees the next snapshot
+            lv.click(screen.minus.unwrap()); // steps from the 5 just sent
             lv.click(screen.plus.unwrap());
             assert!(matches!(
                 f.commands().as_slice(),
                 [
                     Command::SetBrightness(5),
                     Command::SetBrightness(5),
-                    Command::SetBrightness(20)
+                    Command::SetBrightness(10)
                 ]
             ));
             let arc = screen.arc.as_ref().unwrap();
@@ -259,6 +276,35 @@ mod tests {
             assert!(matches!(
                 f.commands().as_slice(),
                 [Command::SetBrightness(5)]
+            ));
+        });
+    }
+
+    #[test]
+    fn two_quick_plus_taps_step_twice() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.settings.brightness_pct = 60;
+            let mut screen = DisplayScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            lv.click(screen.plus.unwrap());
+            // The service has not confirmed yet: the snapshot still says 60.
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetBrightness(70), Command::SetBrightness(80)]
+            ));
+            // A change made elsewhere is followed.
+            snap.settings.brightness_pct = 30;
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetBrightness(40)]
             ));
         });
     }

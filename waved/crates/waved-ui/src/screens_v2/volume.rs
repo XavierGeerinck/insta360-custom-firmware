@@ -7,6 +7,7 @@ use crate::bindings::LV_STATE_PRESSED;
 use crate::kit::components::buttons::{back_button, RoundButton, Tone};
 use crate::kit::components::controls::ValueArc;
 use crate::kit::components::status::StatusArea;
+use crate::kit::dispatch::Dispatcher;
 use crate::kit::event::{on_click, on_swipe, Swipe};
 use crate::kit::fonts::Font;
 use crate::kit::icons;
@@ -123,6 +124,18 @@ impl Level {
         }
     }
 
+    /// (volume, muted) once the service has applied `commands`.
+    fn after(self, commands: &[Command], (mut volume, mut muted): (u16, bool)) -> (u16, bool) {
+        for command in commands {
+            match command {
+                Command::SetSpeakerVolume(v) | Command::SetMicVolume(v) => volume = *v,
+                Command::ToggleSpeakerMute | Command::ToggleMicMute => muted = !muted,
+                _ => {}
+            }
+        }
+        (volume, muted)
+    }
+
     /// Commands for the centre button. Unmuting a speaker at 0 % sets 10 %
     /// first, so unmuting is audible.
     fn toggle(self, volume: u16, muted: bool) -> Vec<Command> {
@@ -198,6 +211,33 @@ pub(crate) fn step_button(
         .obj()
 }
 
+/// Send `commands` and write what they make (volume, muted) back for the
+/// next tap, so two quick + taps step twice and a second + on a muted
+/// speaker doesn't toggle mute back on.
+fn send(dispatch: &Dispatcher, current: &Cell<(u16, bool)>, level: Level, commands: Vec<Command>) {
+    current.set(level.after(&commands, current.get()));
+    commands.into_iter().for_each(|c| dispatch.command(c));
+}
+
+/// The handlers' (volume, muted) after a snapshot: each part follows the
+/// snapshot only when the snapshot changed it (a confirmation or a change
+/// made elsewhere); a snapshot that still reports the old value doesn't undo
+/// what a tap sent.
+fn follow(current: (u16, bool), before: (u16, bool), reported: (u16, bool)) -> (u16, bool) {
+    (
+        if reported.0 != before.0 {
+            reported.0
+        } else {
+            current.0
+        },
+        if reported.1 != before.1 {
+            reported.1
+        } else {
+            current.1
+        },
+    )
+}
+
 pub struct VolumeScreen {
     level: Level,
     status: Option<StatusArea>,
@@ -212,8 +252,11 @@ pub struct VolumeScreen {
     minus: Option<Obj>,
     #[cfg(test)]
     plus: Option<Obj>,
-    /// The latest (volume, muted), for the button handlers.
+    /// (volume, muted) for the button handlers: what the last command sent
+    /// made it, until the snapshot reports a change (see `follow`).
     current: Rc<Cell<(u16, bool)>>,
+    /// The (volume, muted) the snapshot reported last.
+    reported: (u16, bool),
     shown: Option<(u16, bool)>,
 }
 
@@ -241,6 +284,7 @@ impl VolumeScreen {
             #[cfg(test)]
             plus: None,
             current: Rc::new(Cell::new((0, false))),
+            reported: (0, false),
             shown: None,
         }
     }
@@ -249,11 +293,12 @@ impl VolumeScreen {
 impl Screen for VolumeScreen {
     fn build(&mut self, root: Obj, ctx: &ScreenCtx, snap: &UiSnapshot) {
         let level = self.level;
-        self.current.set(level.read(snap));
+        self.reported = level.read(snap);
+        self.current.set(self.reported);
         self.status = Some(StatusArea::plain(root));
-        let dispatch = ctx.dispatch.clone();
+        let (dispatch, current) = (ctx.dispatch.clone(), self.current.clone());
         self.arc = Some(ValueArc::new(root, ARC_CX, ARC_CY, ARC_R, move |percent| {
-            dispatch.command(level.arc_command(percent))
+            send(&dispatch, &current, level, vec![level.arc_command(percent)]);
         }));
         self.caption = Some(
             Obj::label(root, "", Font::Small, TEXT_2)
@@ -272,10 +317,7 @@ impl Screen for VolumeScreen {
         let (dispatch, current) = (ctx.dispatch.clone(), self.current.clone());
         on_click(centre, move || {
             let (volume, muted) = current.get();
-            level
-                .toggle(volume, muted)
-                .into_iter()
-                .for_each(|c| dispatch.command(c));
+            send(&dispatch, &current, level, level.toggle(volume, muted));
         });
         #[cfg(test)]
         {
@@ -285,10 +327,7 @@ impl Screen for VolumeScreen {
             let (dispatch, current) = (ctx.dispatch.clone(), self.current.clone());
             let button = step_button(root, rect, icon, move || {
                 let (volume, muted) = current.get();
-                level
-                    .step(volume, muted, up)
-                    .into_iter()
-                    .for_each(|c| dispatch.command(c));
+                send(&dispatch, &current, level, level.step(volume, muted, up));
             });
             #[cfg(test)]
             if up {
@@ -316,7 +355,9 @@ impl Screen for VolumeScreen {
         }
         let level = self.level;
         let (volume, muted) = level.read(snap);
-        self.current.set((volume, muted));
+        self.current
+            .set(follow(self.current.get(), self.reported, (volume, muted)));
+        self.reported = (volume, muted);
         // The arc follows the snapshot unless a finger is on it.
         if let Some(arc) = self.arc.as_ref() {
             let target = level.arc_value(volume);
@@ -425,15 +466,88 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             assert_targets_ok(root);
             lv.click(screen.plus.unwrap());
-            lv.click(screen.minus.unwrap());
+            lv.click(screen.minus.unwrap()); // steps from the 70 just sent
             lv.click(screen.centre.unwrap());
             assert!(matches!(
                 f.commands().as_slice(),
                 [
                     Command::SetSpeakerVolume(70),
-                    Command::SetSpeakerVolume(50),
+                    Command::SetSpeakerVolume(60),
                     Command::ToggleSpeakerMute
                 ]
+            ));
+        });
+    }
+
+    #[test]
+    fn two_quick_plus_taps_step_twice() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.audio.speaker_volume = 60;
+            let mut screen = VolumeScreen::speaker();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            lv.click(screen.plus.unwrap());
+            // The service has not confirmed yet: the snapshot still says 60.
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(70), Command::SetSpeakerVolume(80)]
+            ));
+            // A change made elsewhere (the host) is followed.
+            snap.audio.speaker_volume = 30;
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(40)]
+            ));
+        });
+    }
+
+    #[test]
+    fn a_second_plus_on_a_muted_speaker_does_not_mute_it_again() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.audio.speaker_volume = 50;
+            snap.audio.speaker_muted = true;
+            let mut screen = VolumeScreen::speaker();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(60), Command::ToggleSpeakerMute]
+            ));
+            // Stale: still 50 and muted.
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(70)]
+            ));
+            // The service reports the volume before the unmute.
+            snap.audio.speaker_volume = 70;
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(80)]
+            ));
+            // Muted again elsewhere: + unmutes once more.
+            snap.audio.speaker_muted = false;
+            screen.update(&snap);
+            snap.audio.speaker_muted = true;
+            screen.update(&snap);
+            lv.click(screen.plus.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetSpeakerVolume(90), Command::ToggleSpeakerMute]
             ));
         });
     }
