@@ -45,7 +45,10 @@ below y 304 do not exist, so the bottom of the circle is cut by the framebuffer 
   or below `TAP_MIN_Y` (6). `Rect::within_tap_limit()` checks a square box;
   `within_tap_limit_rounded(radius)` counts only the pixels a rounded box draws, which is
   what `assert_targets_ok` uses (it reads each object's style radius). The third radio row
-  and the left confirmation pill pass only because their corners are rounded.
+  and the left confirmation pill pass only because their corners are rounded. Like LVGL's hit
+  test, the check cuts each target to its ancestors' boxes: a row scrolled half out of a list
+  counts only where it shows (with square corners at the cut), and a row scrolled out entirely is
+  skipped. The 44 px size check still uses the whole target.
 - **Zones:** status 6–34 (`STATUS`, `STATUS_PILL` 240 wide; the pill's hit area
   `STATUS_PILL_HIT` is 44 tall and ends at y 50, where the dial's tap circle begins); title
   at `TITLE_Y` 38; content from `CONTENT_TOP` 70 (`RADIO_TOP` 68 for radio rows); Back at

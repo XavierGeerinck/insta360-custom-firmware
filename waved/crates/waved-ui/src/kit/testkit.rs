@@ -240,6 +240,12 @@ pub fn assert_golden(name: &str, frame: &Frame) {
 /// Clickable objects under `root` whose drawn box (corners rounded by its
 /// style radius) reaches past the tap limit or above `TAP_MIN_Y`, or that are
 /// smaller than 44 px (counting any extended click area). Hidden subtrees are skipped.
+///
+/// LVGL hit-tests a child only inside its parent's box
+/// (`lv_indev_search_obj`), so a row scrolled half out of a list counts only
+/// where it shows: the box is cut to every ancestor's box, a cut box is checked
+/// with square corners, and an object cut away entirely is skipped. The size
+/// check uses the whole click area.
 pub fn target_problems(root: Obj) -> Vec<String> {
     root.update_layout();
     let mut problems = Vec::new();
@@ -248,10 +254,24 @@ pub fn target_problems(root: Obj) -> Vec<String> {
             return;
         }
         let a = obj.coords();
-        let visible = Rect::new(a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
-        // SAFETY: live object under the test lock.
-        let radius = unsafe {
-            lv_obj_get_style_prop(obj.raw(), LV_PART_MAIN, LV_STYLE_RADIUS as lv_style_prop_t).num
+        let Some(shown) = shown_area(obj) else {
+            return;
+        };
+        let visible = Rect::new(
+            shown.x1,
+            shown.y1,
+            shown.x2 - shown.x1 + 1,
+            shown.y2 - shown.y1 + 1,
+        );
+        let cut = (shown.x1, shown.y1, shown.x2, shown.y2) != (a.x1, a.y1, a.x2, a.y2);
+        let radius = if !cut {
+            // SAFETY: live object under the test lock.
+            unsafe {
+                lv_obj_get_style_prop(obj.raw(), LV_PART_MAIN, LV_STYLE_RADIUS as lv_style_prop_t)
+                    .num
+            }
+        } else {
+            0
         };
         if visible.y < TAP_MIN_Y {
             problems.push(format!("{visible:?} reaches above y {TAP_MIN_Y}"));
@@ -270,6 +290,27 @@ pub fn target_problems(root: Obj) -> Vec<String> {
         }
     });
     problems
+}
+
+/// `obj`'s box cut to the boxes of all its ancestors, or `None` when nothing
+/// of it shows. An ancestor with `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not cut.
+fn shown_area(obj: Obj) -> Option<lv_area_t> {
+    let mut area = obj.coords();
+    let mut ancestor = obj.parent();
+    while let Some(parent) = ancestor {
+        if !parent.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_OVERFLOW_VISIBLE) {
+            let p = parent.coords();
+            area.x1 = area.x1.max(p.x1);
+            area.y1 = area.y1.max(p.y1);
+            area.x2 = area.x2.min(p.x2);
+            area.y2 = area.y2.min(p.y2);
+            if area.x1 > area.x2 || area.y1 > area.y2 {
+                return None;
+            }
+        }
+        ancestor = parent.parent();
+    }
+    Some(area)
 }
 
 pub fn assert_targets_ok(root: Obj) {
@@ -294,6 +335,8 @@ fn visit(obj: Obj, f: &mut dyn FnMut(Obj)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::components::list::{ListItem, RotaryList};
+    use crate::kit::icons;
     use crate::kit::tokens::Rect;
 
     #[test]
@@ -367,6 +410,94 @@ mod tests {
             let problems = target_problems(root);
             assert_eq!(problems.len(), 4, "{problems:#?}");
             assert!(problems[2].contains("above y 6"), "{problems:#?}");
+        });
+    }
+
+    #[test]
+    fn targets_count_only_where_their_parents_show_them() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            // A card cut off at the bottom of a list viewport passes; the same
+            // card on the screen reaches 199 px.
+            let viewport = Obj::plain(root).rect(Rect::new(0, 80, 400, 142));
+            Obj::plain(viewport)
+                .rect(Rect::new(52, 118, 296, 52))
+                .radius(16)
+                .clickable(true);
+            assert_eq!(target_problems(root), Vec::<String>::new());
+            Obj::plain(root)
+                .rect(Rect::new(52, 198, 296, 52))
+                .radius(16)
+                .clickable(true);
+            let problems = target_problems(root);
+            assert_eq!(problems.len(), 1, "{problems:#?}");
+            assert!(problems[0].contains("past the r190"), "{problems:#?}");
+        });
+    }
+
+    #[test]
+    fn a_half_scrolled_list_row_is_checked_where_it_shows() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let items = [
+                "Files",
+                "Audio mode",
+                "Noise reduction",
+                "Volume",
+                "Mic height",
+                "Wi-Fi",
+                "Bluetooth",
+                "Uploads",
+                "System",
+            ]
+            .map(|title| ListItem::new(icons::SETTINGS, title).value("Medium"))
+            .to_vec();
+            let list = RotaryList::new(root, items, |_| {});
+            let viewport = root.child(0);
+            // On a row and between two rows.
+            let mut cut_rows = 0;
+            for scrolled in [0, 12, 36, 96, 132, 384] {
+                // SAFETY: live viewport under the test lock.
+                unsafe {
+                    lv_obj_scroll_to_y(viewport.raw(), scrolled, lv_anim_enable_t_LV_ANIM_OFF)
+                };
+                root.update_layout();
+                let view = viewport.coords();
+                let cut = (0..9).filter(|&i| {
+                    let a = list.row(i).coords();
+                    (a.y1 < view.y1 && a.y2 >= view.y1) || (a.y1 <= view.y2 && a.y2 > view.y2)
+                });
+                cut_rows += cut.count();
+                assert_eq!(
+                    target_problems(root),
+                    Vec::<String>::new(),
+                    "scrolled {scrolled}"
+                );
+            }
+            assert!(cut_rows >= 6, "rows were cut at the edges: {cut_rows}");
+        });
+    }
+
+    #[test]
+    fn a_small_target_is_still_small_when_its_parent_cuts_it() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let viewport = Obj::plain(root).rect(Rect::new(100, 100, 200, 100));
+            // 30 px tall, half of it outside the viewport.
+            Obj::plain(viewport)
+                .rect(Rect::new(50, 85, 100, 30))
+                .clickable(true);
+            // A big row cut to 10 px is fine: the size check uses the whole row.
+            Obj::plain(viewport)
+                .rect(Rect::new(20, -42, 160, 52))
+                .clickable(true);
+            // Entirely outside: never touchable, never checked.
+            Obj::plain(viewport)
+                .rect(Rect::new(50, 120, 10, 10))
+                .clickable(true);
+            let problems = target_problems(root);
+            assert_eq!(problems.len(), 1, "{problems:#?}");
+            assert!(problems[0].contains("100x30 target"), "{problems:#?}");
         });
     }
 
