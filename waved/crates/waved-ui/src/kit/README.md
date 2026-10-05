@@ -30,10 +30,10 @@ deleted when the runtime switches over.
   PIN) and `snap.audio` (mode, noise reduction, volumes, aim). Never read them from
   `ctx.config`: it is the boot-time copy of config.toml and does not see changes made on the
   device or by the setup page since.
-  The one exception is read-only: a screen may read `ctx.config.api.endpoint` (Uploads shows the
-  server host, File detail checks that a server is set). Only the setup page changes it, and
-  saving there restarts waved, so the boot-time copy is never stale. Screens never write to
-  `ctx.config`.
+  The exceptions are read-only, for values that do not change while waved runs: a screen may
+  read `ctx.config.api.endpoint` (Uploads shows the server host, File detail checks that a server
+  is set; only the setup page changes it, and saving there restarts waved) and
+  `ctx.config.device.name` (About shows it). Screens never write to `ctx.config`.
 - Screens never navigate by sending bus commands. Use `ctx.dispatch.navigate(..)`,
   `.back()` or `.show(..)`. Services get `ctx.dispatch.command(..)`.
 - Every screen test calls `assert_targets_ok(root)` and `assert_golden(..)`, and the

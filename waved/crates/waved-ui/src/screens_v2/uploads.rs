@@ -14,7 +14,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
-use crate::kit::time::parse_rfc3339;
+use crate::kit::time::parse_timestamp;
 use crate::kit::tokens::{Rect, RAISED, SCREEN_W, SURFACE, TEXT, TEXT_2, TEXT_3, TITLE_Y, WARN};
 use crate::screens_v2::menu::upload_mode_name;
 use crate::screens_v2::messages::copy;
@@ -69,7 +69,7 @@ pub fn last_sent_line(last: Option<&str>, now_s: i64) -> String {
             let ago = if now_s < CLOCK_VALID_AFTER_UNIX_S {
                 None
             } else {
-                parse_rfc3339(text).and_then(|then| relative(now_s, then))
+                parse_timestamp(text).and_then(|then| relative(now_s, then))
             };
             match ago {
                 Some(ago) => format!("Last sent {ago}"),
@@ -339,12 +339,16 @@ mod tests {
     #[test]
     fn timestamps_parse_and_read_relatively() {
         let t = 1_759_587_600; // 2025-10-04 14:20:00 UTC
-        assert_eq!(parse_rfc3339("2025-10-04T14:20:00+00:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04T14:20:00+00:00"), Some(t));
         assert_eq!(
-            parse_rfc3339("2025-10-04T16:20:00.123456789+02:00"),
+            parse_timestamp("2025-10-04T16:20:00.123456789+02:00"),
             Some(t)
         );
-        assert_eq!(parse_rfc3339("2025-10-04T14:20:00Z"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04T14:20:00Z"), Some(t));
+        // What the database restores after a reboot (SQLite datetime('now')).
+        assert_eq!(parse_timestamp("2025-10-04 14:20:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-02-30 14:20:00"), None);
+        assert_eq!(parse_timestamp("2025-10-04 14:20:00 junk"), None);
         assert_eq!(relative(1_000, 970).as_deref(), Some("just now"));
         assert_eq!(
             relative(10_000, 10_000 - 720).as_deref(),
@@ -370,6 +374,11 @@ mod tests {
         assert_eq!(
             last_sent_line(Some("2025-10-04T14:20:00Z"), 0),
             "Last upload time unknown"
+        );
+        // The value restored from the database after a reboot has no offset.
+        assert_eq!(
+            last_sent_line(Some("2025-10-04 14:20:00"), 1_759_587_600 + 720),
+            "Last sent 12 min ago"
         );
         assert_eq!(
             host("https://notes.example.com/hook").as_deref(),

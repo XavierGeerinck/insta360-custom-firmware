@@ -21,7 +21,7 @@
 //! | Battery 10 % or less, not charging | Warning | Battery 10%, plug in Wave |
 //! | Battery 5 % or less, not charging | Error | Battery 5%, plug in Wave now |
 //! | Microphones not responding | Error | Microphones not responding |
-//! | Play while recording / during a call | Error | Can't play while recording / Can't play during a call |
+//! | Play while recording / during a call | Info | Can't play while recording / Can't play during a call |
 //! | Power off / Factory reset confirmed | Info | Powering off / Resetting Wave |
 //! | Delete confirmed | Success | Recording deleted |
 //! | Retry on Uploads | Info | Retrying 3 uploads |

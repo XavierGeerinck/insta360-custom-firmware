@@ -50,12 +50,11 @@ fn digits(text: &str, range: std::ops::Range<usize>) -> Option<i64> {
     part.parse().ok()
 }
 
-/// Seconds since the epoch for an RFC 3339 time: "2026-10-05T14:02:31Z",
-/// "...T14:02:31.123456789+00:00" (chrono's `to_rfc3339`) or "...-01:00".
-/// The offset is required; the date must exist (no 30 February).
-pub fn parse_rfc3339(text: &str) -> Option<i64> {
+/// The date and time fields of "YYYY-MM-DD[T ]HH:MM:SS[.fraction]" as seconds
+/// since the epoch read as UTC, and what follows them (the offset, if any).
+fn datetime_prefix(text: &str) -> Option<(i64, &str)> {
     let b = text.as_bytes();
-    if b.len() < 20
+    if b.len() < 19
         || b[4] != b'-'
         || b[7] != b'-'
         || !matches!(b[10], b'T' | b't' | b' ')
@@ -91,6 +90,18 @@ pub fn parse_rfc3339(text: &str) -> Option<i64> {
         }
         rest = &fraction[n..];
     }
+    let secs = days_from_civil(year, month as u32, day as u32) * 86_400
+        + hour * 3_600
+        + minute * 60
+        + second;
+    Some((secs, rest))
+}
+
+/// Seconds since the epoch for an RFC 3339 time: "2026-10-05T14:02:31Z",
+/// "...T14:02:31.123456789+00:00" (chrono's `to_rfc3339`) or "...-01:00".
+/// The offset is required; the date must exist (no 30 February).
+pub fn parse_rfc3339(text: &str) -> Option<i64> {
+    let (secs, rest) = datetime_prefix(text)?;
     let offset_s = match rest {
         "Z" | "z" => 0,
         _ => {
@@ -109,13 +120,18 @@ pub fn parse_rfc3339(text: &str) -> Option<i64> {
             sign * (h * 3_600 + m * 60)
         }
     };
-    Some(
-        days_from_civil(year, month as u32, day as u32) * 86_400
-            + hour * 3_600
-            + minute * 60
-            + second
-            - offset_s,
-    )
+    Some(secs - offset_s)
+}
+
+/// Like `parse_rfc3339`, and also the form SQLite's `datetime('now')` writes,
+/// "2025-10-04 14:20:00" (UTC, no offset). The last upload time restored at
+/// boot comes from the database in that form. Only for values that can come
+/// from there; everything else uses the strict parser.
+pub fn parse_timestamp(text: &str) -> Option<i64> {
+    parse_rfc3339(text).or_else(|| match datetime_prefix(text)? {
+        (secs, "") => Some(secs),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -239,6 +255,43 @@ mod tests {
             "2025-10-04T14:32:00é",
         ] {
             assert_eq!(parse_rfc3339(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn timestamps_read_the_sqlite_form_as_utc() {
+        let t = 1_759_587_600; // 2025-10-04 14:20:00 UTC
+                               // Strict RFC 3339 still works through the lenient reader.
+        assert_eq!(parse_timestamp("2025-10-04T14:20:00+00:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04T16:20:00+02:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04T14:20:00Z"), Some(t));
+        // SQLite's datetime('now'): UTC, a space, no offset.
+        assert_eq!(parse_timestamp("2025-10-04 14:20:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04T14:20:00"), Some(t));
+        assert_eq!(parse_timestamp("2025-10-04 14:20:00.250"), Some(t));
+        assert_eq!(parse_timestamp("2024-02-29 23:59:59"), Some(1_709_251_199));
+        // The strict parser keeps refusing the naive form.
+        assert_eq!(parse_rfc3339("2025-10-04 14:20:00"), None);
+    }
+
+    #[test]
+    fn timestamps_reject_a_bad_naive_form() {
+        for bad in [
+            "",
+            "2025-10-04",
+            "2025-10-04 14:20",
+            "2025-02-29 14:20:00",
+            "2025-13-04 14:20:00",
+            "2025-10-04 24:00:00",
+            "2025-10-04 14:20:00 junk",
+            "2025-10-04 14:20:00.",
+            "2025-10-04 14:20:00.5x",
+            "2025-10-04 14:20:00+0200",
+            "2025-10-04 14:20:00+02:00 junk",
+            "+025-10-04 14:20:00",
+            "+é:00 garbage text here",
+        ] {
+            assert_eq!(parse_timestamp(bad), None, "{bad:?}");
         }
     }
 }
