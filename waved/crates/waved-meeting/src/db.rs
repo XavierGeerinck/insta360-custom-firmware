@@ -590,6 +590,48 @@ pub async fn ids_with_status(
         .collect())
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordingRow {
+    pub id: Uuid,
+    pub start_time: String,
+    pub duration_secs: u32,
+    pub status: String,
+    pub attempt_cycle: u32,
+    pub last_status_code: Option<i64>,
+    pub dir: String,
+    pub marks: u32,
+}
+
+/// Every recording row with its bookmark count, newest first.
+pub async fn recording_rows(pool: &SqlitePool) -> Result<Vec<RecordingRow>, sqlx::Error> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(String, String, i64, String, i64, Option<i64>, String, i64)> = sqlx::query_as(
+        "SELECT m.id, m.start_time, COALESCE(m.duration_secs, 0), m.upload_status, \
+         COALESCE(m.attempt_cycle, 0), m.last_status_code, m.file_path, \
+         (SELECT COUNT(*) FROM bookmarks b WHERE b.meeting_id = m.id) \
+         FROM meetings m ORDER BY m.rowid DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(
+            |(id, start_time, duration, status, attempt_cycle, last_status_code, dir, marks)| {
+                Some(RecordingRow {
+                    id: id.parse().ok()?,
+                    start_time,
+                    duration_secs: duration.max(0) as u32,
+                    status,
+                    attempt_cycle: attempt_cycle.max(0) as u32,
+                    last_status_code,
+                    dir,
+                    marks: marks.max(0) as u32,
+                })
+            },
+        )
+        .collect())
+}
+
 fn truncate_diagnostic(value: &str) -> String {
     let mut output = value
         .chars()

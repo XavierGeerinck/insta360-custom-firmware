@@ -134,6 +134,45 @@ pub async fn build_and_write(
     Ok(metadata)
 }
 
+/// Only what the bookmark offsets need from `metadata.json`.
+#[derive(Deserialize)]
+struct MarksMetadata {
+    recording: PreRollMetadata,
+    #[serde(default)]
+    bookmarks: Vec<BookmarkMetadata>,
+}
+
+#[derive(Deserialize)]
+struct PreRollMetadata {
+    #[serde(default)]
+    pre_roll_duration_ms: u64,
+}
+
+/// Bookmark offsets from the start of the file in milliseconds, ascending:
+/// the pre-roll plus each bookmark's offset on the recording timeline (the
+/// scale of `RecordingSummary::marks_ms` and `PlaybackState::marks_ms`).
+/// Empty when the file is missing or unreadable.
+pub fn marks_from_metadata(path: &Path) -> Vec<u32> {
+    let Some(metadata) = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<MarksMetadata>(&bytes).ok())
+    else {
+        return Vec::new();
+    };
+    let pre_roll = metadata.recording.pre_roll_duration_ms;
+    let mut marks: Vec<u32> = metadata
+        .bookmarks
+        .iter()
+        .map(|bookmark| {
+            pre_roll
+                .saturating_add(bookmark.offset_ms)
+                .min(u64::from(u32::MAX)) as u32
+        })
+        .collect();
+    marks.sort_unstable();
+    marks
+}
+
 pub fn stable_device_id() -> String {
     const PATHS: &[&str] = &[
         "/proc/device-tree/serial-number",
@@ -258,5 +297,46 @@ mod tests {
             "audio_duration_ms":1,"pre_roll_duration_ms":0,"audio_mode":"Omni"}"#;
         let parsed: RecordingMetadata = serde_json::from_str(old).unwrap();
         assert!(parsed.pauses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn marks_are_offsets_from_the_start_of_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recording = ActiveRecording::start(dir.path(), "omni").await.unwrap();
+        recording.append_pre_roll(&vec![0.0; 48_000]).unwrap();
+        recording.append_samples(&vec![0.0; 96_000]).unwrap();
+        let finalized = recording.finalize().unwrap();
+        build_and_write(
+            &finalized,
+            &WavedConfig::default(),
+            "wave-test",
+            vec![BookmarkRecord { timestamp_secs: 1 }],
+            vec![],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            marks_from_metadata(&finalized.dir.join("metadata.json")),
+            vec![2_000],
+            "1 s of pre-roll plus the mark at 1 s"
+        );
+
+        let slim = dir.path().join("slim.json");
+        std::fs::write(
+            &slim,
+            r#"{"recording":{"pre_roll_duration_ms":500},
+                "bookmarks":[{"offset_ms":3000},{"offset_ms":1000}]}"#,
+        )
+        .unwrap();
+        assert_eq!(marks_from_metadata(&slim), vec![1_500, 3_500], "ascending");
+    }
+
+    #[test]
+    fn marks_are_empty_without_readable_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(marks_from_metadata(&dir.path().join("missing.json")).is_empty());
+        let garbage = dir.path().join("garbage.json");
+        std::fs::write(&garbage, "{not json").unwrap();
+        assert!(marks_from_metadata(&garbage).is_empty());
     }
 }

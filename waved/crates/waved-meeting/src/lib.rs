@@ -1,5 +1,6 @@
 pub mod db;
 pub mod diarization;
+mod files;
 pub mod metadata;
 pub mod model;
 pub mod reconcile;
@@ -30,8 +31,8 @@ use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
 use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::{UploadMode, WavedConfig};
 use waved_state::{
-    AudioState, Command, DeviceEvent, MeetingState, PendingDecision, RecordingIntegrityFault,
-    SettingsState, WifiState,
+    AudioState, Command, DeviceEvent, FilesState, MeetingState, PendingDecision,
+    RecordingIntegrityFault, SettingsState, WifiState,
 };
 
 pub struct MeetingService {
@@ -58,6 +59,10 @@ pub struct MeetingService {
     audio_state_rx: watch::Receiver<AudioState>,
     /// Keeps the boot-config fallback channels open until live inputs replace them.
     _fallback: Option<(watch::Sender<SettingsState>, watch::Sender<AudioState>)>,
+    /// Where the Files list is published, when someone listens.
+    files_tx: Option<Arc<watch::Sender<FilesState>>>,
+    /// Asks the loop to republish the Files list: a removal finished off-loop.
+    files_refresh: Arc<Notify>,
 }
 
 pub struct MeetingPipelineInputs {
@@ -375,6 +380,8 @@ impl MeetingService {
             settings_rx,
             audio_state_rx,
             _fallback: Some((settings_fallback, audio_fallback)),
+            files_tx: None,
+            files_refresh: Arc::new(Notify::new()),
         })
     }
 
@@ -384,6 +391,40 @@ impl MeetingService {
         self.audio_state_rx = inputs.audio;
         self._fallback = None;
         self
+    }
+
+    /// Publish the Files list on this watch (refreshed every 5 s and after
+    /// any command that changes a recording).
+    pub fn with_files_publisher(mut self, files: Arc<watch::Sender<FilesState>>) -> Self {
+        self.files_tx = Some(files);
+        self
+    }
+
+    async fn publish_files(&self) {
+        let Some(files_tx) = self.files_tx.as_ref() else {
+            return;
+        };
+        let storage_blocked = self.meeting_tx.borrow().storage_blocked;
+        match files::snapshot(
+            &self.pool,
+            &self.recordings_dir,
+            &self.config.storage,
+            self.config.api.retry_max,
+            storage_blocked,
+        )
+        .await
+        {
+            Ok(state) => {
+                files_tx.send_if_modified(|current| {
+                    if *current == state {
+                        return false;
+                    }
+                    *current = state;
+                    true
+                });
+            }
+            Err(error) => warn!("failed to publish the recordings list: {error}"),
+        }
     }
 
     fn stop_policy(&self) -> StopPolicy {
@@ -466,6 +507,10 @@ impl MeetingService {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // When an unanswered "Send this recording?" is kept on Wave (D4).
         let mut ask_deadline: Option<tokio::time::Instant> = None;
+        // The Files list: the first tick fires at once (the boot publish).
+        let mut files_tick = tokio::time::interval(Duration::from_secs(5));
+        files_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let files_refresh = Arc::clone(&self.files_refresh);
 
         loop {
             tokio::select! {
@@ -584,6 +629,7 @@ impl MeetingService {
                             0 => {
                                 ask_deadline = None;
                                 self.keep_unanswered().await;
+                                self.publish_files().await;
                             }
                             left => {
                                 self.meeting_tx.send_if_modified(|s| {
@@ -597,9 +643,16 @@ impl MeetingService {
                         }
                     }
                 }
+                _ = files_tick.tick(), if self.files_tx.is_some() => {
+                    self.publish_files().await;
+                }
+                _ = files_refresh.notified(), if self.files_tx.is_some() => {
+                    self.publish_files().await;
+                }
                 cmd_result = cmd_rx.recv() => {
                     match cmd_result {
                         Ok(cmd) => {
+                            let refresh_files = changes_files(&cmd);
                             match cmd {
                                 Command::StartRecording => {
                                     if let Some(fault) =
@@ -864,6 +917,9 @@ impl MeetingService {
                                     return;
                                 }
                                 _ => {}
+                            }
+                            if refresh_files {
+                                self.publish_files().await;
                             }
                         }
                         Err(broadcast::error::RecvError::Closed) => return,
@@ -1218,6 +1274,7 @@ impl MeetingService {
         let recordings_dir = self.recordings_dir.clone();
         let storage = self.config.storage.clone();
         let meeting_tx = Arc::clone(&self.meeting_tx);
+        let files_refresh = Arc::clone(&self.files_refresh);
         tokio::spawn(async move {
             let outcome = removal::remove_recording(&pool, &recordings_dir, id).await;
             // A Delete of the pending take answers its question once the row
@@ -1251,8 +1308,25 @@ impl MeetingService {
                 // Space was freed: lift a storage block now, not at the next Record.
                 retention::enforce(&pool, &recordings_dir, &storage, &meeting_tx).await;
             }
+            // The loop's refresh after the command may have run before the
+            // removal finished; publish the list as it is now.
+            files_refresh.notify_one();
         });
     }
+}
+
+/// Commands after which the Files list is republished right away.
+fn changes_files(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::StopRecording
+            | Command::SaveRecording(_)
+            | Command::SendRecording(_)
+            | Command::DiscardRecording(_)
+            | Command::RetryUpload(_)
+            | Command::RetryFailedUploads
+            | Command::DeleteRecording(_)
+    )
 }
 
 #[cfg(feature = "recording-integrity-test-hooks")]

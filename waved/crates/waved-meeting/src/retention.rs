@@ -11,6 +11,8 @@ use waved_state::MeetingState;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct DiskUsage {
     pub(crate) used_percent: u8,
+    /// Space available to the recorder, in bytes and in whole MiB.
+    pub(crate) free_bytes: u64,
     pub(crate) free_mb: u64,
 }
 
@@ -119,7 +121,7 @@ async fn remove_uploaded_dir(recordings_dir: &Path, candidate: &Path) -> std::io
     tokio::fs::remove_dir_all(candidate).await
 }
 
-fn disk_usage(path: &Path) -> Result<DiskUsage, nix::Error> {
+pub(crate) fn disk_usage(path: &Path) -> Result<DiskUsage, nix::Error> {
     let stats = statvfs(path)?;
     let blocks = stats.blocks() as u64;
     let used_blocks = blocks.saturating_sub(stats.blocks_free() as u64);
@@ -132,12 +134,11 @@ fn disk_usage(path: &Path) -> Result<DiskUsage, nix::Error> {
             .min(100) as u8
     };
     let fragment_size = (stats.fragment_size() as u64).max(1);
-    let free_mb = (stats.blocks_available() as u64)
-        .saturating_mul(fragment_size)
-        .saturating_div(1024 * 1024);
+    let free_bytes = (stats.blocks_available() as u64).saturating_mul(fragment_size);
     Ok(DiskUsage {
         used_percent,
-        free_mb,
+        free_bytes,
+        free_mb: free_bytes / (1024 * 1024),
     })
 }
 
@@ -205,6 +206,7 @@ pub async fn run_acceptance_fixture(
         &meeting_tx,
         DiskUsage {
             used_percent: 85,
+            free_bytes: 10_000 * 1024 * 1024,
             free_mb: 10_000,
         },
     )
@@ -225,6 +227,7 @@ pub async fn run_acceptance_fixture(
         &meeting_tx,
         DiskUsage {
             used_percent: 10,
+            free_bytes: 2_047 * 1024 * 1024,
             free_mb: 2_047,
         },
     )
@@ -245,6 +248,7 @@ pub async fn run_acceptance_fixture(
         &meeting_tx,
         DiskUsage {
             used_percent: 85,
+            free_bytes: 2_047 * 1024 * 1024,
             free_mb: 2_047,
         },
     )
@@ -369,6 +373,7 @@ mod tests {
         assert!(!needs_pruning(
             DiskUsage {
                 used_percent: 84,
+                free_bytes: 2_048 * 1024 * 1024,
                 free_mb: 2_048,
             },
             &config
@@ -376,6 +381,7 @@ mod tests {
         assert!(needs_pruning(
             DiskUsage {
                 used_percent: 85,
+                free_bytes: 10_000 * 1024 * 1024,
                 free_mb: 10_000,
             },
             &config
@@ -383,6 +389,7 @@ mod tests {
         assert!(needs_pruning(
             DiskUsage {
                 used_percent: 10,
+                free_bytes: 2_047 * 1024 * 1024,
                 free_mb: 2_047,
             },
             &config
@@ -419,6 +426,7 @@ mod tests {
         };
         let constrained = DiskUsage {
             used_percent: 85,
+            free_bytes: 10_000 * 1024 * 1024,
             free_mb: 10_000,
         };
 
@@ -467,6 +475,7 @@ mod tests {
                 &meeting_tx,
                 DiskUsage {
                     used_percent: 84,
+                    free_bytes: 2_048 * 1024 * 1024,
                     free_mb: 2_048,
                 },
             )
@@ -505,6 +514,7 @@ mod tests {
                 &meeting_tx,
                 DiskUsage {
                     used_percent: 10,
+                    free_bytes: 2_047 * 1024 * 1024,
                     free_mb: 2_047,
                 },
             )

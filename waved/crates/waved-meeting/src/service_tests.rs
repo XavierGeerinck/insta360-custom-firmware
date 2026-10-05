@@ -2,14 +2,10 @@
 //! a real MeetingService on a temp SQLite file and drives it over its
 //! channels, the same way main.rs wires it.
 
-// The rig grows with the tasks: some fields only keep channels open and not
-// every test uses every helper.
-#![allow(dead_code)]
-
 use super::*;
 use std::time::Duration;
 use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
-use waved_state::{AudioMode, AudioState, SettingsState, UploadMode, WifiState};
+use waved_state::{AudioMode, AudioState, FilesState, SettingsState, UploadMode, WifiState};
 
 pub(crate) fn quiet_config(upload_mode: UploadMode) -> WavedConfig {
     let mut config = WavedConfig::default();
@@ -47,11 +43,14 @@ pub(crate) struct Rig {
     pub audio: watch::Sender<AudioState>,
     pub commands: broadcast::Sender<Command>,
     pub doa: broadcast::Sender<DoaFrame>,
+    /// Keeps the service's Wi-Fi watch open; no test toggles Wi-Fi yet.
+    #[allow(dead_code)]
     pub wifi: watch::Sender<WifiState>,
     pub integrity: Arc<RecordingIntegrity>,
     pub integrity_tx: mpsc::UnboundedSender<IntegritySignal>,
     pub db_path: PathBuf,
     pub recordings_dir: PathBuf,
+    pub files: Arc<watch::Sender<FilesState>>,
     _tmp: tempfile::TempDir,
 }
 
@@ -79,6 +78,7 @@ pub(crate) async fn start_rig_in(
     });
     let integrity = Arc::new(RecordingIntegrity::default());
     let (integrity_tx, integrity_rx) = mpsc::unbounded_channel();
+    let files = Arc::new(watch::channel(FilesState::default()).0);
     let service = MeetingService::new_with_integrity(
         config,
         db_path.to_str().unwrap(),
@@ -97,7 +97,8 @@ pub(crate) async fn start_rig_in(
     .with_live_inputs(MeetingLiveInputs {
         settings: settings_rx,
         audio: audio_rx,
-    });
+    })
+    .with_files_publisher(Arc::clone(&files));
     let (commands, commands_rx) = broadcast::channel(32);
     let (wifi, wifi_rx) = watch::channel(WifiState::default());
     tokio::spawn(service.run(commands_rx, wifi_rx));
@@ -113,6 +114,7 @@ pub(crate) async fn start_rig_in(
         integrity_tx,
         db_path,
         recordings_dir,
+        files,
         _tmp: tmp,
     }
 }
@@ -1091,4 +1093,49 @@ async fn send_and_retry_without_a_server_queue_nothing() {
     rig.send(Command::RetryUpload(id));
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(rig.status(id).await.as_deref(), Some("retry_wait"), "a failed take stays failed");
+}
+
+async fn wait_files(rig: &Rig, what: &str, predicate: impl Fn(&FilesState) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(7);
+    while !predicate(&rig.files.borrow()) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {:?}",
+            *rig.files.borrow()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn files_list_tracks_takes_marks_and_deletes() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    // 0.2 s of pre-roll, so the mark sits 200 ms into the file.
+    rig.feed(20, 0.1).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.1).await;
+    rig.send(Command::AddBookmark);
+    rig.wait_for("mark", |s| s.marks == 1).await;
+    rig.stop().await;
+    wait_files(&rig, "one recording", |f| f.recordings.len() == 1).await;
+    let files = rig.files.borrow().clone();
+    let entry = &files.recordings[0];
+    assert_eq!(entry.id, id);
+    assert_eq!(entry.status, waved_state::RecordingStatus::LocalOnly);
+    assert_eq!(entry.marks, 1);
+    assert_eq!(entry.marks_ms.len() as u32, entry.marks);
+    assert_eq!(entry.marks_ms.len(), 1);
+    assert_eq!(rig.metadata(id).recording.pre_roll_duration_ms, 200);
+    assert_eq!(entry.marks_ms, vec![200], "the mark at 0 s of the take, after the pre-roll");
+    assert!(entry.size_bytes > 44, "WAV header plus audio");
+    assert!(entry.last_error.is_none());
+    assert!(files.free_bytes > 0);
+    assert!(!files.low_space);
+    let asked = tokio::time::Instant::now();
+    rig.send(Command::DeleteRecording(id));
+    wait_files(&rig, "empty list", |f| f.recordings.is_empty()).await;
+    assert!(
+        asked.elapsed() < Duration::from_secs(3),
+        "the finished removal refreshes Files, not only the 5 s tick"
+    );
 }
