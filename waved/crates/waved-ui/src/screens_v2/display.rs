@@ -170,7 +170,10 @@ impl Screen for DimAfterScreen {
         let options = choices
             .iter()
             .map(|&s| {
-                RadioOption::new(duration_label(s), screen_off_detail(s, snap.settings.off_after_s))
+                RadioOption::new(
+                    duration_label(s),
+                    screen_off_detail(s, snap.settings.off_after_s),
+                )
             })
             .collect();
         let (dispatch, picks) = (ctx.dispatch.clone(), choices.clone());

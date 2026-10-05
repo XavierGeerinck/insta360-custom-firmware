@@ -128,9 +128,7 @@ impl Screen for AboutScreen {
             ))
             .column(ROW_PITCH - ROW_H);
         for row in ROWS {
-            let line = Obj::plain(column)
-                .size(ROW_W, ROW_H)
-                .row_start(8, 16);
+            let line = Obj::plain(column).size(ROW_W, ROW_H).row_start(8, 16);
             Obj::label(line, row.label(), Font::Small, TEXT_2)
                 .grow()
                 .one_line();
@@ -215,13 +213,19 @@ mod tests {
     fn unknown_values_read_plainly() {
         let mut snap = snap();
         assert_eq!(about_value(AboutRow::Serial, &snap, ""), None);
-        assert_eq!(about_value(AboutRow::Name, &snap, "  ").as_deref(), Some("Wave"));
+        assert_eq!(
+            about_value(AboutRow::Name, &snap, "  ").as_deref(),
+            Some("Wave")
+        );
         assert_eq!(
             about_value(AboutRow::Version, &snap, "").as_deref(),
             Some(format!("waved {}", env!("CARGO_PKG_VERSION")).as_str())
         );
         snap.wifi.connected = false;
-        assert_eq!(about_value(AboutRow::Address, &snap, "").as_deref(), Some("Not connected"));
+        assert_eq!(
+            about_value(AboutRow::Address, &snap, "").as_deref(),
+            Some("Not connected")
+        );
         assert_eq!(format_bytes(850_000_000), "850 MB");
         assert_eq!(format_bytes(0), "0 MB");
     }
@@ -232,9 +236,15 @@ mod tests {
         snap.files.free_bytes = 2_000_000_000;
         snap.system.about.storage_free_bytes = 5_000_000_000;
         // The system service has not measured the filesystem yet.
-        assert_eq!(about_value(AboutRow::Space, &snap, "").as_deref(), Some("2.0 GB"));
+        assert_eq!(
+            about_value(AboutRow::Space, &snap, "").as_deref(),
+            Some("2.0 GB")
+        );
         snap.system.about.storage_total_bytes = 16_000_000_000;
-        assert_eq!(about_value(AboutRow::Space, &snap, "").as_deref(), Some("5.0 GB"));
+        assert_eq!(
+            about_value(AboutRow::Space, &snap, "").as_deref(),
+            Some("5.0 GB")
+        );
     }
 
     #[test]
@@ -280,7 +290,9 @@ mod tests {
     fn a_long_device_name_ends_in_dots() {
         lvgl(|lv| {
             let root = lv.screen();
-            let f = fixture_with(config("The large meeting room on the third floor, east wing"));
+            let f = fixture_with(config(
+                "The large meeting room on the third floor, east wing",
+            ));
             let mut screen = AboutScreen::default();
             screen.build(root, &f.ctx, &snap());
             root.update_layout();

@@ -60,7 +60,9 @@ impl ModeChoice {
     pub fn audio_mode(self) -> AudioMode {
         match self {
             ModeChoice::WholeRoom => AudioMode::Omni,
-            ModeChoice::FollowTalker => AudioMode::Steered { initial_az_deg: 0.0 },
+            ModeChoice::FollowTalker => AudioMode::Steered {
+                initial_az_deg: 0.0,
+            },
             ModeChoice::Focused => AudioMode::Cardioid,
             ModeChoice::Narrow => AudioMode::Supercardioid,
             ModeChoice::TwoSides => AudioMode::Figure8,
@@ -88,7 +90,10 @@ impl ModeChoice {
     }
 
     pub fn aimable(self) -> bool {
-        matches!(self, ModeChoice::Focused | ModeChoice::Narrow | ModeChoice::TwoSides)
+        matches!(
+            self,
+            ModeChoice::Focused | ModeChoice::Narrow | ModeChoice::TwoSides
+        )
     }
 
     /// The button drawing (index.html data-polar on each button).
@@ -113,14 +118,26 @@ impl ModeChoice {
     pub fn preview(self, aim_deg: f32, doa_deg: f32) -> Preview {
         let aim = aim_deg.round().rem_euclid(360.0);
         let doa = ((doa_deg / DOA_STEP).round() * DOA_STEP).rem_euclid(360.0);
-        let aimed = |a: f32| Preview { lobes: vec![(a, aim)], handle: Some(aim) };
+        let aimed = |a: f32| Preview {
+            lobes: vec![(a, aim)],
+            handle: Some(aim),
+        };
         match self {
-            ModeChoice::WholeRoom => Preview { lobes: vec![(1.0, 0.0)], handle: None },
-            ModeChoice::FollowTalker => Preview { lobes: vec![(0.5, doa)], handle: None },
+            ModeChoice::WholeRoom => Preview {
+                lobes: vec![(1.0, 0.0)],
+                handle: None,
+            },
+            ModeChoice::FollowTalker => Preview {
+                lobes: vec![(0.5, doa)],
+                handle: None,
+            },
             ModeChoice::Focused => aimed(0.5),
             ModeChoice::Narrow => aimed(0.366),
             ModeChoice::TwoSides => aimed(0.0),
-            ModeChoice::Stereo => Preview { lobes: vec![(0.5, -45.0), (0.5, 45.0)], handle: None },
+            ModeChoice::Stereo => Preview {
+                lobes: vec![(0.5, -45.0), (0.5, 45.0)],
+                handle: None,
+            },
         }
     }
 }
@@ -216,10 +233,15 @@ impl Screen for AudioModeScreen {
         }
         let aim = {
             let mut aim = self.aim.borrow_mut();
-            if aim.pending.is_some_and(|p| same_angle(p, snap.audio.beam_aim_deg)) {
+            if aim
+                .pending
+                .is_some_and(|p| same_angle(p, snap.audio.beam_aim_deg))
+            {
                 aim.pending = None;
             }
-            aim.dragging.or(aim.pending).unwrap_or(snap.audio.beam_aim_deg)
+            aim.dragging
+                .or(aim.pending)
+                .unwrap_or(snap.audio.beam_aim_deg)
         };
         picker.set_preview(&mode.preview(aim, self.last_doa));
         if self.shown != Some(mode) {
@@ -234,8 +256,8 @@ impl Screen for AudioModeScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::screens_v2::menu::fixture::{fixture, snap};
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+    use crate::screens_v2::menu::fixture::{fixture, snap};
     use waved_state::Command;
 
     fn focused_snap() -> UiSnapshot {
@@ -265,7 +287,9 @@ mod tests {
             let root = lv.screen();
             let f = fixture();
             let mut snap = snap();
-            snap.audio.mode = AudioMode::Steered { initial_az_deg: 0.0 };
+            snap.audio.mode = AudioMode::Steered {
+                initial_az_deg: 0.0,
+            };
             snap.audio.doa_active = true;
             snap.audio.doa_horizontal = 40.0;
             let mut screen = AudioModeScreen::default();
@@ -338,11 +362,17 @@ mod tests {
         for choice in ModeChoice::ALL {
             assert_eq!(ModeChoice::of(&choice.audio_mode()), choice);
             assert_eq!(ModeChoice::ALL[choice.index()], choice);
-            assert_eq!(choice.name(), crate::screens_v2::menu::mode_name(&choice.audio_mode()));
+            assert_eq!(
+                choice.name(),
+                crate::screens_v2::menu::mode_name(&choice.audio_mode())
+            );
         }
         assert!(ModeChoice::Focused.aimable() && ModeChoice::TwoSides.aimable());
         assert!(!ModeChoice::FollowTalker.aimable() && !ModeChoice::Stereo.aimable());
         assert_eq!(ModeChoice::Focused.preview(300.4, 0.0).handle, Some(300.0));
-        assert_eq!(ModeChoice::FollowTalker.preview(0.0, 43.0).lobes, vec![(0.5, 45.0)]);
+        assert_eq!(
+            ModeChoice::FollowTalker.preview(0.0, 43.0).lobes,
+            vec![(0.5, 45.0)]
+        );
     }
 }

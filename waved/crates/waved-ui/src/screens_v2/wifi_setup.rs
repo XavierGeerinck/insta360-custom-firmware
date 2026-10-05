@@ -62,7 +62,11 @@ pub fn wifi_qr_payload(ssid: &str, passphrase: &str) -> String {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SetupView {
     Starting,
-    Code { ssid: String, passphrase: String, host: String },
+    Code {
+        ssid: String,
+        passphrase: String,
+        host: String,
+    },
     Busy(String),
     Failed(String),
 }
@@ -71,7 +75,9 @@ pub enum SetupView {
 pub fn should_start(state: &ProvisioningState) -> bool {
     matches!(
         state,
-        ProvisioningState::Idle | ProvisioningState::Connected { .. } | ProvisioningState::Failed { .. }
+        ProvisioningState::Idle
+            | ProvisioningState::Connected { .. }
+            | ProvisioningState::Failed { .. }
     )
 }
 
@@ -83,7 +89,11 @@ pub fn view(state: &ProvisioningState, starting: bool) -> SetupView {
     }
     match state {
         ProvisioningState::Idle | ProvisioningState::Scanning => SetupView::Starting,
-        ProvisioningState::ApActive { ssid, passphrase, url } => SetupView::Code {
+        ProvisioningState::ApActive {
+            ssid,
+            passphrase,
+            url,
+        } => SetupView::Code {
             ssid: ssid.clone(),
             passphrase: passphrase.clone(),
             host: url
@@ -97,7 +107,9 @@ pub fn view(state: &ProvisioningState, starting: bool) -> SetupView {
         ProvisioningState::Reconnecting => {
             SetupView::Busy("Reconnecting to the saved network".into())
         }
-        ProvisioningState::Restarting => SetupView::Busy("Settings saved. Wave is restarting.".into()),
+        ProvisioningState::Restarting => {
+            SetupView::Busy("Settings saved. Wave is restarting.".into())
+        }
         ProvisioningState::Connected { ssid } => SetupView::Busy(format!("Connected to {ssid}")),
         ProvisioningState::Failed { reason } => SetupView::Failed(reason.clone()),
     }
@@ -114,7 +126,9 @@ fn capped(parent: Obj, font: Font, hex: u32) -> Obj {
 }
 
 fn set_capped(label: Obj, text: &str, cap: i32) {
-    label.width(text_width(text, Font::Small).min(cap)).set_text(text);
+    label
+        .width(text_width(text, Font::Small).min(cap))
+        .set_text(text);
 }
 
 #[derive(Default)]
@@ -175,7 +189,9 @@ impl Screen for WifiSetupScreen {
                 .pos(MESSAGE.0, MESSAGE.1),
         );
         let (dispatch, started) = (ctx.dispatch.clone(), self.started.clone());
-        self.retry = Some(text_button(root, RETRY, "Try again", move || start(&dispatch, &started)));
+        self.retry = Some(text_button(root, RETRY, "Try again", move || {
+            start(&dispatch, &started)
+        }));
         let dispatch = ctx.dispatch.clone();
         let cancel = text_button(root, BACK, "Cancel", move || {
             dispatch.command(Command::CancelWifiProvisioning);
@@ -213,17 +229,36 @@ impl Screen for WifiSetupScreen {
             match &next {
                 SetupView::Starting => message.set_text("Starting the setup network"),
                 SetupView::Busy(text) => message.set_text(text),
-                SetupView::Failed(reason) => message.set_text(&format!("Couldn't connect: {reason}")),
+                SetupView::Failed(reason) => {
+                    message.set_text(&format!("Couldn't connect: {reason}"))
+                }
                 SetupView::Code { .. } => {}
             }
         }
         if let Some(retry) = self.retry {
             retry.hidden(!matches!(next, SetupView::Failed(_)));
         }
-        match (&next, self.qr.as_ref(), self.ssid, self.passphrase, self.host) {
-            (SetupView::Code { ssid, passphrase, host }, Some(qr), Some(s), Some(p), Some(h)) => {
+        match (
+            &next,
+            self.qr.as_ref(),
+            self.ssid,
+            self.passphrase,
+            self.host,
+        ) {
+            (
+                SetupView::Code {
+                    ssid,
+                    passphrase,
+                    host,
+                },
+                Some(qr),
+                Some(s),
+                Some(p),
+                Some(h),
+            ) => {
                 // If the code can't be built, the manual details below still work.
-                qr.obj().hidden(!qr.set_data(&wifi_qr_payload(ssid, passphrase)));
+                qr.obj()
+                    .hidden(!qr.set_data(&wifi_qr_payload(ssid, passphrase)));
                 set_capped(s, ssid, SSID_CAP);
                 set_capped(p, &format!("{passphrase},"), PASS_CAP);
                 set_capped(h, &format!("then open {host}"), HOST_CAP);
@@ -276,13 +311,18 @@ mod tests {
             let mut screen = WifiSetupScreen::default();
             screen.build(lv.screen(), &f.ctx, &snap);
             assert_targets_ok(lv.screen());
-            assert!(matches!(f.commands().as_slice(), [Command::OpenWifiProvisioning]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
             // Starting until the service reports progress, even though the state is Idle.
             assert_eq!(screen.shown, Some(SetupView::Starting));
             for state in [
                 ProvisioningState::Scanning,
                 ap("Wave-7F2A", "k3x9p2vw"),
-                ProvisioningState::Connecting { ssid: "Office-5G".into() },
+                ProvisioningState::Connecting {
+                    ssid: "Office-5G".into(),
+                },
                 ProvisioningState::Saving,
                 ProvisioningState::Reconnecting,
                 ProvisioningState::Restarting,
@@ -307,7 +347,10 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             assert_targets_ok(root);
             lv.click(screen.cancel.unwrap());
-            assert!(matches!(f.commands().as_slice(), [Command::CancelWifiProvisioning]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::CancelWifiProvisioning]
+            ));
             assert_eq!(f.events(), vec![UiEvent::Back]);
         });
     }
@@ -318,19 +361,30 @@ mod tests {
             let root = lv.screen();
             let mut f = fixture();
             let mut snap = snap();
-            snap.provisioning = ProvisioningState::Failed { reason: "Wrong password".into() };
+            snap.provisioning = ProvisioningState::Failed {
+                reason: "Wrong password".into(),
+            };
             let mut screen = WifiSetupScreen::default();
             screen.build(root, &f.ctx, &snap);
             // Opening on a stale Failed state retries at once.
-            assert!(matches!(f.commands().as_slice(), [Command::OpenWifiProvisioning]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
             screen.started.set(false);
             screen.update(&snap);
             assert_golden("screen_wifi_setup_failed", &lv.render());
             assert_targets_ok(root);
-            assert_eq!(screen.message.unwrap().text(), "Couldn't connect: Wrong password");
+            assert_eq!(
+                screen.message.unwrap().text(),
+                "Couldn't connect: Wrong password"
+            );
             assert!(!screen.retry.unwrap().is_hidden());
             lv.click(screen.retry.unwrap());
-            assert!(matches!(f.commands().as_slice(), [Command::OpenWifiProvisioning]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
         });
     }
 
@@ -390,15 +444,26 @@ mod tests {
         );
         assert_eq!(
             view(&ap("W", "p"), false),
-            SetupView::Code { ssid: "W".into(), passphrase: "p".into(), host: "10.42.0.1".into() }
+            SetupView::Code {
+                ssid: "W".into(),
+                passphrase: "p".into(),
+                host: "10.42.0.1".into()
+            }
         );
         assert_eq!(view(&ProvisioningState::Idle, true), SetupView::Starting);
         assert_eq!(
-            view(&ProvisioningState::Connecting { ssid: "Office".into() }, false),
+            view(
+                &ProvisioningState::Connecting {
+                    ssid: "Office".into()
+                },
+                false
+            ),
             SetupView::Busy("Connecting to Office".into())
         );
         assert!(should_start(&ProvisioningState::Idle));
-        assert!(should_start(&ProvisioningState::Failed { reason: "x".into() }));
+        assert!(should_start(&ProvisioningState::Failed {
+            reason: "x".into()
+        }));
         assert!(!should_start(&ProvisioningState::Scanning));
     }
 }

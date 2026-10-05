@@ -21,11 +21,27 @@ const CLOCK_ROW: Rect = Rect::new(60, 190, 280, 44);
 const SUFFIX_GAP: i32 = 6;
 
 const WEEKDAYS: [&str; 7] = [
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
 ];
 const MONTHS: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August",
-    "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 /// Zones offered on the device; a zone set on the setup page is added to them.
@@ -103,7 +119,10 @@ pub fn clock_parts(local_s: i64, clock_24h: bool) -> (String, &'static str) {
         (format!("{hour:02}:{minute:02}"), "")
     } else {
         let hour12 = if hour % 12 == 0 { 12 } else { hour % 12 };
-        (format!("{hour12}:{minute:02}"), if hour < 12 { "am" } else { "pm" })
+        (
+            format!("{hour12}:{minute:02}"),
+            if hour < 12 { "am" } else { "pm" },
+        )
     }
 }
 
@@ -261,7 +280,9 @@ impl Screen for TimeZoneScreen {
             self.seen = Some(snap.settings.time_zone.clone());
             if let (Some(list), Some(index)) = (
                 self.list.as_ref(),
-                self.zones.iter().position(|z| *z == snap.settings.time_zone),
+                self.zones
+                    .iter()
+                    .position(|z| *z == snap.settings.time_zone),
             ) {
                 list.set_selected(index);
             }
@@ -354,7 +375,10 @@ mod tests {
             let mut screen = DateTimeScreen::default();
             screen.build(root, &f.ctx, &brussels());
             lv.click(screen.clock.as_ref().unwrap().obj());
-            assert!(matches!(f.commands().as_slice(), [Command::SetClock24h(false)]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetClock24h(false)]
+            ));
             lv.click(screen.zone.as_ref().unwrap().obj());
             assert_eq!(f.events(), vec![UiEvent::Navigate(Route::TimeZone)]);
             // A stale snapshot does not flip the switch back.
@@ -387,7 +411,9 @@ mod tests {
             let list = screen.list.as_ref().unwrap();
             assert_eq!(list.selected(), 4);
             lv.click(list.row(5));
-            assert!(matches!(f.commands().as_slice(), [Command::SetTimeZone(z)] if z == "Europe/Amsterdam"));
+            assert!(
+                matches!(f.commands().as_slice(), [Command::SetTimeZone(z)] if z == "Europe/Amsterdam")
+            );
             // A stale snapshot keeps the tapped zone; a change elsewhere is followed.
             screen.update(&brussels());
             assert_eq!(screen.list.as_ref().unwrap().selected(), 5);
@@ -404,7 +430,10 @@ mod tests {
         assert_eq!(zone_label("America/New_York"), "New York");
         assert_eq!(zone_label("UTC"), "UTC");
         let (zones, index) = zone_choices("America/Argentina/Buenos_Aires");
-        assert_eq!((zones[0].as_str(), index), ("America/Argentina/Buenos_Aires", 0));
+        assert_eq!(
+            (zones[0].as_str(), index),
+            ("America/Argentina/Buenos_Aires", 0)
+        );
         assert_eq!(zone_label(&zones[0]), "Buenos Aires");
         assert!(ZONES.iter().all(|z| waved_config::valid_time_zone(z)));
     }

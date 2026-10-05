@@ -273,8 +273,12 @@ mod tests {
         let mut snap = snap();
         snap.clock = "14:32".into();
         snap.settings.pin_enabled = true;
-        snap.files.recordings = (0..12).map(|_| recording(RecordingStatus::Uploaded)).collect();
-        snap.audio.mode = AudioMode::Steered { initial_az_deg: 0.0 };
+        snap.files.recordings = (0..12)
+            .map(|_| recording(RecordingStatus::Uploaded))
+            .collect();
+        snap.audio.mode = AudioMode::Steered {
+            initial_az_deg: 0.0,
+        };
         snap.audio.nr_level = NrLevel::Med;
         snap.audio.speaker_volume = 60;
         snap
@@ -298,7 +302,15 @@ mod tests {
     fn out_of_scope_rows_are_hidden() {
         assert_eq!(
             ROWS.map(MenuRow::title),
-            ["Files", "Audio mode", "Noise reduction", "Volume", "Wi-Fi", "Uploads", "System"]
+            [
+                "Files",
+                "Audio mode",
+                "Noise reduction",
+                "Volume",
+                "Wi-Fi",
+                "Uploads",
+                "System"
+            ]
         );
     }
 
@@ -311,7 +323,14 @@ mod tests {
             let mut screen = MenuScreen::default();
             screen.build(root, &f.ctx, &snap);
             let value = |screen: &MenuScreen, index: usize| {
-                screen.list.as_ref().unwrap().row(index).child(2).child(0).text()
+                screen
+                    .list
+                    .as_ref()
+                    .unwrap()
+                    .row(index)
+                    .child(2)
+                    .child(0)
+                    .text()
             };
             assert_eq!(value(&screen, 3), "60%");
             snap.audio.speaker_volume = 70;
@@ -358,7 +377,12 @@ mod tests {
         let mut snap = snap();
         assert!(!MenuRow::Files.locked(&snap));
         snap.settings.pin_enabled = true;
-        for row in [MenuRow::Files, MenuRow::Wifi, MenuRow::Uploads, MenuRow::System] {
+        for row in [
+            MenuRow::Files,
+            MenuRow::Wifi,
+            MenuRow::Uploads,
+            MenuRow::System,
+        ] {
             assert!(row.locked(&snap), "{row:?}");
         }
         for row in [MenuRow::AudioMode, MenuRow::NoiseReduction, MenuRow::Volume] {
@@ -369,7 +393,12 @@ mod tests {
     #[test]
     fn the_value_vocabulary_matches_the_mockups() {
         assert_eq!(mode_name(&AudioMode::Omni), "Whole room");
-        assert_eq!(mode_name(&AudioMode::Steered { initial_az_deg: 12.0 }), "Follow talker");
+        assert_eq!(
+            mode_name(&AudioMode::Steered {
+                initial_az_deg: 12.0
+            }),
+            "Follow talker"
+        );
         assert_eq!(mode_name(&AudioMode::Cardioid), "Focused");
         assert_eq!(mode_name(&AudioMode::Supercardioid), "Narrow");
         assert_eq!(mode_name(&AudioMode::Figure8), "Two sides");

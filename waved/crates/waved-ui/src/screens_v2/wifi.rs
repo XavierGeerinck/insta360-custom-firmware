@@ -199,7 +199,9 @@ mod tests {
             assert!(f.commands().is_empty(), "the station is not touched yet");
             assert_eq!(
                 f.events(),
-                vec![UiEvent::Navigate(Route::Confirm(ConfirmKind::ChangeNetwork))]
+                vec![UiEvent::Navigate(Route::Confirm(
+                    ConfirmKind::ChangeNetwork
+                ))]
             );
         });
     }

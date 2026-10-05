@@ -178,7 +178,11 @@ impl Screen for SystemScreen {
             .zip(self.state.borrow().shown.iter())
             .map(|(row, value)| {
                 let item = ListItem::new(row.icon(), row.title());
-                let item = if *row == SystemRow::PowerOff { item.danger() } else { item };
+                let item = if *row == SystemRow::PowerOff {
+                    item.danger()
+                } else {
+                    item
+                };
                 match value {
                     Some(value) => item.value(value.as_str()),
                     None => item,
@@ -239,7 +243,14 @@ mod tests {
     use waved_state::Command;
 
     fn value(screen: &SystemScreen, index: usize) -> String {
-        screen.list.as_ref().unwrap().row(index).child(2).child(0).text()
+        screen
+            .list
+            .as_ref()
+            .unwrap()
+            .row(index)
+            .child(2)
+            .child(0)
+            .text()
     }
 
     #[test]
@@ -261,7 +272,15 @@ mod tests {
     fn rows_left_for_milestone_3_are_hidden() {
         assert_eq!(
             ROWS.map(SystemRow::title),
-            ["Display", "Date and time", "Alert tones", "Pre-recording", "About", "Factory reset", "Power off"]
+            [
+                "Display",
+                "Date and time",
+                "Alert tones",
+                "Pre-recording",
+                "About",
+                "Factory reset",
+                "Power off"
+            ]
         );
     }
 
@@ -280,7 +299,10 @@ mod tests {
             lv.click(list.row(2));
             assert!(matches!(
                 f.commands().as_slice(),
-                [Command::SetPreRecording(false), Command::SetAlertTones(true)]
+                [
+                    Command::SetPreRecording(false),
+                    Command::SetAlertTones(true)
+                ]
             ));
             assert_eq!(value(&screen, 3), "Off");
             assert_eq!(value(&screen, 2), "On");
@@ -327,7 +349,10 @@ mod tests {
             screen.update(&snap);
             assert_eq!(value(&screen, 2), "Off");
             lv.click(screen.list.as_ref().unwrap().row(2));
-            assert!(matches!(f.commands().as_slice(), [Command::SetAlertTones(true)]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetAlertTones(true)]
+            ));
         });
     }
 
@@ -414,7 +439,10 @@ mod tests {
             Some(format!("waved {}", env!("CARGO_PKG_VERSION")))
         );
         snap.system.about.version = "0.1.0 (374015f)".into();
-        assert_eq!(SystemRow::About.value(&snap).as_deref(), Some("0.1.0 (374015f)"));
+        assert_eq!(
+            SystemRow::About.value(&snap).as_deref(),
+            Some("0.1.0 (374015f)")
+        );
         assert_eq!(SystemRow::PowerOff.value(&snap), None);
         assert_eq!(SystemRow::FactoryReset.value(&snap), None);
     }

@@ -14,9 +14,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
-use crate::kit::tokens::{
-    Rect, RAISED, SCREEN_W, SURFACE, TEXT, TEXT_2, TEXT_3, TITLE_Y, WARN,
-};
+use crate::kit::tokens::{Rect, RAISED, SCREEN_W, SURFACE, TEXT, TEXT_2, TEXT_3, TITLE_Y, WARN};
 use crate::screens_v2::datetime::days_from_civil;
 use crate::screens_v2::menu::upload_mode_name;
 use std::cell::Cell;
@@ -41,7 +39,9 @@ pub fn host(endpoint: &str) -> Option<String> {
     if endpoint.is_empty() {
         return None;
     }
-    let rest = endpoint.split_once("://").map_or(endpoint, |(_, rest)| rest);
+    let rest = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest);
     Some(rest.split('/').next().unwrap_or(rest).to_string())
 }
 
@@ -62,12 +62,19 @@ pub fn parse_rfc3339(text: &str) -> Option<i64> {
     let number = |from: usize, to: usize| text.get(from..to)?.parse::<i64>().ok();
     let (year, month, day) = (number(0, 4)?, number(5, 7)?, number(8, 10)?);
     let (hour, minute, second) = (number(11, 13)?, number(14, 16)?, number(17, 19)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
         return None;
     }
     let mut rest = text.get(19..)?;
     if let Some(fraction) = rest.strip_prefix('.') {
-        let digits = fraction.find(|c: char| !c.is_ascii_digit()).unwrap_or(fraction.len());
+        let digits = fraction
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(fraction.len());
         if digits == 0 {
             return None;
         }
@@ -174,10 +181,14 @@ impl Screen for UploadsScreen {
         // api.endpoint only changes through the setup page, which restarts waved.
         let server = host(&ctx.config.api.endpoint);
         self.configured = server.is_some();
-        let host_label =
-            Obj::label(root, server.as_deref().unwrap_or("No upload server"), Font::Body, TEXT_2)
-                .centered_text(TEXT_W)
-                .pos(TEXT_X, HOST_Y);
+        let host_label = Obj::label(
+            root,
+            server.as_deref().unwrap_or("No upload server"),
+            Font::Body,
+            TEXT_2,
+        )
+        .centered_text(TEXT_W)
+        .pos(TEXT_X, HOST_Y);
         #[cfg(test)]
         {
             self.host = Some(host_label);
@@ -238,7 +249,10 @@ impl Screen for UploadsScreen {
         let now = counts(snap);
         self.failed.set(now.failed);
         let last = if self.configured {
-            last_sent_line(snap.meeting.last_upload_success_at.as_deref(), snap.now_unix_s)
+            last_sent_line(
+                snap.meeting.last_upload_success_at.as_deref(),
+                snap.now_unix_s,
+            )
         } else {
             "Add one on the setup page".into()
         };
@@ -250,7 +264,11 @@ impl Screen for UploadsScreen {
             last_label.set_text(&next.1);
             mode.set_value(next.2);
         }
-        let values = [now.sent.to_string(), now.waiting.to_string(), now.failed.to_string()];
+        let values = [
+            now.sent.to_string(),
+            now.waiting.to_string(),
+            now.failed.to_string(),
+        ];
         for (index, ((value, label), text)) in self.counts.iter().zip(&values).enumerate() {
             value.set_text(text);
             let alert = index == 2 && now.failed > 0;
@@ -288,7 +306,9 @@ mod tests {
         snap.meeting.last_upload_success_at = Some("2025-10-04T14:20:00+00:00".into());
         snap.meeting.pending_uploads = 1;
         snap.meeting.failed_uploads = 1;
-        snap.files.recordings = (0..38).map(|_| recording(RecordingStatus::Uploaded)).collect();
+        snap.files.recordings = (0..38)
+            .map(|_| recording(RecordingStatus::Uploaded))
+            .collect();
         snap.settings.upload_mode = UploadMode::Ask;
         snap
     }
@@ -318,10 +338,16 @@ mod tests {
             let retry = screen.retry.unwrap();
             assert!(!retry.is_hidden());
             lv.click(retry);
-            assert!(matches!(f.commands().as_slice(), [Command::RetryFailedUploads]));
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::RetryFailedUploads]
+            ));
             assert_eq!(
                 f.events(),
-                vec![UiEvent::Show(Message::new(Severity::Info, "Retrying 1 upload"))]
+                vec![UiEvent::Show(Message::new(
+                    Severity::Info,
+                    "Retrying 1 upload"
+                ))]
             );
             snap.meeting.failed_uploads = 0;
             screen.update(&snap);
@@ -357,7 +383,10 @@ mod tests {
             assert_targets_ok(root);
             let host = screen.host.unwrap();
             assert!(host.text().ends_with("..."), "{}", host.text());
-            assert_eq!(host.coords().y2 - host.coords().y1 + 1, Font::Body.line_height());
+            assert_eq!(
+                host.coords().y2 - host.coords().y1 + 1,
+                Font::Body.line_height()
+            );
         });
     }
 
@@ -365,23 +394,44 @@ mod tests {
     fn timestamps_parse_and_read_relatively() {
         let t = 1_759_587_600; // 2025-10-04 14:20:00 UTC
         assert_eq!(parse_rfc3339("2025-10-04T14:20:00+00:00"), Some(t));
-        assert_eq!(parse_rfc3339("2025-10-04T16:20:00.123456789+02:00"), Some(t));
+        assert_eq!(
+            parse_rfc3339("2025-10-04T16:20:00.123456789+02:00"),
+            Some(t)
+        );
         assert_eq!(parse_rfc3339("2025-10-04 14:20:00"), Some(t));
         assert_eq!(parse_rfc3339("2025-10-04T14:20:00Z"), Some(t));
         assert_eq!(parse_rfc3339("2025-13-04T00:00:00Z"), None);
         assert_eq!(parse_rfc3339("+é:00 garbage text here"), None);
         assert_eq!(relative(1_000, 970).as_deref(), Some("just now"));
-        assert_eq!(relative(10_000, 10_000 - 720).as_deref(), Some("12 min ago"));
+        assert_eq!(
+            relative(10_000, 10_000 - 720).as_deref(),
+            Some("12 min ago")
+        );
         assert_eq!(relative(10_000, 10_000 - 7_200).as_deref(), Some("2 h ago"));
-        assert_eq!(relative(200_000, 200_000 - 90_000).as_deref(), Some("yesterday"));
-        assert_eq!(relative(400_000, 400_000 - 3 * 86_400).as_deref(), Some("3 days ago"));
+        assert_eq!(
+            relative(200_000, 200_000 - 90_000).as_deref(),
+            Some("yesterday")
+        );
+        assert_eq!(
+            relative(400_000, 400_000 - 3 * 86_400).as_deref(),
+            Some("3 days ago")
+        );
         assert_eq!(relative(1_000, 1_030).as_deref(), Some("just now")); // small clock skew
         assert_eq!(relative(1_000, 5_000), None); // the clock isn't set yet
         assert_eq!(last_sent_line(None, 0), "Nothing sent yet");
         // A clock that is set but not yet believable (1970 + uptime) is not trusted.
-        assert_eq!(last_sent_line(Some("1970-01-01T00:00:10Z"), 100), "Last upload time unknown");
-        assert_eq!(last_sent_line(Some("2025-10-04T14:20:00Z"), 0), "Last upload time unknown");
-        assert_eq!(host("https://notes.example.com/hook").as_deref(), Some("notes.example.com"));
+        assert_eq!(
+            last_sent_line(Some("1970-01-01T00:00:10Z"), 100),
+            "Last upload time unknown"
+        );
+        assert_eq!(
+            last_sent_line(Some("2025-10-04T14:20:00Z"), 0),
+            "Last upload time unknown"
+        );
+        assert_eq!(
+            host("https://notes.example.com/hook").as_deref(),
+            Some("notes.example.com")
+        );
         assert_eq!(host(""), None);
         assert_eq!(retry_label(3), "Retry 3 failed");
     }

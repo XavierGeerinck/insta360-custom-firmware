@@ -148,7 +148,10 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             assert_golden("screen_noise", &lv.render());
             assert_targets_ok(root);
-            assert_eq!(screen.detail.unwrap().text(), "Removes most background noise");
+            assert_eq!(
+                screen.detail.unwrap().text(),
+                "Removes most background noise"
+            );
         });
     }
 

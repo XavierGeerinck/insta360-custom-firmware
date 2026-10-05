@@ -12,7 +12,11 @@ use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{RADIO_TOP, SCREEN_W, TEXT, TITLE_Y};
 use waved_state::{Command, UploadMode};
 
-pub const MODES: [UploadMode; 3] = [UploadMode::Automatic, UploadMode::Ask, UploadMode::LocalOnly];
+pub const MODES: [UploadMode; 3] = [
+    UploadMode::Automatic,
+    UploadMode::Ask,
+    UploadMode::LocalOnly,
+];
 
 pub fn options() -> Vec<RadioOption> {
     vec![
@@ -115,7 +119,10 @@ mod tests {
     #[test]
     fn options_name_the_privacy_choice() {
         let titles: Vec<String> = options().into_iter().map(|o| o.title).collect();
-        assert_eq!(titles, ["Send automatically", "Ask me each time", "Keep on Wave"]);
+        assert_eq!(
+            titles,
+            ["Send automatically", "Ask me each time", "Keep on Wave"]
+        );
         assert_eq!(mode_index(UploadMode::LocalOnly), 2);
     }
 }
