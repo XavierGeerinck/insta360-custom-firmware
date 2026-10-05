@@ -174,6 +174,11 @@ impl BigNumber {
     pub(crate) fn digits(&self) -> Obj {
         self.digits
     }
+
+    #[cfg(test)]
+    pub(crate) fn suffix_text(&self) -> String {
+        self.suffix.text()
+    }
 }
 
 /// A − / + step circle: the kit's round button (Surface, Raised with a 2 px
