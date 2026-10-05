@@ -402,6 +402,9 @@ pub struct AudioService {
     /// Start-up microphone check; `None` before the first frame and after the verdict.
     mic_monitor: Option<crate::mic_check::MicHealthMonitor>,
     mic_check_done: bool,
+    /// Reads whether the host has the USB microphone open (UAC "PCM Playback
+    /// State"). main.rs installs it when UAC routing is on.
+    host_listening_probe: Option<Box<dyn Fn() -> bool + Send>>,
 }
 
 impl AudioService {
@@ -484,7 +487,14 @@ impl AudioService {
             stereo_side_gain: 0.0,
             mic_monitor: None,
             mic_check_done: false,
+            host_listening_probe: None,
         }
+    }
+
+    /// Publish `AudioState.host_listening` from this probe on every frame
+    /// ("Computer is listening" on Home).
+    pub fn set_host_listening_probe(&mut self, probe: impl Fn() -> bool + Send + 'static) {
+        self.host_listening_probe = Some(Box::new(probe));
     }
 
     /// Test hook: set DOA directly, bypassing DoaEstimator.
@@ -651,6 +661,7 @@ impl AudioService {
                 s.doa_horizontal = doa.azimuth_deg;
                 s.doa_pitch = doa.elevation_deg;
                 s.doa_active = doa.vad_active;
+                s.doa_confidence = doa.confidence;
             });
             let frame_idx = self.doa_frame_counter;
             self.doa_frame_counter = self.doa_frame_counter.wrapping_add(1);
@@ -809,6 +820,7 @@ impl AudioService {
                         self.ref_spectrum.compute(&mono, &mut ref_bands);
                     }
 
+                    let host_listening = self.host_listening_probe.as_ref().map(|probe| probe());
                     let integrity = self.integrity.snapshot();
                     self.audio_tx.send_modify(|s| {
                         s.vu_level.copy_from_slice(&vu);
@@ -818,6 +830,9 @@ impl AudioService {
                         s.capture_xruns = integrity.xruns;
                         s.raw_frames_dropped = integrity.raw_frames_dropped;
                         s.processed_frames_dropped = integrity.processed_frames_dropped;
+                        if let Some(listening) = host_listening {
+                            s.host_listening = listening;
+                        }
                     });
                     let _ = self.stats_tee.send(frame.clone());
 
@@ -1937,9 +1952,25 @@ mod tests {
         broadcast::Sender<Command>,
         tokio::task::JoinHandle<AudioServiceExit>,
     ) {
+        spawn_service_with(state, frame_size, |_| {})
+    }
+
+    /// `spawn_service`, with `configure` run on the service before it starts
+    /// (for setters that must be called before `run`).
+    #[allow(clippy::type_complexity)]
+    fn spawn_service_with(
+        state: Arc<watch::Sender<AudioState>>,
+        frame_size: usize,
+        configure: impl FnOnce(&mut AudioService),
+    ) -> (
+        mpsc::Sender<AudioFrame>,
+        mpsc::Receiver<ProcessedAudioFrame>,
+        broadcast::Sender<Command>,
+        tokio::task::JoinHandle<AudioServiceExit>,
+    ) {
         let (frame_tx, frame_rx) = mpsc::channel(8);
         let (meeting_tx, meeting_rx) = mpsc::channel(8);
-        let svc = AudioService::new(
+        let mut svc = AudioService::new(
             state,
             frame_tx.clone(),
             frame_rx,
@@ -1948,9 +1979,51 @@ mod tests {
             48_000,
             crate::beam::MicGeometry::default(),
         );
+        configure(&mut svc);
         let (cmd_tx, cmd_rx) = broadcast::channel(8);
         let handle = tokio::spawn(svc.run(cmd_rx));
         (frame_tx, meeting_rx, cmd_tx, handle)
+    }
+
+    #[tokio::test]
+    async fn host_listening_follows_the_probe() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let state = Arc::new(watch::channel(AudioState::default()).0);
+        let open = Arc::new(AtomicBool::new(true));
+        let probe = Arc::clone(&open);
+        let (frame_tx, mut meeting_rx, cmd_tx, handle) =
+            spawn_service_with(Arc::clone(&state), 16, move |svc| {
+                svc.set_host_listening_probe(move || probe.load(Ordering::Relaxed));
+            });
+        frame_tx
+            .send(AudioFrame::mic_only(vec![0; 16], 1, 48_000, 0))
+            .await
+            .unwrap();
+        meeting_rx.recv().await.unwrap();
+        assert!(state.borrow().host_listening);
+        open.store(false, Ordering::Relaxed);
+        frame_tx
+            .send(AudioFrame::mic_only(vec![0; 16], 1, 48_000, 1))
+            .await
+            .unwrap();
+        meeting_rx.recv().await.unwrap();
+        assert!(!state.borrow().host_listening);
+        cmd_tx.send(Command::Shutdown).unwrap();
+        assert_eq!(handle.await.unwrap(), AudioServiceExit::StopRequested);
+    }
+
+    #[test]
+    fn doa_confidence_is_published_with_the_direction() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        let mut doa = svc.subscribe_doa();
+        let mut frame = None;
+        for _ in 0..5 {
+            svc.process_frame(&plane_wave_8ch(90.0, 480));
+            frame = Some(doa.try_recv().unwrap());
+        }
+        let frame = frame.unwrap();
+        assert!(frame.confidence > 0.0, "a clean plane wave is not zero-confidence");
+        assert_eq!(state.borrow().doa_confidence, frame.confidence);
     }
 
     #[test]
