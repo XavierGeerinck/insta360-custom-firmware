@@ -3,6 +3,7 @@ pub mod diarization;
 mod files;
 pub mod metadata;
 pub mod model;
+pub mod player;
 pub mod reconcile;
 pub mod recorder;
 mod removal;
