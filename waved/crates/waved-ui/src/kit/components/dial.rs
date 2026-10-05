@@ -14,7 +14,11 @@ const TALKER_WIDTH: i32 = 6;
 /// The wedge's angle span; its rounded caps add about 2.5° at each end, so it
 /// reads as about 44° (the mockup draws 38° with round caps).
 const TALKER_SPAN: f32 = 38.0;
-/// The update / start-up progress ring and its track.
+/// The update / start-up progress ring and its track: a fixed stroke 6 (the
+/// mockups' progress stroke), not relative to the ring like the gauge
+/// (`width + 2`), because the progress replaces the ring rather than
+/// highlighting it. Every dial in the mockups has a stroke-3 ring, where both
+/// rules agree on the look.
 const PROGRESS_WIDTH: i32 = 6;
 /// The talker dot sits just outside the ring, on r + 12 (r 82 on Home).
 const TALKER_DOT_OFFSET: i32 = 12;

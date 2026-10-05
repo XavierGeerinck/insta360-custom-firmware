@@ -197,7 +197,10 @@ impl StatusArea {
         self.message_until_ms = Some(now_ms + message.severity.duration_ms());
     }
 
-    /// The cluster, or on the pill its hit area (the tap target; the pill is child 0).
+    /// What hides while a message shows. On `plain` it is the cluster itself
+    /// (not clickable). On `pill` it is the pill's hit area
+    /// (`STATUS_PILL_HIT`, the tap target), and the visible 28 px pill is its
+    /// `child(0)`.
     pub fn cluster(&self) -> Obj {
         self.slot
     }

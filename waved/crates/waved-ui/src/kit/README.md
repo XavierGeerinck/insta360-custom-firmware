@@ -100,7 +100,7 @@ impl Screen for AboutScreen {
 | Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active` | every screen |
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
-| Round bottom buttons | `RoundButton::new(root, BottomSpot::Main, icons::RECORD, "Record", Tone::Rec, on_tap)`; `.icon_font(Font::Icon20)` for the solid media glyphs (Record, Stop, Pause / Resume); `.hold(HOLD_TO_STOP_MS as u32, on_stop)` for Stop; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
+| Round bottom buttons | `RoundButton::record(root, on_tap)`, `RoundButton::stop(root, on_tap, on_stop)` (holds for `HOLD_TO_STOP_MS`), `RoundButton::new(root, BottomSpot::Left, icons::MARK, "Mark", Tone::Neutral, on_tap)`; `.hold(ms, on_complete)`, `.icon_font(font)` to override the icon size; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
 | Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` (a round button at the side spot) | Home, Recording, File detail |
 | Pill pair | `ButtonRow::two(root, [cancel, action], on_tap)` at `BOTTOM_PILL_PAIR` | Confirmation |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
@@ -132,9 +132,16 @@ Notes on the parts that carry state:
   hold), a completed hold does not. While held the circle is Raised without the teal ring. The
   ring is not tappable; it is a sibling of the button (it reaches past the circle) and is
   deleted with it, so a deleted button's hold never completes.
-- Tabler's solid media glyphs fill more of the em than the mockup's symbols, so Record, Stop and
-  Pause / Resume use `icon_font(Font::Icon20)` (a 12–13 px dot or square, as in the mockups);
-  `set_icon` keeps the font.
+- Tabler's solid media glyphs fill more of the em than the mockup's symbols, so Record, Stop,
+  Pause and Play (Resume) are drawn at 20 px automatically (a 12–13 px dot or square, as in the
+  mockups); other glyphs take the spot's size. `set_icon` re-picks the size for the new glyph;
+  `icon_font(font)` fixes it instead.
+- A round button's label and hold ring are siblings of its circle, placed in screen
+  coordinates: its parent must be the screen root or a full-screen container without a layout.
+  Deleting the button deletes them too.
+- Disabling differs by form: `ButtonRow::set_enabled` fades a pill to 35 % opacity, while
+  `RoundButton::set_enabled` keeps the Surface circle and greys the icon and label to Text 3
+  (paused.png). Both ignore taps.
 - The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
   with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
   centre over 62°–122°. Rows fade and change band with distance from the focus line.

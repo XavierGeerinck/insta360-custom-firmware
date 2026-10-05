@@ -121,6 +121,19 @@ pub const DIAL_TITLE_Y: i32 = 95;
 pub const DIAL_LINE_Y: i32 = 127;
 /// Top of the dial's hint ("Tap to mute").
 pub const DIAL_HINT_Y: i32 = 153;
+/// Recording's text stack inside the dial (tops of the kit labels): the
+/// "Recording" chip...
+pub const REC_CHIP_Y: i32 = 76;
+/// ...the 48 px timer, placed by its digits' baseline (y 138, as in
+/// recording.png), not by its box: the Num48 box is 43 tall with 9 px under
+/// the baseline, so its top is 104...
+pub const REC_TIMER_Y: i32 = 104;
+/// ...the talker line ("Speaker 2 talking") and the hint ("Tap to mute").
+pub const REC_LINE_Y: i32 = 140;
+pub const REC_HINT_Y: i32 = 161;
+/// The chip's red dot and the gap before its word.
+pub const REC_DOT: i32 = 7;
+pub const REC_DOT_GAP: i32 = 5;
 /// Top of the content under a sub-screen title (62 for a sub-line directly
 /// under the title).
 pub const CONTENT_TOP: i32 = 70;

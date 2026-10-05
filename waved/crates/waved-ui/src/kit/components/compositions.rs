@@ -16,19 +16,9 @@ use crate::kit::snapshot::UiSnapshot;
 use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
 use crate::kit::tokens::{
     DIAL_CX, DIAL_CY, DIAL_HINT_Y, DIAL_ICON_X, DIAL_ICON_Y, DIAL_LINE_Y, DIAL_R, DIAL_TITLE_Y,
-    HOLD_TO_STOP_MS, LIVE, RADIO_TOP, REC, SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y,
+    LIVE, RADIO_TOP, REC, REC_CHIP_Y, REC_DOT, REC_DOT_GAP, REC_HINT_Y, REC_LINE_Y, REC_TIMER_Y,
+    SCREEN_W, TEXT, TEXT_2, TEXT_3, TITLE_Y,
 };
-
-/// Recording's text stack inside the dial (tops of the kit labels): the
-/// "Recording" chip, the timer (placed by its digits' baseline, at y 138 as
-/// in recording.png), the talker line and the hint.
-const REC_CHIP_Y: i32 = 76;
-const REC_TIMER_Y: i32 = 104;
-const REC_LINE_Y: i32 = 140;
-const REC_HINT_Y: i32 = 161;
-/// The chip's dot and the gap before its word.
-const REC_DOT: i32 = 7;
-const REC_DOT_GAP: i32 = 5;
 
 #[test]
 fn home_from_kit_parts() {
@@ -60,15 +50,7 @@ fn home_from_kit_parts() {
             .pos(0, DIAL_HINT_Y);
         SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", || {});
         SideButton::new(root, Side::Right, icons::VOLUME_HIGH, "Louder", || {});
-        RoundButton::new(
-            root,
-            BottomSpot::Main,
-            icons::RECORD,
-            "Record",
-            Tone::Rec,
-            || {},
-        )
-        .icon_font(Font::Icon20);
+        RoundButton::record(root, || {});
 
         assert_golden("kit_home", &lv.render());
         assert_targets_ok(root);
@@ -116,16 +98,7 @@ fn recording_from_kit_parts() {
             Tone::Neutral,
             || {},
         );
-        RoundButton::new(
-            root,
-            BottomSpot::Main,
-            icons::STOP,
-            "Stop",
-            Tone::RecText,
-            || {},
-        )
-        .icon_font(Font::Icon20)
-        .hold(HOLD_TO_STOP_MS as u32, || {});
+        RoundButton::stop(root, || {}, || {});
         RoundButton::new(
             root,
             BottomSpot::Right,
@@ -133,8 +106,7 @@ fn recording_from_kit_parts() {
             "Pause",
             Tone::Neutral,
             || {},
-        )
-        .icon_font(Font::Icon20);
+        );
 
         assert_golden("kit_recording", &lv.render());
         assert_targets_ok(root);
