@@ -1,12 +1,13 @@
 //! The revision-2 UI runtime: one router, the screens_v2 registry, the
 //! dispatcher, the message slot, screen power and the runtime's swipes, fed
 //! by one snapshot per loop iteration. `step` and `touch` are host-testable;
-//! the device loop (Z8) adds LVGL's tick, input and display around them.
+//! the device loop (`run`) adds LVGL's tick, input and display around them.
 
 pub mod device;
 pub mod gesture;
 pub mod power;
 pub mod registry;
+pub mod run;
 pub mod slot;
 pub mod touch;
 
