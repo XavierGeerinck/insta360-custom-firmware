@@ -73,7 +73,10 @@ pub enum SetupView {
     Closed,
 }
 
-/// Whether the service is not running a session (Try again may start one).
+/// Whether no session is running (Idle, Connected or Failed): `view` shows
+/// Starting from the start command until the service reports progress, and
+/// Try again may start one. Opening the screen for the first time starts
+/// from Idle or Failed only (`build`); a rebuild never starts.
 pub fn should_start(state: &ProvisioningState) -> bool {
     matches!(
         state,
@@ -213,10 +216,16 @@ impl Screen for WifiSetupScreen {
         let _ = cancel;
         if snap.rebuilt {
             // Back from a screen on top (the power-off confirmation): this
-            // is not a first visit. Idle now means the setup network closed,
-            // so offer Try again instead of restarting it unasked.
+            // is not a first visit. Idle now means the setup network closed
+            // and Failed shows the failure; either way offer Try again
+            // instead of restarting unasked.
             self.session = true;
-        } else if matches!(snap.provisioning, ProvisioningState::Idle) {
+        } else if matches!(
+            snap.provisioning,
+            ProvisioningState::Idle | ProvisioningState::Failed { .. }
+        ) {
+            // A first visit is the request to start: from Idle, or from the
+            // failure of an earlier visit.
             start(&ctx.dispatch, &self.started);
         }
         self.update(snap);
@@ -395,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_first_visit_from_idle_starts_setup() {
+    fn only_a_first_visit_from_idle_or_failed_starts_setup() {
         lvgl(|lv| {
             for (state, rebuilt, starts) in [
                 (ProvisioningState::Idle, false, true),
@@ -405,6 +414,13 @@ mod tests {
                         reason: "Wrong password".into(),
                     },
                     false,
+                    true,
+                ),
+                (
+                    ProvisioningState::Failed {
+                        reason: "Wrong password".into(),
+                    },
+                    true,
                     false,
                 ),
                 (
@@ -519,10 +535,42 @@ mod tests {
             };
             let mut screen = WifiSetupScreen::default();
             screen.build(root, &f.ctx, &snap);
-            // A stale Failed state is shown, not retried unasked.
-            assert!(f.commands().is_empty());
+            // A first visit from Failed is the request to start.
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+            screen.started.set(false);
+            screen.update(&snap);
             assert_golden("screen_wifi_setup_failed", &lv.render());
             assert_targets_ok(root);
+            assert_eq!(
+                screen.message.unwrap().text(),
+                "Couldn't connect: Wrong password"
+            );
+            assert!(!screen.retry.unwrap().is_hidden());
+            lv.click(screen.retry.unwrap());
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::OpenWifiProvisioning]
+            ));
+        });
+    }
+
+    #[test]
+    fn a_rebuilt_failure_shows_it_with_try_again_and_sends_nothing() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.provisioning = ProvisioningState::Failed {
+                reason: "Wrong password".into(),
+            };
+            snap.rebuilt = true;
+            let mut screen = WifiSetupScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            assert!(f.commands().is_empty());
             assert_eq!(
                 screen.message.unwrap().text(),
                 "Couldn't connect: Wrong password"

@@ -172,8 +172,10 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   right on top of a route, that screen is parked (kept alive, not shown), and on wake it is
   re-loaded as it was, not rebuilt. A screen that acts in `build` (Wi-Fi setup starts
   provisioning) therefore does not act again on waking. Any other return rebuilds the screen
-  (Back from the power-off confirmation); `UiSnapshot::rebuilt` is `true` for that `build`
-  call, so a screen that acts in `build` can skip it.
+  (Back from the power-off confirmation). For that `build` call `UiSnapshot::rebuilt` is
+  `true`, so a screen that acts in `build` can skip it. It is `false` on a first visit, and
+  `false` again once the route has left the stack: a route that comes back after leaving is a
+  first visit.
 - **Leave commands.** A route can send commands when it goes away (Wi-Fi setup sends
   `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays).
   The runtime sends them once, when the route leaves the router stack by any path: a button
@@ -181,8 +183,9 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   A screen's own Back button may send the same command too; a duplicate is accepted.
 - **Press cancel.** A press is cancelled (`lv_indev_wait_release`) when the screen changes
   under it, or when a swipe is taken (by the runtime, or by a screen's `on_swipe`), so it never
-  also taps. A press that only woke the screen is never delivered to LVGL. A new pending
-  decision or an incoming call also wakes the screen, without a press.
+  also taps. A press that only woke the screen is never delivered to LVGL.
+- **Wake on arrival.** A new pending decision (a recording stopped) or an incoming call
+  (`audio.call_ringing`) wakes a resting or dark screen without delivering a press.
 
 ## Components
 
