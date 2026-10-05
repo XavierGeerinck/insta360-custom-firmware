@@ -22,6 +22,8 @@ pub(crate) struct PreBuffer {
     /// recording is active (the take's own writer owns the audio) and resumed
     /// once idle, so a take's audio never bleeds into the next pre-roll.
     paused: bool,
+    /// The user's pre-recording setting (D3). Off means nothing is buffered.
+    enabled: bool,
 }
 
 impl PreBuffer {
@@ -31,6 +33,7 @@ impl PreBuffer {
             samples: VecDeque::with_capacity(capacity),
             capacity,
             paused: false,
+            enabled: true,
         }
     }
 
@@ -42,6 +45,19 @@ impl PreBuffer {
     /// Re-arm the pre-roll so `push` accumulates again.
     pub(crate) fn resume(&mut self) {
         self.paused = false;
+    }
+
+    /// Turn pre-recording on or off. Off drops everything buffered at once,
+    /// because the setting is a privacy control, and frees the ring's memory.
+    pub(crate) fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.samples = VecDeque::new();
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     #[cfg(test)]
@@ -59,7 +75,7 @@ impl PreBuffer {
     }
 
     pub(crate) fn push(&mut self, samples: &[f32]) {
-        if self.capacity == 0 || self.paused {
+        if self.capacity == 0 || self.paused || !self.enabled {
             return;
         }
         // If the incoming slice itself exceeds capacity, only the last
@@ -504,5 +520,19 @@ mod tests {
         assert!(partial.exists());
         assert!(!partial.with_file_name("audio.wav").exists());
         assert_eq!(hound::WavReader::open(partial).unwrap().duration(), 1);
+    }
+
+    #[test]
+    fn prebuffer_disabled_drops_buffered_audio_and_ignores_pushes() {
+        let mut pb = PreBuffer::new(1, 100, 1);
+        pb.push(&[0.1; 50]);
+        pb.set_enabled(false);
+        assert!(!pb.is_enabled());
+        assert_eq!(pb.len(), 0, "turning it off drops what was buffered");
+        pb.push(&[0.2; 10]);
+        assert_eq!(pb.len(), 0, "nothing is buffered while off");
+        pb.set_enabled(true);
+        pb.push(&[0.3; 10]);
+        assert_eq!(pb.drain_all(), vec![0.3; 10]);
     }
 }

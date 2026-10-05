@@ -235,3 +235,31 @@ async fn metadata_records_the_live_audio_mode() {
     rig.stop().await;
     assert_eq!(rig.metadata(id).recording.audio_mode, "Cardioid");
 }
+
+#[tokio::test]
+async fn pre_roll_follows_the_setting() {
+    let rig = start_rig(
+        quiet_config(UploadMode::LocalOnly),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+
+    // On (the default): 50 idle frames (0.5 s) become the pre-roll.
+    rig.feed(50, 0.5).await;
+    let first = rig.start().await;
+    rig.feed(20, 0.25).await;
+    rig.stop().await;
+    assert_eq!(rig.metadata(first).recording.pre_roll_duration_ms, 500);
+    assert_eq!(rig.wav_samples(first), 70 * 480);
+
+    // Off right before Record: the buffer is dropped and stays empty.
+    rig.feed(50, 0.5).await;
+    rig.settings.send_modify(|s| s.pre_recording = false);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    rig.feed(10, 0.5).await;
+    let second = rig.start().await;
+    rig.feed(20, 0.25).await;
+    rig.stop().await;
+    assert_eq!(rig.metadata(second).recording.pre_roll_duration_ms, 0);
+    assert_eq!(rig.wav_samples(second), 20 * 480);
+}

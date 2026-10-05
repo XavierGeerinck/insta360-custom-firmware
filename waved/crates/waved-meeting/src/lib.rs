@@ -380,6 +380,8 @@ impl MeetingService {
         // Post-DSP mono samples kept around for the pre-record splice.
         // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
         let mut prebuffer = PreBuffer::new(PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE, 1);
+        prebuffer.set_enabled(self.settings_rx.borrow().pre_recording);
+        let mut settings_rx = self.settings_rx.clone();
 
         // 1 Hz tick to publish elapsed-seconds onto MeetingState while
         // recording. The watch broadcasts to anyone holding a Receiver
@@ -684,6 +686,16 @@ impl MeetingService {
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("meeting_srv lagged by {n} commands");
                         }
+                    }
+                }
+                Ok(()) = settings_rx.changed() => {
+                    let pre_recording = settings_rx.borrow_and_update().pre_recording;
+                    if pre_recording != prebuffer.is_enabled() {
+                        prebuffer.set_enabled(pre_recording);
+                        info!(
+                            "pre-recording {}",
+                            if pre_recording { "on" } else { "off; buffered audio dropped" }
+                        );
                     }
                 }
                 Ok(()) = wifi_rx.changed() => {
