@@ -290,3 +290,41 @@ async fn pre_roll_off_then_record_back_to_back_never_splices_old_audio() {
         assert_eq!(rig.wav_samples(id), 5 * 480, "round {round}");
     }
 }
+
+#[test]
+fn pre_recording_indicator_rule() {
+    let healthy = AudioState::default();
+    assert!(pre_recording_active(true, false, &healthy));
+    assert!(!pre_recording_active(false, false, &healthy), "setting off");
+    assert!(!pre_recording_active(true, true, &healthy), "recording");
+    let muted = AudioState {
+        mic_muted: true,
+        ..AudioState::default()
+    };
+    assert!(!pre_recording_active(true, false, &muted), "muted");
+    let dead = AudioState {
+        capture_healthy: false,
+        ..AudioState::default()
+    };
+    assert!(!pre_recording_active(true, false, &dead), "no audio arriving");
+}
+
+#[tokio::test]
+async fn pre_recording_dot_follows_setting_mute_and_recording() {
+    let rig = start_rig(
+        quiet_config(UploadMode::LocalOnly),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    rig.wait_for("dot on at idle", |s| s.pre_recording_active).await;
+    rig.audio.send_modify(|a| a.mic_muted = true);
+    rig.wait_for("dot off while muted", |s| !s.pre_recording_active).await;
+    rig.audio.send_modify(|a| a.mic_muted = false);
+    rig.wait_for("dot back after unmute", |s| s.pre_recording_active).await;
+    rig.start().await;
+    rig.wait_for("dot off while recording", |s| !s.pre_recording_active).await;
+    rig.stop().await;
+    rig.wait_for("dot back after stop", |s| s.pre_recording_active).await;
+    rig.settings.send_modify(|s| s.pre_recording = false);
+    rig.wait_for("dot off with the setting", |s| !s.pre_recording_active).await;
+}

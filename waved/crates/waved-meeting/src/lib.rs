@@ -79,6 +79,11 @@ struct StopPolicy {
     upload_mode: UploadMode,
 }
 
+/// The pre-recording dot (D3, C12): the buffer is filling right now.
+pub(crate) fn pre_recording_active(setting_on: bool, recording: bool, audio: &AudioState) -> bool {
+    setting_on && !recording && !audio.mic_muted && audio.capture_healthy
+}
+
 #[derive(Clone)]
 struct RecordingFinalizer {
     config: WavedConfig,
@@ -382,6 +387,8 @@ impl MeetingService {
         let mut prebuffer = PreBuffer::new(PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE, 1);
         self.sync_pre_recording(&mut prebuffer);
         let mut settings_rx = self.settings_rx.clone();
+        let mut audio_state_rx = self.audio_state_rx.clone();
+        self.publish_pre_recording(false);
 
         // 1 Hz tick to publish elapsed-seconds onto MeetingState while
         // recording. The watch broadcasts to anyone holding a Receiver
@@ -697,12 +704,19 @@ impl MeetingService {
                     settings_rx.borrow_and_update();
                     self.sync_pre_recording(&mut prebuffer);
                 }
+                Ok(()) = audio_state_rx.changed() => {
+                    // Mute and capture health feed the dot; the bottom of
+                    // the loop republishes it. The audio watch changes about
+                    // 47 times per second (VU levels), so only mark it seen.
+                    let _ = audio_state_rx.borrow_and_update();
+                }
                 Ok(()) = wifi_rx.changed() => {
                     if wifi_rx.borrow().connected {
                         upload_wake.notify_one();
                     }
                 }
             }
+            self.publish_pre_recording(active.is_some());
         }
     }
 
@@ -726,6 +740,23 @@ impl MeetingService {
                 if pre_recording { "on" } else { "off; buffered audio dropped" }
             );
         }
+    }
+
+    /// Publish the D3 dot from the live setting, the take state and the audio
+    /// state. Notifies subscribers only when the value actually changes.
+    fn publish_pre_recording(&self, recording: bool) {
+        let active = pre_recording_active(
+            self.settings_rx.borrow().pre_recording,
+            recording,
+            &self.audio_state_rx.borrow(),
+        );
+        self.meeting_tx.send_if_modified(|state| {
+            if state.pre_recording_active == active {
+                return false;
+            }
+            state.pre_recording_active = active;
+            true
+        });
     }
 
     async fn await_finalization_with_drain<F>(
