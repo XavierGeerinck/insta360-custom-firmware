@@ -175,8 +175,7 @@ async fn run_async(
     #[cfg(not(feature = "simulate"))]
     {
         if power_key_opted_in(std::env::var(POWER_KEY_ENV).ok().as_deref()) {
-            let started = waved_system::power_key::start(bus.events.clone());
-            info!("power key: {POWER_KEY_ENV}=1, reader started: {started}");
+            log_power_key_start(waved_system::power_key::start(bus.events.clone()));
         } else {
             info!("power key: not read; set {POWER_KEY_ENV}=1 to enable it");
         }
@@ -851,13 +850,24 @@ fn exit_wait(cause: ExitCause) -> std::time::Duration {
 }
 
 /// The env var that turns the power key reader on (RS7).
-#[cfg(not(feature = "simulate"))]
+#[cfg(any(test, not(feature = "simulate")))]
 const POWER_KEY_ENV: &str = "WAVED_POWER_KEY";
 
 /// Only `WAVED_POWER_KEY=1` starts the power key reader (RS7).
 #[cfg(any(test, not(feature = "simulate")))]
 fn power_key_opted_in(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// After opting in: whether the power key reader started. Not starting is a
+/// warning: the user asked for the key and it will not work.
+#[cfg(any(test, not(feature = "simulate")))]
+fn log_power_key_start(started: bool) {
+    if started {
+        info!("power key: {POWER_KEY_ENV}=1, reader started");
+    } else {
+        warn!("power key: {POWER_KEY_ENV}=1, but the reader did not start");
+    }
 }
 
 fn publish_first_pipeline_fault(
@@ -1133,6 +1143,30 @@ mod exit_tests {
         for value in [None, Some(""), Some("0"), Some("true"), Some(" 1")] {
             assert!(!power_key_opted_in(value), "{value:?}");
         }
+    }
+
+    #[test]
+    fn an_opted_in_power_key_that_does_not_start_is_a_warning() {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        struct Levels(Arc<Mutex<Vec<tracing::Level>>>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Levels {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                self.0.lock().unwrap().push(*event.metadata().level());
+            }
+        }
+
+        let levels = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(Levels(levels.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            log_power_key_start(true);
+            log_power_key_start(false);
+        });
+        assert_eq!(
+            *levels.lock().unwrap(),
+            [tracing::Level::INFO, tracing::Level::WARN]
+        );
     }
 }
 
