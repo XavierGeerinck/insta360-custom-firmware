@@ -61,3 +61,14 @@ Each M2.0 item gets tests in the owning crate; goldens must stay byte-identical 
 - Pre-recording: **fixed 30 s**, on/off only.
 - Mic level on the device: **0–200 %** (100 % in the middle); the host can still set up to 800 %.
 - Execution approved: M2.0 contracts, then A–E in parallel, then the runtime switch and a device pass.
+
+## Landed names (M2.0-1, commits 0721549..df466b8) — use these, not the plan text
+
+| Plan | Plan text | Use instead |
+|---|---|---|
+| B, D | `snap.utc_offset_min` | `snap.system.utc_offset_min`, or `snap.local_unix_s()` |
+| B | `snap.device.serial` | `snap.system.about.serial` |
+| A | `snap.audio.mic_fault` / `mic_fault: bool` | `matches!(snap.audio.mic_health, MicHealth::NotResponding { .. })` (`waved_state::MicHealth`) |
+| Z1 | `ActiveMessage.id` in `kit::dispatch`; 4-argument `capture(.., utc_offset)` | `ActiveMessage.seq` in `kit::snapshot` (with `until_ms()`); `capture` keeps 3 arguments and reads the offset from `bus.system` |
+
+Note for B (Date and time): `local_unix_s()` has no validity guard; before the clock is valid (`now_unix_s < CLOCK_VALID_AFTER_UNIX_S`) show the date as "--" like the clock.
