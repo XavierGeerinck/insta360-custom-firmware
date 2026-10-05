@@ -76,10 +76,20 @@ pub const STATUS_PILL_HIT: Rect = Rect::new(80, 6, 240, 44);
 /// Messages take the status slot: h 28, centred, this wide at most.
 pub const MESSAGE_MAX_W: i32 = 240;
 pub const TITLE_Y: i32 = 38;
+/// A sub-line directly under a sub-screen title (Files' free space).
+pub const SUBTITLE_Y: i32 = 62;
 pub const BACK: Rect = Rect::new(144, 244, 112, 44);
 pub const SIDE_LEFT: Rect = Rect::new(26, 91, 60, 60);
 pub const SIDE_RIGHT: Rect = Rect::new(314, 91, 60, 60);
 pub const SIDE_LABEL_Y: i32 = 155;
+/// File detail: Delete and Send sit on the scrubber's centre line (y 134),
+/// 13 px lower than Home's side buttons (docs/mockups README, "Side button").
+pub const DETAIL_SIDE_LEFT: Rect = Rect::new(26, 104, 60, 60);
+pub const DETAIL_SIDE_RIGHT: Rect = Rect::new(314, 104, 60, 60);
+pub const DETAIL_SIDE_LEFT_LABEL: (i32, i32) = (11, 168);
+pub const DETAIL_SIDE_RIGHT_LABEL: (i32, i32) = (299, 168);
+/// File detail's upload state or failure line ("Upload failed: server didn't answer").
+pub const DETAIL_NOTE_Y: i32 = 218;
 
 /// Bottom round buttons are centred on this arc around (PANEL_CX, PANEL_CY).
 pub const BOTTOM_ARC_R: i32 = 135;
@@ -173,6 +183,16 @@ mod tests {
             ("back", BACK, 22),
             ("side left", SIDE_LEFT, round(SIDE_LEFT)),
             ("side right", SIDE_RIGHT, round(SIDE_RIGHT)),
+            (
+                "detail side left",
+                DETAIL_SIDE_LEFT,
+                round(DETAIL_SIDE_LEFT),
+            ),
+            (
+                "detail side right",
+                DETAIL_SIDE_RIGHT,
+                round(DETAIL_SIDE_RIGHT),
+            ),
             ("bottom main", BOTTOM_MAIN, round(BOTTOM_MAIN)),
             ("bottom left", BOTTOM_LEFT, round(BOTTOM_LEFT)),
             ("bottom right", BOTTOM_RIGHT, round(BOTTOM_RIGHT)),
@@ -317,6 +337,34 @@ mod tests {
         // The side buttons and the dial share a centre line.
         assert_eq!(SIDE_LEFT.y + SIDE_LEFT.h / 2, DIAL_CY);
         assert_eq!(SIDE_LABEL_Y, SIDE_LEFT.y + SIDE_LEFT.h + 4);
+    }
+
+    #[test]
+    fn file_detail_side_buttons_sit_on_the_scrubber_centre_line() {
+        let centre_y = |r: Rect| r.y + r.h / 2;
+        assert_eq!(centre_y(DETAIL_SIDE_LEFT), 134);
+        assert_eq!(centre_y(DETAIL_SIDE_RIGHT), 134);
+        assert_eq!(DETAIL_SIDE_LEFT.y - SIDE_LEFT.y, 13, "13 px below Home's");
+        assert_eq!(
+            (DETAIL_SIDE_LEFT.x, DETAIL_SIDE_LEFT.w),
+            (SIDE_LEFT.x, SIDE_LEFT.w)
+        );
+        const { assert!(DETAIL_SIDE_LEFT.x + DETAIL_SIDE_LEFT.w + DETAIL_SIDE_RIGHT.x == SCREEN_W) };
+        for (rect, (x, y)) in [
+            (DETAIL_SIDE_LEFT, DETAIL_SIDE_LEFT_LABEL),
+            (DETAIL_SIDE_RIGHT, DETAIL_SIDE_RIGHT_LABEL),
+        ] {
+            assert_eq!(x * 2 + ROUND_LABEL_W, rect.x * 2 + rect.w, "{rect:?}");
+            assert_eq!(y, rect.y + rect.h + 4, "{rect:?}: as Home's side labels");
+        }
+        // Well inside r 190: 177.7 px on the left, 176.7 on the right (the
+        // last pixel column is x + w - 1, so the pair is not exactly mirrored).
+        assert!(DETAIL_SIDE_LEFT.farthest(30) < 177.7);
+        assert!(DETAIL_SIDE_RIGHT.farthest(30) < 176.7);
+        assert!(DETAIL_NOTE_Y > DETAIL_SIDE_LEFT_LABEL.1);
+        // The sub-line sits directly under the title, above the content.
+        const { assert!(TITLE_Y < SUBTITLE_Y && SUBTITLE_Y < CONTENT_TOP) };
+        assert_eq!(SUBTITLE_Y, 62);
     }
 
     #[test]
