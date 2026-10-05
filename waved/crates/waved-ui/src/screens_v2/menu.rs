@@ -323,6 +323,7 @@ mod tests {
             snap.wifi.connected = false;
             screen.update(&snap);
             assert_eq!(value(&screen, 4), "Not connected");
+            assert_targets_ok(root);
         });
     }
 
@@ -333,6 +334,7 @@ mod tests {
             let f = fixture();
             let mut screen = MenuScreen::default();
             screen.build(root, &f.ctx, &menu_snap());
+            assert_targets_ok(root);
             lv.click(screen.list.as_ref().unwrap().row(1));
             assert_eq!(f.events(), vec![UiEvent::Navigate(Route::AudioMode)]);
         });
@@ -345,6 +347,7 @@ mod tests {
             let mut f = fixture();
             let mut screen = MenuScreen::default();
             screen.build(root, &f.ctx, &menu_snap());
+            assert_targets_ok(root);
             lv.click(screen.list.as_ref().unwrap().row(4));
             assert!(f.commands().is_empty());
         });
