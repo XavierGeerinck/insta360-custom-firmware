@@ -12,7 +12,7 @@ coordinates are what the user sees (see `waved/docs/ui/COORDINATE_SYSTEM.md`). T
 | | | |
 |---|---|---|
 | ![Home](png/home.png) | ![Recording](png/recording.png) | ![Audio mode](png/audio-mode.png) |
-| Home: tap the dial to mute | Recording: same layout, new bottom row | Audio mode: six modes around a live preview |
+| Home: tap the dial to mute | Recording: same layout, Stop takes the Record spot | Audio mode: six modes around a live preview |
 | ![After stop](png/decision.png) | ![Menu](png/menu.png) | ![Files](png/files.png) |
 | After stop: Send, Keep, Delete | Menu: opens from the status pill | Files: attention first |
 
@@ -23,40 +23,111 @@ coordinates are what the user sees (see `waved/docs/ui/COORDINATE_SYSTEM.md`). T
 | Tapping the dial mutes (Home, Recording) | Mute is the most frequent action in a meeting, so it gets the biggest target, and the ring turning red is visible from every seat. |
 | Quieter / Louder on the sides of Home and Recording | Volume becomes one tap instead of a trip to another screen. The dial shows the level while it changes. |
 | Menu opens from the status pill at the top | The old "Menu" handle sat 4 px under Record, where a slip started a recording. |
-| Mark, Pause, Stop in one row; Stop needs a 1 s hold | Stopping can't be undone. A short tap explains the hold instead of doing nothing. |
+| Mark, Pause and Stop together at the bottom; Stop needs a 1 s hold | Stopping can't be undone. A short tap explains the hold instead of doing nothing. |
 | "Send this recording?" with a 60 s auto-Keep | The old screen waited forever. Keep is the safe default: nothing leaves the device and nothing is deleted. |
 | Audio modes as a radial picker with drag-to-aim | All options are visible at once. Directional modes get a direction you choose, which today's code can't express from the UI. |
-| One Back button, 112 × 44 px at (144, 252) | Revision 1 still had two Back styles and a 36 px target. |
+| One Back button, 112 × 44 px at (144, 244) | Revision 1 still had two Back styles and a 36 px target. |
+| Round bottom actions (5 October) | The panel was measured: the visible circle sits 46 px higher than assumed. Bottom actions are round buttons on an arc that follows the edge, in the same language as the dial and the side buttons. Record and Stop are one button in one spot. |
 | New screens | Start-up, first start, resting screen, recording muted, holding Stop, Mic height, Bluetooth, After a recording, Display, Date and time, PIN. |
 | PIN for Files and admin settings | Files, Wi-Fi, Bluetooth, Uploads and System ask for the PIN. Mute, volume, Record, audio mode and noise reduction never do. |
 
 ## Layout system
 
-The panel is a 380 px circle (r ≈ 190 at (200,152)) cropped by the 400 × 304 framebuffer.
-It is 228 px wide at y = 0 and 380 px wide at y = 152.
+The visible panel, measured on the device (`waved/docs/DISPLAY_HARDWARE.md`, "Visible
+Area"), is a **circle of r ≈ 198 centred at (200, 106)**, cut off flat at the top by
+framebuffer row 0 where the stand's notch covers the glass. It is 335 px wide at y = 0,
+almost the full 400 px at y = 106 (the widest row) and narrows quickly below: 325 px at
+y = 220, 147 px at y = 290. The area-weighted centre of the visible shape is about y = 137.
+
+The device frame in `index.html` draws that shape: the bezel circle is centred on the visible
+circle, the strip above framebuffer row 0 is the notch, and `.fb` is clipped with
+`circle(198px at 200px 106px)` (which, intersected with the 400 × 304 box, gives the flat top).
 
 | Zone | y range | Contents |
 |---|---|---|
-| Status | 0–36 | Status cluster or status pill (connection, time, battery). Messages replace it for a few seconds. |
+| Status | 6–34 | Status cluster or status pill (connection, time, battery), 240 px wide on the flat top edge. Messages replace it for a few seconds. |
 | Title | 38–62 | Sub-screen title, 20 px semibold. Not used on Home and Recording. |
-| Core | 64–248 | Screen content. On Home and Recording: the dial, centre (200,132), r = 78. |
-| Sides | centre y = 132 | Secondary actions: 60 px circles centred at x = 58 and x = 342, with a 12 px label below. |
-| Base | 250–304 | One primary action, a row of two or three buttons, or Back. |
+| Core | 50–236 | Screen content. On Home and Recording: the dial, centre (200,121), r = 70. |
+| Sides | centre y = 121 | Volume on Home and Recording: 60 px circles centred at x = 56 and x = 344, with a 12 px label below. |
+| Base | 181–293 | Bottom actions on the r 135 arc: the main round button at (200,241) and up to two companions at (113,209) / (287,209); or a bottom pill; or the Back pill at y 244–288. |
+
+### Dial geometry
+
+The dial is a ring of **r 70 centred at (200,121)**, with a tap circle of r 71 (its outer edge,
+y 50–192). It sits between the status pill (bottom y 34) and the main bottom button (top y 209),
+with the same clear space on both sides: 15.5 px from the ring to the status pill and 16.5 px
+to the main button. The companions are 24 px from the ring and 32 px from the main button. The
+side buttons are 42 px from the ring. The status pill's 44 px hit area ends at y 50, where the
+dial's tap circle begins.
+
+Revision 2 used r 78, which left the ring nearly touching everything around it. r 66 was tried
+first, but the 48 px timer is 119 px wide, so inside r 66 it came within about 4 px of the ring
+on Recording. r 70 is the smallest ring that keeps the type scale and still leaves the timer
+about 7 px of air on each side, with the digits centred on the ring's widest row. The talker arc
+keeps its 44° span at stroke 6 (was 7), and the talker dot sits just outside the ring, on r 82.
+The volume gauge (Home), the update progress ring, the start-up ring and the resting-screen ring
+all use the same r 70 at (200,121). The call ripples are r 76/82/88 around (200,118), because
+the phone number is 129 px wide.
 
 Rules:
 
-1. **Tap limit r = 182 px.** No tappable pixel is farther than 182 px from (200,152).
+1. **Tap limit r = 190 px around (200,106), and y ≥ 6.** No tappable pixel is farther than
+   190 px from (200,106) (about 8 px inside the curve). The flat top edge can be used, 6 px
+   in from row 0.
 2. **Targets ≥ 44 px, main actions ≥ 50 px.** Short bars and icons get invisible full-size hit areas.
-3. **Same place, same job.** Quieter left, Louder right, mute in the dial, recording controls
-   at the bottom, menu at the top, Back bottom centre.
-4. **Messages replace the status pill.** One line, ≤ 230 px, never clickable, never over a button.
-5. **Colour carries meaning only:**
+3. **Bottom actions are round.** See "Bottom actions" below.
+4. **Same place, same job.** Quieter left, Louder right, mute in the dial, the main action in
+   the bottom-centre round button (Record becomes Stop there), menu at the top, Back bottom centre.
+5. **Messages replace the status pill.** One line, ≤ 240 px, never clickable, never over a button.
+6. **Colour carries meaning only:**
    - teal `#3fd6b1`: live, selected or healthy
    - red `#ff4b3e`: recording, muted or destructive
    - amber `#ffb547`: paused or needs attention
    - everything else is grey on `#000`
-6. **Undo-proof actions are isolated.** Stop needs a hold. Delete, Factory reset, Power off
+7. **Undo-proof actions are isolated.** Stop needs a hold. Delete, Factory reset, Power off
    and Stop USB storage go through the confirmation dialog.
+
+### Bottom actions
+
+The bottom of the screen speaks the same round language as the dial and the side buttons. There
+are no bars, slabs or half-moons.
+
+**Geometry.** Bottom buttons sit on an arc of **r 135 around the panel centre (200,106)**, so
+they follow the edge of the visible circle. All of them stay within r 167 of that centre, well
+inside the r 190 tap limit.
+
+| Spot | Circle | Centre | Label (micro 12 px, 4–6 px below) |
+|---|---|---|---|
+| Main | 64 px | (200, 241), the bottom of the arc | 90 wide, top 279 |
+| Companion left / right | 56 px | (113, 209) / (287, 209), ±40° on the arc | 90 wide, top 241 |
+| Pair left / right | 64 px | (113, 209) / (287, 209), the companion spots | 90 wide, top 245 |
+
+**Style.** Every bottom button is a Surface circle. Pressed is Raised with a 2 px teal ring, the
+same as Quieter and Louder. Colour goes only on the icon (and the label where it carries the
+meaning): the record dot is red, Stop is a red square with a red label, Send / Set up Wi-Fi /
+Answer are teal, Delete / Decline are red, Resume is amber. Other labels are Text 2. Red is never
+a button fill. It stays the state colour (recording and muted rings, the record dot).
+
+**Record and Stop are one control.** Home's Record and Recording's Stop use the same Main spot
+and size, so the button that starts a recording is the one that ends it. Stop's one-second hold
+shows as a red progress ring (r 35, stroke 3, over a Line track) around the circle, while the
+circle turns Raised.
+
+**Which form per screen:**
+
+| Screen | Bottom actions | Why |
+|---|---|---|
+| Home (all states) | Main: Record | The one action that isn't mute or volume. |
+| Recording, muted, Holding Stop, Paused | Companions Mark / Pause (Resume) and Main Stop | The same three-button arc every time. Mark is dimmed while paused. |
+| After stop | Companions Keep / Delete and Main Send | The same shape as Recording, so after Stop the choices appear in the same places. |
+| First start | Main: Set up Wi-Fi; "Use without Wi-Fi" as a content pill above | One clear way forward. Skipping is quieter. |
+| Incoming call | Pair: Decline (red) / Answer (teal) | Two equal choices with strong icons, mirrored around x 200. |
+| Confirmation | Pill pair: Cancel / action, 124 × 50 at (70,196) / (206,196) | The words matter more than icons. Both pills are the same size, mirrored. |
+| USB storage | Wide pill: "Stop USB storage", 184 × 52 centred on the Main spot (108,215) | A long label that no icon says on its own. |
+| Sub-screens | Back pill at (144,244) | Unchanged. |
+
+Content above the bottom buttons ends at y ≤ 166 where companions are used (their tops are at
+y 181) and at y ≤ 193 otherwise (the main circle's top is at y 209).
 
 ## Interaction model
 
@@ -101,7 +172,7 @@ Rules:
 | Paused | dashed amber | timer | Not recording | Tap to mute |
 | Volume changing | gauge −135°…135°, teal fill | *n* % | — | — |
 
-The talker arc is 44° wide and centred on the smoothed direction-of-arrival azimuth. It is only
+The talker arc is 44° wide (stroke 6, on the r 70 ring) and centred on the smoothed direction-of-arrival azimuth. It is only
 drawn while voice activity is detected and audio is going somewhere (call, computer or recording).
 
 ## Tokens
@@ -156,26 +227,35 @@ is the reason the Save/Send/Discard buttons render blank today.
 
 ## Components
 
+All positions are in framebuffer pixels (top-left, width × height) and match `index.html`.
+
 | Component | Size and position | LVGL |
 |---|---|---|
-| Status cluster | 200 × 20 at (100,8) | top layer, not clickable |
-| Status pill (Home, Recording) | 200 × 28 at (100,7), radius 14 | clickable, opens Menu |
-| Message | h 28, max w 230, centred at y 7, radius 14 | top layer, not clickable, hides the status for its duration |
-| Dial | r 78 at (200,132), stroke 3; talker arc stroke 7 | `lv_arc` × 2 plus a clickable round `lv_obj` (r 82) for mute |
-| Side button | 60 × 60 at (28,102) / (312,102) | `lv_button`, hold-repeat 300 ms |
-| Primary | 184 × 56 at (108,216), radius 28; optional second line 11 px | `lv_button` |
-| Button pair | 108 × 48 at (86,222) and (206,222) | `lv_button` × 2 |
-| Button row of three | 80 × 48 at (72,222), (160,222), (248,222) | `lv_button` × 3 |
-| Back | 112 × 44 at (144,252), radius 22 | `lv_button`, calls `nav::back()` |
-| Rotary list | viewport y 34–252; rows 34 / 46 / 52 px; focused row 320 wide | flex column, `LV_EVENT_SCROLL` scaling (`lv_example_scroll_6`), bottom fade |
-| Arc scrollbar | r 180, 62°–118° | `lv_arc`, value tied to scroll position |
-| Radio list | rows 296 × 52 at x 52 | `lv_obj` rows with a radio indicator |
+| Status cluster | 240 × 20 at (80,8) | top layer, not clickable |
+| Status pill (Home, Recording) | 240 × 28 at (80,6), radius 14; hit area 240 × 44 (y 6–50); a 7 px teal dot leads the contents while pre-recording is on | clickable, opens Menu |
+| Message | h 28, max w 240, centred, top 6, radius 14 | top layer, not clickable, hides the status for its duration |
+| Title | 400 × 24 at (0,38), centred | label |
+| Dial | r 70 at (200,121), stroke 3; talker arc 44°, stroke 6; talker dot r 4 on r 82; volume gauge and progress ring on the same r 70 | `lv_arc` × 2 plus a clickable round `lv_obj` (r 71, y 50–192) for mute |
+| Dial content stack (Home) | icon 20 px at top 73; state 26 px at top 95; second line 15 px at top 127; hint 12 px at top 153 | labels, centred |
+| Dial content stack (Recording) | state 13 px at top 76; timer 48 px at top 93 (digits centred on y 121); second line 13 px at top 140; hint 12 px at top 161 | labels, centred |
+| Dial content stack (gauge, progress, resting) | caption 13 px at top 77; value 48 px at top 93; second line 13 px at top 145 | labels, centred |
+| Side button | 60 × 60 at (26,91) / (314,91), centres (56,121) / (344,121); label 12 px at top 155, 90 px wide, centred on the button (File detail: top 104, label 168) | `lv_button`, hold-repeat 300 ms |
+| Bottom main (Record / Stop / Send / Set up Wi-Fi) | 64 × 64 round at (168,209), centre (200,241); icon 26 px; label 90 wide at (155,279) | `lv_button`, radius `LV_RADIUS_CIRCLE`; Stop adds an `lv_arc` hold ring r 35 |
+| Bottom companions (Mark / Pause, Keep / Delete) | 56 × 56 round at (85,181) / (259,181), centres (113,209) / (287,209); icon 22 px; labels 90 wide at (68,241) / (242,241) | `lv_button` × 2 |
+| Bottom pair (Decline / Answer) | 64 × 64 round at (81,177) / (255,177), centres (113,209) / (287,209); labels at (68,245) / (242,245) | `lv_button` × 2 |
+| Bottom pills | wide 184 × 52 at (108,215), radius 26 (USB storage); pair 124 × 50 at (70,196) / (206,196), radius 25 (Confirmation) | `lv_button` |
+| Content pill | h 44, radius 22; e.g. 176 × 44 at (112,164), 160 × 44 at (120,192), 184 × 44 at (108,192), pair of 120 × 44 at (76,174) / (204,174) | `lv_button` |
+| Back | 112 × 44 at (144,244), radius 22 | `lv_button`, calls `nav::back()` |
+| Rotary list | viewport y 34–240; rows 32 / 44 / 52 / 44 / 32 px at viewport y 0 / 36 / 84 / 140 / 188; focused row 320 × 52 at (40,118), focus centre y 144; fades 14 px top, 16 px bottom | flex column, `LV_EVENT_SCROLL` scaling (`lv_example_scroll_6`) |
+| Arc scrollbar | r 188 around (200,106), 62°–122° (y 18–206 on the right edge), stroke 4 | `lv_arc`, value tied to scroll position |
+| File list | viewport y 80–222; cards 296 × 52 at x 52, every 58 px | flex column, bottom fade |
+| Radio list | rows 296 × 52 at x 52, y 68 / 124 / 180 | `lv_obj` rows with a radio indicator |
 | Value row | h 38–44, radius 20, label left, value right, chevron | `lv_button` |
 | Switch | 44 × 26 | `lv_switch` |
-| Value arc | r 72–92, 270° sweep, stroke 8, knob 22 | `lv_arc` (Volume, Mic level, Display) |
-| Radial mode picker | six 48 px buttons on r 128 around (200,148); preview r 50 | `lv_button` × 6 + `lv_canvas` |
-| Confirmation | icon 56 px, title 26 px, body 13 px, button pair | modal screen |
-| PIN keypad | 3 × 4 keys of 64 × 48 at x 96/168/240, y 80/134/188/242 | modal screen, no status |
+| Value arc | Volume r 88 at (200,132); Display r 68 at (200,140); 270° sweep, stroke 8, knob 22; − / + 52 px circles centred at x 56 / 344 | `lv_arc` (Volume, Mic level, Display) |
+| Radial mode picker | six 48 px buttons on r 132 around (200,134), at 300° / 270° / 240° and 60° / 90° / 120°; preview r 50 | `lv_button` × 6 + `lv_canvas` |
+| Confirmation | icon 56 px at (172,40), title 26 px at top 104, body 13 px at top 142 (270 wide), pill pair | modal screen |
+| PIN keypad | title at top 6, dots at top 36; 3 × 4 keys of 64 × 48 at x 96/168/240, y 56/110/164/218 | modal screen, no status |
 
 ## Screens
 
@@ -214,11 +294,14 @@ is the reason the Save/Send/Discard buttons render blank today.
 
 ## Panel note
 
-`display.rs` turns on `/sys/class/leds/lcd-backlight`, which points to an LCD with a
-backlight, while the docs call the panel an OLED. One test settles it: write `0` to the
-backlight node. If the image disappears completely, it's an LCD. Brightness and the resting
-screen work either way. Only an OLED needs burn-in protection (shift the layout by up to 3 px
-every 10 minutes).
+The panel is an LCD with a PWM backlight, confirmed on the device on 5 October 2026: writing
+`0` to `/sys/class/leds/lcd-backlight/brightness` blanks the image completely. There is no
+burn-in to manage, and brightness and the resting screen simply set the backlight level.
+
+The visible image is not the 400 × 304 framebuffer but a circle of r ≈ 198 centred at
+(200, 106), cut flat at the top by row 0. Rows 0–33 are usable along the flat top edge, and
+everything below y ≈ 230 lies on the tight bottom curve. Measurements and the width table are
+in `waved/docs/DISPLAY_HARDWARE.md`.
 
 ## Regenerating the PNGs
 
@@ -233,4 +316,5 @@ for id in boot first-run home home-muted home-volume ambient recording recording
 done
 ```
 
-Add `&grid=1` to the URL to render the layout-zone overlay. The implementation backlog is in [`../../TODO.md`](../../TODO.md).
+Add `&grid=1` to the URL to render the layout-zone overlay: the visible circle (r 198), the tap
+limit (r 190), the widest row (y 106), the status zone, the dial tap circle and the r 135 bottom arc. The implementation backlog is in [`../../TODO.md`](../../TODO.md).

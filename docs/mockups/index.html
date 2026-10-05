@@ -86,10 +86,16 @@ figure.screen ul{margin:8px 0 0;padding-left:18px;font-size:14px;color:var(--p-i
 figure.screen li{margin:2px 0}
 .new{font:600 12px/1 var(--f-ui);color:var(--p-mark);border:1px solid currentColor;border-radius:999px;padding:3px 8px;margin-left:6px;vertical-align:2px}
 
+/* Device frame drawn to the measured panel: the visible image is a circle of r 198 centred at
+   framebuffer (200,106), cut flat at row 0 where the stand's notch covers the glass. The bezel
+   circle is centred on the visible circle, so the framebuffer sits low in the frame. */
 .device{width:440px;height:440px;border-radius:50%;position:relative;
   background:radial-gradient(circle at 50% 38%,var(--p-bezel-a),var(--p-bezel-b) 72%);
   box-shadow:0 1px 0 rgba(255,255,255,.08) inset,0 18px 40px -18px rgba(0,0,0,.55)}
-.glass{position:absolute;left:28px;top:28px;width:384px;height:384px;border-radius:50%;background:var(--d-bg)}
+.glass{position:absolute;left:16px;top:16px;width:408px;height:408px;border-radius:50%;background:#030505;overflow:hidden}
+.glass::before{content:"";position:absolute;left:0;top:0;width:408px;height:98px;
+  background:linear-gradient(to bottom,#2b3132,#171b1c 82%,#101314);box-shadow:inset 0 -1px 0 rgba(255,255,255,.07)}
+.glass::after{content:"";position:absolute;left:174px;top:76px;width:60px;height:8px;border-radius:4px;background:#0b0d0e;box-shadow:0 1px 0 rgba(255,255,255,.05)}
 @media (max-width:520px){
   .wrap{padding-inline:16px;padding-block:32px 72px}
   header.intro{grid-template-columns:1fr;gap:24px}
@@ -100,20 +106,20 @@ figure.screen li{margin:2px 0}
 }
 
 /* ---------- Device framebuffer: 400 x 304, every direct child placed in px ---------- */
-.fb{position:absolute;left:-8px;top:40px;width:400px;height:304px;background:var(--d-bg);
-  clip-path:circle(190px at 200px 152px);overflow:hidden;color:var(--d-text);
+.fb{position:absolute;left:4px;top:98px;width:400px;height:304px;background:var(--d-bg);
+  clip-path:circle(198px at 200px 106px);overflow:hidden;color:var(--d-text);
   font:500 15px/1.2 var(--f-ui);-webkit-font-smoothing:antialiased}
 .fb > *, .list > *{position:absolute}
 .fb svg.layer{left:0;top:0;width:400px;height:304px;overflow:visible;pointer-events:none}
 .fb svg{display:block}
 
-.crown{top:8px;left:100px;width:200px;height:20px;display:flex;justify-content:center;align-items:center;gap:7px;
+.crown{top:8px;left:80px;width:240px;height:20px;display:flex;justify-content:center;align-items:center;gap:8px;
   font:500 13px/1 var(--f-num);color:var(--d-text2);font-variant-numeric:tabular-nums}
 .crown svg{width:15px;height:15px;flex:none}
 .crown .bat{display:flex;align-items:center;gap:3px}
-.crown.pill{top:7px;height:28px;border-radius:14px;background:var(--d-surface)}
+.crown.pill{top:6px;height:28px;border-radius:14px;background:var(--d-surface)}
 .crown .chev{width:12px;height:12px;color:var(--d-text3);margin-left:-1px}
-.toast{top:7px;left:50%;transform:translateX(-50%);height:28px;max-width:230px;white-space:nowrap;padding:0 13px 0 9px;border-radius:14px;
+.toast{top:6px;left:50%;transform:translateX(-50%);height:28px;max-width:240px;white-space:nowrap;padding:0 13px 0 9px;border-radius:14px;
   background:var(--d-surface2);display:flex;align-items:center;gap:6px;font:500 13px/1 var(--f-ui);color:var(--d-text)}
 .toast svg{width:15px;height:15px;flex:none}
 .title{top:38px;left:0;width:400px;text-align:center;font:600 20px/24px var(--f-ui);color:var(--d-text)}
@@ -135,33 +141,51 @@ figure.screen li{margin:2px 0}
 
 .side{width:60px;height:60px;border-radius:50%;background:var(--d-surface);display:grid;place-items:center;color:var(--d-text)}
 .side svg{width:26px;height:26px}
-.side.l{left:28px} .side.r{left:312px}
+.side.l{left:26px} .side.r{left:314px}
 .side.pressed{background:var(--d-surface2);box-shadow:inset 0 0 0 2px var(--d-live)}
 .side-lbl{width:90px;text-align:center;font-size:12px;line-height:14px;color:var(--d-text2)}
-.side-lbl.l{left:13px} .side-lbl.r{left:297px}
+.side-lbl.l{left:11px} .side-lbl.r{left:299px}
 
-.primary{left:108px;top:216px;width:184px;height:56px;border-radius:28px;display:flex;align-items:center;justify-content:center;gap:10px;
-  font:600 18px/1 var(--f-ui);background:var(--d-rec);color:#fff}
-.primary svg{width:20px;height:20px;flex:none}
-.primary.go{background:var(--d-live);color:var(--d-on-live)}
+/* Bottom actions: one round language with the dial and the side buttons.
+   MAIN: a 64 px round button centred at (200,241), on the arc r 135 around the panel centre
+   (200,106); Home's Record and Recording's Stop share this exact spot. COMPANIONS: 56 px round
+   buttons on the same arc at +/-40 deg, centred at (113,209) and (287,209). Labels sit 4 px below
+   each circle (micro 12 px, Text 2; accent colour only for Stop, Send, Delete, Resume, Answer,
+   Decline). Fill is always Surface; pressed is Raised with a 2 px teal ring. */
+.rb{border-radius:50%;background:var(--d-surface);display:grid;place-items:center;color:var(--d-text)}
+.rb.main{left:168px;top:209px;width:64px;height:64px} .rb.main svg{width:26px;height:26px}
+.rb.cl{left:85px;top:181px;width:56px;height:56px} .rb.cr{left:259px;top:181px;width:56px;height:56px}
+.rb.cl svg,.rb.cr svg{width:22px;height:22px}
+.rb.pl{left:81px;top:177px;width:64px;height:64px} .rb.pr{left:255px;top:177px;width:64px;height:64px}
+.rb.pl svg,.rb.pr svg{width:26px;height:26px}
+.rb.pressed{background:var(--d-surface2);box-shadow:inset 0 0 0 2px var(--d-live)}
+.rb.off{color:var(--d-text3)}
+.rb.held{background:var(--d-surface2)} /* plus the red 1 s progress ring, r 35 around (200,241) */
+.rl{width:90px;text-align:center;font-size:12px;line-height:14px;color:var(--d-text2)}
+.rl.main{left:155px;top:279px} .rl.cl{left:68px;top:241px} .rl.cr{left:242px;top:241px}
+.rl.pl{left:68px;top:245px} .rl.pr{left:242px;top:245px}
+.rec-c{color:var(--d-rec)} .live-c{color:var(--d-live)} .warn-c{color:var(--d-warn)} .off-c{color:var(--d-text3)}
+/* Pills for actions whose words matter: wide pill (one action) centred on the MAIN spot,
+   pill pair (two equal choices) mirrored around x 200. Main pills are 50-52 px tall. */
+.bp{height:52px;border-radius:26px;background:var(--d-surface);display:flex;align-items:center;justify-content:center;gap:8px;
+  font:600 17px/1 var(--f-ui);color:var(--d-text)}
+.bp svg{width:20px;height:20px;flex:none}
+.bp.wide{left:108px;top:215px;width:184px}
+.bp.rec-c{color:var(--d-rec)} .bp.live-c{color:var(--d-live)}
+.bp.pa{left:70px;top:196px;width:124px;height:50px;border-radius:25px} .bp.pb{left:206px;top:196px;width:124px;height:50px;border-radius:25px}
 .stack{display:flex;flex-direction:column;align-items:flex-start;gap:2px}
 .stack b{font:600 18px/19px var(--f-ui)}
 .stack small{font:500 11px/12px var(--f-ui);opacity:.85}
-.btn{top:222px;height:48px;border-radius:24px;display:flex;align-items:center;justify-content:center;gap:6px;
+.btn{height:44px;border-radius:22px;display:flex;align-items:center;justify-content:center;gap:6px;
   font:600 15px/1 var(--f-ui);background:var(--d-surface);color:var(--d-text)}
 .btn svg{width:18px;height:18px;flex:none}
-.btn.a{left:86px;width:108px} .btn.b{left:206px;width:108px}
-.btn.t1{left:72px;width:80px} .btn.t2{left:160px;width:80px} .btn.t3{left:248px;width:80px}
-.btn.fill-rec{background:var(--d-rec);color:#fff} .btn.fill-live{background:var(--d-live);color:var(--d-on-live)}
-.btn.off{opacity:.35}
-.btn.holding{background:linear-gradient(90deg,#ff9289 0 62%,#9e2c25 62% 100%);color:#fff;box-shadow:0 0 0 3px rgba(255,75,62,.3)}
-.back{left:144px;top:252px;width:112px;height:44px;border-radius:22px;background:var(--d-surface);display:flex;align-items:center;justify-content:center;gap:2px;
+.back{left:144px;top:244px;width:112px;height:44px;border-radius:22px;background:var(--d-surface);display:flex;align-items:center;justify-content:center;gap:2px;
   font:500 15px/1 var(--f-ui);color:var(--d-text)}
 .back svg{width:18px;height:18px;margin-left:-6px}
 
 .list{left:0;width:400px;overflow:hidden;
-  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%);
-          mask-image:linear-gradient(to bottom,transparent 0,#000 18px,#000 calc(100% - 22px),transparent 100%)}
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 14px,#000 calc(100% - 16px),transparent 100%);
+          mask-image:linear-gradient(to bottom,transparent 0,#000 14px,#000 calc(100% - 16px),transparent 100%)}
 .row{display:flex;align-items:center;gap:12px;border-radius:24px;padding:0 18px;color:var(--d-text2);font-size:16px}
 .row svg{width:20px;height:20px;flex:none}
 .row .v{margin-left:auto;font-size:14px;color:var(--d-text3)}
@@ -266,7 +290,7 @@ body.only .device{zoom:1}
 
 <header class="intro">
   <div>
-    <span class="rev">Revision 2, 4 October 2026, decisions recorded</span>
+    <span class="rev">Revision 2, decisions recorded 4 October 2026, laid out for the measured panel 5 October</span>
     <h1>Wave display redesign</h1>
     <p class="lede">Every screen of the waved touch UI, drawn for the round 400 × 304 panel. Each mockup is placed in real framebuffer pixels, so the numbers on this page can be used directly in <code>lv_obj_set_pos</code>.</p>
     <div class="controls">
@@ -275,8 +299,8 @@ body.only .device{zoom:1}
     </div>
   </div>
   <aside>
-    <p>The panel is a 380 px circle cropped by a 400 × 304 framebuffer. It is 228 px wide at the top edge and 380 px wide through the middle.</p>
-    <p>Every tappable object stays within 182 px of the centre, and every target is at least 44 px. Actions that are hard to undo sit away from everything else.</p>
+    <p>The visible panel is a circle of radius 198 px centred at (200, 106), cut off flat at the top by the 400 × 304 framebuffer where the stand covers the glass. It is 335 px wide along the top edge, almost 400 px wide at y 106, and narrows quickly toward the bottom.</p>
+    <p>Every tappable object stays within 190 px of (200, 106), and every target is at least 44 px. Actions that are hard to undo sit away from everything else.</p>
     <p>The device sits in the middle of a meeting table, so people read it from about a metre away and from every side.</p>
   </aside>
 </header>
@@ -287,10 +311,10 @@ body.only .device{zoom:1}
   <li><b>Tap the dial to mute</b>The largest target on Home and Recording now does the most frequent job. The ring turns red so the whole table can see it. <a href="#home">Home</a></li>
   <li><b>Volume in one tap</b>Quieter and Louder sit left and right on Home and while recording, in the same place. The dial shows the level while it changes. <a href="#home-volume">Changing volume</a></li>
   <li><b>Menu moved to the top</b>The status pill opens the menu. Before, "Menu" sat right under Record, where a slip of the finger started a recording. <a href="#menu">Menu</a></li>
-  <li><b>Safer recording controls</b>Mark, Pause and Stop sit in one row. Stop needs a one-second hold, and a quick tap explains that. Muting while recording says the audio is left out. <a href="#hold-stop">Holding Stop</a></li>
+  <li><b>Safer recording controls</b>Mark, Pause and Stop sit together at the bottom, with Stop where Record was. Stop needs a one-second hold, and a quick tap explains that. Muting while recording says the audio is left out. <a href="#hold-stop">Holding Stop</a></li>
   <li><b>A clear question after recording</b>"Send this recording?" with Send, Keep and Delete. If nobody answers, the file stays on Wave after a minute instead of the screen waiting forever. <a href="#decision">After stop</a></li>
   <li><b>Audio modes you can see</b>All six modes sit around a live preview. Directional modes are aimed by dragging the shape. Follow talker aims itself. <a href="#audio-mode">Audio mode</a></li>
-  <li><b>Plain words</b>"Pre-roll" is now "includes last 30 s" on the Record button. Errors say what happened and what to do next.</li>
+  <li><b>Plain words</b>"Pre-roll" is now "Pre-recording", shown as a teal dot in the status pill. Errors say what happened and what to do next.</li>
   <li><b>One Back button</b>112 × 44 px, bottom centre, on every screen including lists. Lists fade out above it instead of running underneath.</li>
   <li><b>A PIN for Files and admin settings</b>Earlier meetings and the upload server are protected in a shared room. Mute, volume, Record and audio settings never ask for it. <a href="#pin">PIN</a></li>
   <li><b>Screens that were missing</b>Start-up, first start, a dimmed resting screen, Bluetooth, Mic height, Display, Date and time, and a choice of what happens after each recording.</li>
@@ -304,7 +328,7 @@ body.only .device{zoom:1}
   <tbody>
     <tr><td>Stopping a recording</td><td>Hold Stop for one second</td><td>A short tap explains the hold. Letting go early cancels.</td></tr>
     <tr><td>Audio modes</td><td>Six modes, directional ones aimed by dragging</td><td>Follow talker uses the smoothed steered beam. The raw per-frame chasing goes away.</td></tr>
-    <tr><td>Pre-recording</td><td>On by default</td><td>"includes last 30 s" on Record, a dot on the resting screen, a switch under System.</td></tr>
+    <tr><td>Pre-recording</td><td>On by default</td><td>A teal dot in the status pill and on the resting screen, a switch under System.</td></tr>
     <tr><td>Nobody answers after a recording</td><td>Keep it on Wave after 60 s</td><td>Nothing leaves the device and nothing is deleted.</td></tr>
     <tr><td>Feature scope</td><td>Everything on this page</td><td>Bluetooth, Wave Controller, updates, USB storage, Mic height, PIN lock, physical volume buttons. More languages wait for a later round.</td></tr>
   </tbody>
@@ -315,8 +339,8 @@ body.only .device{zoom:1}
 <p class="sub">Six rules, applied the same way on every screen.</p>
 <div class="principles">
   <div><b>The ring is the room</b><span>The dial in the middle of Home and Recording stands for the table. An arc lights up toward whoever is talking. Tapping it mutes. The same ring shows volume, playback, update progress and calls.</span></div>
-  <div><b>Same place, same job</b><span>Quieter is always left, Louder always right, mute always in the middle, recording controls always at the bottom. Home and Recording only differ in what the bottom row says.</span></div>
-  <div><b>Bottom centre does the main thing</b><span>Record, Stop, Send, Back and Confirm all sit at the bottom centre. Back is the same 112 × 44 px button on every screen.</span></div>
+  <div><b>Same place, same job</b><span>Quieter is always left, Louder always right, mute always in the middle, recording controls always at the bottom. Home and Recording only differ in the buttons at the bottom.</span></div>
+  <div><b>Bottom centre does the main thing</b><span>The main action is a large round button at the bottom centre. Record turns into Stop in the same spot, and Send and Set up Wi-Fi sit there too. Companions such as Mark and Pause sit either side on an arc that follows the edge. Screens without a main action show the same 112 × 44 px Back button there.</span></div>
   <div><b>Status opens the menu</b><span>The status pill at the top opens the menu, far from Record. Messages appear in the same spot for a few seconds and never cover a button.</span></div>
   <div><b>Colour means something</b><span>Teal means live or selected. Red means recording, muted or destructive. Amber means paused or needs attention. Everything else is grey on black, which also hides the edge of the round panel.</span></div>
   <div><b>No precise taps needed</b><span>Targets are at least 44 px, main actions at least 50 px. Stop needs a one-second hold and Delete asks first, because a mis-tap there can't be undone.</span></div>
@@ -355,10 +379,10 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="boot">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-line)" stroke-width="3"/>
-        <path data-arc="200 132 78 0 220" stroke="var(--d-live)" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
-      <div class="c t-title" style="top:112px">Starting</div>
-      <div class="c t-micro faint num" style="top:142px">waved 0.9.3</div>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-line)" stroke-width="3"/>
+        <path data-arc="200 121 70 0 220" stroke="var(--d-live)" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+      <div class="c t-title" style="top:99px">Starting</div>
+      <div class="c t-micro faint num" style="top:129px">waved 0.9.3</div>
     </div></div></div>
     <figcaption><h3>Start-up <span class="new">new</span> <span class="id">screens/boot.rs</span></h3>
       <p>The ring draws itself while audio, USB and Wi-Fi come up. This is the only animation that plays without a touch.</p>
@@ -369,10 +393,11 @@ body.only .device{zoom:1}
   <figure class="screen" id="first-run">
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><span class="num">09:02</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div class="c t-dial" style="top:46px">Set up Wave</div>
-      <div class="c t-body dim" style="top:86px;left:70px;width:260px">Wave works as a USB speakerphone right away. Connect Wi-Fi to send recordings to your own server.</div>
-      <div class="primary go" style="top:160px;height:50px"><svg><use href="#i-wifi"/></svg>Set up Wi-Fi</div>
-      <div class="btn" style="left:112px;top:220px;width:176px;height:44px">Use without Wi-Fi</div>
+      <div class="c t-dial" style="top:40px">Set up Wave</div>
+      <div class="c t-body dim" style="top:78px;left:65px;width:270px">Wave works as a USB speakerphone right away. Connect Wi-Fi to send recordings to your own server.</div>
+      <div class="btn" style="left:112px;top:146px;width:176px;color:var(--d-text2)">Use without Wi-Fi</div>
+      <div class="rb main"><svg class="live-c"><use href="#i-wifi"/></svg></div>
+      <div class="rl main live-c">Set up Wi-Fi</div>
     </div></div></div>
     <figcaption><h3>First start <span class="new">new</span> <span class="id">screens/first_run.rs</span></h3>
       <p>Shown once, until Wi-Fi is set up or skipped. Skipping is a full answer: Wave is a speakerphone and local recorder without any network.</p>
@@ -387,41 +412,44 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="home">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-live)" stroke-width="3" opacity=".4"/>
-        <path data-arc="200 132 78 288 326" stroke="var(--d-live)" stroke-width="7" fill="none" stroke-linecap="round"/>
-        <circle data-on-ring="200 132 92 307" r="4" fill="var(--d-live)"/></svg>
-      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
-      <div class="ico" style="left:190px;top:74px"><svg><use href="#i-mic"/></svg></div>
-      <div class="c t-dial" style="top:100px">Mic on</div>
-      <div class="c t-body live" style="top:134px">In a call</div>
-      <div class="c t-micro faint" style="top:172px">Tap to mute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-live)" stroke-width="3" opacity=".4"/>
+        <path data-arc="200 121 70 288 326" stroke="var(--d-live)" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 121 82 307" r="4" fill="var(--d-live)"/></svg>
+      <div class="crown pill"><span class="dot live" title="Pre-recording"></span><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="ico" style="left:190px;top:73px"><svg><use href="#i-mic"/></svg></div>
+      <div class="c t-dial" style="top:95px">Mic on</div>
+      <div class="c t-body live" style="top:127px">In a call</div>
+      <div class="c t-micro faint" style="top:153px">Tap to mute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-rec"/></svg></div>
+      <div class="rl main">Record</div>
     </div></div></div>
     <figcaption><h3>Home <span class="id">screens/home.rs</span></h3>
       <p>Tap anywhere on the dial to mute. The ring says where the audio goes: teal in a call, grey when nothing is connected, red when muted. The bright arc points at whoever is talking.</p>
       <ul><li>"In a call" comes from the HID off-hook report that Teams and Zoom already send. Otherwise it reads "Connected by USB", "Bluetooth: iPhone" or "Not connected".</li>
       <li>The status pill opens the menu (swipe down from the top does the same).</li>
-      <li>"includes last 30 s" appears only while pre-recording is on, so people know audio is being buffered.</li></ul>
+      <li>The teal dot at the left of the status pill appears only while pre-recording is on, so people know audio is being buffered. Record itself stays one calm word.</li>
+      <li>Record is a round button like Quieter and Louder. Only its dot is red, so red keeps meaning "recording" or "muted". While recording, Stop takes exactly this spot.</li></ul>
     </figcaption>
   </figure>
 
   <figure class="screen" id="home-muted">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
       <div class="toast"><svg class="live"><use href="#i-check"/></svg>Recording sent</div>
-      <div class="ico rec" style="left:190px;top:74px"><svg><use href="#i-mic-off"/></svg></div>
-      <div class="c t-dial rec" style="top:100px">Muted</div>
-      <div class="c t-body dim" style="top:134px">Call can't hear you</div>
-      <div class="c t-micro faint" style="top:172px">Tap to unmute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+      <div class="ico rec" style="left:190px;top:73px"><svg><use href="#i-mic-off"/></svg></div>
+      <div class="c t-dial rec" style="top:95px">Muted</div>
+      <div class="c t-body dim" style="top:127px">Call can't hear you</div>
+      <div class="c t-micro faint" style="top:153px">Tap to unmute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-rec"/></svg></div>
+      <div class="rl main">Record</div>
     </div></div></div>
     <figcaption><h3>Home, muted, with a message <span class="id">screens/home.rs, toast.rs</span></h3>
       <p>Muted turns the whole ring red. The second line says what that means for the people on the call. A message replaces the status pill for two seconds and never covers a button.</p>
@@ -431,16 +459,17 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="home-volume">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><path data-arc="200 132 78 -135 135" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 132 78 -135 27" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
-      <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
-      <div class="c t-small dim" style="top:86px">Speaker</div>
-      <div class="c t-big num" style="top:104px">60<span class="pct">%</span></div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r pressed" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="primary"><svg><use href="#i-rec"/></svg><span class="stack"><b>Record</b><small>includes last 30 s</small></span></div>
+      <svg class="layer"><path data-arc="200 121 70 -135 135" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 121 70 -135 27" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+      <div class="crown pill"><span class="dot live" title="Pre-recording"></span><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
+      <div class="c t-small dim" style="top:77px">Speaker</div>
+      <div class="c t-big num" style="top:93px">60<span class="pct">%</span></div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r pressed" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-rec"/></svg></div>
+      <div class="rl main">Record</div>
     </div></div></div>
     <figcaption><h3>Home, changing volume <span class="id">screens/home.rs</span></h3>
       <p>Each tap on Quieter or Louder moves the speaker 10 %. For 1.5 s the dial turns into a gauge, so the feedback appears where people are already looking.</p>
@@ -450,9 +479,9 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="ambient">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".5"/></svg>
-      <div class="c t-big num" style="top:100px">14:32</div>
-      <div class="c t-small live" style="top:158px">Mic on, in a call</div>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".5"/></svg>
+      <div class="c t-big num" style="top:93px">14:32</div>
+      <div class="c t-small live" style="top:145px">Mic on, in a call</div>
       <div class="c t-micro live" style="top:236px"><span class="chip"><span class="dot"></span>Pre-recording</span></div>
       <div class="dimmer"></div>
     </div></div></div>
@@ -466,30 +495,34 @@ body.only .device{zoom:1}
 </div>
 
 <h2>Recording</h2>
-<p class="sub">Same layout as Home, so mute and volume don't move. Only the bottom row changes to Mark, Pause and Stop.</p>
+<p class="sub">Same layout as Home, so mute and volume don't move. Only the bottom changes: Record becomes Stop, with Mark and Pause either side.</p>
 <div class="gallery">
 
   <figure class="screen" id="recording">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
-        <path data-arc="200 132 78 38 82" stroke="var(--d-rec)" stroke-width="7" fill="none" stroke-linecap="round"/>
-        <circle data-on-ring="200 132 92 60" r="4" fill="var(--d-rec)"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
+        <path data-arc="200 121 70 38 82" stroke="var(--d-rec)" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 121 82 60" r="4" fill="var(--d-rec)"/></svg>
       <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
-      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
-      <div class="c t-big num" style="top:98px">42:17</div>
-      <div class="c t-small dim" style="top:152px">Speaker 2 talking</div>
-      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
-      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
-      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+      <div class="c t-small rec" style="top:76px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:93px">42:17</div>
+      <div class="c t-small dim" style="top:140px">Speaker 2 talking</div>
+      <div class="c t-micro faint" style="top:161px">Tap to mute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb cl"><svg><use href="#i-mark"/></svg></div>
+      <div class="rl cl">Mark</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-stop"/></svg></div>
+      <div class="rl main rec-c">Stop</div>
+      <div class="rb cr"><svg><use href="#i-pause"/></svg></div>
+      <div class="rl cr">Pause</div>
     </div></div></div>
     <figcaption><h3>Recording <span class="id">screens/recording.rs</span></h3>
       <p>The dim red ring says "recording" from any seat. The bright arc follows the direction of arrival. The speaker number comes from the per-meeting numbering (no names).</p>
-      <ul><li>Mark adds a bookmark and confirms with "Marked at 42:17".</li>
+      <ul><li>Stop is the large round button where Record was on Home, and needs the one-second hold. Mark and Pause sit either side, on an arc that follows the edge.</li>
+      <li>Mark adds a bookmark and confirms with "Marked at 42:17".</li>
       <li>The timer switches to h:mm:ss after 59:59.</li>
       <li>The status pill still opens the menu, so noise reduction can change mid-meeting.</li></ul>
     </figcaption>
@@ -497,19 +530,22 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="recording-muted">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-rec)" stroke-width="3"/></svg>
       <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:35</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
-      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
-      <div class="c t-big num" style="top:98px">45:02</div>
-      <div class="c t-small rec" style="top:152px">Muted, not recorded</div>
-      <div class="c t-micro faint" style="top:176px">Tap to unmute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
-      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
-      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+      <div class="c t-small rec" style="top:76px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:93px">45:02</div>
+      <div class="c t-small rec" style="top:140px">Muted, not recorded</div>
+      <div class="c t-micro faint" style="top:161px">Tap to unmute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb cl"><svg><use href="#i-mark"/></svg></div>
+      <div class="rl cl">Mark</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-stop"/></svg></div>
+      <div class="rl main rec-c">Stop</div>
+      <div class="rb cr"><svg><use href="#i-pause"/></svg></div>
+      <div class="rl cr">Pause</div>
     </div></div></div>
     <figcaption><h3>Recording, muted <span class="new">new</span> <span class="id">screens/recording.rs</span></h3>
       <p>Mute silences the microphones before anything else in the pipeline, so the recording keeps running but holds silence. The screen says so in four words.</p>
@@ -518,42 +554,50 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="hold-stop">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
-        <path data-arc="200 132 78 38 82" stroke="var(--d-rec)" stroke-width="7" fill="none" stroke-linecap="round"/>
-        <circle data-on-ring="200 132 92 60" r="4" fill="var(--d-rec)"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-rec)" stroke-width="3" opacity=".35"/>
+        <path data-arc="200 121 70 38 82" stroke="var(--d-rec)" stroke-width="6" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 121 82 60" r="4" fill="var(--d-rec)"/></svg>
       <div class="toast"><svg class="dim"><use href="#i-info"/></svg>Keep holding to stop</div>
-      <div class="c t-small rec" style="top:80px"><span class="chip"><span class="dot"></span>Recording</span></div>
-      <div class="c t-big num" style="top:98px">42:18</div>
-      <div class="c t-small dim" style="top:152px">Speaker 2 talking</div>
-      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="btn t1"><svg><use href="#i-mark"/></svg>Mark</div>
-      <div class="btn t2"><svg><use href="#i-pause"/></svg>Pause</div>
-      <div class="btn t3 holding"><svg><use href="#i-stop"/></svg>Stop</div>
+      <div class="c t-small rec" style="top:76px"><span class="chip"><span class="dot"></span>Recording</span></div>
+      <div class="c t-big num" style="top:93px">42:18</div>
+      <div class="c t-small dim" style="top:140px">Speaker 2 talking</div>
+      <div class="c t-micro faint" style="top:161px">Tap to mute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <svg class="layer"><circle cx="200" cy="241" r="35" fill="none" stroke="var(--d-line)" stroke-width="3"/>
+        <path data-arc="200 241 35 0 223" stroke="var(--d-rec)" stroke-width="3" fill="none" stroke-linecap="round"/></svg>
+      <div class="rb cl"><svg><use href="#i-mark"/></svg></div>
+      <div class="rl cl">Mark</div>
+      <div class="rb main held"><svg class="rec-c"><use href="#i-stop"/></svg></div>
+      <div class="rl main rec-c">Stop</div>
+      <div class="rb cr"><svg><use href="#i-pause"/></svg></div>
+      <div class="rl cr">Pause</div>
     </div></div></div>
     <figcaption><h3>Holding Stop <span class="new">new</span> <span class="id">screens/recording.rs</span></h3>
-      <p>Stop fills from left to right over one second, then the recording ends. Letting go early cancels. A short tap shows "Hold Stop to end the recording" instead of doing nothing.</p>
+      <p>A red ring around Stop fills clockwise over one second, then the recording ends. Letting go early cancels. A short tap shows "Hold Stop to end the recording" instead of doing nothing.</p>
     </figcaption>
   </figure>
 
   <figure class="screen" id="paused">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-warn)" stroke-width="3" stroke-dasharray="4 8" stroke-linecap="round"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-warn)" stroke-width="3" stroke-dasharray="4 8" stroke-linecap="round"/></svg>
       <div class="crown pill"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:40</span><span class="bat"><svg><use href="#i-bat"/></svg>81%</span><svg class="chev"><use href="#i-chev-down"/></svg></div>
-      <div class="c t-small warn" style="top:80px">Paused</div>
-      <div class="c t-big num" style="top:98px">42:17</div>
-      <div class="c t-small dim" style="top:152px">Not recording</div>
-      <div class="c t-micro faint" style="top:176px">Tap to mute</div>
-      <div class="side l" style="top:102px"><svg><use href="#i-spk-minus"/></svg></div>
-      <div class="side-lbl l" style="top:168px">Quieter</div>
-      <div class="side r" style="top:102px"><svg><use href="#i-spk-plus"/></svg></div>
-      <div class="side-lbl r" style="top:168px">Louder</div>
-      <div class="btn t1 off"><svg><use href="#i-mark"/></svg>Mark</div>
-      <div class="btn t2" style="color:var(--d-warn)"><svg><use href="#i-play"/></svg>Resume</div>
-      <div class="btn t3 fill-rec"><svg><use href="#i-stop"/></svg>Stop</div>
+      <div class="c t-small warn" style="top:76px">Paused</div>
+      <div class="c t-big num" style="top:93px">42:17</div>
+      <div class="c t-small dim" style="top:140px">Not recording</div>
+      <div class="c t-micro faint" style="top:161px">Tap to mute</div>
+      <div class="side l" style="top:91px"><svg><use href="#i-spk-minus"/></svg></div>
+      <div class="side-lbl l" style="top:155px">Quieter</div>
+      <div class="side r" style="top:91px"><svg><use href="#i-spk-plus"/></svg></div>
+      <div class="side-lbl r" style="top:155px">Louder</div>
+      <div class="rb cl off"><svg><use href="#i-mark"/></svg></div>
+      <div class="rl cl off-c">Mark</div>
+      <div class="rb main"><svg class="rec-c"><use href="#i-stop"/></svg></div>
+      <div class="rl main rec-c">Stop</div>
+      <div class="rb cr"><svg class="warn-c"><use href="#i-play"/></svg></div>
+      <div class="rl cr warn-c">Resume</div>
     </div></div></div>
     <figcaption><h3>Recording, paused <span class="id">screens/recording.rs</span></h3>
       <p>A dashed amber ring reads as "on hold" without words. Mark is disabled because nothing is being recorded. Pause needs <code>PauseRecording</code> handled in <code>waved-meeting</code>.</p>
@@ -564,13 +608,16 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:14</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
       <div class="title">Send this recording?</div>
-      <div class="c t-big num" style="top:66px">42:17</div>
-      <div class="c t-body dim" style="top:122px">184 MB, 3 speakers, 4 marks</div>
-      <div class="c t-small faint" style="top:142px">To notes.example.com</div>
-      <div class="primary go" style="top:164px;height:50px"><svg><use href="#i-send"/></svg>Send</div>
-      <div class="btn a" style="height:44px"><svg><use href="#i-device"/></svg>Keep</div>
-      <div class="btn b" style="height:44px;color:var(--d-rec)"><svg><use href="#i-trash"/></svg>Delete</div>
-      <div class="c t-micro faint num" style="top:276px">Keeps it on Wave in 0:52</div>
+      <div class="c t-big num" style="top:62px">42:17</div>
+      <div class="c t-small dim" style="top:116px">184 MB, 3 speakers, 4 marks</div>
+      <div class="c t-small faint" style="top:134px">To notes.example.com</div>
+      <div class="c t-micro faint num" style="top:152px">Keeps it on Wave in 0:52</div>
+      <div class="rb cl"><svg class="dim"><use href="#i-device"/></svg></div>
+      <div class="rl cl">Keep</div>
+      <div class="rb main"><svg class="live-c"><use href="#i-send"/></svg></div>
+      <div class="rl main live-c">Send</div>
+      <div class="rb cr"><svg class="rec-c"><use href="#i-trash"/></svg></div>
+      <div class="rl cr rec-c">Delete</div>
     </div></div></div>
     <figcaption><h3>After stop <span class="id">screens/confirmation.rs</span></h3>
       <p>Only when "After a recording" is set to "Ask me each time". The question names the choice, every button has a label, and the countdown says what happens if nobody answers.</p>
@@ -586,15 +633,15 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="menu">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><path data-arc="200 152 180 62 118" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 152 180 66 82" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+      <svg class="layer"><path data-arc="200 106 188 62 122" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 106 188 66 82" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div class="list" style="top:34px;height:218px">
-        <div class="row far" style="left:90px;top:0;width:220px;height:34px"><svg><use href="#i-folder"/></svg>Files<span class="v" style="display:flex;align-items:center;gap:6px">12<svg style="width:14px;height:14px"><use href="#i-lock"/></svg></span></div>
-        <div class="row" style="left:52px;top:40px;width:296px;height:46px"><svg><use href="#i-pattern"/></svg>Audio mode<span class="v">Follow talker</span></div>
-        <div class="row focus" style="left:40px;top:92px;width:320px;height:52px"><svg><use href="#i-nr"/></svg>Noise reduction<span class="v">Medium</span></div>
-        <div class="row" style="left:52px;top:150px;width:296px;height:46px"><svg><use href="#i-spk"/></svg>Volume<span class="v">60%</span></div>
-        <div class="row far" style="left:90px;top:196px;width:220px;height:34px"><svg><use href="#i-mic"/></svg>Mic height<span class="v">Medium</span></div>
+      <div class="list" style="top:34px;height:206px">
+        <div class="row far" style="left:90px;top:0px;width:220px;height:32px"><svg><use href="#i-folder"/></svg>Files<span class="v" style="display:flex;align-items:center;gap:6px">12<svg style="width:14px;height:14px"><use href="#i-lock"/></svg></span></div>
+        <div class="row" style="left:52px;top:36px;width:296px;height:44px"><svg><use href="#i-pattern"/></svg>Audio mode<span class="v">Follow talker</span></div>
+        <div class="row focus" style="left:40px;top:84px;width:320px;height:52px"><svg><use href="#i-nr"/></svg>Noise reduction<span class="v">Medium</span></div>
+        <div class="row" style="left:52px;top:140px;width:296px;height:44px"><svg><use href="#i-spk"/></svg>Volume<span class="v">60%</span></div>
+        <div class="row far" style="left:90px;top:188px;width:220px;height:32px"><svg><use href="#i-mic"/></svg>Mic height<span class="v">Medium</span></div>
       </div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
@@ -610,22 +657,22 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Audio mode</div>
-      <div class="c t-title" style="top:204px">Focused</div>
-      <div class="c t-small dim" style="top:229px">Drag the shape to aim it</div>
+      <div class="c t-title" style="top:192px">Focused</div>
+      <div class="c t-small dim" style="top:217px">Drag the shape to aim it</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
       <svg class="layer">
-        <circle cx="200" cy="148" r="50" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
-        <circle cx="200" cy="148" r="25" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
-        <path data-polar="200 148 50 0.5 300" fill="rgba(63,214,177,.16)" stroke="var(--d-live)" stroke-width="2.5"/>
-        <line data-ray="200 148 50 300" stroke="var(--d-text2)" stroke-width="1.5" stroke-dasharray="3 4"/>
-        <circle cx="200" cy="148" r="4" fill="var(--d-text)"/>
-        <circle data-on-ring="200 148 50 300" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/>
-        <g data-btn="89.15 84"><path data-polar="89.15 84 14 1 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
-        <g data-btn="72 148"><path data-polar="72 148 12 0.5 -50" fill="none" stroke="var(--d-text3)" stroke-width="1.6" stroke-dasharray="2 2.5"/><path data-polar="72 148 13 0.5 40" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
-        <g data-btn="89.15 212" data-on="1"><path data-polar="89.15 212 15 0.5 0" fill="none" stroke="var(--d-live)" stroke-width="2.2"/></g>
-        <g data-btn="310.85 84"><path data-polar="310.85 84 15 0.366 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
-        <g data-btn="328 148"><path data-polar="328 148 14 0 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
-        <g data-btn="310.85 212"><path data-polar="310.85 212 12 0.5 -45" fill="none" stroke="var(--d-text2)" stroke-width="2"/><path data-polar="310.85 212 12 0.5 45" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <circle cx="200" cy="134" r="50" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
+        <circle cx="200" cy="134" r="25" fill="none" stroke="var(--d-line)" stroke-width="1.5"/>
+        <path data-polar="200 134 50 0.5 300" fill="rgba(63,214,177,.16)" stroke="var(--d-live)" stroke-width="2.5"/>
+        <line data-ray="200 134 50 300" stroke="var(--d-text2)" stroke-width="1.5" stroke-dasharray="3 4"/>
+        <circle cx="200" cy="134" r="4" fill="var(--d-text)"/>
+        <circle data-on-ring="200 134 50 300" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/>
+        <g data-btn="85.68 68"><path data-polar="85.68 68 14 1 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="68 134"><path data-polar="68 134 12 0.5 -50" fill="none" stroke="var(--d-text3)" stroke-width="1.6" stroke-dasharray="2 2.5"/><path data-polar="68 134 13 0.5 40" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="85.68 200" data-on="1"><path data-polar="85.68 200 15 0.5 0" fill="none" stroke="var(--d-live)" stroke-width="2.2"/></g>
+        <g data-btn="314.32 68"><path data-polar="314.32 68 15 0.366 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="332 134"><path data-polar="332 134 14 0 0" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
+        <g data-btn="314.32 200"><path data-polar="314.32 200 12 0.5 -45" fill="none" stroke="var(--d-text2)" stroke-width="2"/><path data-polar="314.32 200 12 0.5 45" fill="none" stroke="var(--d-text2)" stroke-width="2"/></g>
       </svg>
     </div></div></div>
     <figcaption><h3>Audio mode <span class="id">screens/audio_mode.rs</span></h3>
@@ -640,14 +687,14 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Noise reduction</div>
-      <div style="left:94px;top:138px;width:44px;height:28px;border-radius:10px;background:var(--d-live)"></div>
-      <div style="left:150px;top:118px;width:44px;height:48px;border-radius:10px;background:var(--d-live)"></div>
-      <div style="left:206px;top:98px;width:44px;height:68px;border-radius:10px;background:var(--d-live)"></div>
-      <div style="left:262px;top:78px;width:44px;height:88px;border-radius:10px;background:var(--d-surface);box-shadow:inset 0 0 0 2px var(--d-line)"></div>
-      <div class="c t-micro faint" style="top:172px;display:flex;justify-content:center">
+      <div style="left:94px;top:136px;width:44px;height:28px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:150px;top:116px;width:44px;height:48px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:206px;top:96px;width:44px;height:68px;border-radius:10px;background:var(--d-live)"></div>
+      <div style="left:262px;top:76px;width:44px;height:88px;border-radius:10px;background:var(--d-surface);box-shadow:inset 0 0 0 2px var(--d-line)"></div>
+      <div class="c t-micro faint" style="top:170px;display:flex;justify-content:center">
         <span style="width:56px">Off</span><span style="width:56px">Low</span><span style="width:56px;color:var(--d-live)">Medium</span><span style="width:56px">High</span></div>
-      <div class="c t-title" style="top:194px">Medium</div>
-      <div class="c t-small dim" style="top:219px">Removes most background noise</div>
+      <div class="c t-title" style="top:192px">Medium</div>
+      <div class="c t-small dim" style="top:217px">Removes most background noise</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Noise reduction <span class="id">screens/noise_reduction.rs</span></h3>
@@ -658,15 +705,15 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="volume">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><path data-arc="200 146 92 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 146 92 -135 27" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
-        <circle data-on-ring="200 146 92 27" r="11" fill="var(--d-text)"/></svg>
+      <svg class="layer"><path data-arc="200 132 88 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 132 88 -135 27" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 132 88 27" r="11" fill="var(--d-text)"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:33</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div class="c t-small dim" style="top:92px">Speaker</div>
-      <div class="c t-big num" style="top:108px">60<span class="pct">%</span></div>
-      <div style="left:180px;top:172px;width:40px;height:40px;border-radius:50%;background:var(--d-surface);display:grid;place-items:center"><svg style="width:20px;height:20px"><use href="#i-spk"/></svg></div>
-      <div class="side l" style="top:120px;width:52px;height:52px;left:34px;font:500 28px/1 var(--f-num)">&minus;</div>
-      <div class="side r" style="top:120px;width:52px;height:52px;left:314px;font:500 28px/1 var(--f-num)">+</div>
+      <div class="c t-small dim" style="top:80px">Speaker</div>
+      <div class="c t-big num" style="top:96px">60<span class="pct">%</span></div>
+      <div style="left:180px;top:164px;width:40px;height:40px;border-radius:50%;background:var(--d-surface);display:grid;place-items:center"><svg style="width:20px;height:20px"><use href="#i-spk"/></svg></div>
+      <div class="side l" style="top:106px;width:52px;height:52px;left:30px;font:500 28px/1 var(--f-num)">&minus;</div>
+      <div class="side r" style="top:106px;width:52px;height:52px;left:318px;font:500 28px/1 var(--f-num)">+</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Volume <span class="id">screens/volume.rs</span></h3>
@@ -679,9 +726,9 @@ body.only .device{zoom:1}
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:34</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Mic height</div>
       <div class="hopt" style="left:116px;top:70px;width:168px;height:44px">High</div>
-      <div class="hopt on" style="left:116px;top:122px;width:168px;height:44px">Medium<svg class="ck"><use href="#i-ok"/></svg></div>
-      <div class="hopt" style="left:116px;top:174px;width:168px;height:44px">Low</div>
-      <div class="c t-small dim" style="top:228px">Raise it when laptops block the table</div>
+      <div class="hopt on" style="left:116px;top:120px;width:168px;height:44px">Medium<svg class="ck"><use href="#i-ok"/></svg></div>
+      <div class="hopt" style="left:116px;top:170px;width:168px;height:44px">Low</div>
+      <div class="c t-small dim" style="top:222px">Raise it when laptops block the table</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Mic height <span class="new">new</span> <span class="id">screens/mic_height.rs</span></h3>
@@ -701,10 +748,10 @@ body.only .device{zoom:1}
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:20</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
       <div class="title">Files</div>
       <div class="c t-micro faint" style="top:62px">3.2 GB free</div>
-      <div class="list" style="top:78px;height:170px">
-        <div class="file" style="top:2px"><svg class="warn"><use href="#i-alert"/></svg><div class="txt"><b>Today, 14:02</b><span>42 min, upload failed</span></div><svg class="chev"><use href="#i-right"/></svg></div>
-        <div class="file" style="top:60px"><svg class="dim"><use href="#i-clock"/></svg><div class="txt"><b>Today, 10:30</b><span>18 min, waiting for Wi-Fi</span></div><svg class="chev"><use href="#i-right"/></svg></div>
-        <div class="file" style="top:118px"><svg class="live"><use href="#i-check"/></svg><div class="txt"><b>Yesterday, 16:45</b><span>1 h 05 min, sent</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+      <div class="list" style="top:80px;height:142px">
+        <div class="file" style="left:52px;width:296px;top:2px"><svg class="warn"><use href="#i-alert"/></svg><div class="txt"><b>Today, 14:02</b><span>42 min, upload failed</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+        <div class="file" style="left:52px;width:296px;top:60px"><svg class="dim"><use href="#i-clock"/></svg><div class="txt"><b>Today, 10:30</b><span>18 min, waiting for Wi-Fi</span></div><svg class="chev"><use href="#i-right"/></svg></div>
+        <div class="file" style="left:52px;width:296px;top:118px"><svg class="live"><use href="#i-check"/></svg><div class="txt"><b>Yesterday, 16:45</b><span>1 h 05 min, sent</span></div><svg class="chev"><use href="#i-right"/></svg></div>
       </div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
@@ -717,20 +764,20 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="file-detail">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="140" r="66" fill="none" stroke="var(--d-line)" stroke-width="4"/>
-        <path data-arc="200 140 66 0 126" stroke="var(--d-live)" stroke-width="4" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 140 77 53 56" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
-        <path data-arc="200 140 77 199 202" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
-        <circle data-on-ring="200 140 66 126" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/></svg>
+      <svg class="layer"><circle cx="200" cy="140" r="60" fill="none" stroke="var(--d-line)" stroke-width="4"/>
+        <path data-arc="200 140 60 0 126" stroke="var(--d-live)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 140 70 53 56" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
+        <path data-arc="200 140 70 199 202" stroke="var(--d-text2)" stroke-width="6" fill="none"/>
+        <circle data-on-ring="200 140 60 126" r="8" fill="var(--d-text)" stroke="var(--d-bg)" stroke-width="3"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:21</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
       <div class="title">Today, 14:02</div>
       <div style="left:178px;top:102px;width:44px;height:44px"><svg style="width:44px;height:44px"><use href="#i-pause"/></svg></div>
-      <div class="c t-small num dim" style="top:154px">14:52 / 42:17</div>
-      <div class="c t-small warn" style="top:216px">Upload failed: server didn't answer</div>
-      <div class="side l" style="top:110px"><svg style="color:var(--d-rec)"><use href="#i-trash"/></svg></div>
-      <div class="side-lbl l" style="top:176px">Delete</div>
-      <div class="side r" style="top:110px"><svg style="color:var(--d-live)"><use href="#i-refresh"/></svg></div>
-      <div class="side-lbl r" style="top:176px">Send again</div>
+      <div class="c t-small num dim" style="top:152px">14:52 / 42:17</div>
+      <div class="c t-small warn" style="top:218px">Upload failed: server didn't answer</div>
+      <div class="side l" style="top:104px"><svg style="color:var(--d-rec)"><use href="#i-trash"/></svg></div>
+      <div class="side-lbl l" style="top:168px">Delete</div>
+      <div class="side r" style="top:104px"><svg style="color:var(--d-live)"><use href="#i-refresh"/></svg></div>
+      <div class="side-lbl r" style="top:168px">Send again</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Recording detail <span class="new">new</span> <span class="id">screens/file_detail.rs</span></h3>
@@ -748,16 +795,16 @@ body.only .device{zoom:1}
   <figure class="screen" id="wifi">
     <div class="device"><div class="glass"><div class="fb">
       <svg class="layer">
-        <path data-arc="200 132 48 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 132 35 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 132 22 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 132 9 -42 42" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
+        <path data-arc="200 126 48 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 126 35 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 126 22 -42 42" stroke="var(--d-live)" stroke-width="5" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 126 9 -42 42" stroke="var(--d-line)" stroke-width="5" fill="none" stroke-linecap="round"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:34</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Wi-Fi</div>
-      <div class="c t-title" style="top:140px">Office-5G</div>
-      <div class="c t-small live" style="top:164px">Connected, signal good</div>
-      <div class="c t-small dim num" style="top:182px">192.168.1.42</div>
-      <div class="btn" style="left:120px;top:204px;width:160px;height:40px">Change network</div>
+      <div class="c t-title" style="top:134px">Office-5G</div>
+      <div class="c t-small live" style="top:158px">Connected, signal good</div>
+      <div class="c t-small faint num" style="top:174px">192.168.1.42</div>
+      <div class="btn" style="left:120px;top:192px;width:160px">Change network</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Wi-Fi <span class="id">screens/wifi_provisioning.rs</span></h3>
@@ -770,14 +817,14 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><span class="num">14:35</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Set up Wi-Fi</div>
-      <div class="qr" style="left:66px;top:72px;width:124px;height:124px"><svg data-qr style="position:absolute;left:8px;top:8px;width:108px;height:108px"></svg></div>
-      <div class="steps" style="left:204px;top:76px;width:136px">
+      <div class="qr" style="left:68px;top:68px;width:120px;height:120px"><svg data-qr style="position:absolute;left:8px;top:8px;width:104px;height:104px"></svg></div>
+      <div class="steps" style="left:202px;top:72px;width:140px">
         <div><b>1</b>Scan with your phone</div>
         <div><b>2</b>Pick your network on the page that opens</div>
         <div><b>3</b>Wave restarts and connects</div>
       </div>
-      <div class="c t-small dim" style="top:206px">No camera? Join <span style="color:var(--d-text)">Wave-7F2A</span></div>
-      <div class="c t-small dim" style="top:224px">password <span class="num" style="color:var(--d-text)">k3x9p2vw</span>, then open 10.42.0.1</div>
+      <div class="c t-small dim" style="top:198px">No camera? Join <span style="color:var(--d-text)">Wave-7F2A</span></div>
+      <div class="c t-small dim" style="top:216px">password <span class="num" style="color:var(--d-text)">k3x9p2vw</span>, then open 10.42.0.1</div>
       <div class="back">Cancel</div>
     </div></div></div>
     <figcaption><h3>Wi-Fi setup <span class="id">screens/wifi_provisioning.rs</span></h3>
@@ -790,9 +837,9 @@ body.only .device{zoom:1}
       <div class="crown"><svg><use href="#i-usb"/></svg><svg class="live"><use href="#i-bt"/></svg><span class="num">14:36</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Bluetooth</div>
       <div class="c t-micro faint" style="top:62px">Shows up as Wave Boardroom</div>
-      <div class="dev" style="left:60px;top:80px;width:280px;height:48px"><svg><use href="#i-handset"/></svg>iPhone<span class="v live">Connected</span></div>
-      <div class="dev" style="left:60px;top:134px;width:280px;height:48px"><svg><use href="#i-laptop"/></svg>MacBook Pro<span class="v faint">Paired</span></div>
-      <div class="btn" style="left:108px;top:196px;width:184px;height:44px"><svg><use href="#i-bt"/></svg>Pair a device</div>
+      <div class="dev" style="left:60px;top:82px;width:280px;height:48px"><svg><use href="#i-handset"/></svg>iPhone<span class="v live">Connected</span></div>
+      <div class="dev" style="left:60px;top:136px;width:280px;height:48px"><svg><use href="#i-laptop"/></svg>MacBook Pro<span class="v faint">Paired</span></div>
+      <div class="btn" style="left:108px;top:192px;width:184px"><svg><use href="#i-bt"/></svg>Pair a device</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Bluetooth <span class="new">new</span> <span class="id">screens/bluetooth.rs</span></h3>
@@ -805,15 +852,15 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:22</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
       <div class="title">Uploads</div>
-      <div class="c t-body" style="top:66px">notes.example.com</div>
-      <div class="vrow" style="left:76px;top:88px;width:248px;height:40px"><span class="lbl">After a recording</span><span class="v">Ask me</span><svg><use href="#i-right"/></svg></div>
-      <div style="left:80px;top:130px;width:240px;display:flex;justify-content:space-between;text-align:center">
+      <div class="c t-body dim" style="top:62px">notes.example.com</div>
+      <div class="c t-small faint" style="top:80px">Last sent 12 min ago</div>
+      <div class="vrow" style="left:76px;top:100px;width:248px;height:40px"><span class="lbl">After a recording</span><span class="v">Ask me</span><svg><use href="#i-right"/></svg></div>
+      <div style="left:80px;top:144px;width:240px;display:flex;justify-content:space-between;text-align:center">
         <div style="width:76px"><div class="num" style="font-size:26px;line-height:30px">38</div><div class="t-micro dim">sent</div></div>
         <div style="width:76px"><div class="num" style="font-size:26px;line-height:30px">1</div><div class="t-micro dim">waiting</div></div>
         <div style="width:76px"><div class="num warn" style="font-size:26px;line-height:30px">1</div><div class="t-micro warn">failed</div></div>
       </div>
-      <div class="c t-small dim" style="top:181px">Last sent 12 min ago</div>
-      <div class="btn" style="left:120px;top:202px;width:160px;height:40px"><svg><use href="#i-refresh"/></svg>Retry 1 failed</div>
+      <div class="btn" style="left:120px;top:192px;width:160px"><svg><use href="#i-refresh"/></svg>Retry 1 failed</div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Uploads <span class="id">screens/webhook.rs</span></h3>
@@ -826,9 +873,9 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">15:22</span><span class="bat"><svg><use href="#i-bat"/></svg>79%</span></div>
       <div class="title">After a recording</div>
-      <div class="opt" style="left:52px;top:70px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Send automatically</b><span>As soon as Wi-Fi allows</span></span></div>
-      <div class="opt on" style="left:52px;top:128px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Ask me each time</b><span>Choose Send, Keep or Delete</span></span></div>
-      <div class="opt" style="left:52px;top:186px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Keep on Wave</b><span>Nothing leaves the device</span></span></div>
+      <div class="opt" style="left:52px;top:68px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Send automatically</b><span>As soon as Wi-Fi allows</span></span></div>
+      <div class="opt on" style="left:52px;top:124px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Ask me each time</b><span>Choose Send, Keep or Delete</span></span></div>
+      <div class="opt" style="left:52px;top:180px;width:296px;height:52px"><span class="radio"></span><span class="txt"><b>Keep on Wave</b><span>Nothing leaves the device</span></span></div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>After a recording <span class="new">new</span> <span class="id">screens/upload_mode.rs</span></h3>
@@ -839,15 +886,17 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="call">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="124" r="80" fill="none" stroke="var(--d-live)" stroke-width="3"/>
-        <circle cx="200" cy="124" r="94" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".35"/>
-        <circle cx="200" cy="124" r="108" fill="none" stroke="var(--d-live)" stroke-width="1.5" opacity=".15"/></svg>
+      <svg class="layer"><circle cx="200" cy="118" r="76" fill="none" stroke="var(--d-live)" stroke-width="3"/>
+        <circle cx="200" cy="118" r="82" fill="none" stroke="var(--d-live)" stroke-width="2" opacity=".3"/>
+        <circle cx="200" cy="118" r="88" fill="none" stroke="var(--d-live)" stroke-width="1.5" opacity=".12"/></svg>
       <div class="crown"><svg class="live"><use href="#i-bt"/></svg><span class="num">14:36</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="c t-small live" style="top:86px">Incoming call</div>
-      <div class="c num" style="top:110px;font-size:18px;line-height:22px">+32 470 12 34 56</div>
-      <div class="c t-small dim" style="top:138px">via iPhone</div>
-      <div class="btn a fill-rec"><svg><use href="#i-hang"/></svg>Decline</div>
-      <div class="btn b fill-live"><svg><use href="#i-phone"/></svg>Answer</div>
+      <div class="c num" style="top:108px;font-size:18px;line-height:22px">+32 470 12 34 56</div>
+      <div class="c t-small dim" style="top:134px">via iPhone</div>
+      <div class="rb pl"><svg class="rec-c"><use href="#i-hang"/></svg></div>
+      <div class="rl pl rec-c">Decline</div>
+      <div class="rb pr"><svg class="live-c"><use href="#i-phone"/></svg></div>
+      <div class="rl pr live-c">Answer</div>
     </div></div></div>
     <figcaption><h3>Incoming call <span class="new">new</span> <span class="id">screens/call.rs</span></h3>
       <p>For Bluetooth calls. The rings ripple outward until someone answers or declines. Only the number is shown: no phone-book sync, by design.</p>
@@ -863,15 +912,15 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="system">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><path data-arc="200 152 180 62 118" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 152 180 98 116" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
+      <svg class="layer"><path data-arc="200 106 188 62 122" stroke="var(--d-line)" stroke-width="4" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 106 188 100 118" stroke="var(--d-text2)" stroke-width="4" fill="none" stroke-linecap="round"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div class="list" style="top:34px;height:218px">
-        <div class="row far" style="left:90px;top:0;width:220px;height:34px"><svg><use href="#i-clock"/></svg>Pre-recording<span class="v">On</span></div>
-        <div class="row" style="left:52px;top:40px;width:296px;height:46px"><svg><use href="#i-info"/></svg>About<span class="v">waved 0.9.3</span></div>
-        <div class="row focus" style="left:40px;top:92px;width:320px;height:52px"><svg><use href="#i-refresh"/></svg>Firmware update<span class="v">Up to date</span></div>
-        <div class="row" style="left:52px;top:150px;width:296px;height:46px"><svg><use href="#i-trash"/></svg>Factory reset</div>
-        <div class="row far danger" style="left:90px;top:196px;width:220px;height:34px"><svg><use href="#i-power"/></svg>Power off</div>
+      <div class="list" style="top:34px;height:206px">
+        <div class="row far" style="left:90px;top:0px;width:220px;height:32px"><svg><use href="#i-clock"/></svg>Pre-recording<span class="v">On</span></div>
+        <div class="row" style="left:52px;top:36px;width:296px;height:44px"><svg><use href="#i-info"/></svg>About<span class="v">waved 0.9.3</span></div>
+        <div class="row focus" style="left:40px;top:84px;width:320px;height:52px"><svg><use href="#i-refresh"/></svg>Firmware update<span class="v">Up to date</span></div>
+        <div class="row" style="left:52px;top:140px;width:296px;height:44px"><svg><use href="#i-trash"/></svg>Factory reset</div>
+        <div class="row far danger" style="left:90px;top:188px;width:220px;height:32px"><svg><use href="#i-power"/></svg>Power off</div>
       </div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
@@ -884,16 +933,16 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="display">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><path data-arc="200 146 72 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
-        <path data-arc="200 146 72 -135 54" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
-        <circle data-on-ring="200 146 72 54" r="11" fill="var(--d-text)"/></svg>
+      <svg class="layer"><path data-arc="200 140 68 -135 135" stroke="var(--d-line)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <path data-arc="200 140 68 -135 54" stroke="var(--d-live)" stroke-width="8" fill="none" stroke-linecap="round"/>
+        <circle data-on-ring="200 140 68 54" r="11" fill="var(--d-text)"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:38</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Display</div>
-      <div class="ico" style="left:190px;top:100px"><svg><use href="#i-sun"/></svg></div>
-      <div class="c t-big num" style="top:120px">70<span class="pct">%</span></div>
-      <div class="side l" style="top:120px;width:52px;height:52px;left:34px;font:500 28px/1 var(--f-num)">&minus;</div>
-      <div class="side r" style="top:120px;width:52px;height:52px;left:314px;font:500 28px/1 var(--f-num)">+</div>
-      <div class="vrow" style="left:90px;top:207px;width:220px;height:38px"><span class="lbl">Dim after</span><span class="v">2 min</span><svg><use href="#i-right"/></svg></div>
+      <div class="ico" style="left:190px;top:96px"><svg><use href="#i-sun"/></svg></div>
+      <div class="c t-big num" style="top:114px">70<span class="pct">%</span></div>
+      <div class="side l" style="top:114px;width:52px;height:52px;left:30px;font:500 28px/1 var(--f-num)">&minus;</div>
+      <div class="side r" style="top:114px;width:52px;height:52px;left:318px;font:500 28px/1 var(--f-num)">+</div>
+      <div class="vrow" style="left:90px;top:198px;width:220px;height:38px"><span class="lbl">Dim after</span><span class="v">2 min</span><svg><use href="#i-right"/></svg></div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Display <span class="new">new</span> <span class="id">screens/display.rs</span></h3>
@@ -905,10 +954,10 @@ body.only .device{zoom:1}
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
       <div class="title">Date and time</div>
-      <div class="c t-big num" style="top:64px">14:37</div>
-      <div class="c t-body dim" style="top:118px">Saturday 4 October</div>
-      <div class="vrow" style="left:60px;top:146px;width:280px;height:44px"><span class="lbl">Time zone</span><span class="v">Brussels</span><svg><use href="#i-right"/></svg></div>
-      <div class="vrow" style="left:60px;top:196px;width:280px;height:44px"><span class="lbl">24-hour clock</span><span class="switch"></span></div>
+      <div class="c t-big num" style="top:62px">14:37</div>
+      <div class="c t-body dim" style="top:114px">Saturday 4 October</div>
+      <div class="vrow" style="left:60px;top:140px;width:280px;height:44px"><span class="lbl">Time zone</span><span class="v">Brussels</span><svg><use href="#i-right"/></svg></div>
+      <div class="vrow" style="left:60px;top:190px;width:280px;height:44px"><span class="lbl">24-hour clock</span><span class="switch"></span></div>
       <div class="back"><svg><use href="#i-left"/></svg>Back</div>
     </div></div></div>
     <figcaption><h3>Date and time <span class="new">new</span> <span class="id">screens/datetime.rs</span></h3>
@@ -919,11 +968,11 @@ body.only .device{zoom:1}
   <figure class="screen" id="confirm">
     <div class="device"><div class="glass"><div class="fb">
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:37</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div style="left:172px;top:58px;width:56px;height:56px;border-radius:50%;background:rgba(255,75,62,.14);display:grid;place-items:center;color:var(--d-rec)"><svg style="width:28px;height:28px"><use href="#i-power"/></svg></div>
-      <div class="c t-dial" style="top:128px">Power off?</div>
-      <div class="c t-small dim" style="top:166px;left:70px;width:260px">A recording in progress is saved first. Turn Wave on again with the power button.</div>
-      <div class="btn a">Cancel</div>
-      <div class="btn b fill-rec">Power off</div>
+      <div style="left:172px;top:40px;width:56px;height:56px;border-radius:50%;background:rgba(255,75,62,.14);display:grid;place-items:center;color:var(--d-rec)"><svg style="width:28px;height:28px"><use href="#i-power"/></svg></div>
+      <div class="c t-dial" style="top:104px">Power off?</div>
+      <div class="c t-small dim" style="top:142px;left:65px;width:270px">A recording in progress is saved first. Turn Wave on again with the power button.</div>
+      <div class="bp pa">Cancel</div>
+      <div class="bp pb rec-c"><svg><use href="#i-power"/></svg>Power off</div>
     </div></div></div>
     <figcaption><h3>Confirmation <span class="new">new</span> <span class="id">screens/dialog.rs</span></h3>
       <p>One component for Power off, Factory reset, Delete recording and Stop USB storage. The button repeats the action's name, and the message afterwards uses it too ("Powering off").</p>
@@ -933,13 +982,13 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="pin">
     <div class="device"><div class="glass"><div class="fb">
-      <div class="c t-title" style="top:22px">Enter PIN</div>
-      <div class="c" style="top:56px;display:flex;justify-content:center;gap:12px">
+      <div class="c t-title" style="top:6px">Enter PIN</div>
+      <div class="c" style="top:36px;display:flex;justify-content:center;gap:12px">
         <span class="dot" style="width:12px;height:12px;background:var(--d-text)"></span><span class="dot" style="width:12px;height:12px;background:var(--d-text)"></span><span class="dot" style="width:12px;height:12px;background:transparent;box-shadow:inset 0 0 0 2px var(--d-text3)"></span><span class="dot" style="width:12px;height:12px;background:transparent;box-shadow:inset 0 0 0 2px var(--d-text3)"></span></div>
-      <div class="key" style="left:96px;top:80px">1</div><div class="key" style="left:168px;top:80px">2</div><div class="key" style="left:240px;top:80px">3</div>
-      <div class="key" style="left:96px;top:134px">4</div><div class="key" style="left:168px;top:134px">5</div><div class="key" style="left:240px;top:134px">6</div>
-      <div class="key" style="left:96px;top:188px">7</div><div class="key" style="left:168px;top:188px">8</div><div class="key" style="left:240px;top:188px">9</div>
-      <div class="key alt" style="left:96px;top:242px">Cancel</div><div class="key" style="left:168px;top:242px">0</div><div class="key alt" style="left:240px;top:242px"><svg style="width:22px;height:22px"><use href="#i-backspace"/></svg></div>
+      <div class="key" style="left:96px;top:56px">1</div><div class="key" style="left:168px;top:56px">2</div><div class="key" style="left:240px;top:56px">3</div>
+      <div class="key" style="left:96px;top:110px">4</div><div class="key" style="left:168px;top:110px">5</div><div class="key" style="left:240px;top:110px">6</div>
+      <div class="key" style="left:96px;top:164px">7</div><div class="key" style="left:168px;top:164px">8</div><div class="key" style="left:240px;top:164px">9</div>
+      <div class="key alt" style="left:96px;top:218px">Cancel</div><div class="key" style="left:168px;top:218px">0</div><div class="key alt" style="left:240px;top:218px"><svg style="width:22px;height:22px"><use href="#i-backspace"/></svg></div>
     </div></div></div>
     <figcaption><h3>PIN <span class="new">new</span> <span class="id">screens/pin.rs</span></h3>
       <p>Opens when someone taps a locked row. Files, Wi-Fi, Bluetooth, Uploads and System are locked, so a guest can't play back earlier meetings or change where recordings go. Mute, volume, Record, audio mode and noise reduction never ask.</p>
@@ -950,12 +999,12 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="usb">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="112" r="56" fill="none" stroke="var(--d-live)" stroke-width="3"/></svg>
+      <svg class="layer"><circle cx="200" cy="86" r="42" fill="none" stroke="var(--d-live)" stroke-width="3"/></svg>
       <div class="crown"><svg class="live"><use href="#i-usb"/></svg><span class="num">14:38</span><span class="bat"><svg><use href="#i-bat"/></svg>82%</span></div>
-      <div style="left:180px;top:92px;width:40px;height:40px;color:var(--d-live)"><svg style="width:40px;height:40px"><use href="#i-usb"/></svg></div>
-      <div class="c t-title" style="top:180px">USB storage is on</div>
-      <div class="c t-small dim" style="top:206px;left:80px;width:240px">Your computer can open the recordings. Audio is off until you stop.</div>
-      <div class="back" style="left:130px;width:140px">Stop USB storage</div>
+      <div style="left:182px;top:68px;width:36px;height:36px;color:var(--d-live)"><svg style="width:36px;height:36px"><use href="#i-usb"/></svg></div>
+      <div class="c t-title" style="top:138px">USB storage is on</div>
+      <div class="c t-small dim" style="top:164px;left:70px;width:260px">Your computer can open the recordings. Audio is off until you stop.</div>
+      <div class="bp wide">Stop USB storage</div>
     </div></div></div>
     <figcaption><h3>USB storage <span class="new">new</span> <span class="id">screens/usb_mode.rs</span></h3>
       <p>Takes over the screen while the mass-storage gadget is active, because the microphones and speaker are unavailable then. The way out is the only action.</p>
@@ -964,14 +1013,14 @@ body.only .device{zoom:1}
 
   <figure class="screen" id="ota">
     <div class="device"><div class="glass"><div class="fb">
-      <svg class="layer"><circle cx="200" cy="132" r="78" fill="none" stroke="var(--d-line)" stroke-width="6"/>
-        <path data-arc="200 132 78 0 230" stroke="var(--d-live)" stroke-width="6" fill="none" stroke-linecap="round"/></svg>
+      <svg class="layer"><circle cx="200" cy="121" r="70" fill="none" stroke="var(--d-line)" stroke-width="6"/>
+        <path data-arc="200 121 70 0 230" stroke="var(--d-live)" stroke-width="6" fill="none" stroke-linecap="round"/></svg>
       <div class="crown"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">02:14</span><span class="bat"><svg><use href="#i-bat-charge"/></svg>100%</span></div>
-      <div class="c t-small dim" style="top:92px">Installing update</div>
-      <div class="c t-big num" style="top:108px">64<span class="pct">%</span></div>
-      <div class="c t-small dim num" style="top:164px">waved 0.10.0</div>
-      <div class="c t-body" style="top:228px">Keep Wave plugged in</div>
-      <div class="c t-small dim" style="top:250px">It restarts by itself when done</div>
+      <div class="c t-small dim" style="top:77px">Installing update</div>
+      <div class="c t-big num" style="top:93px">64<span class="pct">%</span></div>
+      <div class="c t-small dim num" style="top:145px">waved 0.10.0</div>
+      <div class="c t-body" style="top:216px">Keep Wave plugged in</div>
+      <div class="c t-small dim" style="top:238px">It restarts by itself when done</div>
     </div></div></div>
     <figcaption><h3>Firmware update <span class="new">new</span> <span class="id">screens/ota.rs</span></h3>
       <p>The dial again, as a progress ring. No buttons, because interrupting would leave Wave unusable. If the update fails: "Update failed. Wave is still on 0.9.3." with Retry.</p>
@@ -981,7 +1030,7 @@ body.only .device{zoom:1}
 </div>
 
 <h2>Messages</h2>
-<p class="sub">Shown at 1:1 in the status position. One line, at most 230 px wide, with an icon for the severity. Success and info stay 2 s, warnings and errors 4 s. The last two show the status pill while charging and on low battery.</p>
+<p class="sub">Shown at 1:1 in the status position. One line, at most 240 px wide (the width of the status pill), with an icon for the severity. Success and info stay 2 s, warnings and errors 4 s. The last two show the status pill while charging and on low battery.</p>
 <div class="gallery" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:20px">
   <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="live"><use href="#i-check"/></svg>Recording sent</div></div></div>
   <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="dim"><use href="#i-info"/></svg>Marked at 42:17</div></div></div>
@@ -989,8 +1038,8 @@ body.only .device{zoom:1}
   <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="warn"><use href="#i-alert"/></svg>No Wi-Fi, upload waiting</div></div></div>
   <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="warn"><use href="#i-bat-low"/></svg>Battery 10%, plug in Wave</div></div></div>
   <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="toast"><svg class="rec"><use href="#i-alert"/></svg>Microphones not responding</div></div></div>
-  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:30px"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat live"><svg><use href="#i-bat-charge"/></svg>64%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
-  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:30px"><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat rec"><svg><use href="#i-bat-low"/></svg>8%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:10px"><svg><use href="#i-usb"/></svg><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat live"><svg><use href="#i-bat-charge"/></svg>64%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
+  <div style="background:var(--d-bg);border-radius:20px;height:56px;position:relative"><div class="fb" style="left:50%;top:6px;transform:translateX(-50%);width:260px;height:44px;clip-path:none"><div class="crown pill" style="left:10px"><svg><use href="#i-wifi"/></svg><span class="num">14:32</span><span class="bat rec"><svg><use href="#i-bat-low"/></svg>8%</span><svg class="chev"><use href="#i-chev-down"/></svg></div></div></div>
 </div>
 </section>
 
@@ -1054,15 +1103,17 @@ document.querySelectorAll('svg[data-qr]').forEach(svg => {
 });
 // Layout-zone overlay on every device framebuffer.
 const OVERLAY = `<svg class="overlay" viewBox="0 0 400 304">
-  <rect x="0" y="0" width="400" height="36" fill="rgba(80,160,255,.14)"/>
-  <rect x="0" y="250" width="400" height="54" fill="rgba(255,120,80,.12)"/>
-  <circle cx="200" cy="152" r="190" fill="none" stroke="#5af" stroke-width="1" stroke-dasharray="3 3"/>
-  <circle cx="200" cy="152" r="182" fill="none" stroke="#fa5" stroke-width="1" stroke-dasharray="2 4"/>
+  <rect x="0" y="0" width="400" height="34" fill="rgba(80,160,255,.14)"/>
+  <circle cx="200" cy="106" r="198" fill="none" stroke="#5af" stroke-width="1" stroke-dasharray="3 3"/>
+  <circle cx="200" cy="106" r="190" fill="none" stroke="#fa5" stroke-width="1" stroke-dasharray="2 4"/>
+  <circle cx="200" cy="106" r="135" fill="none" stroke="#fa5" stroke-width=".8" stroke-dasharray="1 3" opacity=".8"/>
+  <circle cx="200" cy="121" r="71" fill="none" stroke="#7bf" stroke-width=".8" stroke-dasharray="1 3"/>
   <line x1="200" y1="0" x2="200" y2="304" stroke="#5af" stroke-width=".6" opacity=".6"/>
-  <line x1="0" y1="152" x2="400" y2="152" stroke="#5af" stroke-width=".6" opacity=".6"/>
-  <text x="200" y="47" fill="#7bf" font-size="9" text-anchor="middle" font-family="monospace">status 0-36</text>
-  <text x="200" y="301" fill="#fa7" font-size="9" text-anchor="middle" font-family="monospace">base 250-304</text>
-  <text x="300" y="150" fill="#fa7" font-size="9" font-family="monospace">r182 tap limit</text></svg>`;
+  <line x1="0" y1="106" x2="400" y2="106" stroke="#5af" stroke-width=".6" opacity=".6"/>
+  <text x="200" y="45" fill="#7bf" font-size="9" text-anchor="middle" font-family="monospace">status 0-34</text>
+  <text x="300" y="104" fill="#7bf" font-size="9" font-family="monospace">widest row y 106</text>
+  <text x="292" y="64" fill="#fa7" font-size="9" font-family="monospace">r190 tap limit</text>
+  <text x="200" y="300" fill="#fa7" font-size="9" text-anchor="middle" font-family="monospace">bottom arc r135</text></svg>`;
 document.querySelectorAll('.device .fb').forEach(fb => fb.insertAdjacentHTML('beforeend', OVERLAY));
 const grid = document.getElementById('grid');
 grid.addEventListener('change', () => document.body.classList.toggle('show-grid', grid.checked));
