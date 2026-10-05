@@ -119,10 +119,10 @@ These five inputs aren't covered by the happy-path tests but are likely to hurt 
 2. **Stale snapshots fighting the user.** The services confirm a change one or more UI frames later (or, for `SetBeamAim`, not at all until C10 lands). A tap, a drag or an arc being held must not snap back to the old value. *(Task 4: `a_pending_aim_survives_a_stale_snapshot`; Task 5: `a_tap_shows_the_new_level_before_the_service_confirms`; Task 6: `the_arc_ignores_snapshots_while_pressed`)*
 3. **Long user strings.** A 32-character SSID, a 63-character setup passphrase, a long upload host or a long device name must end in "..." inside their boxes and never push other text off the panel. *(Task 13: `a_long_network_name_ends_in_dots`; Task 14: `long_setup_details_stay_on_their_lines`; Task 15: `a_long_host_stays_on_one_line`)*
 4. **Irreversible actions hit the right target.**
-   - Delete from "Send this recording?" must discard the pending recording (`DiscardRecording`); Delete from a file must use `DeleteRecording` and leave the deleted file's detail screen.
-   - Power off must only be sent after the confirmation.
+   - Delete from a file uses `DeleteRecording`; the confirmation does one back and the detail leaves itself (R6: the confirmation handles kept files only; After stop discards a pending recording in its own dialog, workstream A).
+   - Power off and Factory reset must only be sent after the confirmation.
 
-   *(Task 7: `deleting_the_pending_recording_discards_it`, `power_off_only_after_confirming`)*
+   *(Task 7: `deleting_a_kept_file_sends_delete_recording`, `power_off_only_after_confirming`, `factory_reset_only_after_confirming`)*
 5. **Wi-Fi setup lifecycle.**
    - Opening Wi-Fi setup starts provisioning once.
    - Rebuilding the screen while the access point is up must not restart it (waking from the resting screen rebuilds the screen).
@@ -224,8 +224,8 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
     | Menu | `menu::MenuScreen::default()` |
     | AudioMode | `audio_mode::AudioModeScreen::default()` |
     | NoiseReduction | `noise::NoiseScreen::default()` |
-    | Volume | `volume::LevelScreen::speaker()` |
-    | MicLevel | `volume::LevelScreen::mic()` |
+    | Volume | `volume::VolumeScreen::speaker()` |
+    | MicLevel | `volume::VolumeScreen::mic()` |
     | System | `system::SystemScreen::default()` |
     | Display | `display::DisplayScreen::default()` |
     | DimAfter | `display::DimAfterScreen::default()` |
@@ -238,8 +238,7 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
     | Uploads | `uploads::UploadsScreen::default()` |
     | UploadMode | `upload_mode::UploadModeScreen::default()` |
 
-    Two cross-workstream notes:
-    - **A and D:** Decision (A3) and File detail (D2) open `Route::Confirm(ConfirmKind::DeleteRecording(id))`. B's confirmation discards the pending recording or deletes a kept one, and pops the right number of screens (Task 7).
+    One cross-workstream note:
     - **A5:** First start's "Set up Wi-Fi" navigates to `Route::WifiSetup` without sending `OpenWifiProvisioning`, because the setup screen starts provisioning itself (Task 14).
 
 ---
@@ -252,7 +251,7 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
 | `crates/waved-ui/src/kit/components/mode_picker.rs` | `ModePicker`, pattern geometry, `aim_angle`, `blend565`, `dash_segments`, canvas painter | Fill stub |
 | `crates/waved-ui/src/screens_v2/audio_mode.rs` | `AudioModeScreen`, `ModeChoice` | Fill stub |
 | `crates/waved-ui/src/screens_v2/noise.rs` | `NoiseScreen` | Fill stub |
-| `crates/waved-ui/src/screens_v2/volume.rs` | `LevelScreen` (Volume, Mic level), `step_level`, `BigNumber` | Fill stub |
+| `crates/waved-ui/src/screens_v2/volume.rs` | `VolumeScreen` (Volume, Mic level), `step_level`, `BigNumber` | Fill stub |
 | `crates/waved-ui/src/screens_v2/confirm.rs` | `ConfirmScreen`, `spec`, `outcome` | Fill stub |
 | `crates/waved-ui/src/screens_v2/system.rs` | `SystemScreen` | Fill stub |
 | `crates/waved-ui/src/screens_v2/display.rs` | `DisplayScreen`, `DimAfterScreen`, `duration_label` | Fill stub |
@@ -6014,28 +6013,30 @@ Note every deviation in the PR description. Known ones are under "Open points".
      - Drag the handle with a finger: it follows smoothly. On release, `SetBeamAim` lands in `/tmp/audio_stats.json` once C10 is in.
      - A sideways drag never triggers Back.
      - Follow talker's preview turns toward a speaker walking around the table.
-  2. Volume: a swipe left opens Mic level and a swipe right returns. Dragging the arc changes the speaker live without jumping back.
+  2. Volume: a swipe left opens Mic level and a swipe right returns. Dragging the arc changes the speaker live without jumping back. Mic level reaches 0–200 % (100 % mid-arc); a host-set gain above 200 % still shows its real percentage.
   3. Display: dragging brightness changes the backlight live (E1). "Dim after 30 s" rests the screen after 30 s.
-  4. Date and time: switching zones updates the status clock within a minute (E3); the 12-hour format shows "pm" on its baseline.
+  4. Date and time: switching zones updates the status clock within a minute (E3); the 12-hour format shows "pm" on its baseline; before the clock is set the time reads "--:--".
   5. Wi-Fi:
      - "Change network" shows the warning first.
      - Continuing brings up the setup AP, and the QR joins it from an iPhone and an Android phone.
      - Cancel restores the station.
      - A wrong password shows "Couldn't connect: …" with Try again.
+     - Left open for 5 minutes, the setup network closes and the screen says "The setup network closed. Try again to reopen it." with Try again.
+     - Signal arcs: confirm with the user that lighting inside-out (P18) is what they want versus the mockup's outer-lit look.
   6. Confirmation:
      - Power off from System and from the power key (E2) powers down only after the action pill.
      - Factory reset runs only on a test unit (E6).
-     - Delete from File detail returns to Files.
+     - Delete from File detail: the confirmation does one back and the detail leaves itself, landing on Files; Cancel does one back to the detail.
   7. Uploads: Retry re-queues failed uploads (watch `waved.log`), and the count drops.
   8. Every settings screen: every target is reachable with a fingertip at the panel's bottom curve (Back, the Display "Dim after" row, the radio rows at y 180).
+  9. Status messages: "Powering off", "Resetting Wave", "Recording deleted", "Retrying n uploads" appear in the status area (UiSnapshot.message + StatusArea::update).
 
 ---
 
 ## Open points
 
-- **Wi-Fi signal arcs.** wifi.png ("signal good") greys the *innermost* r 9 arc and lights the outer three. This plan lights from the inside out (3 bars = r 9 / 22 / 35), the usual reading of "arcs grey out as the signal drops". Confirm with the user. Flipping it is one line in `SignalArcs::set_bars`.
-- **Mic level range.** The arc maps 0–100 to `mic_volume` 0–200 % (unity mid-arc), and the label shows the real percentage. Higher gains set by the host (up to 800) are kept and shown, but can't be reached on the device. C5 may prefer another mapping.
+- **Wi-Fi signal arcs.** wifi.png ("signal good") greys the *innermost* r 9 arc and lights the outer three. Implemented inside-out (controller ruling P18; 3 bars = r 9 / 22 / 35), the usual reading of "arcs grey out as the signal drops". Confirm with the user at the device pass. Flipping it is one line in `SignalArcs::set_bars`.
+- **Mic level range.** Decided (user decision 2026-10-05): 0–200 % on the device (unity mid-arc). The arc maps 0–100 to `mic_volume` 0–200 %, and the label shows the real percentage. Higher gains set by the host (up to 800) are kept and shown, but can't be reached on the device.
 - **"Sent" count.** It comes from `FilesState` (Uploaded recordings still on Wave). Retention prunes delivered files, so it is not a lifetime total. A lifetime count needs a `MeetingState` field from C, which this plan does not request.
 - **Time zones.** The device offers a curated list of 29 zones. E3 must resolve each of them, through the zoneinfo database or its own table.
 - **Mic level discoverability.** Only the swipe reaches it, as the mockup says. A second Menu row "Mic level" would be a spec change.
-- **Messages on settings screens.** `StatusArea::show` needs the runtime to route `UiEvent::Show` to the current screen's status area. The `Screen` trait has no hook for it yet; that is the integrator's runtime-switch design.
