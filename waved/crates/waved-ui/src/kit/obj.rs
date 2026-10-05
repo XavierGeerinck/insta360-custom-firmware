@@ -427,6 +427,14 @@ impl Obj {
         self
     }
 
+    /// This object handles its own drags (a slider knob, an aim handle, a
+    /// scrubber): a press that starts on it never becomes a screen swipe
+    /// (swipe right for Back, swipe down for Menu, or a screen's `on_swipe`).
+    /// Clears `LV_OBJ_FLAG_GESTURE_BUBBLE`, which the gesture checks read.
+    pub fn keep_gestures(self) -> Self {
+        self.flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE, false)
+    }
+
     pub fn set_state(self, state: u32, on: bool) {
         self.check_live();
         // SAFETY: live object.
@@ -589,6 +597,21 @@ mod tests {
             let label = Obj::label(parent, "Mic on", Font::Body, TEXT);
             parent.delete();
             label.set_text("Mic off");
+        });
+    }
+
+    #[test]
+    fn controls_can_keep_their_drags_from_screen_gestures() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let plain = Obj::plain(root);
+            assert!(
+                plain.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE),
+                "children pass gestures up to the screen by default"
+            );
+            let knob = Obj::plain(root).clickable(true).keep_gestures();
+            assert!(!knob.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE));
+            assert!(knob.is_clickable(), "keeping gestures leaves taps alone");
         });
     }
 

@@ -264,7 +264,8 @@ impl ValueArc {
         let arc = Obj::arc(parent)
             .pos(cx - size / 2, cy - size / 2)
             .size(size, size)
-            .clickable(true);
+            .clickable(true)
+            .keep_gestures();
         // SAFETY: live arc.
         unsafe {
             lv_arc_set_rotation(arc.raw(), 0);
@@ -414,6 +415,18 @@ mod tests {
                 a.x2 - a.x1 + 1 >= 100,
                 "value label is only {} px wide",
                 a.x2 - a.x1 + 1
+            );
+        });
+    }
+
+    #[test]
+    fn value_arc_keeps_its_drags() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let arc = ValueArc::new(root, 200, 132, 88, |_| {});
+            assert!(
+                !arc.obj().has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE),
+                "dragging the knob right must not read as swipe-right-for-Back"
             );
         });
     }

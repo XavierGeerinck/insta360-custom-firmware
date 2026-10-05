@@ -134,6 +134,15 @@ id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` f
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
 
+## Drags and the screen gestures
+
+The runtime turns a swipe right into Back (on sub-screens) and a swipe down from
+the top edge (y ≤ 34) into Menu (Home, Recording). A control that takes drags —
+the value arc, the audio-mode aim, the playback scrubber — calls
+`.keep_gestures()` on its tappable object, so a drag that starts on it is never
+read as a swipe. `ValueArc` already does. Screens never handle these two swipes
+themselves.
+
 ## Components
 
 | Component | Constructor | Used by |
