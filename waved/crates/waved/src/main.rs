@@ -350,7 +350,15 @@ async fn run_async(
             // batches while keeping the service alive for the rest of the
             // process lifetime.
             let playback = Arc::new(playback);
-            // H1–H3 (lane C) land here: H2
+            // Plays kept recordings from Files through the speaker path.
+            tokio::spawn(
+                waved_meeting::player::RecordingPlayer::new(
+                    PathBuf::from(RECORDINGS_DIR),
+                    Arc::clone(&playback) as Arc<dyn waved_meeting::player::SpeakerOutput>,
+                    Arc::clone(&bus.playback),
+                )
+                .run(bus.commands.subscribe(), bus.audio.subscribe(), bus.meeting.subscribe()),
+            );
             // Recording start and stop tones (E5) through the playback path.
             struct PlaybackTones(Arc<waved_audio::playback::PlaybackService>);
             impl waved_system::tones::ToneSink for PlaybackTones {
@@ -420,7 +428,13 @@ async fn run_async(
                     Arc::clone(&uac_stats),
                 );
                 std::mem::forget(upstream);
-                // H1–H3 (lane C) land here: H3
+                // "Computer is listening": the host is reading the UAC2 uplink.
+                let probe_stats = Arc::clone(&uac_stats);
+                audio_svc.set_host_listening_probe(move || {
+                    probe_stats
+                        .upstream_active
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                });
 
                 let control_cfg = waved_audio::uac::control::UacControlConfig {
                     mixer_card: uac_cfg.mixer_card.clone(),
@@ -673,7 +687,12 @@ async fn run_async(
         },
     ).await {
         Ok(meeting_svc) => {
-            // H1–H3 (lane C) land here: H1
+            let meeting_svc = meeting_svc
+                .with_live_inputs(waved_meeting::MeetingLiveInputs {
+                    settings: bus.settings.subscribe(),
+                    audio: bus.audio.subscribe(),
+                })
+                .with_files_publisher(Arc::clone(&bus.files));
             let meeting_cmd_rx = bus.commands.subscribe();
             let wifi_rx = bus.wifi.subscribe();
             tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await });
