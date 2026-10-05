@@ -755,27 +755,26 @@ impl MeetingService {
                                 }
                                 Command::PauseRecording => {
                                     let Some(rec) = active.as_mut() else { continue };
-                                    if !rec.is_paused() {
-                                        // Frames still queued were captured before the
-                                        // pause: write them, or the last words are lost.
-                                        if let Some(fault) = self.append_queued_frames(rec) {
-                                            let rec = active.take().expect("active recording disappeared");
-                                            diarizer = None;
-                                            self.abort_recording(rec, fault).await;
-                                            prebuffer.clear();
-                                            prebuffer.resume();
-                                            continue;
-                                        }
-                                    }
-                                    if self.integrity.epoch() != rec.integrity_epoch() {
+                                    // Frames still queued were captured before the
+                                    // pause: write them, or the last words are lost.
+                                    let write_fault = if rec.is_paused() {
+                                        None
+                                    } else {
+                                        self.append_queued_frames(rec)
+                                    };
+                                    if let Some(fault) = write_fault {
+                                        let rec = active.take().expect("active recording disappeared");
+                                        diarizer = None;
+                                        self.abort_recording(rec, fault).await;
+                                        prebuffer.clear();
+                                        prebuffer.resume();
+                                    } else if self.integrity.epoch() != rec.integrity_epoch() {
                                         // A fault from while audio was being written is
                                         // still queued; pausing now would excuse it. Its
                                         // signal is certain to follow (see
                                         // `RecordingIntegrity::record_fault`) and ends the take.
                                         warn!("pause ignored: an integrity fault is ending the take");
-                                        continue;
-                                    }
-                                    if rec.pause_at(std::time::Instant::now()) {
+                                    } else if rec.pause_at(std::time::Instant::now()) {
                                         if let Some(seg) = diarizer.as_mut().and_then(|d| d.pause()) {
                                             if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
                                                 warn!("failed to insert diarization segment at pause: {e}");
