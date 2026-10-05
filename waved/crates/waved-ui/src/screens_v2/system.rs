@@ -79,14 +79,7 @@ impl SystemRow {
             SystemRow::DateTime => Some(snap.clock.clone()),
             SystemRow::AlertTones => Some(on_off(snap.settings.tones_enabled)),
             SystemRow::PreRecording => Some(on_off(snap.settings.pre_recording)),
-            SystemRow::About => {
-                let version = snap.system.about.version.trim();
-                Some(if version.is_empty() {
-                    format!("waved {}", env!("CARGO_PKG_VERSION"))
-                } else {
-                    version.to_string()
-                })
-            }
+            SystemRow::About => Some(super::about::version_line(snap)),
             SystemRow::FactoryReset | SystemRow::PowerOff => None,
         }
     }
