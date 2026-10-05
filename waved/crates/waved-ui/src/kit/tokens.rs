@@ -77,20 +77,9 @@ pub const STATUS_PILL_HIT: Rect = Rect::new(80, 6, 240, 44);
 pub const MESSAGE_MAX_W: i32 = 240;
 pub const TITLE_Y: i32 = 38;
 pub const BACK: Rect = Rect::new(144, 244, 112, 44);
-/// The milestone 1 pill primary. Task 2 replaces it with `BOTTOM_MAIN`.
-pub const PRIMARY: Rect = Rect::new(108, 216, 184, 56);
 pub const SIDE_LEFT: Rect = Rect::new(26, 91, 60, 60);
 pub const SIDE_RIGHT: Rect = Rect::new(314, 91, 60, 60);
 pub const SIDE_LABEL_Y: i32 = 155;
-/// The old name of `BOTTOM_PILL_PAIR`, kept until Task 2 removes it.
-pub const ROW2: [Rect; 2] = BOTTOM_PILL_PAIR;
-/// The milestone 1 three-button row, moved inside the tap limit until Task 2
-/// replaces it with the round bottom buttons.
-pub const ROW3: [Rect; 3] = [
-    Rect::new(72, 196, 80, 48),
-    Rect::new(160, 196, 80, 48),
-    Rect::new(248, 196, 80, 48),
-];
 
 /// Bottom round buttons are centred on this arc around (PANEL_CX, PANEL_CY).
 pub const BOTTOM_ARC_R: i32 = 135;
@@ -100,6 +89,10 @@ pub const BOTTOM_LABEL_W: i32 = 90;
 /// also Send and Set up Wi-Fi. Icon 26 px.
 pub const BOTTOM_MAIN: Rect = Rect::new(168, 209, 64, 64);
 pub const BOTTOM_MAIN_LABEL: (i32, i32) = (155, 279);
+/// Stop's hold ring: r 35 around the main spot's centre (just outside its
+/// r 32 circle), stroke 3. Not tappable.
+pub const BOTTOM_HOLD_R: i32 = 35;
+pub const BOTTOM_HOLD_WIDTH: i32 = 3;
 /// The companions at ±40° on the arc: Mark / Pause (Resume), Keep / Delete. Icon 22 px.
 pub const BOTTOM_LEFT: Rect = Rect::new(85, 181, 56, 56);
 pub const BOTTOM_RIGHT: Rect = Rect::new(259, 181, 56, 56);
@@ -165,12 +158,8 @@ mod tests {
             ("status pill", STATUS_PILL, 14),
             ("status pill hit area", STATUS_PILL_HIT, 0),
             ("back", BACK, 22),
-            ("primary", PRIMARY, PRIMARY.h / 2),
             ("side left", SIDE_LEFT, round(SIDE_LEFT)),
             ("side right", SIDE_RIGHT, round(SIDE_RIGHT)),
-            ("row3 0", ROW3[0], 24),
-            ("row3 1", ROW3[1], 24),
-            ("row3 2", ROW3[2], 24),
             ("bottom main", BOTTOM_MAIN, round(BOTTOM_MAIN)),
             ("bottom left", BOTTOM_LEFT, round(BOTTOM_LEFT)),
             ("bottom right", BOTTOM_RIGHT, round(BOTTOM_RIGHT)),
@@ -215,7 +204,6 @@ mod tests {
         ] {
             assert!(rect.h >= MIN_PRIMARY, "{rect:?}");
         }
-        const { assert!(PRIMARY.h >= MIN_PRIMARY) };
     }
 
     #[test]
@@ -286,6 +274,8 @@ mod tests {
         assert!(mirrored(BOTTOM_PILL_PAIR[0], BOTTOM_PILL_PAIR[1]));
         assert!(mirrored(SIDE_LEFT, SIDE_RIGHT));
         assert_eq!(centre(BOTTOM_PILL_WIDE).0, centre(BOTTOM_MAIN).0);
+        // Stop's hold ring runs just outside the main circle.
+        const { assert!(BOTTOM_HOLD_R - BOTTOM_HOLD_WIDTH / 2 > BOTTOM_MAIN.w / 2) };
         // Labels are centred under their buttons.
         for (rect, (x, y)) in [
             (BOTTOM_MAIN, BOTTOM_MAIN_LABEL),

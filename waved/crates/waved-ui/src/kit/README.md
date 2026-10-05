@@ -100,9 +100,9 @@ impl Screen for AboutScreen {
 | Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active` | every screen |
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
-| Primary (milestone 1 pill, replaced by round bottom buttons) | `PrimaryButton::new(root, PRIMARY, Tone::Rec, icons::RECORD, "Record", None, on_tap)` | Home, After stop, First start |
-| Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` | Home, Recording, File detail |
-| Button rows | `ButtonRow::two(..)` is the pill pair at `BOTTOM_PILL_PAIR`; `ButtonRow::three(..)` is the milestone 1 row (replaced by round bottom buttons) | Confirmation; Recording, After stop, Call until then |
+| Round bottom buttons | `RoundButton::new(root, BottomSpot::Main, icons::RECORD, "Record", Tone::Rec, on_tap)`; `.hold(HOLD_TO_STOP_MS as u32, on_stop)` for Stop; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
+| Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` (a round button at the side spot) | Home, Recording, File detail |
+| Pill pair | `ButtonRow::two(root, [cancel, action], on_tap)` at `BOTTOM_PILL_PAIR` | Confirmation |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Call, Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
@@ -115,8 +115,22 @@ Notes on the parts that carry state:
 - The Dial is in one of three modes: ring (`set_ring`, `set_talker`), gauge (`set_gauge`) or
   progress (`set_progress`). Setting a gauge or progress replaces the ring; clearing it
   (`None`) returns to the ring.
-- `Tone` picks a button's fill and text colour (`Tone::colors()`). `Tone::accent()` is the colour a
-  dialog uses for that tone: red for destructive tones, teal otherwise.
+- Every button is a Surface fill (Raised while pressed); red is never a fill. `Tone` is the
+  accent on what is drawn on it: `Tone::fg()` colours the icon (and a pill's words),
+  `Tone::label()` a round button's label. `Neutral` is a Text icon with a Text 2 label (Mark,
+  Pause), `Rec` a red icon with a calm label (Record's dot), `RecText` red icon and label (Stop,
+  Delete, Decline), `Live` teal (Send, Answer), `WarnText` amber (Resume). `Tone::accent()` is
+  the colour a dialog uses for that tone: red for destructive tones, teal otherwise.
+- Round buttons (`RoundButton`, `SideButton`) share one implementation: a Surface circle at a
+  spot (`BottomSpot::{Main, Left, Right, PairLeft, PairRight}` or `Side`), a 26 px icon (22 px
+  at the companions) and a micro label under it. Pressed is Raised with a 2 px teal ring drawn
+  as a border, so it stays inside the circle and the tap target. Disabled shows the icon and
+  label in Text 3 and ignores taps (Mark while paused).
+- `RoundButton::hold` (Stop) draws a red ring of r 35 (`BOTTOM_HOLD_R`, stroke 3, Line track)
+  around the circle while pressed. It fills clockwise over the duration and calls back once when
+  full; letting go early empties it, and that release still counts as a tap (Stop explains the
+  hold), a completed hold does not. While held the circle is Raised without the teal ring. The
+  ring is not tappable.
 - The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
   with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
   centre over 62°–122°. Rows fade and change band with distance from the focus line.
@@ -158,10 +172,11 @@ fn about_matches_the_mockup() {
 - A new screen needs a `Route` variant in `kit/route.rs` (the router builds screens from it);
   `Route::About` already exists.
 - Taps in tests: `lv.click(obj)`, `lv.send(obj, code)`, and `lv.advance(ms)` for held buttons.
-- `components/compositions.rs` shows Home and After a recording built from kit parts.
+- `components/compositions.rs` shows Home, Recording and After a recording built from kit parts.
 
 ## Fonts and icons
 
 `crates/waved-ui/fonts/build_fonts.sh` regenerates `src/kit/fonts/*.c` and `src/kit/icons.rs`; see
 `crates/waved-ui/fonts/README.md`. To add an icon, add it to `crates/waved-ui/fonts/icons.py` and
-rerun the script.
+rerun the script. Names ending in `-filled` come from Tabler's filled face (the media
+controls use it); the icon sizes are 16, 20, 22 (companion bottom buttons), 26 and 44.

@@ -8,8 +8,8 @@ use crate::kit::obj::{color, Obj};
 use crate::kit::tokens::{lvgl_angle, polar, LINE, LIVE, REC, WARN};
 use std::cell::Cell;
 
-const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
-const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
+pub(super) const MAIN: lv_style_selector_t = LV_PART_MAIN as lv_style_selector_t;
+pub(super) const INDICATOR: lv_style_selector_t = LV_PART_INDICATOR as lv_style_selector_t;
 const TALKER_WIDTH: i32 = 6;
 /// The wedge's angle span; its rounded caps add about 2.5° at each end, so it
 /// reads as about 44° (the mockup draws 38° with round caps).
@@ -255,7 +255,7 @@ impl Dial {
 
 /// A non-interactive arc whose stroke is centred on radius `r`, angles in
 /// device-to-LVGL terms (rotation 0, full background, range 0..1000).
-fn arc(parent: Obj, cx: i32, cy: i32, r: i32, width: i32) -> Obj {
+pub(super) fn arc(parent: Obj, cx: i32, cy: i32, r: i32, width: i32) -> Obj {
     let size = 2 * r + width;
     let arc = Obj::arc(parent)
         .pos(cx - size / 2, cy - size / 2)
@@ -271,7 +271,7 @@ fn arc(parent: Obj, cx: i32, cy: i32, r: i32, width: i32) -> Obj {
 }
 
 /// Full circle with the indicator starting at the top.
-fn full_ring(arc: Obj) {
+pub(super) fn full_ring(arc: Obj) {
     // SAFETY: live arc.
     unsafe {
         lv_arc_set_rotation(arc.raw(), 270);
@@ -281,7 +281,7 @@ fn full_ring(arc: Obj) {
     }
 }
 
-fn arc_style(arc: Obj, part: lv_style_selector_t, hex: u32, opa: u8, width: i32) {
+pub(super) fn arc_style(arc: Obj, part: lv_style_selector_t, hex: u32, opa: u8, width: i32) {
     // SAFETY: live arc.
     unsafe {
         lv_obj_set_style_arc_color(arc.raw(), color(hex), part);

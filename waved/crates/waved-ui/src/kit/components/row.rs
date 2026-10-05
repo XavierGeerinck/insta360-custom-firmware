@@ -1,13 +1,12 @@
-//! Rows of two or three equal buttons, and the shared confirmation dialog.
-//! `ButtonRow::two` is the confirmation's pill pair (`BOTTOM_PILL_PAIR`);
-//! `ButtonRow::three` is the milestone 1 row that Task 2 replaces with round
-//! bottom buttons.
+//! The pill pair (two equal choices whose words matter, at
+//! `BOTTOM_PILL_PAIR`) and the shared confirmation dialog built on it. Actions
+//! that an icon says on its own use round buttons (`buttons::RoundButton`).
 
-use crate::kit::components::buttons::Tone;
+use crate::kit::components::buttons::{pill, Tone};
 use crate::kit::event::on_click;
 use crate::kit::fonts::Font;
 use crate::kit::obj::Obj;
-use crate::kit::tokens::{Rect, BOTTOM_PILL_PAIR, ROW3, SCREEN_W, TEXT, TEXT_2};
+use crate::kit::tokens::{Rect, BOTTOM_PILL_PAIR, SCREEN_W, TEXT, TEXT_2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -18,6 +17,8 @@ const CONFIRM_TITLE_Y: i32 = 104;
 const CONFIRM_BODY_X: i32 = 65;
 const CONFIRM_BODY_Y: i32 = 142;
 const CONFIRM_BODY_W: i32 = 270;
+/// Space between a pill's icon and its words (the mockup's `.bp` gap).
+const PILL_GAP: i32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ButtonSpec {
@@ -43,9 +44,9 @@ struct RowButton {
 }
 
 impl RowButton {
+    /// Surface pill; the tone colours the icon and the words.
     fn apply(&self, spec: &ButtonSpec) {
-        let (fill, fg) = spec.tone.colors();
-        self.obj.bg(fill).pressed_bg(spec.tone.pressed());
+        let fg = spec.tone.fg();
         self.icon
             .hidden(spec.icon.is_none())
             .text_color(fg)
@@ -59,31 +60,15 @@ pub struct ButtonRow {
 }
 
 impl ButtonRow {
+    /// The pill pair mirrored around x 200: button 0 left, button 1 right.
     pub fn two(parent: Obj, specs: [ButtonSpec; 2], on_tap: impl FnMut(usize) + 'static) -> Self {
-        Self::build(parent, &BOTTOM_PILL_PAIR, &specs, on_tap)
-    }
-
-    pub fn three(parent: Obj, specs: [ButtonSpec; 3], on_tap: impl FnMut(usize) + 'static) -> Self {
-        Self::build(parent, &ROW3, &specs, on_tap)
-    }
-
-    fn build(
-        parent: Obj,
-        rects: &[Rect],
-        specs: &[ButtonSpec],
-        on_tap: impl FnMut(usize) + 'static,
-    ) -> Self {
         let handler = Rc::new(RefCell::new(on_tap));
-        let buttons = rects
+        let buttons = BOTTOM_PILL_PAIR
             .iter()
-            .zip(specs)
+            .zip(&specs)
             .enumerate()
             .map(|(index, (rect, spec))| {
-                let obj = Obj::plain(parent)
-                    .rect(*rect)
-                    .radius(rect.h / 2)
-                    .clickable(true)
-                    .row(6);
+                let obj = pill(parent, *rect).row(PILL_GAP);
                 let icon = Obj::label(obj, "", Font::Icon20, TEXT);
                 let text = Obj::label(obj, "", Font::Body, TEXT);
                 let handler = handler.clone();
@@ -128,7 +113,8 @@ pub struct ConfirmSpec {
 }
 
 /// A full-screen confirmation: icon, question, one line on the consequence,
-/// then Cancel and the action (button 0 and button 1).
+/// then Cancel and the action (button 0 and button 1). The action pill
+/// repeats the icon in the tone's accent.
 pub fn confirm_dialog(
     root: Obj,
     spec: &ConfirmSpec,
@@ -153,7 +139,7 @@ pub fn confirm_dialog(
         root,
         [
             ButtonSpec::new(None, "Cancel", Tone::Neutral),
-            ButtonSpec::new(None, spec.confirm.clone(), spec.tone),
+            ButtonSpec::new(Some(spec.icon), spec.confirm.clone(), spec.tone),
         ],
         move |index| if index == 0 { cancel() } else { confirm() },
     )
@@ -172,54 +158,6 @@ mod tests {
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
     use crate::kit::tokens::BOTTOM_PILL_PAIR;
     use std::cell::Cell;
-
-    #[test]
-    fn the_recording_row_reports_taps_and_can_disable_a_button() {
-        lvgl(|lv| {
-            let root = lv.screen();
-            let taps = Rc::new(RefCell::new(Vec::new()));
-            let log = taps.clone();
-            let row = ButtonRow::three(
-                root,
-                [
-                    ButtonSpec::new(Some(icons::MARK), "Mark", Tone::Neutral),
-                    ButtonSpec::new(Some(icons::PAUSE), "Pause", Tone::Neutral),
-                    ButtonSpec::new(Some(icons::STOP), "Stop", Tone::Rec),
-                ],
-                move |index| log.borrow_mut().push(index),
-            );
-            assert_golden("row_recording", &lv.render());
-            assert_targets_ok(root);
-            lv.click(row.obj(2));
-            lv.click(row.obj(0));
-            assert_eq!(*taps.borrow(), vec![2, 0]);
-
-            row.set_enabled(0, false);
-            row.set(
-                1,
-                &ButtonSpec::new(Some(icons::PLAY), "Resume", Tone::WarnText),
-            );
-            assert!(!row.obj(0).is_clickable());
-            assert_golden("row_paused", &lv.render());
-        });
-    }
-
-    #[test]
-    fn the_call_row_has_decline_and_answer() {
-        lvgl(|lv| {
-            let root = lv.screen();
-            ButtonRow::two(
-                root,
-                [
-                    ButtonSpec::new(Some(icons::PHONE_OFF), "Decline", Tone::Rec),
-                    ButtonSpec::new(Some(icons::PHONE), "Answer", Tone::Live),
-                ],
-                |_| {},
-            );
-            assert_golden("row_call", &lv.render());
-            assert_targets_ok(root);
-        });
-    }
 
     #[test]
     fn the_confirmation_names_the_action() {
@@ -324,6 +262,45 @@ mod tests {
             assert!(row.obj(1).is_clickable());
             lv.click(row.obj(1));
             assert_eq!(taps.get(), 1);
+        });
+    }
+
+    #[test]
+    fn the_action_pill_is_surface_with_a_red_icon_and_red_words() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let row = confirm_dialog(
+                root,
+                &ConfirmSpec {
+                    icon: icons::POWER,
+                    title: "Power off?".into(),
+                    body: "Turn Wave on again with the power button.".into(),
+                    confirm: "Power off".into(),
+                    tone: Tone::Rec,
+                },
+                || {},
+                || {},
+            );
+            let frame = lv.render();
+            let action = row.obj(1);
+            let (icon, words) = (action.child(0), action.child(1));
+            assert!(!icon.is_hidden(), "the action repeats the dialog's icon");
+            assert_eq!(icon.text(), icons::POWER);
+            assert_eq!(words.text(), "Power off");
+            // Red is never a fill: the pill is Surface (0x141c1e) near its edge.
+            let [r, g, b] = frame.pixel(BOTTOM_PILL_PAIR[1].x + 14, 221);
+            assert!(r < 40 && g < 40 && b < 40, "action pill fill {r},{g},{b}");
+            // Its words are red, Cancel's are not.
+            let reddest = |x0: i32, x1: i32| {
+                (x0..x1)
+                    .flat_map(|x| (210..232).map(move |y| (x, y)))
+                    .map(|(x, y)| frame.pixel(x, y))
+                    .filter(|[r, g, b]| *r > 200 && *g < 120 && *b < 120)
+                    .count()
+            };
+            assert!(reddest(206, 330) > 20);
+            assert_eq!(reddest(70, 194), 0);
+            assert!(row.obj(0).child(0).is_hidden(), "Cancel has no icon");
         });
     }
 

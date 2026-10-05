@@ -49,10 +49,18 @@ conv font_num_20   b-medium-tnum.ttf     20 "$TEXT_RANGE"
 conv font_num_26   b-medium-tnum.ttf     26 "$DIGIT_RANGE"
 conv font_num_48   b-medium-tnum.ttf     48 "$DIGIT_RANGE"
 
+# Icons come from Tabler's outline face, plus its filled face for the names in
+# icons.py that end in "-filled" (the two faces use distinct code points).
 CSS="$WORK/package/dist/tabler-icons.css"
-ICON_RANGE=$(python3 icons.py range "$CSS")
-for size in 16 20 26 44; do
-  conv "font_icons_$size" package/dist/fonts/tabler-icons.ttf "$size" "$ICON_RANGE"
+FILLED_CSS="$WORK/package/dist/tabler-icons-filled.css"
+OUTLINE_RANGE=$(python3 icons.py range "$CSS" "$FILLED_CSS" outline)
+FILLED_RANGE=$(python3 icons.py range "$CSS" "$FILLED_CSS" filled)
+for size in 16 20 22 26 44; do
+  name="font_icons_$size"
+  (cd "$WORK" && $CONV --font package/dist/fonts/tabler-icons.ttf -r "$OUTLINE_RANGE" \
+    --font package/dist/fonts/tabler-icons-filled.ttf -r "$FILLED_RANGE" \
+    --size "$size" --bpp 4 --format lvgl --no-compress --lv-font-name "$name" -o "$name.c" >/dev/null)
+  mv "$WORK/$name.c" "$OUT/$name.c"
 done
-python3 icons.py rust "$CSS" > ../src/kit/icons.rs
+python3 icons.py rust "$CSS" "$FILLED_CSS" > ../src/kit/icons.rs
 echo "fonts regenerated in $OUT"

@@ -14,6 +14,7 @@ extern "C" {
     static font_num_48: lv_font_t;
     static font_icons_16: lv_font_t;
     static font_icons_20: lv_font_t;
+    static font_icons_22: lv_font_t;
     static font_icons_26: lv_font_t;
     static font_icons_44: lv_font_t;
 }
@@ -41,6 +42,8 @@ pub enum Font {
     Num48,
     Icon16,
     Icon20,
+    /// The companion bottom buttons (Mark, Pause, Keep, Delete).
+    Icon22,
     Icon26,
     Icon44,
 }
@@ -61,6 +64,7 @@ impl Font {
                 Font::Num48 => &font_num_48,
                 Font::Icon16 => &font_icons_16,
                 Font::Icon20 => &font_icons_20,
+                Font::Icon22 => &font_icons_22,
                 Font::Icon26 => &font_icons_26,
                 Font::Icon44 => &font_icons_44,
             }
@@ -144,7 +148,13 @@ mod tests {
 
     #[test]
     fn icon_fonts_cover_every_icon() {
-        for font in [Font::Icon16, Font::Icon20, Font::Icon26, Font::Icon44] {
+        for font in [
+            Font::Icon16,
+            Font::Icon20,
+            Font::Icon22,
+            Font::Icon26,
+            Font::Icon44,
+        ] {
             for icon in crate::kit::icons::ALL {
                 let ch = icon.chars().next().unwrap();
                 assert!(

@@ -35,14 +35,14 @@ pub const BATTERY_3: &str = "\u{ea31}";
 pub const BATTERY_4: &str = "\u{ea32}";
 /// Tabler `battery-charging`
 pub const BATTERY_CHARGING: &str = "\u{ea33}";
-/// Tabler `player-play`
-pub const PLAY: &str = "\u{ed46}";
-/// Tabler `player-pause`
-pub const PAUSE: &str = "\u{ed45}";
-/// Tabler `player-stop`
-pub const STOP: &str = "\u{ed4a}";
-/// Tabler `player-record`
-pub const RECORD: &str = "\u{ed47}";
+/// Tabler `player-play-filled`
+pub const PLAY: &str = "\u{f691}";
+/// Tabler `player-pause-filled`
+pub const PAUSE: &str = "\u{f690}";
+/// Tabler `player-stop-filled`
+pub const STOP: &str = "\u{f695}";
+/// Tabler `player-record-filled`
+pub const RECORD: &str = "\u{f692}";
 /// Tabler `chevron-left`
 pub const LEFT: &str = "\u{ea60}";
 /// Tabler `chevron-right`
