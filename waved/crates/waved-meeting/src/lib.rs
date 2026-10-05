@@ -77,11 +77,27 @@ pub struct MeetingLiveInputs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct StopPolicy {
     upload_mode: UploadMode,
+    /// Seconds before an unanswered "Send this recording?" keeps the take.
+    ask_timeout_s: u32,
+    /// A webhook endpoint is configured. Without one, nothing is queued.
+    server_configured: bool,
+}
+
+/// The upload worker's rule: an empty endpoint means there is nowhere to send.
+fn upload_server_configured(endpoint: &str) -> bool {
+    !endpoint.trim().is_empty()
 }
 
 /// The pre-recording dot (D3, C12): the buffer is filling right now.
 pub(crate) fn pre_recording_active(setting_on: bool, recording: bool, audio: &AudioState) -> bool {
     setting_on && !recording && !audio.mic_muted && audio.capture_healthy
+}
+
+/// Whole seconds left before `deadline`, rounded up, so the countdown shows
+/// 60 for the whole first second.
+pub(crate) fn seconds_left(deadline: tokio::time::Instant, now: tokio::time::Instant) -> u32 {
+    let millis = deadline.saturating_duration_since(now).as_millis();
+    millis.div_ceil(1_000).min(u128::from(u32::MAX)) as u32
 }
 
 /// A fault while paused only ends the take when the pipeline itself is gone:
@@ -194,7 +210,9 @@ impl RecordingFinalizer {
         finalization_test_checkpoint(FinalizationCheckpoint::MetadataFinalized, id).await;
 
         let status = match policy.upload_mode {
-            UploadMode::Automatic => MeetingStatus::Queued,
+            UploadMode::Automatic if policy.server_configured => MeetingStatus::Queued,
+            // Nowhere to send it: keep it on Wave rather than look queued.
+            UploadMode::Automatic => MeetingStatus::LocalOnly,
             UploadMode::Ask => MeetingStatus::AwaitingDecision,
             UploadMode::LocalOnly => MeetingStatus::LocalOnly,
         };
@@ -221,6 +239,7 @@ impl RecordingFinalizer {
             speakers: speaker_count,
             marks: mark_count,
         });
+        let ask_deadline_secs = decision.as_ref().map(|_| policy.ask_timeout_s);
 
         self.meeting_tx.send_modify(|state| {
             state.recording = false;
@@ -229,6 +248,7 @@ impl RecordingFinalizer {
             state.meeting_id = None;
             state.duration_secs = duration;
             state.pending_decision = decision;
+            state.ask_deadline_secs = ask_deadline_secs;
         });
         info!(
             "recording stopped: {} ({}s, {} bytes) — {}",
@@ -315,6 +335,11 @@ impl MeetingService {
         if let Err(error) = reconcile::run(&pool, &recordings_dir).await {
             warn!("recording reconciliation failed: {error}");
         }
+        match db::keep_stale_decisions(&pool).await {
+            Ok(0) => {}
+            Ok(kept) => info!("kept {kept} recording(s) whose decision was interrupted by a restart"),
+            Err(error) => warn!("failed to keep interrupted decisions: {error}"),
+        }
         let webhook_test_marker = Path::new(db_path)
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -357,9 +382,29 @@ impl MeetingService {
     }
 
     fn stop_policy(&self) -> StopPolicy {
+        let settings = self.settings_rx.borrow();
         StopPolicy {
-            upload_mode: self.settings_rx.borrow().upload_mode,
+            upload_mode: settings.upload_mode,
+            ask_timeout_s: settings.ask_timeout_s,
+            server_configured: upload_server_configured(&self.config.api.endpoint),
         }
+    }
+
+    /// Start the auto-Keep countdown for a decision `stop_recording` just posted.
+    fn arm_ask_deadline(&self) -> Option<tokio::time::Instant> {
+        let state = self.meeting_tx.borrow();
+        state.pending_decision.as_ref()?;
+        let seconds = state.ask_deadline_secs?;
+        Some(tokio::time::Instant::now() + Duration::from_secs(u64::from(seconds)))
+    }
+
+    /// Nobody answered "Send this recording?": keep it on Wave (D4).
+    async fn keep_unanswered(&self) {
+        let Some(id) = self.meeting_tx.borrow().pending_decision.as_ref().map(|d| d.id) else {
+            return;
+        };
+        info!("no answer to \"Send this recording?\" for {id}; keeping it on Wave");
+        self.handle_save_recording(id).await;
     }
 
     fn live_audio_mode(&self) -> String {
@@ -407,12 +452,15 @@ impl MeetingService {
         self.publish_pre_recording(false);
 
         // 1 Hz tick to publish elapsed-seconds onto MeetingState while
-        // recording. The watch broadcasts to anyone holding a Receiver
-        // (e.g. the UI thread); subscribers see the new value next time
-        // they `borrow()`. Tick fires every second regardless of recording
-        // state — branch is gated by `active.is_some()`.
+        // recording, and the "Send this recording?" countdown while it runs.
+        // The watch broadcasts to anyone holding a Receiver (e.g. the UI
+        // thread); subscribers see the new value next time they `borrow()`.
+        // Tick fires every second regardless — the branch is gated by an
+        // active take or a running countdown.
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // When an unanswered "Send this recording?" is kept on Wave (D4).
+        let mut ask_deadline: Option<tokio::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -515,12 +563,33 @@ impl MeetingService {
                         }
                     }
                 }
-                _ = tick.tick(), if active.is_some() => {
+                _ = tick.tick(), if active.is_some() || ask_deadline.is_some() => {
                     if let Some(rec) = active.as_ref() {
                         let secs = rec.duration_secs();
                         self.meeting_tx.send_modify(|s| {
                             s.duration_secs = secs;
                         });
+                    }
+                    if ask_deadline.is_some() && self.meeting_tx.borrow().pending_decision.is_none() {
+                        // Answered (Save / Send / Discard / Delete) since the last tick.
+                        ask_deadline = None;
+                    }
+                    if let Some(deadline) = ask_deadline {
+                        match seconds_left(deadline, tokio::time::Instant::now()) {
+                            0 => {
+                                ask_deadline = None;
+                                self.keep_unanswered().await;
+                            }
+                            left => {
+                                self.meeting_tx.send_if_modified(|s| {
+                                    if s.ask_deadline_secs == Some(left) {
+                                        return false;
+                                    }
+                                    s.ask_deadline_secs = Some(left);
+                                    true
+                                });
+                            }
+                        }
                     }
                 }
                 cmd_result = cmd_rx.recv() => {
@@ -647,6 +716,12 @@ impl MeetingService {
                                             )
                                             .await;
                                             upload_wake.notify_one();
+                                            ask_deadline = self.arm_ask_deadline();
+                                            if ask_deadline.is_some() {
+                                                // Step the countdown on whole seconds from now,
+                                                // so it reaches zero at the deadline itself.
+                                                tick.reset();
+                                            }
                                         }
                                         for acknowledgement in acknowledgements {
                                             let _ = acknowledgement.send(());
@@ -1047,7 +1122,10 @@ impl MeetingService {
     }
 
     fn clear_pending(&self) {
-        self.meeting_tx.send_modify(|s| s.pending_decision = None);
+        self.meeting_tx.send_modify(|s| {
+            s.pending_decision = None;
+            s.ask_deadline_secs = None;
+        });
     }
 
     async fn handle_save_recording(&self, id: Uuid) {
@@ -1062,13 +1140,24 @@ impl MeetingService {
     }
 
     async fn handle_send_recording(&self, id: Uuid) {
-        if self.validate_pending(&id).is_none() {
+        let Some(decision) = self.validate_pending(&id) else {
             return;
-        }
-        if let Err(e) = db::set_status(&self.pool, &id, MeetingStatus::Queued).await {
+        };
+        // The endpoint snapshot from Stop: without a server there is nowhere
+        // to send it, so it is kept on Wave rather than left looking queued.
+        let status = if upload_server_configured(&decision.endpoint) {
+            MeetingStatus::Queued
+        } else {
+            MeetingStatus::LocalOnly
+        };
+        if let Err(e) = db::set_status(&self.pool, &id, status).await {
             warn!("send: db update failed for {id}: {e}");
         }
-        info!("send: {id} queued for the background webhook worker");
+        if status == MeetingStatus::Queued {
+            info!("send: {id} queued for the background webhook worker");
+        } else {
+            info!("send: no webhook endpoint is configured; {id} kept on Wave");
+        }
         self.clear_pending();
     }
 

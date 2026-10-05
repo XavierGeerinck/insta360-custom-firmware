@@ -638,3 +638,142 @@ async fn the_pending_decision_counts_marks_and_speakers() {
     assert_eq!(decision.marks, 1);
     assert_eq!(decision.speakers, 1);
 }
+
+#[test]
+fn seconds_left_rounds_up_and_stops_at_zero() {
+    let now = tokio::time::Instant::now();
+    assert_eq!(seconds_left(now + Duration::from_millis(59_001), now), 60);
+    assert_eq!(seconds_left(now + Duration::from_secs(60), now), 60);
+    assert_eq!(seconds_left(now + Duration::from_millis(1), now), 1);
+    assert_eq!(seconds_left(now, now), 0);
+    assert_eq!(seconds_left(now, now + Duration::from_secs(5)), 0);
+}
+
+fn ask_after(seconds: u32) -> SettingsState {
+    SettingsState {
+        ask_timeout_s: seconds,
+        ..settings_for(UploadMode::Ask)
+    }
+}
+
+/// A webhook server is configured. Wi-Fi stays down in the rig, so a queued
+/// take stays queued and nothing is ever dialled.
+fn with_server(mut config: WavedConfig) -> WavedConfig {
+    config.api.endpoint = "http://127.0.0.1:9/hook".into();
+    config
+}
+
+#[tokio::test]
+async fn unanswered_decision_is_kept_after_the_timeout() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), ask_after(1)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    assert_eq!(rig.meeting.borrow().ask_deadline_secs, Some(1));
+    rig.wait_for("kept", |s| s.pending_decision.is_none()).await;
+    assert_eq!(rig.meeting.borrow().ask_deadline_secs, None);
+    rig.wait_status(id, Some("local_only")).await;
+}
+
+#[tokio::test]
+async fn answer_before_timeout_cancels_auto_keep() {
+    let rig = start_rig(with_server(quiet_config(UploadMode::Ask)), ask_after(2)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    rig.send(Command::SendRecording(id));
+    rig.wait_for("answered", |s| s.pending_decision.is_none()).await;
+    tokio::time::sleep(Duration::from_millis(2_500)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("queued"), "Send must win");
+    assert_eq!(rig.meeting.borrow().ask_deadline_secs, None);
+}
+
+/// The countdown steps once a second, and an answer given while it shows its
+/// last second still wins over the auto-Keep.
+#[tokio::test]
+async fn an_answer_in_the_last_second_still_wins() {
+    let rig = start_rig(with_server(quiet_config(UploadMode::Ask)), ask_after(2)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    assert_eq!(rig.meeting.borrow().ask_deadline_secs, Some(2));
+    rig.wait_for("last second", |s| s.ask_deadline_secs == Some(1)).await;
+    rig.send(Command::SendRecording(id));
+    rig.wait_for("answered", |s| s.pending_decision.is_none()).await;
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("queued"), "Send must win");
+    assert_eq!(rig.meeting.borrow().ask_deadline_secs, None);
+}
+
+#[tokio::test]
+async fn a_decision_left_by_a_restart_is_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id = Uuid::new_v4();
+    let dir = tmp.path().join("rec").join(id.to_string());
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("audio.wav"), b"RIFF").unwrap();
+    std::fs::write(dir.join("metadata.json"), b"{}").unwrap();
+    let pool = db::init_pool(tmp.path().join("t.db").to_str().unwrap()).await.unwrap();
+    db::insert_meeting(&pool, &id, "Omni", &dir.to_string_lossy()).await.unwrap();
+    db::finish_meeting(&pool, &id, 3, MeetingStatus::AwaitingDecision).await.unwrap();
+    pool.close().await;
+
+    let rig = start_rig_in(tmp, quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    assert!(rig.meeting.borrow().pending_decision.is_none());
+}
+
+/// With a server, Automatic queues the take for the worker (unchanged).
+#[tokio::test]
+async fn automatic_with_a_server_queues_the_take() {
+    let rig = start_rig(
+        with_server(quiet_config(UploadMode::Automatic)),
+        settings_for(UploadMode::Automatic),
+    )
+    .await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    rig.wait_for("one upload waiting", |s| s.pending_uploads == 1).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("queued"));
+    assert!(rig.meeting.borrow().pending_decision.is_none());
+}
+
+/// No server configured: Automatic has nowhere to send the take, so it is
+/// kept on Wave instead of looking like it is on its way.
+#[tokio::test]
+async fn automatic_without_a_server_keeps_the_take_on_wave() {
+    let rig = start_rig(
+        quiet_config(UploadMode::Automatic),
+        settings_for(UploadMode::Automatic),
+    )
+    .await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    rig.wait_status(id, Some("local_only")).await;
+    let meeting = rig.meeting.borrow().clone();
+    assert!(meeting.pending_decision.is_none());
+    assert_eq!(meeting.ask_deadline_secs, None);
+    assert_eq!(meeting.pending_uploads, 0);
+}
+
+/// No server configured: Ask still asks, but Send keeps the take on Wave.
+#[tokio::test]
+async fn send_without_a_server_keeps_the_take_on_wave() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("awaiting_decision"));
+    rig.send(Command::SendRecording(id));
+    rig.wait_for("answered", |s| s.pending_decision.is_none()).await;
+    rig.wait_status(id, Some("local_only")).await;
+    let meeting = rig.meeting.borrow().clone();
+    assert_eq!(meeting.ask_deadline_secs, None);
+    assert_eq!(meeting.pending_uploads, 0);
+}

@@ -511,6 +511,17 @@ pub async fn delete_meeting_cascade(pool: &SqlitePool, id: &Uuid) -> Result<(), 
     tx.commit().await
 }
 
+/// Recordings a restart left waiting for "Send this recording?". The
+/// question is gone after a restart, so they are kept on Wave, the D4 default.
+pub async fn keep_stale_decisions(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("UPDATE meetings SET upload_status = ? WHERE upload_status = ?")
+        .bind(MeetingStatus::LocalOnly.as_str())
+        .bind(MeetingStatus::AwaitingDecision.as_str())
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 fn truncate_diagnostic(value: &str) -> String {
     let mut output = value
         .chars()
