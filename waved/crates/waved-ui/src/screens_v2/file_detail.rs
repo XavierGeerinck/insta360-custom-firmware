@@ -2,14 +2,29 @@
 //! playback scrubber, Delete sits on the left, Send / Send again on the
 //! right, and the upload state or failure reason under them.
 //!
-//! This half is pure logic, tested on the host; the screen builds on it.
+//! The first half is pure logic, tested on the host; `FileDetailScreen`
+//! builds the screen on it.
 
-use super::files::{sentence, status_look};
+use super::files::{recording_title, sentence, status_look};
+use crate::kit::components::buttons::{back_button, RoundButton, Tone};
+use crate::kit::components::scrubber::{ScrubEvent, Scrubber};
+use crate::kit::components::status::StatusArea;
+use crate::kit::dispatch::{Dispatcher, Severity};
+use crate::kit::event::on_click;
+use crate::kit::fonts::Font;
 use crate::kit::icons;
+use crate::kit::obj::Obj;
+use crate::kit::route::{ConfirmKind, Route};
+use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
-use crate::kit::tokens::{TEXT_2, WARN};
+use crate::kit::tokens::{
+    DETAIL_NOTE_Y, DETAIL_SIDE_LEFT, DETAIL_SIDE_LEFT_LABEL, DETAIL_SIDE_RIGHT,
+    DETAIL_SIDE_RIGHT_LABEL, SCREEN_W, TEXT, TEXT_2, TITLE_Y, WARN,
+};
+use std::cell::RefCell;
+use std::rc::Rc;
 use uuid::Uuid;
-use waved_state::{PlaybackState, RecordingStatus, RecordingSummary};
+use waved_state::{Command, PlaybackState, RecordingStatus, RecordingSummary};
 
 /// After a seek, show its target until playback reports a position within
 /// `SEEK_TOLERANCE_MS` of it, or for at most `SEEK_SETTLE_MS`.
@@ -197,13 +212,257 @@ pub fn note_line(rec: &RecordingSummary, wifi_connected: bool) -> (String, u32) 
     }
 }
 
+/// The note box: room for "Upload failed: server didn't answer", narrow
+/// enough to stay inside the panel at y 218 (about 314 px visible there).
+const NOTE_W: i32 = 300;
+
+/// What the scrubber's handlers need from the last snapshot.
+#[derive(Default)]
+struct Live {
+    view: PlayView,
+    playable: bool,
+    guard: Option<&'static str>,
+    /// The start chosen on the ring before this recording plays.
+    local_ms: u32,
+    /// A seek (or a start) sent to the player that it has not reached yet.
+    pending: Option<PendingSeek>,
+    now_ms: u64,
+}
+
+fn on_scrub(id: Uuid, live: &RefCell<Live>, dispatch: &Dispatcher, event: ScrubEvent) {
+    let mut live = live.borrow_mut();
+    match event {
+        ScrubEvent::TogglePlay => {
+            match centre_tap(&live.view, live.local_ms, live.playable, live.guard) {
+                CentreTap::Play { from_ms } => {
+                    dispatch.command(Command::PlayRecording(id));
+                    // The player starts at 0 and seeks after: hold the knob on
+                    // the chosen start meanwhile instead of flicking to 0:00.
+                    live.pending = None;
+                    if from_ms > 0 {
+                        dispatch.command(Command::SeekPlayback(from_ms));
+                        live.pending = Some(PendingSeek {
+                            target_ms: from_ms,
+                            sent_at_ms: live.now_ms,
+                        });
+                    }
+                }
+                CentreTap::Pause => dispatch.command(Command::PausePlayback),
+                CentreTap::Resume => dispatch.command(Command::ResumePlayback),
+                CentreTap::Refuse(text) => dispatch.show(Severity::Info, text),
+                CentreTap::Nothing => {}
+            }
+        }
+        ScrubEvent::Seek(ms) => {
+            if live.view.active {
+                dispatch.command(Command::SeekPlayback(ms));
+                live.pending = Some(PendingSeek {
+                    target_ms: ms,
+                    sent_at_ms: live.now_ms,
+                });
+            } else {
+                live.local_ms = ms;
+            }
+            live.view.position_ms = ms;
+        }
+    }
+}
+
+/// Recording detail (`Route::FileDetail(id)`): playback of this recording,
+/// Delete (asks first) and Send / Send again.
+pub struct FileDetailScreen {
+    id: Uuid,
+    root: Option<Obj>,
+    dispatch: Option<Dispatcher>,
+    /// An upload server is configured.
+    server_set: bool,
+    status: Option<StatusArea>,
+    title: Option<Obj>,
+    scrubber: Option<Scrubber>,
+    delete: Option<RoundButton>,
+    send: Option<(SendAction, RoundButton)>,
+    note: Option<Obj>,
+    back: Option<Obj>,
+    live: Rc<RefCell<Live>>,
+    /// Title and note as last drawn, to skip relabelling every frame.
+    shown_title: String,
+    shown_note: Option<(String, u32)>,
+    /// Already went back because the recording disappeared.
+    left: bool,
+}
+
+impl FileDetailScreen {
+    pub fn new(id: Uuid) -> Self {
+        Self {
+            id,
+            root: None,
+            dispatch: None,
+            server_set: false,
+            status: None,
+            title: None,
+            scrubber: None,
+            delete: None,
+            send: None,
+            note: None,
+            back: None,
+            live: Rc::default(),
+            shown_title: String::new(),
+            shown_note: None,
+            left: false,
+        }
+    }
+
+    /// Show, swap or remove the right-hand button. A changed action rebuilds
+    /// it; deleting the circle deletes its label too.
+    fn sync_send(&mut self, wanted: Option<SendAction>) {
+        if self.send.as_ref().map(|(action, _)| *action) == wanted {
+            return;
+        }
+        if let Some((_, button)) = self.send.take() {
+            button.obj().delete();
+        }
+        let (Some(action), Some(root), Some(dispatch)) = (wanted, self.root, self.dispatch.clone())
+        else {
+            return;
+        };
+        let id = self.id;
+        let button = RoundButton::at(
+            root,
+            DETAIL_SIDE_RIGHT,
+            DETAIL_SIDE_RIGHT_LABEL,
+            action.icon(),
+            action.label(),
+            Tone::LiveIcon,
+            move || {
+                dispatch.command(Command::RetryUpload(id));
+                dispatch.show(Severity::Info, SENDING);
+            },
+        );
+        self.send = Some((action, button));
+    }
+}
+
+impl Screen for FileDetailScreen {
+    fn build(&mut self, root: Obj, ctx: &ScreenCtx, snap: &UiSnapshot) {
+        self.root = Some(root);
+        self.dispatch = Some(ctx.dispatch.clone());
+        // Only the setup page changes the endpoint, and saving there restarts
+        // waved (RestartForConfig), so the boot-time copy is current.
+        self.server_set = !ctx.config.api.endpoint.trim().is_empty();
+        self.status = Some(StatusArea::plain(root));
+        let title = Obj::label(root, "", Font::Title, TEXT)
+            .centered_text(SCREEN_W)
+            .pos(0, TITLE_Y);
+        // The scrubber reads touches in screen coordinates: it goes on the root.
+        let (id, live, dispatch) = (self.id, self.live.clone(), ctx.dispatch.clone());
+        self.scrubber = Some(Scrubber::new(root, move |event| {
+            on_scrub(id, &live, &dispatch, event)
+        }));
+        let dispatch = ctx.dispatch.clone();
+        self.delete = Some(RoundButton::at(
+            root,
+            DETAIL_SIDE_LEFT,
+            DETAIL_SIDE_LEFT_LABEL,
+            icons::TRASH,
+            "Delete",
+            Tone::Rec,
+            move || dispatch.navigate(Route::Confirm(ConfirmKind::DeleteRecording(id))),
+        ));
+        let note = Obj::label(root, "", Font::Small, TEXT_2)
+            .centered_text(NOTE_W)
+            .pos((SCREEN_W - NOTE_W) / 2, DETAIL_NOTE_Y);
+        // A one-line label ends in "..." until it has its width: lay both
+        // out once so every later `set_text` fits at once.
+        title.update_layout();
+        note.update_layout();
+        self.title = Some(title);
+        self.note = Some(note);
+        let back = back_button(root, &ctx.dispatch);
+        let (live, dispatch) = (self.live.clone(), ctx.dispatch.clone());
+        on_click(back, move || {
+            // Leaving with this recording playing or paused stops it; another
+            // recording's playback is not this screen's.
+            if live.borrow().view.active {
+                dispatch.command(Command::StopPlayback);
+            }
+        });
+        self.back = Some(back);
+        self.update(snap);
+    }
+
+    fn update(&mut self, snap: &UiSnapshot) {
+        if let Some(status) = self.status.as_mut() {
+            status.update(snap);
+        }
+        let Some(rec) = snap.files.recordings.iter().find(|rec| rec.id == self.id) else {
+            // Deleted (after the confirmation) or pruned by retention: back
+            // to Files, once.
+            if !self.left {
+                self.left = true;
+                if let Some(dispatch) = &self.dispatch {
+                    dispatch.back();
+                }
+            }
+            return;
+        };
+        let title = recording_title(rec, snap);
+        if let (Some(label), true) = (self.title, title != self.shown_title) {
+            label.set_text(&title);
+            self.shown_title = title;
+        }
+        let note = note_line(rec, snap.wifi.connected);
+        if let (Some(label), true) = (self.note, self.shown_note.as_ref() != Some(&note)) {
+            label.text_color(note.1).set_text(&note.0);
+            self.shown_note = Some(note);
+        }
+        self.sync_send(send_action(rec.status, self.server_set));
+        let (view, can_play) = {
+            let mut live = self.live.borrow_mut();
+            live.now_ms = snap.now_ms;
+            let mut view = play_view(self.id, rec, &snap.playback, live.local_ms);
+            // Until this recording plays the view shows the chosen start, so a
+            // pending start is kept (it expires by time) for when it does.
+            if view.active {
+                let (shown, pending) = shown_position(view.position_ms, live.pending, snap.now_ms);
+                view.position_ms = shown;
+                live.pending = pending;
+            }
+            live.view = view;
+            live.playable = playable(rec);
+            live.guard = play_guard(snap);
+            (view, live.playable)
+        };
+        if let Some(scrubber) = &self.scrubber {
+            scrubber.set(
+                view.position_ms,
+                view.duration_ms,
+                marks_for(self.id, rec, &snap.playback),
+                view.playing,
+                can_play,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::components::scrubber::{to_ms, CX, CY};
+    use crate::kit::dispatch::{Dispatcher, Message, Severity, UiEvent};
     use crate::kit::icons;
+    use crate::kit::obj::Obj;
+    use crate::kit::route::{ConfirmKind, Route};
+    use crate::kit::screen::{Screen, ScreenCtx};
+    use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl, Lvgl};
+    use crate::kit::tokens::polar;
     use crate::kit::tokens::{TEXT_2, WARN};
     use crate::screens_v2::files::recording;
-    use waved_state::{AudioState, MeetingState};
+    use std::sync::{mpsc, Arc};
+    use tokio::sync::broadcast;
+    use waved_config::{ApiConfig, WavedConfig};
+    use waved_state::{
+        AudioState, BatteryState, Command, FilesState, McuState, MeetingState, WifiState,
+    };
 
     const ID: Uuid = Uuid::from_u128(1);
     const OTHER: Uuid = Uuid::from_u128(2);
@@ -384,5 +643,412 @@ mod tests {
         assert!(playable(&kept));
         kept.duration_secs = 0;
         assert!(!playable(&kept), "an empty file has nothing to play");
+    }
+
+    const ENDPOINT: &str = "https://notes.example.com/hook";
+
+    struct Rig {
+        screen: FileDetailScreen,
+        root: Obj,
+        bus: broadcast::Receiver<Command>,
+        ui: mpsc::Receiver<UiEvent>,
+    }
+
+    impl Rig {
+        fn commands(&mut self) -> Vec<Command> {
+            std::iter::from_fn(|| self.bus.try_recv().ok()).collect()
+        }
+
+        fn events(&self) -> Vec<UiEvent> {
+            self.ui.try_iter().collect()
+        }
+
+        fn tap_centre(&self) {
+            let scrubber = self.screen.scrubber.as_ref().unwrap();
+            scrubber.press(CX, CY);
+            scrubber.release();
+        }
+
+        fn tap_ring(&self, deg: f32) {
+            let scrubber = self.screen.scrubber.as_ref().unwrap();
+            let (x, y) = polar(CX, CY, 60.0, deg);
+            scrubber.press(x, y);
+            scrubber.release();
+        }
+
+        fn caption(&self) -> String {
+            self.screen.scrubber.as_ref().unwrap().time().text()
+        }
+    }
+
+    fn rig(lv: &mut Lvgl, snap: &UiSnapshot, endpoint: &str) -> Rig {
+        let root = lv.screen();
+        let (dispatch, bus, ui) = Dispatcher::test();
+        let config = WavedConfig {
+            api: ApiConfig {
+                endpoint: endpoint.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let ctx = ScreenCtx {
+            dispatch,
+            config: Arc::new(config),
+        };
+        let mut screen = FileDetailScreen::new(ID);
+        screen.build(root, &ctx, snap);
+        Rig {
+            screen,
+            root,
+            bus,
+            ui,
+        }
+    }
+
+    /// file-detail.png: the failed 14:02 recording playing at 14:52 of 42:17.
+    fn detail_snap() -> UiSnapshot {
+        let rec = RecordingSummary {
+            marks_ms: vec![384_000, 1_413_000],
+            ..failed()
+        };
+        UiSnapshot {
+            mcu: McuState {
+                usb_connected: true,
+                ..Default::default()
+            },
+            wifi: WifiState {
+                connected: true,
+                ..Default::default()
+            },
+            clock: "15:21".into(),
+            battery: BatteryState {
+                level: 79,
+                ..Default::default()
+            },
+            now_unix_s: 1_791_213_660, // 2026-10-05 15:21 UTC
+            now_ms: 50_000,
+            files: FilesState {
+                recordings: vec![rec],
+                ..Default::default()
+            },
+            playback: PlaybackState {
+                recording: Some(ID),
+                playing: true,
+                position_ms: 892_000,
+                duration_ms: 2_537_000,
+                marks_ms: vec![384_000, 1_413_000],
+            },
+            ..Default::default()
+        }
+    }
+
+    /// The 10:30 recording kept on Wave (18 min, one mark), not playing.
+    fn kept_snap() -> UiSnapshot {
+        let rec = RecordingSummary {
+            marks_ms: vec![300_000],
+            ..recording(
+                ID,
+                RecordingStatus::LocalOnly,
+                "2026-10-05T10:30:00Z",
+                1_080,
+            )
+        };
+        UiSnapshot {
+            files: FilesState {
+                recordings: vec![rec],
+                ..Default::default()
+            },
+            playback: PlaybackState::default(),
+            ..detail_snap()
+        }
+    }
+
+    #[test]
+    fn file_detail_matches_the_mockup() {
+        lvgl(|lv| {
+            let r = rig(lv, &detail_snap(), ENDPOINT);
+            assert_eq!(r.screen.title.unwrap().text(), "Today, 14:02");
+            assert_eq!(
+                r.screen.note.unwrap().text(),
+                "Upload failed: server didn't answer"
+            );
+            let scrubber = r.screen.scrubber.as_ref().unwrap();
+            assert_eq!(scrubber.time().text(), "14:52 / 42:17");
+            assert_eq!(scrubber.icon().text(), icons::PAUSE);
+            assert_eq!(
+                r.screen.send.as_ref().map(|(a, _)| *a),
+                Some(SendAction::SendAgain)
+            );
+            assert_golden("file_detail", &lv.render());
+            assert_targets_ok(r.root);
+        });
+    }
+
+    #[test]
+    fn a_kept_recording_offers_send_and_plays_from_the_start() {
+        lvgl(|lv| {
+            let mut r = rig(lv, &kept_snap(), ENDPOINT);
+            assert_eq!(
+                r.screen.send.as_ref().map(|(a, _)| *a),
+                Some(SendAction::Send)
+            );
+            assert_eq!(r.screen.note.unwrap().text(), "Kept on Wave");
+            let scrubber = r.screen.scrubber.as_ref().unwrap();
+            assert_eq!(scrubber.time().text(), "0:00 / 18:00");
+            assert_eq!(scrubber.icon().text(), icons::PLAY);
+            assert_eq!(
+                scrubber.tick_count(),
+                1,
+                "summary marks show before playback"
+            );
+            assert_golden("file_detail_kept", &lv.render());
+            assert_targets_ok(r.root);
+            r.tap_centre();
+            let sent = r.commands();
+            assert!(
+                matches!(sent.as_slice(), [Command::PlayRecording(id)] if *id == ID),
+                "{sent:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_start_chosen_before_playing_is_sent_after_play() {
+        lvgl(|lv| {
+            let mut r = rig(lv, &kept_snap(), ENDPOINT);
+            // 270° lands on exact pixels and is far from the mark at 100°.
+            r.tap_ring(270.0);
+            assert!(
+                r.commands().is_empty(),
+                "not playing yet: only the start moves"
+            );
+            r.tap_centre();
+            let three_quarters = to_ms(0.75, 1_080_000);
+            let sent = r.commands();
+            assert!(
+                matches!(sent.as_slice(), [Command::PlayRecording(id), Command::SeekPlayback(ms)] if *id == ID && *ms == three_quarters),
+                "{sent:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_chosen_start_holds_the_knob_until_playback_gets_there() {
+        lvgl(|lv| {
+            let mut snap = kept_snap();
+            let mut r = rig(lv, &snap, ENDPOINT);
+            r.tap_ring(270.0);
+            r.tap_centre();
+            r.commands();
+            // A frame before the player starts: still the chosen start.
+            snap.now_ms += 100;
+            r.screen.update(&snap);
+            assert_eq!(r.caption(), "13:30 / 18:00");
+            // The player starts at 0 and has not seeked yet: no flicker to 0:00.
+            snap.now_ms += 200;
+            snap.playback = PlaybackState {
+                recording: Some(ID),
+                playing: true,
+                position_ms: 0,
+                duration_ms: 1_080_000,
+                marks_ms: vec![300_000],
+            };
+            r.screen.update(&snap);
+            assert_eq!(r.caption(), "13:30 / 18:00");
+            assert_eq!(
+                r.screen.scrubber.as_ref().unwrap().icon().text(),
+                icons::PAUSE
+            );
+            // Once playback is there, the caption follows it.
+            snap.now_ms += 200;
+            snap.playback.position_ms = 811_000;
+            r.screen.update(&snap);
+            assert_eq!(r.caption(), "13:31 / 18:00");
+        });
+    }
+
+    #[test]
+    fn playing_from_the_start_holds_nothing() {
+        lvgl(|lv| {
+            let mut snap = kept_snap();
+            let mut r = rig(lv, &snap, ENDPOINT);
+            r.tap_centre();
+            snap.now_ms += 300;
+            snap.playback = PlaybackState {
+                recording: Some(ID),
+                playing: true,
+                position_ms: 4_000,
+                duration_ms: 1_080_000,
+                marks_ms: vec![300_000],
+            };
+            r.screen.update(&snap);
+            assert_eq!(r.caption(), "0:04 / 18:00");
+        });
+    }
+
+    #[test]
+    fn while_playing_the_middle_pauses_and_the_ring_seeks() {
+        lvgl(|lv| {
+            let mut snap = detail_snap();
+            let mut r = rig(lv, &snap, ENDPOINT);
+            r.tap_centre();
+            r.tap_ring(180.0);
+            let half = to_ms(0.5, 2_537_000);
+            let sent = r.commands();
+            assert!(
+                matches!(sent.as_slice(), [Command::PausePlayback, Command::SeekPlayback(ms)] if *ms == half),
+                "{sent:?}"
+            );
+            // Playback still reports 14:52: the caption keeps the target.
+            snap.now_ms += 300;
+            r.screen.update(&snap);
+            assert_eq!(r.caption(), "21:08 / 42:17");
+            // Paused on this recording: the middle resumes.
+            snap.playback.playing = false;
+            snap.playback.position_ms = half;
+            r.screen.update(&snap);
+            r.tap_centre();
+            assert!(matches!(r.commands().as_slice(), [Command::ResumePlayback]));
+        });
+    }
+
+    #[test]
+    fn play_waits_for_the_recording_to_end() {
+        lvgl(|lv| {
+            let snap = UiSnapshot {
+                meeting: MeetingState {
+                    recording: true,
+                    ..Default::default()
+                },
+                ..kept_snap()
+            };
+            let mut r = rig(lv, &snap, ENDPOINT);
+            r.tap_centre();
+            assert!(r.commands().is_empty());
+            assert_eq!(
+                r.events(),
+                vec![UiEvent::Show(Message::new(Severity::Info, BUSY_RECORDING))]
+            );
+        });
+    }
+
+    #[test]
+    fn send_again_queues_the_upload_and_says_so() {
+        lvgl(|lv| {
+            let mut r = rig(lv, &detail_snap(), ENDPOINT);
+            let send = r.screen.send.as_ref().unwrap().1.obj();
+            lv.click(send);
+            assert!(matches!(r.commands().as_slice(), [Command::RetryUpload(id)] if *id == ID));
+            assert_eq!(
+                r.events(),
+                vec![UiEvent::Show(Message::new(Severity::Info, SENDING))]
+            );
+        });
+    }
+
+    #[test]
+    fn the_send_button_leaves_once_the_upload_starts() {
+        lvgl(|lv| {
+            let mut snap = detail_snap();
+            let mut r = rig(lv, &snap, ENDPOINT);
+            let label_count = r.root.child_count();
+            snap.files.recordings[0].status = RecordingStatus::Uploading;
+            r.screen.update(&snap);
+            assert!(r.screen.send.is_none());
+            // The circle and its label are both gone.
+            assert_eq!(r.root.child_count(), label_count - 2);
+            assert_eq!(r.screen.note.unwrap().text(), "Sending");
+        });
+    }
+
+    #[test]
+    fn without_a_server_there_is_nothing_to_send() {
+        lvgl(|lv| {
+            let r = rig(lv, &detail_snap(), "");
+            assert!(r.screen.send.is_none());
+            let r = rig(lv, &detail_snap(), "   ");
+            assert!(r.screen.send.is_none(), "a blank endpoint is no server");
+        });
+    }
+
+    #[test]
+    fn delete_asks_first() {
+        lvgl(|lv| {
+            let mut r = rig(lv, &detail_snap(), ENDPOINT);
+            lv.click(r.screen.delete.as_ref().unwrap().obj());
+            assert_eq!(
+                r.events(),
+                vec![UiEvent::Navigate(Route::Confirm(
+                    ConfirmKind::DeleteRecording(ID)
+                ))]
+            );
+            assert!(
+                r.commands().is_empty(),
+                "the detail never deletes by itself"
+            );
+        });
+    }
+
+    #[test]
+    fn back_stops_this_recordings_playback() {
+        lvgl(|lv| {
+            let mut r = rig(lv, &detail_snap(), ENDPOINT);
+            lv.click(r.screen.back.unwrap());
+            assert_eq!(r.events(), vec![UiEvent::Back]);
+            assert!(matches!(r.commands().as_slice(), [Command::StopPlayback]));
+            // Another recording's playback is left alone.
+            let mut snap = detail_snap();
+            snap.playback.recording = Some(OTHER);
+            let mut r = rig(lv, &snap, ENDPOINT);
+            lv.click(r.screen.back.unwrap());
+            assert_eq!(r.events(), vec![UiEvent::Back]);
+            assert!(r.commands().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_deleted_recording_leaves_the_detail_once() {
+        lvgl(|lv| {
+            let mut snap = detail_snap();
+            let mut r = rig(lv, &snap, ENDPOINT);
+            snap.files.recordings.clear();
+            r.screen.update(&snap);
+            r.screen.update(&snap);
+            assert_eq!(r.events(), vec![UiEvent::Back]);
+            assert!(r.commands().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_detail_for_a_missing_recording_goes_back_without_panicking() {
+        lvgl(|lv| {
+            let snap = UiSnapshot {
+                files: FilesState::default(),
+                ..detail_snap()
+            };
+            let mut r = rig(lv, &snap, ENDPOINT);
+            r.tap_centre();
+            assert_eq!(r.events(), vec![UiEvent::Back]);
+            assert!(r.commands().is_empty());
+        });
+    }
+
+    #[test]
+    fn a_long_failure_reason_stays_inside_the_note_box() {
+        lvgl(|lv| {
+            let mut snap = detail_snap();
+            snap.files.recordings[0].last_error = Some(
+                "server refused it (413 code) because the request body was far larger than allowed"
+                    .into(),
+            );
+            let r = rig(lv, &snap, ENDPOINT);
+            let note = r.screen.note.unwrap();
+            note.update_layout();
+            let a = note.coords();
+            assert!(a.x1 >= 50 && a.x2 <= 349, "{a:?}");
+            assert_eq!(a.y1, DETAIL_NOTE_Y);
+            assert_eq!(a.y2 - a.y1 + 1, Font::Small.line_height(), "one line");
+            assert!(note.text().ends_with("..."), "{:?}", note.text());
+        });
     }
 }
