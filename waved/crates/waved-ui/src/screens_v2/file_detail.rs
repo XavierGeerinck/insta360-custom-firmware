@@ -21,6 +21,7 @@ use crate::kit::tokens::{
     DETAIL_NOTE_Y, DETAIL_SIDE_LEFT, DETAIL_SIDE_LEFT_LABEL, DETAIL_SIDE_RIGHT,
     DETAIL_SIDE_RIGHT_LABEL, SCREEN_W, TEXT, TEXT_2, TITLE_Y, WARN,
 };
+use crate::screens_v2::messages::copy;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use uuid::Uuid;
@@ -30,9 +31,6 @@ use waved_state::{Command, PlaybackState, RecordingStatus, RecordingSummary};
 /// `SEEK_TOLERANCE_MS` of it, or for at most `SEEK_SETTLE_MS`.
 pub const SEEK_SETTLE_MS: u64 = 1_500;
 pub const SEEK_TOLERANCE_MS: u32 = 1_000;
-pub const SENDING: &str = "Sending the recording";
-pub const BUSY_RECORDING: &str = "Can't play while recording";
-pub const BUSY_CALL: &str = "Can't play during a call";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayView {
@@ -146,9 +144,9 @@ pub fn playable(rec: &RecordingSummary) -> bool {
 /// or over a call.
 pub fn play_guard(snap: &UiSnapshot) -> Option<&'static str> {
     if snap.meeting.recording {
-        Some(BUSY_RECORDING)
+        Some(copy::CANT_PLAY_RECORDING)
     } else if snap.in_call() {
-        Some(BUSY_CALL)
+        Some(copy::CANT_PLAY_CALL)
     } else {
         None
     }
@@ -336,7 +334,7 @@ impl FileDetailScreen {
             Tone::LiveIcon,
             move || {
                 dispatch.command(Command::RetryUpload(id));
-                dispatch.show(Severity::Info, SENDING);
+                dispatch.show(Severity::Info, copy::SENDING);
             },
         );
         self.send = Some((action, button));
@@ -569,12 +567,12 @@ mod tests {
             ..paused
         };
         assert_eq!(
-            centre_tap(&on, 0, true, Some(BUSY_RECORDING)),
+            centre_tap(&on, 0, true, Some(copy::CANT_PLAY_RECORDING)),
             CentreTap::Pause
         );
         assert_eq!(
-            centre_tap(&idle, 0, true, Some(BUSY_CALL)),
-            CentreTap::Refuse(BUSY_CALL)
+            centre_tap(&idle, 0, true, Some(copy::CANT_PLAY_CALL)),
+            CentreTap::Refuse(copy::CANT_PLAY_CALL)
         );
         assert_eq!(centre_tap(&idle, 0, false, None), CentreTap::Nothing);
     }
@@ -590,7 +588,7 @@ mod tests {
             },
             ..UiSnapshot::default()
         };
-        assert_eq!(play_guard(&snap), Some(BUSY_CALL));
+        assert_eq!(play_guard(&snap), Some(copy::CANT_PLAY_CALL));
         snap = UiSnapshot {
             audio: AudioState {
                 call_off_hook: true,
@@ -602,7 +600,7 @@ mod tests {
             },
             ..UiSnapshot::default()
         };
-        assert_eq!(play_guard(&snap), Some(BUSY_RECORDING));
+        assert_eq!(play_guard(&snap), Some(copy::CANT_PLAY_RECORDING));
     }
 
     #[test]
@@ -940,7 +938,10 @@ mod tests {
             assert!(r.commands().is_empty());
             assert_eq!(
                 r.events(),
-                vec![UiEvent::Show(Message::new(Severity::Info, BUSY_RECORDING))]
+                vec![UiEvent::Show(Message::new(
+                    Severity::Info,
+                    copy::CANT_PLAY_RECORDING
+                ))]
             );
         });
     }
@@ -954,7 +955,7 @@ mod tests {
             assert!(matches!(r.commands().as_slice(), [Command::RetryUpload(id)] if *id == ID));
             assert_eq!(
                 r.events(),
-                vec![UiEvent::Show(Message::new(Severity::Info, SENDING))]
+                vec![UiEvent::Show(Message::new(Severity::Info, copy::SENDING))]
             );
         });
     }

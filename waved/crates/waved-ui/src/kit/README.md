@@ -30,6 +30,10 @@ deleted when the runtime switches over.
   PIN) and `snap.audio` (mode, noise reduction, volumes, aim). Never read them from
   `ctx.config`: it is the boot-time copy of config.toml and does not see changes made on the
   device or by the setup page since.
+  The one exception is read-only: a screen may read `ctx.config.api.endpoint` (Uploads shows the
+  server host, File detail checks that a server is set). Only the setup page changes it, and
+  saving there restarts waved, so the boot-time copy is never stale. Screens never write to
+  `ctx.config`.
 - Screens never navigate by sending bus commands. Use `ctx.dispatch.navigate(..)`,
   `.back()` or `.show(..)`. Services get `ctx.dispatch.command(..)`.
 - Every screen test calls `assert_targets_ok(root)` and `assert_golden(..)`, and the
@@ -176,6 +180,11 @@ screen. LVGL's own `LV_EVENT_GESTURE` is not used. Two runtime rules go with it:
 | Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`: whole rows only (three from `RADIO_TOP`, y 68–231), snapping to rows when longer; `.scroll_to(index)` puts the row at the top without animation, or shows the last rows | After a recording, Time zone, Dim after |
 | Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
+| Audio mode picker | `ModePicker::new(root, glyphs: [Glyph; 6], selected, on_select, on_aim)`; `set_selected`, `set_preview(&Preview)`, `set_aimable`; `AimEvent` reports the aim while dragging and on release. Six round buttons on a ring around a drawn pickup-pattern preview; the preview disc takes aim drags and keeps its gestures (`components/mode_picker.rs`) | Audio mode |
+| Signal arcs | `SignalArcs::new(root, cx, cy)`, `set_bars(lit)` (0-4 of four concentric arcs, innermost first) (`components/wifi.rs`) | Wi-Fi |
+| QR code | `Qr::new(root, rect, quiet)`, `set_data(text) -> bool` (white rounded panel with a quiet zone; false when the text does not fit) (`components/wifi.rs`) | Wi-Fi setup |
+| File list | `FileList::new(root, on_open(id))`, `set_rows(Vec<RowLook>)`, `scroll_to`, `empty_state()`; `RowLook` is what one 296 x 52 recording card shows (`components/file_row.rs`) | Files |
+| Playback scrubber | `Scrubber::new(root, on_event)` with `ScrubEvent::{TogglePlay, Seek(ms)}`; `set(position_ms, duration_ms, marks_ms, playing, playable)`. A ring (r 60 at (200, 140)) with mark ticks, a knob and the time caption; centre taps play or pause, the ring seeks and keeps its gestures (`components/scrubber.rs`) | File detail |
 
 Notes on the parts that carry state:
 
@@ -216,10 +225,16 @@ Notes on the parts that carry state:
 - The status pill's pre-recording dot follows `MeetingState::pre_recording_active` (the buffer
   is filling now), not the `SettingsState::pre_recording` setting.
 
-Some components are owned by their workstreams: the radial audio-mode picker
-(`components/mode_picker.rs`, B2), the Wi-Fi signal arcs and QR code (`components/wifi.rs`, B7),
-file rows (`components/file_row.rs`, D1) and the playback scrubber (`components/scrubber.rs`, D2);
-later the PIN keypad (K2) and Bluetooth device rows (I4).
+Some components came from workstreams: the radial audio-mode picker (B2), the Wi-Fi signal arcs
+and QR code (B7), file rows (D1) and the playback scrubber (D2); later the PIN keypad (K2) and
+Bluetooth device rows (I4).
+
+Not components, but shared by the screens:
+
+- `kit::time`: `days_from_civil`, `civil_from_days`, `is_leap`, `month_len` and `parse_rfc3339`
+  (the offset is required, the date must exist). Use it instead of a private copy.
+- `screens_v2::messages::copy`: every message a screen sends. Screens never write message
+  literals; add the text to `copy` (and to its width test) instead.
 
 ## Testing
 

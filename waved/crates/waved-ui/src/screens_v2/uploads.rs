@@ -14,9 +14,10 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::time::parse_rfc3339;
 use crate::kit::tokens::{Rect, RAISED, SCREEN_W, SURFACE, TEXT, TEXT_2, TEXT_3, TITLE_Y, WARN};
-use crate::screens_v2::datetime::days_from_civil;
 use crate::screens_v2::menu::upload_mode_name;
+use crate::screens_v2::messages::copy;
 use std::cell::Cell;
 use std::rc::Rc;
 use waved_state::{Command, RecordingStatus, CLOCK_VALID_AFTER_UNIX_S};
@@ -44,61 +45,6 @@ pub fn host(endpoint: &str) -> Option<String> {
     let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     let host = authority.rsplit('@').next().unwrap_or(authority);
     (!host.is_empty()).then(|| host.to_string())
-}
-
-/// Seconds since the epoch of "YYYY-MM-DD[T ]HH:MM:SS[.frac][Z|±HH:MM]"
-/// (no offset means UTC); `None` when it doesn't parse.
-pub fn parse_rfc3339(text: &str) -> Option<i64> {
-    let text = text.trim();
-    let bytes = text.as_bytes();
-    if bytes.len() < 19
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || !matches!(bytes[10], b'T' | b't' | b' ')
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-    {
-        return None;
-    }
-    let number = |from: usize, to: usize| text.get(from..to)?.parse::<i64>().ok();
-    let (year, month, day) = (number(0, 4)?, number(5, 7)?, number(8, 10)?);
-    let (hour, minute, second) = (number(11, 13)?, number(14, 16)?, number(17, 19)?);
-    if !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || hour > 23
-        || minute > 59
-        || second > 60
-    {
-        return None;
-    }
-    let mut rest = text.get(19..)?;
-    if let Some(fraction) = rest.strip_prefix('.') {
-        let digits = fraction
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(fraction.len());
-        if digits == 0 {
-            return None;
-        }
-        rest = &fraction[digits..];
-    }
-    let offset_s = match rest {
-        "" | "Z" | "z" => 0,
-        _ => {
-            let sign = match rest.as_bytes()[0] {
-                b'+' => 1,
-                b'-' => -1,
-                _ => return None,
-            };
-            if rest.len() != 6 || rest.as_bytes()[3] != b':' {
-                return None;
-            }
-            let hours: i64 = rest.get(1..3)?.parse().ok()?;
-            let minutes: i64 = rest.get(4..6)?.parse().ok()?;
-            sign * (hours * 3_600 + minutes * 60)
-        }
-    };
-    let days = days_from_civil(year, month as u32, day as u32);
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second - offset_s)
 }
 
 /// "12 min ago"; `None` when `then` lies in the future (the clock isn't set).
@@ -235,8 +181,7 @@ impl Screen for UploadsScreen {
         on_click(retry, move || {
             let n = failed.get();
             dispatch.command(Command::RetryFailedUploads);
-            let noun = if n == 1 { "upload" } else { "uploads" };
-            dispatch.show(Severity::Info, format!("Retrying {n} {noun}"));
+            dispatch.show(Severity::Info, copy::retrying_uploads(n));
         });
         self.retry = Some(retry);
         back_button(root, &ctx.dispatch);
@@ -347,7 +292,7 @@ mod tests {
                 f.events(),
                 vec![UiEvent::Show(Message::new(
                     Severity::Info,
-                    "Retrying 1 upload"
+                    copy::retrying_uploads(1)
                 ))]
             );
             snap.meeting.failed_uploads = 0;
@@ -399,10 +344,7 @@ mod tests {
             parse_rfc3339("2025-10-04T16:20:00.123456789+02:00"),
             Some(t)
         );
-        assert_eq!(parse_rfc3339("2025-10-04 14:20:00"), Some(t));
         assert_eq!(parse_rfc3339("2025-10-04T14:20:00Z"), Some(t));
-        assert_eq!(parse_rfc3339("2025-13-04T00:00:00Z"), None);
-        assert_eq!(parse_rfc3339("+é:00 garbage text here"), None);
         assert_eq!(relative(1_000, 970).as_deref(), Some("just now"));
         assert_eq!(
             relative(10_000, 10_000 - 720).as_deref(),

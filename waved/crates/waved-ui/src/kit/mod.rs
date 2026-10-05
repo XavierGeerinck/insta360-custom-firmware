@@ -13,4 +13,5 @@ pub mod screen;
 pub mod snapshot;
 #[cfg(test)]
 pub mod testkit;
+pub mod time;
 pub mod tokens;

@@ -19,7 +19,7 @@ pub struct AudioState {
     pub mic_muted: bool,
     pub speaker_muted: bool,
     pub speaker_volume: u16,
-    /// Linear-percent mic gain. 100 = unity (0 dB). Range 0..=400.
+    /// Linear-percent mic gain. 100 = unity (0 dB). Range 0..=800 (`clamp_mic_volume`).
     /// Default 100 so the DSP chain is transparent unless explicitly
     /// configured. Production startup seeds this from TOML (Task 3).
     pub mic_volume: u16,

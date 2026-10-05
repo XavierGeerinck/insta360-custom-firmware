@@ -22,6 +22,9 @@
 //! | Battery 5 % or less, not charging | Error | Battery 5%, plug in Wave now |
 //! | Microphones not responding | Error | Microphones not responding |
 //! | Play while recording / during a call | Error | Can't play while recording / Can't play during a call |
+//! | Power off / Factory reset confirmed | Info | Powering off / Resetting Wave |
+//! | Delete confirmed | Success | Recording deleted |
+//! | Retry on Uploads | Info | Retrying 3 uploads |
 
 use crate::kit::dispatch::{Message, Severity};
 use crate::kit::snapshot::UiSnapshot;
@@ -51,6 +54,14 @@ pub mod copy {
     pub const CANT_PLAY_RECORDING: &str = "Can't play while recording";
     pub const CANT_PLAY_CALL: &str = "Can't play during a call";
     pub const STORAGE_ALMOST_FULL: &str = "Storage almost full";
+    pub const POWERING_OFF: &str = "Powering off";
+    pub const RESETTING: &str = "Resetting Wave";
+
+    /// What Retry on the Uploads screen says: "Retrying 1 upload", "Retrying 3 uploads".
+    pub fn retrying_uploads(count: u32) -> String {
+        let noun = if count == 1 { "upload" } else { "uploads" };
+        format!("Retrying {count} {noun}")
+    }
 
     pub fn marked_at(secs: u32) -> String {
         format!("Marked at {}", format_timer(secs))
@@ -264,9 +275,13 @@ mod tests {
             copy::CANT_PLAY_RECORDING,
             copy::CANT_PLAY_CALL,
             copy::STORAGE_ALMOST_FULL,
+            copy::POWERING_OFF,
+            copy::RESETTING,
         ]
         .map(String::from)
         .into();
+        texts.push(copy::retrying_uploads(1));
+        texts.push(copy::retrying_uploads(99_999));
         texts.push(copy::marked_at(359_999));
         texts.push(copy::battery_low(10));
         texts.push(copy::battery_critical(5));
@@ -295,6 +310,12 @@ mod tests {
         assert_eq!(copy::CANT_PLAY_RECORDING, "Can't play while recording");
         assert_eq!(copy::CANT_PLAY_CALL, "Can't play during a call");
         assert_eq!(copy::STORAGE_ALMOST_FULL, "Storage almost full");
+        assert_eq!(copy::POWERING_OFF, "Powering off");
+        assert_eq!(copy::RESETTING, "Resetting Wave");
+        assert_eq!(copy::DELETED, "Recording deleted");
+        assert_eq!(copy::retrying_uploads(1), "Retrying 1 upload");
+        assert_eq!(copy::retrying_uploads(0), "Retrying 0 uploads");
+        assert_eq!(copy::retrying_uploads(3), "Retrying 3 uploads");
     }
 
     #[test]

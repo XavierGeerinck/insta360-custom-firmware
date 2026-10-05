@@ -8,6 +8,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::time::civil_from_days;
 use crate::kit::tokens::{Rect, RADIO_TOP, SCREEN_W, TEXT, TEXT_2, TITLE_Y};
 use crate::screens_v2::menu::Pending;
 use crate::screens_v2::volume::BigNumber;
@@ -77,35 +78,10 @@ pub const ZONES: [&str; 29] = [
     "America/Los_Angeles",
 ];
 
-/// (year, month 1-12, day 1-31) of a day count since 1970-01-01 (H. Hinnant).
-pub(crate) fn civil(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-/// Days since 1970-01-01 of a civil date (H. Hinnant); Uploads parses its timestamps with it.
-pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let yoe = year.rem_euclid(400);
-    let month = i64::from(month);
-    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + i64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 /// "Saturday 4 October".
 pub fn date_line(local_s: i64) -> String {
     let days = local_s.div_euclid(86_400);
-    let (_, month, day) = civil(days);
+    let (_, month, day) = civil_from_days(days);
     let weekday = WEEKDAYS[(days + 4).rem_euclid(7) as usize];
     let month_name = MONTHS[month as usize - 1];
     format!("{weekday} {day} {month_name}")
@@ -335,15 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn civil_dates_round_trip() {
-        assert_eq!(civil(0), (1970, 1, 1));
-        assert_eq!(civil(-1), (1969, 12, 31));
-        assert_eq!(civil(20_365), (2025, 10, 4));
-        assert_eq!(civil(19_782), (2024, 2, 29));
-        for days in [-800_000, -1, 0, 59, 19_782, 20_365, 2_932_896] {
-            let (y, m, d) = civil(days);
-            assert_eq!(days_from_civil(y, m, d), days);
-        }
+    fn the_date_line_names_the_weekday_and_month() {
         assert_eq!(date_line(1_759_588_620), "Saturday 4 October");
         assert_eq!(date_line(0), "Thursday 1 January");
     }

@@ -1,6 +1,6 @@
 //! Confirmation (B6, confirm.png): one screen for every action that can't be
 //! undone or drops a connection. The action pill repeats the action's name,
-//! and the message afterwards uses it too ("Powering off"). It handles kept
+//! and the message afterwards uses it too (copy::POWERING_OFF). It handles kept
 //! files only: a recording waiting on the decision screen is discarded there.
 
 use crate::kit::components::buttons::Tone;
@@ -14,6 +14,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::{ConfirmKind, Route};
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::screens_v2::messages::copy;
 use waved_state::Command;
 
 pub fn spec(kind: ConfirmKind, snap: &UiSnapshot) -> ConfirmSpec {
@@ -89,16 +90,16 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
     match kind {
         ConfirmKind::PowerOff => done(
             Some(Command::Shutdown),
-            Some(Message::new(Severity::Info, "Powering off")),
+            Some(Message::new(Severity::Info, copy::POWERING_OFF)),
         ),
         ConfirmKind::FactoryReset => done(
             Some(Command::FactoryReset),
-            Some(Message::new(Severity::Info, "Resetting Wave")),
+            Some(Message::new(Severity::Info, copy::RESETTING)),
         ),
         // One back: the file's detail leaves by itself when its row disappears.
         ConfirmKind::DeleteRecording(id) => done(
             Some(Command::DeleteRecording(id)),
-            Some(Message::new(Severity::Success, "Recording deleted")),
+            Some(Message::new(Severity::Success, copy::DELETED)),
         ),
         ConfirmKind::ChangeNetwork => Outcome {
             command: None,
@@ -230,7 +231,7 @@ mod tests {
                 f.events(),
                 vec![
                     UiEvent::Back,
-                    UiEvent::Show(Message::new(Severity::Info, "Powering off"))
+                    UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF))
                 ]
             );
             assert_targets_ok(root);
@@ -252,7 +253,7 @@ mod tests {
                 f.events(),
                 vec![
                     UiEvent::Back,
-                    UiEvent::Show(Message::new(Severity::Info, "Resetting Wave"))
+                    UiEvent::Show(Message::new(Severity::Info, copy::RESETTING))
                 ]
             );
         });
@@ -266,7 +267,7 @@ mod tests {
         assert_eq!(done.backs, 1);
         assert_eq!(
             done.message,
-            Some(Message::new(Severity::Success, "Recording deleted"))
+            Some(Message::new(Severity::Success, copy::DELETED))
         );
         lvgl(|lv| {
             let (mut f, screen, root) = build(ConfirmKind::DeleteRecording(kept), &snap(), lv);
@@ -279,7 +280,7 @@ mod tests {
                 f.events(),
                 vec![
                     UiEvent::Back,
-                    UiEvent::Show(Message::new(Severity::Success, "Recording deleted"))
+                    UiEvent::Show(Message::new(Severity::Success, copy::DELETED))
                 ]
             );
             assert_targets_ok(root);
