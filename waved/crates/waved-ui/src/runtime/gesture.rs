@@ -170,6 +170,15 @@ impl Gestures {
         let target = press.target.filter(|&t| still_on(t, root)).unwrap_or(root);
         send_swipe(target, direction).then_some(SwipeTaken::Screen)
     }
+
+    /// The screen changed under the current press: it swipes nothing more,
+    /// in any direction, until it is lifted.
+    pub fn ignore_press(&mut self) {
+        self.press = Some(PressStart {
+            target: None,
+            blocked: true,
+        });
+    }
 }
 
 /// `obj` still exists and is on `root` (a handler may have deleted it, or the
@@ -677,6 +686,25 @@ mod tests {
             // And back again: a blocked press after a swipe.
             assert_eq!(feed(down(90, 90), 2_000), None);
             assert_eq!(feed(down(170, 90), 2_100), None, "blocked again");
+        });
+    }
+
+    #[test]
+    fn an_ignored_press_swipes_nothing_until_it_is_lifted() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut g = Gestures::default();
+            let feed = |g: &mut Gestures, s, at| g.sample(s, at, root, &Route::Volume, 2);
+            assert_eq!(feed(&mut g, down(100, 150), 0), None);
+            g.ignore_press();
+            assert_eq!(feed(&mut g, down(170, 150), 100), None, "ignored");
+            assert_eq!(feed(&mut g, up(), 150), None);
+            assert_eq!(feed(&mut g, down(100, 150), 1_000), None);
+            assert_eq!(
+                feed(&mut g, down(170, 150), 1_100),
+                back(),
+                "the next press swipes"
+            );
         });
     }
 

@@ -65,6 +65,10 @@ pub fn run(bus: Arc<StateBus>, config: WavedConfig) -> Result<(), Box<dyn std::e
         }
 
         runtime.step(snap, &events);
+        // The screen changed under a press: it clicks nothing on the new one.
+        if runtime.take_cancel_press() {
+            device.cancel_press();
+        }
         device.run_timers();
         std::thread::sleep(LOOP_SLEEP);
     }

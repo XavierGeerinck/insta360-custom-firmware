@@ -72,6 +72,10 @@ pub struct Runtime {
     /// The router stack after the last step: a route missing from it now has
     /// left, by whatever path, and sends its leave commands.
     last_stack: Vec<Route>,
+    /// The last sample `touch` handed LVGL was pressed.
+    pressed: bool,
+    /// The screen changed under a press: the device loop cancels it.
+    cancel_press: bool,
 }
 
 impl Runtime {
@@ -97,6 +101,8 @@ impl Runtime {
             shown: None,
             parked: None,
             last_stack: Vec::new(),
+            pressed: false,
+            cancel_press: false,
         }
     }
 
@@ -141,6 +147,7 @@ impl Runtime {
             pressed: raw.pressed && gate.deliver,
             ..raw
         };
+        self.pressed = sample.pressed;
         let root = self.root().unwrap_or_else(|| {
             // SAFETY: a null handle means "no screen loaded yet"; `Gestures`
             // checks for it before any LVGL call.
@@ -298,9 +305,15 @@ impl Runtime {
     /// `next` (already loaded) becomes the screen on display. The old one is
     /// parked when `next` is the resting screen pushed right on top of its
     /// route and nothing is parked yet; otherwise it is deleted with every
-    /// handler.
+    /// handler. A press that is down while the screen changes is cancelled
+    /// (`take_cancel_press`) and swipes nothing more: it began on another
+    /// screen, and a parked screen's pressed object would still click.
     fn replace_shown(&mut self, next: Shown) {
         if let Some(old) = self.shown.take() {
+            if self.pressed {
+                self.cancel_press = true;
+                self.gestures.ignore_press();
+            }
             let stack = self.router.stack();
             let parks = next.route == Route::Resting
                 && self.parked.is_none()
@@ -313,6 +326,13 @@ impl Runtime {
             }
         }
         self.shown = Some(next);
+    }
+
+    /// Whether a `step` since the last call changed the screen under a
+    /// press. The device loop then cancels the press (`lv_indev_wait_release`)
+    /// after `step` and before LVGL's timers run, so the press clicks nothing.
+    pub fn take_cancel_press(&mut self) -> bool {
+        std::mem::take(&mut self.cancel_press)
     }
 
     /// Delete the screen on display (tests only; the device never stops).
@@ -360,6 +380,8 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use super::device::Pointer;
+    use super::gesture::press_target;
     use super::power::BacklightOut;
     use super::testing::shows_text;
     use super::*;
@@ -386,6 +408,8 @@ mod tests {
         static LAST_NOW: Cell<Option<u64>> = const { Cell::new(None) };
         /// `settings.pin_enabled` as the Probe saw it in (build, update).
         static PIN_SEEN: Cell<(Option<bool>, Option<bool>)> = const { Cell::new((None, None)) };
+        /// Clicks on the TapTarget's button.
+        static TAPS: Cell<u32> = const { Cell::new(0) };
     }
 
     fn builds() -> Vec<String> {
@@ -1035,6 +1059,215 @@ mod tests {
             assert!(!setup.alive(), "the parked screen is deleted");
             assert!(!ambient.alive());
             assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+            rt.close();
+        });
+    }
+
+    /// The TapTarget's button: over the Probe's knob and the empty space
+    /// left of it.
+    const BUTTON: Rect = Rect::new(40, 170, 320, 100);
+    /// Empty space on a Probe, inside BUTTON.
+    const EMPTY: (i32, i32) = (80, 220);
+
+    /// A screen with one big button that counts its clicks.
+    struct TapTarget;
+
+    impl Screen for TapTarget {
+        fn build(&mut self, root: Obj, _ctx: &ScreenCtx, _snap: &UiSnapshot) {
+            let button = Obj::plain(root).rect(BUTTON).clickable(true);
+            crate::kit::event::on_click(button, || TAPS.with(|t| t.set(t.get() + 1)));
+            root.update_layout();
+        }
+
+        fn update(&mut self, _snap: &UiSnapshot) {}
+    }
+
+    /// Recording and Menu are TapTargets, everything else a Probe.
+    fn tap_targets(route: &Route) -> Option<Box<dyn Screen>> {
+        match route {
+            Route::Recording | Route::Menu => Some(Box::new(TapTarget)),
+            other => probes(other),
+        }
+    }
+
+    fn booted_tapping(lv: &mut Lvgl) -> Runtime {
+        lv.screen();
+        TAPS.with(|t| t.set(0));
+        let (mut rt, _bus) = runtime_with(Box::new(tap_targets));
+        rt.step(ready(0), &[]);
+        rt.step(ready(BOOT_MIN_MS), &[]);
+        rt
+    }
+
+    /// One iteration of `run::run` around a real LVGL pointer: the touch
+    /// report reaches the pointer, the step, the cancel the step asks for
+    /// (unless `cancel` is false), then LVGL reads the pointer. Returns
+    /// whether the step asked for a cancel.
+    fn iterate(
+        rt: &mut Runtime,
+        pointer: &Pointer,
+        sample: TouchSample,
+        snap: UiSnapshot,
+        cancel: bool,
+    ) -> bool {
+        iterate_with(rt, pointer, sample, snap, &[], cancel)
+    }
+
+    fn iterate_with(
+        rt: &mut Runtime,
+        pointer: &Pointer,
+        sample: TouchSample,
+        snap: UiSnapshot,
+        events: &[DeviceEvent],
+        cancel: bool,
+    ) -> bool {
+        let report = rt.touch(sample, &snap);
+        pointer.report(report.sample);
+        if report.cancel_press {
+            pointer.cancel_press();
+        }
+        rt.step(snap, events);
+        let asked = rt.take_cancel_press();
+        if asked && cancel {
+            pointer.cancel_press();
+        }
+        pointer.read();
+        asked
+    }
+
+    fn recording(now_ms: u64) -> UiSnapshot {
+        let mut snap = ready(now_ms);
+        snap.meeting.recording = true;
+        snap
+    }
+
+    fn taps() -> u32 {
+        TAPS.with(Cell::get)
+    }
+
+    #[test]
+    fn a_press_on_empty_space_does_not_tap_the_screen_that_replaces_it() {
+        lvgl(|lv| {
+            let mut rt = booted_tapping(lv);
+            let pointer = Pointer::create();
+            let (x, y) = EMPTY;
+            // In LVGL 9.2 such a press is the bottom layer's (clickable, no
+            // press lock), so LVGL itself turns the new screen's button into
+            // a PRESS_LOST; the runtime's cancel makes that explicit.
+            assert_eq!(
+                press_target(rt.root().unwrap(), x, y),
+                None,
+                "empty on Home"
+            );
+            assert!(!iterate(&mut rt, &pointer, down(x, y), ready(2_000), true));
+            assert!(
+                iterate(&mut rt, &pointer, down(x, y), recording(2_050), true),
+                "the meeting change replaced the screen under the press"
+            );
+            assert_eq!(rt.shown_route(), Some(&Route::Recording));
+            assert!(
+                press_target(rt.root().unwrap(), x, y).is_some(),
+                "a button now"
+            );
+            iterate(&mut rt, &pointer, down(x, y), recording(2_100), true);
+            iterate(&mut rt, &pointer, up(), recording(2_150), true);
+            assert_eq!(taps(), 0, "the press that began on Home taps nothing");
+
+            assert!(!iterate(
+                &mut rt,
+                &pointer,
+                down(x, y),
+                recording(2_500),
+                true
+            ));
+            assert!(!iterate(&mut rt, &pointer, up(), recording(2_550), true));
+            assert_eq!(taps(), 1, "a press that starts after the release taps");
+            drop(pointer);
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_press_held_into_a_rest_does_not_tap_the_parked_screen() {
+        lvgl(|lv| {
+            let mut rt = booted_tapping(lv);
+            let pointer = Pointer::create();
+            send(&mut rt, UiEvent::Navigate(Route::Menu), 2_000);
+            let (x, y) = EMPTY;
+            assert!(
+                press_target(rt.root().unwrap(), x, y).is_some(),
+                "Menu's button"
+            );
+            iterate(&mut rt, &pointer, down(x, y), ready(2_100), true);
+            // The power key rests the screen while the finger is still down:
+            // Menu is parked, so its pressed button is not deleted.
+            let short = [DeviceEvent::PowerKey(PowerKeyPress::Short)];
+            assert!(
+                iterate_with(&mut rt, &pointer, down(x, y), ready(2_150), &short, true),
+                "the resting screen replaced Menu under the press"
+            );
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            iterate(&mut rt, &pointer, down(x, y), ready(2_200), true);
+            iterate(&mut rt, &pointer, up(), ready(2_250), true);
+            assert_eq!(taps(), 0, "the parked Menu's button is not tapped");
+            drop(pointer);
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_pressed_object_deleted_with_its_screen_never_clicks() {
+        lvgl(|lv| {
+            let mut rt = booted_tapping(lv);
+            let pointer = Pointer::create();
+            let (x, y) = (KNOB.x + 50, KNOB.y + 30);
+            assert!(press_target(rt.root().unwrap(), x, y).is_some(), "the knob");
+            // The runtime's cancel is left out on purpose: this pins LVGL's
+            // own guard (deleting the pressed object waits for the release).
+            iterate(&mut rt, &pointer, down(x, y), ready(2_000), false);
+            iterate(&mut rt, &pointer, down(x, y), recording(2_050), false);
+            assert_eq!(rt.shown_route(), Some(&Route::Recording));
+            assert!(
+                press_target(rt.root().unwrap(), x, y).is_some(),
+                "a button now"
+            );
+            iterate(&mut rt, &pointer, up(), recording(2_100), false);
+            assert_eq!(taps(), 0);
+            drop(pointer);
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_screen_change_under_a_press_cancels_it_and_its_swipe() {
+        lvgl(|lv| {
+            let mut rt = booted(lv);
+            let (x, y) = (200, 20);
+            assert_eq!(press_target(rt.root().unwrap(), x, y), None);
+            assert!(!rt.touch(down(x, y), &ready(2_000)).cancel_press);
+            rt.step(recording(2_050), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Recording));
+            assert!(rt.take_cancel_press(), "the screen changed under the press");
+            assert!(!rt.take_cancel_press(), "asked once");
+            // Down 70 px from the top edge would open Menu on Recording.
+            assert!(
+                !rt.touch(down(x, y + 70), &recording(2_100)).cancel_press,
+                "no swipe for the rest of the press"
+            );
+            rt.touch(up(), &recording(2_150));
+            rt.step(recording(2_200), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Recording));
+            assert!(!rt.take_cancel_press());
+
+            assert!(!rt.touch(down(x, y), &recording(2_500)).cancel_press);
+            assert!(
+                rt.touch(down(x, y + 70), &recording(2_600)).cancel_press,
+                "a press that starts after the release swipes"
+            );
+            rt.touch(up(), &recording(2_650));
+            rt.step(recording(2_700), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Menu));
+            assert!(!rt.take_cancel_press(), "released before the change");
             rt.close();
         });
     }

@@ -9,8 +9,7 @@ use crate::runtime::touch::TouchSample;
 use std::cell::Cell;
 
 pub struct Device {
-    indev: *mut lv_indev_t,
-    touch: &'static Cell<TouchSample>,
+    pointer: Pointer,
 }
 
 impl Device {
@@ -18,8 +17,8 @@ impl Device {
     /// on the UI thread.
     pub fn init(fb: FramebufferDisplay) -> Self {
         // SAFETY: called once before any other LVGL call on this thread; the
-        // framebuffer and the touch cell are leaked, so LVGL's user-data
-        // pointers stay valid for the life of the process.
+        // framebuffer is leaked, so LVGL's user-data pointer stays valid for
+        // the life of the process.
         unsafe {
             lv_init();
             let disp = lv_display_create(display::SCREEN_W as i32, display::SCREEN_H as i32);
@@ -38,26 +37,21 @@ impl Device {
                 len,
                 lv_display_render_mode_t_LV_DISPLAY_RENDER_MODE_PARTIAL,
             );
-            let touch: &'static Cell<TouchSample> =
-                Box::leak(Box::new(Cell::new(TouchSample::default())));
-            let indev = lv_indev_create();
-            lv_indev_set_type(indev, lv_indev_type_t_LV_INDEV_TYPE_POINTER);
-            lv_indev_set_read_cb(indev, Some(touch_read_cb));
-            lv_indev_set_user_data(indev, touch as *const Cell<TouchSample> as *mut _);
-            release_top_layer();
-            Self { indev, touch }
         }
+        let pointer = Pointer::create();
+        release_top_layer();
+        Self { pointer }
     }
 
     /// What LVGL reads at its next pointer poll.
     pub fn report(&self, sample: TouchSample) {
-        self.touch.set(sample);
+        self.pointer.report(sample);
     }
 
-    /// A gesture took this press: LVGL sends PRESS_LOST on release, no click.
+    /// A gesture took this press, or the screen changed under it: LVGL
+    /// ignores the rest of the press (PRESS_LOST, no click).
     pub fn cancel_press(&self) {
-        // SAFETY: the pointer device created in `init`.
-        unsafe { lv_indev_wait_release(self.indev) };
+        self.pointer.cancel_press();
     }
 
     /// The loaded screen (null before the first one).
@@ -74,6 +68,59 @@ impl Device {
     pub fn run_timers(&self) {
         // SAFETY: plain LVGL call on the UI thread; handlers only push to channels.
         unsafe { lv_timer_handler() };
+    }
+}
+
+/// LVGL's pointer input device, fed the last reported touch sample.
+pub(crate) struct Pointer {
+    indev: *mut lv_indev_t,
+    touch: &'static Cell<TouchSample>,
+}
+
+impl Pointer {
+    /// Register a pointer with the default display. Call on the UI thread
+    /// once a display exists.
+    pub(crate) fn create() -> Self {
+        // Leaked, so LVGL's user-data pointer stays valid as long as the indev.
+        let touch: &'static Cell<TouchSample> =
+            Box::leak(Box::new(Cell::new(TouchSample::default())));
+        // SAFETY: LVGL is initialised with a default display (caller's
+        // contract); the read callback only reads the leaked cell.
+        unsafe {
+            let indev = lv_indev_create();
+            lv_indev_set_type(indev, lv_indev_type_t_LV_INDEV_TYPE_POINTER);
+            lv_indev_set_read_cb(indev, Some(touch_read_cb));
+            lv_indev_set_user_data(indev, touch as *const Cell<TouchSample> as *mut _);
+            Self { indev, touch }
+        }
+    }
+
+    pub(crate) fn report(&self, sample: TouchSample) {
+        self.touch.set(sample);
+    }
+
+    pub(crate) fn cancel_press(&self) {
+        // SAFETY: the pointer device created in `create`.
+        unsafe { lv_indev_wait_release(self.indev) };
+    }
+
+    /// Read and process the pointer now, as LVGL's read timer would (tests
+    /// run no timers).
+    #[cfg(test)]
+    pub(crate) fn read(&self) {
+        // SAFETY: the pointer device created in `create`.
+        unsafe { lv_indev_read(self.indev) };
+    }
+}
+
+/// Tests create a pointer each: remove it so no later test sees it (the
+/// touch cell, a few bytes, stays leaked). The device's pointer lives as
+/// long as the process.
+#[cfg(test)]
+impl Drop for Pointer {
+    fn drop(&mut self) {
+        // SAFETY: the pointer device created in `create`, deleted once.
+        unsafe { lv_indev_delete(self.indev) };
     }
 }
 
