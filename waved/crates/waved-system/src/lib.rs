@@ -6,4 +6,5 @@ pub mod backlight;
 mod civil;
 pub mod display;
 pub mod power_key;
+pub mod rtc;
 pub mod tz;
