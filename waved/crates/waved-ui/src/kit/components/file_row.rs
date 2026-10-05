@@ -118,8 +118,20 @@ impl FileList {
 
     /// Show `rows`. Unchanged rows keep their cards; a change rebuilds them
     /// and keeps the scroll position (clamped to the new content).
+    ///
+    /// While a card is pressed the rebuild waits: LVGL would hand the finger
+    /// to whatever new card is under it, and lifting it would open another
+    /// recording. `self.rows` still holds the rows on screen, so the next
+    /// call after the finger lifts rebuilds.
     pub fn set_rows(&mut self, rows: Vec<RowLook>) {
         if self.rows.as_ref() == Some(&rows) {
+            return;
+        }
+        if self
+            .cards
+            .iter()
+            .any(|card| card.has_state(LV_STATE_PRESSED))
+        {
             return;
         }
         let scroll = self.scroll_y();
@@ -269,6 +281,32 @@ mod tests {
             list.set_rows(changed);
             assert_eq!(list.len(), 3);
             assert_eq!(list.card(0).child(1).child(1).text(), "42 min, sending");
+        });
+    }
+
+    #[test]
+    fn a_pressed_card_is_not_rebuilt_under_the_finger() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let opened = Rc::new(Cell::new(None));
+            let seen = opened.clone();
+            let mut list = FileList::new(root, move |id| seen.set(Some(id)));
+            list.set_rows(three());
+            let pressed = list.card(1);
+            pressed.set_state(LV_STATE_PRESSED, true);
+            // An upload fails meanwhile and the order changes.
+            let mut reordered = three();
+            reordered.swap(0, 1);
+            list.set_rows(reordered.clone());
+            assert_eq!(list.card(0).child(1).child(0).text(), "Today, 14:02");
+            assert_eq!(list.card(1), pressed, "the finger keeps its card");
+            lv.click(pressed);
+            assert_eq!(opened.get(), Some(Uuid::from_u128(2)));
+            // Once the finger lifts, the next update shows the new order.
+            pressed.set_state(LV_STATE_PRESSED, false);
+            list.set_rows(reordered);
+            assert_eq!(list.card(0).child(1).child(0).text(), "Today, 10:30");
+            assert_eq!(list.card(1).child(1).child(0).text(), "Today, 14:02");
         });
     }
 

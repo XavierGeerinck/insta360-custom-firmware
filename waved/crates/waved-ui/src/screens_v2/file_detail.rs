@@ -21,7 +21,7 @@ use crate::kit::tokens::{
     DETAIL_NOTE_Y, DETAIL_SIDE_LEFT, DETAIL_SIDE_LEFT_LABEL, DETAIL_SIDE_RIGHT,
     DETAIL_SIDE_RIGHT_LABEL, SCREEN_W, TEXT, TEXT_2, TITLE_Y, WARN,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use uuid::Uuid;
 use waved_state::{Command, PlaybackState, RecordingStatus, RecordingSummary};
@@ -287,8 +287,9 @@ pub struct FileDetailScreen {
     /// Title and note as last drawn, to skip relabelling every frame.
     shown_title: String,
     shown_note: Option<(String, u32)>,
-    /// Already went back because the recording disappeared.
-    left: bool,
+    /// Already went back because the recording disappeared: Delete does
+    /// nothing more for it (Back is deleted then).
+    left: Rc<Cell<bool>>,
 }
 
 impl FileDetailScreen {
@@ -308,7 +309,7 @@ impl FileDetailScreen {
             live: Rc::default(),
             shown_title: String::new(),
             shown_note: None,
-            left: false,
+            left: Rc::default(),
         }
     }
 
@@ -358,7 +359,7 @@ impl Screen for FileDetailScreen {
         self.scrubber = Some(Scrubber::new(root, move |event| {
             on_scrub(id, &live, &dispatch, event)
         }));
-        let dispatch = ctx.dispatch.clone();
+        let (dispatch, left) = (ctx.dispatch.clone(), self.left.clone());
         self.delete = Some(RoundButton::at(
             root,
             DETAIL_SIDE_LEFT,
@@ -366,7 +367,11 @@ impl Screen for FileDetailScreen {
             icons::TRASH,
             "Delete",
             Tone::Rec,
-            move || dispatch.navigate(Route::Confirm(ConfirmKind::DeleteRecording(id))),
+            move || {
+                if !left.get() {
+                    dispatch.navigate(Route::Confirm(ConfirmKind::DeleteRecording(id)));
+                }
+            },
         ));
         let note = Obj::label(root, "", Font::Small, TEXT_2)
             .centered_text(NOTE_W)
@@ -396,9 +401,17 @@ impl Screen for FileDetailScreen {
         }
         let Some(rec) = snap.files.recordings.iter().find(|rec| rec.id == self.id) else {
             // Deleted (after the confirmation) or pruned by retention: back
-            // to Files, once.
-            if !self.left {
-                self.left = true;
+            // to Files, once. Until the router pops, taps send nothing for the
+            // missing recording: the scrubber's handler sees nothing to play
+            // (a seek only moves the local start), Send goes, Delete is
+            // guarded, and Back goes too, since the kit's Back always sends
+            // `UiEvent::Back` and a second one would pop past Files.
+            if !self.left.replace(true) {
+                *self.live.borrow_mut() = Live::default();
+                self.sync_send(None);
+                if let Some(back) = self.back.take() {
+                    back.delete();
+                }
                 if let Some(dispatch) = &self.dispatch {
                     dispatch.back();
                 }
@@ -1014,6 +1027,18 @@ mod tests {
             snap.files.recordings.clear();
             r.screen.update(&snap);
             r.screen.update(&snap);
+            // Taps in the frames before the router pops: nothing more goes out
+            // for the missing recording, and Back is not sent twice.
+            r.tap_centre();
+            r.tap_ring(90.0);
+            r.tap_ring(270.0);
+            for index in 0..r.root.child_count() {
+                let obj = r.root.child(index as i32);
+                if obj.is_clickable() && !obj.is_hidden() {
+                    lv.click(obj);
+                }
+            }
+            assert!(r.screen.back.is_none() && r.screen.send.is_none());
             assert_eq!(r.events(), vec![UiEvent::Back]);
             assert!(r.commands().is_empty());
         });

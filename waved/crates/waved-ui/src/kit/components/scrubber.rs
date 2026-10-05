@@ -32,7 +32,8 @@ const TIME_W: i32 = 160;
 /// Touches closer than this to the centre play or pause...
 pub const CENTRE_R: f32 = 44.0;
 /// ...and out to this radius they scrub (the ring, the ticks and some slop).
-pub const HIT_R: i32 = 84;
+/// 88 makes the ring band 44 px wide, the minimum target size.
+pub const HIT_R: i32 = 88;
 /// A ring tap within this many degrees of a tick jumps to its mark: ±18° is
 /// a 44 px arc on r 70, the minimum target size.
 pub const MARK_SNAP_DEG: f32 = 18.0;
@@ -65,20 +66,19 @@ pub fn angle_at(x: i32, y: i32) -> f32 {
         .rem_euclid(360.0)
 }
 
-/// The next drag position for a finger at `angle_deg`, coming from `prev`
-/// (0..1). A jump of more than half a turn means the finger crossed the top,
-/// so the position stays at the end it came from instead of wrapping.
-pub fn follow(prev: f32, angle_deg: f32) -> f32 {
-    let next = angle_deg.rem_euclid(360.0) / 360.0;
-    if (next - prev).abs() > 0.5 {
-        if prev >= 0.5 {
-            1.0
-        } else {
-            0.0
-        }
-    } else {
-        next
-    }
+/// The finger's angle `angle_deg` (0..360) unwound from the last reading
+/// `prev_deg`: each step goes the short way round, so crossing the top
+/// clockwise counts past 360 and counter-clockwise below 0.
+pub fn unwind(prev_deg: f32, angle_deg: f32) -> f32 {
+    let step = (angle_deg - prev_deg).rem_euclid(360.0);
+    prev_deg + if step > 180.0 { step - 360.0 } else { step }
+}
+
+/// The drag position (0..1) for an unwound finger angle. Past the top either
+/// way the knob stays at that end until the finger comes back across it,
+/// however far round it goes meanwhile.
+pub fn follow(turn_deg: f32) -> f32 {
+    (turn_deg / 360.0).clamp(0.0, 1.0)
 }
 
 pub fn fraction(position_ms: u32, duration_ms: u32) -> f32 {
@@ -145,8 +145,13 @@ enum Gesture {
     Scrub {
         x: i32,
         y: i32,
+        /// Where the knob is (0..1).
         at: f32,
         moved: bool,
+        /// The finger's angle unwound across the top (`unwind`).
+        turn: f32,
+        /// The finger went through the middle, where its angle means nothing.
+        centred: bool,
     },
 }
 
@@ -306,13 +311,16 @@ impl Scrubber {
         inner.gesture = match zone(x, y) {
             Zone::Centre => Gesture::Centre,
             Zone::Ring => {
-                let at = angle_at(x, y) / 360.0;
+                let turn = angle_at(x, y);
+                let at = turn / 360.0;
                 inner.draw_at(at);
                 Gesture::Scrub {
                     x,
                     y,
                     at,
                     moved: false,
+                    turn,
+                    centred: false,
                 }
             }
             Zone::Outside => Gesture::Idle,
@@ -328,19 +336,32 @@ impl Scrubber {
                 y: y0,
                 at,
                 moved,
+                turn,
+                centred,
             } => {
                 let moved = moved || ((x - x0) as f32).hypot((y - y0) as f32) > DRAG_SLOP;
-                let next = if moved {
-                    follow(at, angle_at(x, y))
+                let (at, turn, centred) = if !moved {
+                    (at, turn, centred)
+                } else if zone(x, y) == Zone::Centre {
+                    // Near the middle the angle swings wildly: the knob waits.
+                    (at, turn, true)
+                } else if centred {
+                    // Back from across the middle: the knob goes where the
+                    // finger is, with no turn to unwind from.
+                    let turn = angle_at(x, y);
+                    (turn / 360.0, turn, false)
                 } else {
-                    at
+                    let turn = unwind(turn, angle_at(x, y));
+                    (follow(turn), turn, false)
                 };
-                inner.draw_at(next);
+                inner.draw_at(at);
                 inner.gesture = Gesture::Scrub {
                     x: x0,
                     y: y0,
-                    at: next,
+                    at,
                     moved,
+                    turn,
+                    centred,
                 };
             }
             _ => {}
@@ -497,6 +518,8 @@ mod tests {
         assert_eq!(zone(CX + 60, CY), Zone::Ring);
         assert_eq!(zone(CX, CY - HIT_R), Zone::Ring);
         assert_eq!(zone(CX + 80, CY + 80), Zone::Outside);
+        // The ring band is a 44 px target, like every other one.
+        assert!(HIT_R as f32 - CENTRE_R >= 44.0, "ring band too thin");
         assert_eq!(angle_at(CX, CY - 60), 0.0);
         assert_eq!(angle_at(CX + 60, CY), 90.0);
         assert_eq!(angle_at(CX, CY + 60), 180.0);
@@ -521,10 +544,13 @@ mod tests {
 
     #[test]
     fn dragging_past_the_top_clamps_instead_of_wrapping() {
-        assert_eq!(follow(0.97, 20.0), 1.0);
-        assert_eq!(follow(0.03, 340.0), 0.0);
-        assert!((follow(1.0, 340.0) - 340.0 / 360.0).abs() < 1e-6);
-        assert!((follow(0.25, 100.0) - 100.0 / 360.0).abs() < 1e-6);
+        assert_eq!(unwind(350.0, 20.0), 380.0);
+        assert_eq!(unwind(10.0, 340.0), -20.0);
+        assert_eq!(unwind(380.0, 340.0), 340.0);
+        assert_eq!(unwind(90.0, 100.0), 100.0);
+        assert_eq!(follow(380.0), 1.0);
+        assert_eq!(follow(-20.0), 0.0);
+        assert!((follow(340.0) - 340.0 / 360.0).abs() < 1e-6);
         lvgl(|lv| {
             let root = lv.screen();
             let (scrubber, events) = rig(root);
@@ -534,6 +560,75 @@ mod tests {
             scrubber.drag(x, y);
             scrubber.release();
             assert_eq!(*events.borrow(), vec![ScrubEvent::Seek(DURATION)]);
+        });
+    }
+
+    #[test]
+    fn a_drag_through_the_middle_lands_where_the_finger_comes_back() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (scrubber, events) = rig(root);
+            let (x, y) = at(90.0, 60.0);
+            scrubber.press(x, y);
+            // Across the middle, where the angle means nothing...
+            let (x, y) = at(90.0, 20.0);
+            scrubber.drag(x, y);
+            scrubber.drag(CX, CY);
+            let (x, y) = at(270.0, 20.0);
+            scrubber.drag(x, y);
+            // ...the knob waits where it was.
+            assert_eq!(
+                scrubber.time().text(),
+                time_text(to_ms(0.25, DURATION), DURATION)
+            );
+            // Back on the ring at 270°: the knob is there, not at an end.
+            let (x, y) = at(270.0, 60.0);
+            scrubber.drag(x, y);
+            scrubber.release();
+            assert_eq!(
+                *events.borrow(),
+                vec![ScrubEvent::Seek(to_ms(0.75, DURATION))]
+            );
+        });
+    }
+
+    #[test]
+    fn past_the_end_the_knob_stays_until_the_finger_comes_back_across_the_top() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (scrubber, events) = rig(root);
+            let end = time_text(DURATION, DURATION);
+            let (x, y) = at(350.0, 60.0);
+            scrubber.press(x, y);
+            // Clockwise past the top and on round to 190°: still at the end.
+            for deg in [20.0, 60.0, 100.0, 140.0, 190.0] {
+                let (x, y) = at(deg, 60.0);
+                scrubber.drag(x, y);
+                assert_eq!(scrubber.time().text(), end, "at {deg}°");
+            }
+            // Back the same way: still the end until the finger crosses the top.
+            for deg in [140.0, 60.0, 10.0] {
+                let (x, y) = at(deg, 60.0);
+                scrubber.drag(x, y);
+                assert_eq!(scrubber.time().text(), end, "back at {deg}°");
+            }
+            let (x, y) = at(340.0, 60.0);
+            scrubber.drag(x, y);
+            let ms = to_ms(angle_at(x, y) / 360.0, DURATION);
+            assert_eq!(scrubber.time().text(), time_text(ms, DURATION));
+            scrubber.release();
+            assert_eq!(*events.borrow(), vec![ScrubEvent::Seek(ms)]);
+            // The same holds at the start, counter-clockwise.
+            events.borrow_mut().clear();
+            let (x, y) = at(10.0, 60.0);
+            scrubber.press(x, y);
+            for deg in [340.0, 300.0, 250.0, 170.0] {
+                let (x, y) = at(deg, 60.0);
+                scrubber.drag(x, y);
+                assert_eq!(scrubber.time().text(), time_text(0, DURATION), "at {deg}°");
+            }
+            scrubber.release();
+            assert_eq!(*events.borrow(), vec![ScrubEvent::Seek(0)]);
         });
     }
 
