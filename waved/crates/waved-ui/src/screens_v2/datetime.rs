@@ -75,9 +75,7 @@ pub(crate) fn civil(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-/// Days since 1970-01-01 of a civil date (H. Hinnant). Uploads (Task 15) uses
-/// it; until then only the tests do, and that task drops the attribute.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Days since 1970-01-01 of a civil date (H. Hinnant); Uploads parses its timestamps with it.
 pub(crate) fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
