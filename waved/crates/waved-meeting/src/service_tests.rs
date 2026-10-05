@@ -255,11 +255,38 @@ async fn pre_roll_follows_the_setting() {
     // Off right before Record: the buffer is dropped and stays empty.
     rig.feed(50, 0.5).await;
     rig.settings.send_modify(|s| s.pre_recording = false);
-    tokio::time::sleep(Duration::from_millis(50)).await;
     rig.feed(10, 0.5).await;
     let second = rig.start().await;
     rig.feed(20, 0.25).await;
     rig.stop().await;
     assert_eq!(rig.metadata(second).recording.pre_roll_duration_ms, 0);
     assert_eq!(rig.wav_samples(second), 20 * 480);
+}
+
+/// The setting change and Record are both ready when the service looks, and
+/// `select!` picks at random. Run it enough times that either order shows up.
+#[tokio::test]
+async fn pre_roll_off_then_record_back_to_back_never_splices_old_audio() {
+    let rig = start_rig(
+        quiet_config(UploadMode::LocalOnly),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    for round in 0..20 {
+        rig.settings.send_modify(|s| s.pre_recording = true);
+        rig.feed(50, 0.5).await;
+        // No wait between the two: both are pending at the same time.
+        rig.settings.send_modify(|s| s.pre_recording = false);
+        rig.send(Command::StartRecording);
+        rig.wait_for("recording", |s| s.recording).await;
+        let id = rig.meeting.borrow().meeting_id.expect("recording has an id");
+        rig.feed(5, 0.25).await;
+        rig.stop().await;
+        assert_eq!(
+            rig.metadata(id).recording.pre_roll_duration_ms,
+            0,
+            "round {round}"
+        );
+        assert_eq!(rig.wav_samples(id), 5 * 480, "round {round}");
+    }
 }

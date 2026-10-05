@@ -380,7 +380,7 @@ impl MeetingService {
         // Post-DSP mono samples kept around for the pre-record splice.
         // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
         let mut prebuffer = PreBuffer::new(PREBUFFER_SECONDS, RECORDING_SAMPLE_RATE, 1);
-        prebuffer.set_enabled(self.settings_rx.borrow().pre_recording);
+        self.sync_pre_recording(&mut prebuffer);
         let mut settings_rx = self.settings_rx.clone();
 
         // 1 Hz tick to publish elapsed-seconds onto MeetingState while
@@ -413,6 +413,7 @@ impl MeetingService {
                             prebuffer.resume();
                         }
                     } else {
+                        self.sync_pre_recording(&mut prebuffer);
                         prebuffer.push(&frame.mic_mono_f32);
                     }
                 }
@@ -535,6 +536,10 @@ impl MeetingService {
                                             diarizer = Some(crate::diarization::Diarizer::new(id));
                                             // Splice the pre-record prefix onto the front of the
                                             // new WAV before any live frames arrive.
+                                            // The setting is read again here: `select!` is
+                                            // unbiased, so a just-flipped "off" may not have
+                                            // been handled yet, and its audio must not be used.
+                                            self.sync_pre_recording(&mut prebuffer);
                                             let prefix = prebuffer.drain_all();
                                             // active was just set above; the unwrap is safe by construction.
                                             if let Err(error) =
@@ -689,14 +694,8 @@ impl MeetingService {
                     }
                 }
                 Ok(()) = settings_rx.changed() => {
-                    let pre_recording = settings_rx.borrow_and_update().pre_recording;
-                    if pre_recording != prebuffer.is_enabled() {
-                        prebuffer.set_enabled(pre_recording);
-                        info!(
-                            "pre-recording {}",
-                            if pre_recording { "on" } else { "off; buffered audio dropped" }
-                        );
-                    }
+                    settings_rx.borrow_and_update();
+                    self.sync_pre_recording(&mut prebuffer);
                 }
                 Ok(()) = wifi_rx.changed() => {
                     if wifi_rx.borrow().connected {
@@ -713,6 +712,20 @@ impl MeetingService {
         policy: StopPolicy,
     ) -> impl Future<Output = ()> + Send + 'static {
         RecordingFinalizer::from(self).stop_recording(rec, policy)
+    }
+
+    /// Make the pre-roll follow the latest `pre_recording` setting. Cheap, and
+    /// called wherever the buffer is pushed to or spliced from, so a change
+    /// that the settings branch has not handled yet is never missed.
+    fn sync_pre_recording(&self, prebuffer: &mut PreBuffer) {
+        let pre_recording = self.settings_rx.borrow().pre_recording;
+        if pre_recording != prebuffer.is_enabled() {
+            prebuffer.set_enabled(pre_recording);
+            info!(
+                "pre-recording {}",
+                if pre_recording { "on" } else { "off; buffered audio dropped" }
+            );
+        }
     }
 
     async fn await_finalization_with_drain<F>(
@@ -737,13 +750,17 @@ impl MeetingService {
                     // command handling resumes, so an immediately queued Start
                     // cannot overtake its own pre-roll.
                     while let Ok(frame) = self.audio_rx.try_recv() {
+                        self.sync_pre_recording(prebuffer);
                         prebuffer.push(&frame.mic_mono_f32);
                     }
                     break;
                 },
                 frame = self.audio_rx.recv(), if !audio_closed => {
                     match frame {
-                        Some(frame) => prebuffer.push(&frame.mic_mono_f32),
+                        Some(frame) => {
+                            self.sync_pre_recording(prebuffer);
+                            prebuffer.push(&frame.mic_mono_f32);
+                        }
                         None => audio_closed = true,
                     }
                 }
