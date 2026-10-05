@@ -147,6 +147,8 @@ impl Screen for RecordingScreen {
         };
         // Set by the first completed hold: Stop is one-shot until the screen changes.
         let stopped = Rc::new(Cell::new(false));
+        // Only the setup page changes the endpoint, and saving there restarts waved.
+        let server_set = !ctx.config.api.endpoint.trim().is_empty();
         let stop = {
             let (tap, done) = (ctx.dispatch.clone(), ctx.dispatch.clone());
             let (tap_stopped, done_stopped, live) =
@@ -164,7 +166,7 @@ impl Screen for RecordingScreen {
                     }
                     done.command(Command::StopRecording);
                     // Also replaces "Keep holding to stop" before the screen changes.
-                    let message = copy::after_stop(live.get().upload_mode);
+                    let message = copy::after_stop(live.get().upload_mode, server_set);
                     done.show(message.severity, message.text);
                 },
             )
@@ -430,7 +432,7 @@ mod tests {
             assert_eq!(sent(&mut bus), ["StopRecording"]);
             assert_eq!(
                 events(&ui).last(),
-                Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic)))
+                Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic, false)))
             );
         });
     }
@@ -451,13 +453,36 @@ mod tests {
             assert_eq!(sent(&mut bus), ["StopRecording"], "one StopRecording");
             let stops = events(&ui)
                 .into_iter()
-                .filter(|e| *e == UiEvent::Show(copy::after_stop(UploadMode::Automatic)))
+                .filter(|e| *e == UiEvent::Show(copy::after_stop(UploadMode::Automatic, false)))
                 .count();
             assert_eq!(stops, 1, "one after_stop message");
             let before = events(&ui).len();
             lv.click(stop);
             assert!(sent(&mut bus).is_empty());
             assert_eq!(events(&ui).len(), before, "taps after Stop say nothing");
+        });
+    }
+
+    #[test]
+    fn automatic_with_a_server_says_it_is_sending() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (mut ctx, mut bus, ui) = ctx();
+            let mut config = (*ctx.config).clone();
+            config.api.endpoint = "https://notes.example.com/hook".into();
+            ctx.config = std::sync::Arc::new(config);
+            let mut snap = recording(2_537);
+            snap.settings.upload_mode = UploadMode::Automatic;
+            let mut screen = RecordingScreen::default();
+            screen.build(root, &ctx, &snap);
+            let stop = screen.parts.as_ref().unwrap().stop.obj();
+            lv.send(stop, lv_event_code_t_LV_EVENT_PRESSED);
+            lv.advance(HOLD_TO_STOP_MS as u32 + 100);
+            assert_eq!(sent(&mut bus), ["StopRecording"]);
+            assert_eq!(
+                events(&ui).last(),
+                Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic, true)))
+            );
         });
     }
 
@@ -482,7 +507,7 @@ mod tests {
                 assert_eq!(sent(&mut bus), ["StopRecording"]);
                 assert_eq!(
                     events(&ui).last(),
-                    Some(&UiEvent::Show(copy::after_stop(mode))),
+                    Some(&UiEvent::Show(copy::after_stop(mode, false))),
                     "{mode:?}"
                 );
             });

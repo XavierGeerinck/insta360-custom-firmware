@@ -76,11 +76,16 @@ pub mod copy {
     }
 
     /// What Stop's completed hold says, by what happens to the recording next.
-    pub fn after_stop(mode: UploadMode) -> Message {
+    /// Automatic with no upload server keeps the take on Wave, so it says so.
+    pub fn after_stop(mode: UploadMode, server_set: bool) -> Message {
         match mode {
             UploadMode::Ask => Message::new(Severity::Info, "Recording stopped"),
-            UploadMode::Automatic => Message::new(Severity::Info, "Recording saved, sending"),
-            UploadMode::LocalOnly => Message::new(Severity::Success, "Recording saved on Wave"),
+            UploadMode::Automatic if server_set => {
+                Message::new(Severity::Info, "Recording saved, sending")
+            }
+            UploadMode::Automatic | UploadMode::LocalOnly => {
+                Message::new(Severity::Success, "Recording saved on Wave")
+            }
         }
     }
 }
@@ -290,7 +295,7 @@ mod tests {
             UploadMode::Automatic,
             UploadMode::LocalOnly,
         ] {
-            texts.push(copy::after_stop(mode).text);
+            texts.push(copy::after_stop(mode, true).text);
         }
         lvgl(|_| {
             for text in &texts {
@@ -321,15 +326,21 @@ mod tests {
     #[test]
     fn stop_messages_follow_the_upload_mode() {
         assert_eq!(
-            copy::after_stop(UploadMode::Ask),
+            copy::after_stop(UploadMode::Ask, true),
             message(Severity::Info, "Recording stopped")
         );
         assert_eq!(
-            copy::after_stop(UploadMode::Automatic),
+            copy::after_stop(UploadMode::Automatic, true),
             message(Severity::Info, "Recording saved, sending")
         );
         assert_eq!(
-            copy::after_stop(UploadMode::LocalOnly),
+            copy::after_stop(UploadMode::LocalOnly, true),
+            message(Severity::Success, "Recording saved on Wave")
+        );
+        // No upload server: Automatic keeps the take on Wave and must not
+        // promise a send.
+        assert_eq!(
+            copy::after_stop(UploadMode::Automatic, false),
             message(Severity::Success, "Recording saved on Wave")
         );
         assert_eq!(copy::marked_at(2_537), "Marked at 42:17");
