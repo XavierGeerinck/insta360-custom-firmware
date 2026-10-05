@@ -176,11 +176,12 @@ impl MessageFeed {
         } else if battery.level <= BATTERY_CRITICAL {
             BatteryStage::Critical
         } else if battery.level <= BATTERY_LOW {
-            BatteryStage::Low
+            // Never back down a stage before the re-arm level: 5 <-> 6 % warns once.
+            self.battery.max(BatteryStage::Low)
         } else if battery.level >= BATTERY_REARM {
             BatteryStage::Normal
         } else {
-            self.battery.min(BatteryStage::Low)
+            self.battery
         };
         if stage > self.battery {
             match stage {
@@ -454,6 +455,28 @@ mod tests {
         assert_eq!(
             feed.on_snapshot(&snap),
             [message(Severity::Error, "Battery 5%, plug in Wave now")]
+        );
+        for level in [6, 5, 6, 5, 6, 5] {
+            snap.battery.level = level;
+            assert!(
+                feed.on_snapshot(&snap).is_empty(),
+                "flapping 5 <-> 6 % warns once ({level} %)"
+            );
+        }
+        snap.battery.level = 14;
+        assert!(feed.on_snapshot(&snap).is_empty());
+        snap.battery.level = 5;
+        assert!(
+            feed.on_snapshot(&snap).is_empty(),
+            "still armed below the re-arm level"
+        );
+        snap.battery.level = 15;
+        assert!(feed.on_snapshot(&snap).is_empty());
+        snap.battery.level = 5;
+        assert_eq!(
+            feed.on_snapshot(&snap),
+            [message(Severity::Error, "Battery 5%, plug in Wave now")],
+            "re-armed at 15 %"
         );
         snap.battery.is_charging = true;
         assert!(feed.on_snapshot(&snap).is_empty());
