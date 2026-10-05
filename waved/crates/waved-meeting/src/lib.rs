@@ -540,38 +540,8 @@ impl MeetingService {
                     }
                 }
                 Some(signal) = self.integrity_rx.recv() => {
-                    let fault = signal.fault;
-                    let epoch = self.integrity.epoch();
-                    let moved = active
-                        .as_ref()
-                        .is_some_and(|rec| epoch != rec.integrity_epoch());
-                    let tolerated = moved
-                        && active
-                            .as_ref()
-                            .is_some_and(|rec| paused_take_tolerates(rec, fault));
-                    if tolerated {
-                        if let Some(rec) = active.as_mut() {
-                            warn!(
-                                "{} while paused; nothing was being written, the take continues",
-                                fault.diagnostic()
-                            );
-                            // Accept only the one fault this signal reports: a
-                            // capture failure recorded behind it still moves the
-                            // epoch and ends the take when its own signal lands.
-                            rec.rebase_integrity_epoch(rec.integrity_epoch() + 1);
-                        }
-                    } else if moved {
-                        let rec = active.take().expect("active recording disappeared");
-                        diarizer = None;
-                        self.abort_recording(rec, fault).await;
-                        prebuffer.clear();
-                        prebuffer.resume();
-                    } else {
-                        self.publish_idle_fault(fault);
-                    }
-                    if let Some(acknowledgement) = signal.acknowledgement {
-                        let _ = acknowledgement.send(());
-                    }
+                    self.handle_integrity_signal(signal, &mut active, &mut diarizer, &mut prebuffer)
+                        .await;
                 }
                 // Drain DoA frames into the active diarizer. Frames arriving
                 // outside a recording are silently dropped (diarizer is None).
@@ -789,9 +759,23 @@ impl MeetingService {
                                 }
                                 Command::PauseRecording => {
                                     let Some(rec) = active.as_mut() else { continue };
+                                    if !rec.is_paused() {
+                                        // Frames still queued were captured before the
+                                        // pause: write them, or the last words are lost.
+                                        if let Some(fault) = self.append_queued_frames(rec) {
+                                            let rec = active.take().expect("active recording disappeared");
+                                            diarizer = None;
+                                            self.abort_recording(rec, fault).await;
+                                            prebuffer.clear();
+                                            prebuffer.resume();
+                                            continue;
+                                        }
+                                    }
                                     if self.integrity.epoch() != rec.integrity_epoch() {
                                         // A fault from while audio was being written is
-                                        // still queued; pausing now would excuse it.
+                                        // still queued; pausing now would excuse it. Its
+                                        // signal is certain to follow (see
+                                        // `RecordingIntegrity::record_fault`) and ends the take.
                                         warn!("pause ignored: an integrity fault is ending the take");
                                         continue;
                                     }
@@ -809,13 +793,30 @@ impl MeetingService {
                                     }
                                 }
                                 Command::ResumeRecording => {
-                                    let Some(rec) = active.as_mut() else { continue };
-                                    if rec.resume_at(std::time::Instant::now()) {
-                                        if let Some(d) = diarizer.as_mut() {
-                                            d.resume();
+                                    if active.as_ref().is_some_and(|rec| rec.is_paused()) {
+                                        // Still paused: frames queued now were captured
+                                        // during the pause and never reach the file, and
+                                        // faults from during the pause are judged as
+                                        // pause faults before the take writes again.
+                                        self.discard_queued_frames();
+                                        while let Ok(signal) = self.integrity_rx.try_recv() {
+                                            self.handle_integrity_signal(
+                                                signal,
+                                                &mut active,
+                                                &mut diarizer,
+                                                &mut prebuffer,
+                                            )
+                                            .await;
                                         }
-                                        self.meeting_tx.send_modify(|s| s.paused = false);
-                                        info!("recording resumed at {}s", rec.duration_secs());
+                                    }
+                                    if let Some(rec) = active.as_mut() {
+                                        if rec.resume_at(std::time::Instant::now()) {
+                                            if let Some(d) = diarizer.as_mut() {
+                                                d.resume();
+                                            }
+                                            self.meeting_tx.send_modify(|s| s.paused = false);
+                                            info!("recording resumed at {}s", rec.duration_secs());
+                                        }
                                     }
                                 }
                                 Command::AddBookmark => {
@@ -1051,6 +1052,83 @@ impl MeetingService {
         }
     }
 
+    /// Write every frame already queued to the take: they were captured
+    /// before the command being handled (Stop, Pause). A paused take drops
+    /// them (`append_samples`). On a failure the fault is recorded and
+    /// returned, and the caller ends the take.
+    fn append_queued_frames(
+        &mut self,
+        rec: &mut recorder::ActiveRecording,
+    ) -> Option<RecordingIntegrityFault> {
+        loop {
+            let fault = match self.audio_rx.try_recv() {
+                Ok(frame) => match rec.append_samples(&frame.mic_mono_f32) {
+                    Ok(_) => continue,
+                    Err(_) => RecordingIntegrityFault::WavWriteFailed,
+                },
+                Err(mpsc::error::TryRecvError::Empty) => return None,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    RecordingIntegrityFault::ProcessedFrameChannelClosed
+                }
+            };
+            self.integrity.record_fault(fault);
+            return Some(fault);
+        }
+    }
+
+    /// Drop every frame already queued: they were captured during a pause.
+    fn discard_queued_frames(&mut self) {
+        while self.audio_rx.try_recv().is_ok() {}
+    }
+
+    /// Judge one integrity signal against the running take, then acknowledge
+    /// it. A fault since the take's epoch ends the take, unless the take is
+    /// paused and the pipeline is still there: then nothing was being written
+    /// and the take goes on. Without a take the fault is published as idle.
+    ///
+    /// Relies on each `RecordingIntegrity::record_fault` by the audio
+    /// pipeline being followed by exactly one signal: a tolerated signal
+    /// accepts exactly one fault (+1 on the take's epoch), so a capture
+    /// failure recorded behind it still ends the take when its own signal
+    /// lands.
+    async fn handle_integrity_signal(
+        &mut self,
+        signal: IntegritySignal,
+        active: &mut Option<recorder::ActiveRecording>,
+        diarizer: &mut Option<crate::diarization::Diarizer>,
+        prebuffer: &mut PreBuffer,
+    ) {
+        let fault = signal.fault;
+        let epoch = self.integrity.epoch();
+        let moved = active
+            .as_ref()
+            .is_some_and(|rec| epoch != rec.integrity_epoch());
+        let tolerated = moved
+            && active
+                .as_ref()
+                .is_some_and(|rec| paused_take_tolerates(rec, fault));
+        if tolerated {
+            if let Some(rec) = active.as_mut() {
+                warn!(
+                    "{} while paused; nothing was being written, the take continues",
+                    fault.diagnostic()
+                );
+                rec.rebase_integrity_epoch(rec.integrity_epoch() + 1);
+            }
+        } else if moved {
+            let rec = active.take().expect("active recording disappeared");
+            *diarizer = None;
+            self.abort_recording(rec, fault).await;
+            prebuffer.clear();
+            prebuffer.resume();
+        } else {
+            self.publish_idle_fault(fault);
+        }
+        if let Some(acknowledgement) = signal.acknowledgement {
+            let _ = acknowledgement.send(());
+        }
+    }
+
     fn drain_before_stop(
         &mut self,
         rec: &mut recorder::ActiveRecording,
@@ -1058,28 +1136,8 @@ impl MeetingService {
         Option<RecordingIntegrityFault>,
         Vec<tokio::sync::oneshot::Sender<()>>,
     ) {
-        let mut fault = None;
+        let mut fault = self.append_queued_frames(rec);
         let mut acknowledgements = Vec::new();
-
-        loop {
-            match self.audio_rx.try_recv() {
-                Ok(frame) => {
-                    if rec.append_samples(&frame.mic_mono_f32).is_err() {
-                        self.integrity
-                            .record_fault(RecordingIntegrityFault::WavWriteFailed);
-                        fault.get_or_insert(RecordingIntegrityFault::WavWriteFailed);
-                        break;
-                    }
-                }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    self.integrity
-                        .record_fault(RecordingIntegrityFault::ProcessedFrameChannelClosed);
-                    fault.get_or_insert(RecordingIntegrityFault::ProcessedFrameChannelClosed);
-                    break;
-                }
-            }
-        }
 
         while let Ok(signal) = self.integrity_rx.try_recv() {
             if self.integrity.epoch() != rec.integrity_epoch()

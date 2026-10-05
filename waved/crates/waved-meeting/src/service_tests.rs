@@ -143,6 +143,15 @@ impl Rig {
         }
     }
 
+    /// Queue `count` frames holding `value` without yielding, so they are all
+    /// waiting in the channel when the command sent next is handled (the test
+    /// runtime is single-threaded: the service only runs once the test awaits).
+    pub fn queue(&self, count: usize, value: f32) {
+        for _ in 0..count {
+            self.frames.try_send(frame_of(value)).unwrap();
+        }
+    }
+
     pub async fn wait_for(&self, what: &str, predicate: impl Fn(&MeetingState) -> bool) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while !predicate(&self.meeting.borrow()) {
@@ -451,6 +460,86 @@ async fn a_drop_before_the_pause_still_ends_the_take() {
         .unwrap();
     rig.wait_for("take ended", |s| !s.recording).await;
     rig.wait_status(id, Some("artifact_error")).await;
+}
+
+/// All samples of a take's WAV, as written.
+fn wav_values(rig: &Rig, id: Uuid) -> Vec<i16> {
+    hound::WavReader::open(rig.dir(id).join("audio.wav"))
+        .unwrap()
+        .samples::<i16>()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// Frames still queued when Resume is handled were captured during the
+/// pause: none reach the file. A frame drop from during the pause that is
+/// still queued at Resume is a pause fault and keeps the take. Everything
+/// is queued before the service runs, so Resume, the frames and the signal
+/// are all ready at once; ten rounds make the old orders show up.
+#[tokio::test]
+async fn frames_and_drops_queued_at_resume_stay_in_the_pause() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    for round in 0..10 {
+        rig.send(Command::PauseRecording);
+        rig.wait_for("paused", |s| s.paused).await;
+        rig.queue(20, 0.5);
+        rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+        rig.integrity_tx
+            .send(IntegritySignal::new(RecordingIntegrityFault::ProcessedFrameDropped))
+            .unwrap();
+        rig.send(Command::ResumeRecording);
+        rig.wait_for("resumed", |s| !s.paused).await;
+        assert!(rig.meeting.borrow().recording, "round {round}: the take survives");
+        rig.feed(10, 0.25).await;
+    }
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    let values = wav_values(&rig, id);
+    assert_eq!(values.len(), 110 * 480, "only the frames from outside the pauses");
+    assert!(
+        values.iter().all(|&v| v == values[0]),
+        "no audio from a pause in the file"
+    );
+}
+
+/// A dead capture whose signal is still queued at Resume ends the take
+/// there, before it writes again.
+#[tokio::test]
+async fn a_capture_failure_queued_at_resume_ends_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.queue(5, 0.5);
+    rig.integrity.record_fault(RecordingIntegrityFault::CaptureEnded);
+    rig.integrity_tx
+        .send(IntegritySignal::new(RecordingIntegrityFault::CaptureEnded))
+        .unwrap();
+    rig.send(Command::ResumeRecording);
+    rig.wait_for("take ended", |s| !s.recording).await;
+    rig.wait_status(id, Some("artifact_error")).await;
+}
+
+/// Frames still queued when Pause is handled were captured before it: they
+/// reach the file, so the last words before a pause are kept.
+#[tokio::test]
+async fn frames_queued_at_pause_are_written() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    for _ in 0..10 {
+        rig.queue(20, 0.25);
+        rig.send(Command::PauseRecording);
+        rig.wait_for("paused", |s| s.paused).await;
+        rig.send(Command::ResumeRecording);
+        rig.wait_for("resumed", |s| !s.paused).await;
+    }
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    assert_eq!(rig.wav_samples(id), 200 * 480);
+    assert_eq!(rig.metadata(id).recording.pauses.len(), 10);
 }
 
 /// PauseRecording and ResumeRecording are idempotent (lane A ruling).
