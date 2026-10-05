@@ -84,6 +84,12 @@ pub(crate) fn pre_recording_active(setting_on: bool, recording: bool, audio: &Au
     setting_on && !recording && !audio.mic_muted && audio.capture_healthy
 }
 
+/// A fault while paused only ends the take when the pipeline itself is gone:
+/// frame drops and xruns lose nothing, since nothing is written while paused.
+fn paused_take_tolerates(rec: &recorder::ActiveRecording, fault: RecordingIntegrityFault) -> bool {
+    rec.is_paused() && !fault.requires_restart()
+}
+
 #[derive(Clone)]
 struct RecordingFinalizer {
     config: WavedConfig,
@@ -426,10 +432,26 @@ impl MeetingService {
                 }
                 Some(signal) = self.integrity_rx.recv() => {
                     let fault = signal.fault;
-                    let affects_active = active
+                    let epoch = self.integrity.epoch();
+                    let moved = active
                         .as_ref()
-                        .is_some_and(|rec| self.integrity.epoch() != rec.integrity_epoch());
-                    if affects_active {
+                        .is_some_and(|rec| epoch != rec.integrity_epoch());
+                    let tolerated = moved
+                        && active
+                            .as_ref()
+                            .is_some_and(|rec| paused_take_tolerates(rec, fault));
+                    if tolerated {
+                        if let Some(rec) = active.as_mut() {
+                            warn!(
+                                "{} while paused; nothing was being written, the take continues",
+                                fault.diagnostic()
+                            );
+                            // Accept only the one fault this signal reports: a
+                            // capture failure recorded behind it still moves the
+                            // epoch and ends the take when its own signal lands.
+                            rec.rebase_integrity_epoch(rec.integrity_epoch() + 1);
+                        }
+                    } else if moved {
                         let rec = active.take().expect("active recording disappeared");
                         diarizer = None;
                         self.abort_recording(rec, fault).await;
@@ -536,6 +558,7 @@ impl MeetingService {
                                             let _ = self.events_tx.send(DeviceEvent::RecordingStarted(id));
                                             self.meeting_tx.send_modify(|s| {
                                                 s.recording = true;
+                                                s.paused = false;
                                                 s.meeting_id = Some(id);
                                                 s.duration_secs = 0;
                                             });
@@ -613,6 +636,37 @@ impl MeetingService {
                                         for acknowledgement in acknowledgements {
                                             let _ = acknowledgement.send(());
                                         }
+                                    }
+                                }
+                                Command::PauseRecording => {
+                                    let Some(rec) = active.as_mut() else { continue };
+                                    if self.integrity.epoch() != rec.integrity_epoch() {
+                                        // A fault from while audio was being written is
+                                        // still queued; pausing now would excuse it.
+                                        warn!("pause ignored: an integrity fault is ending the take");
+                                        continue;
+                                    }
+                                    if rec.pause_at(std::time::Instant::now()) {
+                                        if let Some(seg) = diarizer.as_mut().and_then(|d| d.pause()) {
+                                            if let Err(e) = db::insert_diarization_segment(&self.pool, &seg).await {
+                                                warn!("failed to insert diarization segment at pause: {e}");
+                                            }
+                                        }
+                                        self.meeting_tx.send_modify(|s| {
+                                            s.paused = true;
+                                            s.current_speaker = None;
+                                        });
+                                        info!("recording paused at {}s", rec.duration_secs());
+                                    }
+                                }
+                                Command::ResumeRecording => {
+                                    let Some(rec) = active.as_mut() else { continue };
+                                    if rec.resume_at(std::time::Instant::now()) {
+                                        if let Some(d) = diarizer.as_mut() {
+                                            d.resume();
+                                        }
+                                        self.meeting_tx.send_modify(|s| s.paused = false);
+                                        info!("recording resumed at {}s", rec.duration_secs());
                                     }
                                 }
                                 Command::AddBookmark => {
@@ -853,7 +907,9 @@ impl MeetingService {
         }
 
         while let Ok(signal) = self.integrity_rx.try_recv() {
-            if self.integrity.epoch() != rec.integrity_epoch() {
+            if self.integrity.epoch() != rec.integrity_epoch()
+                && !paused_take_tolerates(rec, signal.fault)
+            {
                 fault.get_or_insert(signal.fault);
             }
             if let Some(acknowledgement) = signal.acknowledgement {
@@ -861,7 +917,11 @@ impl MeetingService {
             }
         }
         if self.integrity.epoch() != rec.integrity_epoch() {
-            fault = fault.or_else(|| self.integrity.last_fault());
+            fault = fault.or_else(|| {
+                self.integrity
+                    .last_fault()
+                    .filter(|last| !paused_take_tolerates(rec, *last))
+            });
         }
 
         (fault, acknowledgements)

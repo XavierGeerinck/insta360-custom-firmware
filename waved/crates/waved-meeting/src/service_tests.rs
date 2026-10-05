@@ -122,14 +122,23 @@ impl Rig {
         self.commands.send(command).unwrap();
     }
 
-    /// Queue `count` frames holding `value`, then give the service time to
-    /// drain them before the next command (commands and frames arrive on
-    /// different channels, and `select!` picks among ready branches at random).
+    /// Queue `count` frames holding `value` and wait until the service has
+    /// taken all of them, so the next command lands after them (commands and
+    /// frames arrive on different channels, and `select!` picks among ready
+    /// branches at random). A taken frame is fully handled before the service
+    /// looks at its next event.
     pub async fn feed(&self, count: usize, value: f32) {
         for _ in 0..count {
             self.frames.send(frame_of(value)).await.unwrap();
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while self.frames.capacity() < self.frames.max_capacity() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the service stopped taking frames"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
     }
 
     pub async fn wait_for(&self, what: &str, predicate: impl Fn(&MeetingState) -> bool) {
@@ -327,4 +336,155 @@ async fn pre_recording_dot_follows_setting_mute_and_recording() {
     rig.wait_for("dot back after stop", |s| s.pre_recording_active).await;
     rig.settings.send_modify(|s| s.pre_recording = false);
     rig.wait_for("dot off with the setting", |s| !s.pre_recording_active).await;
+}
+
+fn no_pre_roll(upload_mode: UploadMode) -> SettingsState {
+    SettingsState {
+        pre_recording: false,
+        ..settings_for(upload_mode)
+    }
+}
+
+#[tokio::test]
+async fn pause_and_resume_cut_the_paused_audio_and_freeze_the_timer() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(100, 0.25).await; // 1 s
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.feed(100, 0.5).await; // talked over the pause: dropped
+    tokio::time::sleep(Duration::from_millis(1_100)).await; // a tick passes
+    assert_eq!(rig.meeting.borrow().duration_secs, 1);
+    rig.send(Command::ResumeRecording);
+    rig.wait_for("resumed", |s| !s.paused).await;
+    rig.feed(100, 0.75).await;
+    rig.stop().await;
+    assert_eq!(rig.wav_samples(id), 200 * 480);
+    let pauses = rig.metadata(id).recording.pauses;
+    assert_eq!(pauses.len(), 1);
+    assert_eq!(pauses[0].offset_ms, 1_000);
+    assert!(pauses[0].duration_ms >= 1_100, "{pauses:?}");
+}
+
+#[tokio::test]
+async fn a_dropped_frame_while_paused_keeps_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    rig.integrity_tx
+        .send(IntegritySignal::with_acknowledgement(
+            RecordingIntegrityFault::ProcessedFrameDropped,
+            ack_tx,
+        ))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), ack_rx).await.unwrap().unwrap();
+    assert!(rig.meeting.borrow().recording, "nothing was being written; the take survives");
+    rig.send(Command::ResumeRecording);
+    rig.wait_for("resumed", |s| !s.paused).await;
+    rig.feed(10, 0.25).await;
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+}
+
+#[tokio::test]
+async fn a_capture_failure_while_paused_still_ends_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::CaptureEnded);
+    rig.integrity_tx
+        .send(IntegritySignal::new(RecordingIntegrityFault::CaptureEnded))
+        .unwrap();
+    rig.wait_for("take ended", |s| !s.recording).await;
+    rig.wait_status(id, Some("artifact_error")).await;
+}
+
+/// A dying capture often reports an xrun just before it ends. Both faults are
+/// recorded before the service reads the first signal: tolerating the xrun
+/// must not swallow the capture failure behind it.
+#[tokio::test]
+async fn an_xrun_then_a_capture_failure_while_paused_ends_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::CaptureXrun);
+    rig.integrity.record_fault(RecordingIntegrityFault::CaptureEnded);
+    rig.integrity_tx
+        .send(IntegritySignal::new(RecordingIntegrityFault::CaptureXrun))
+        .unwrap();
+    rig.integrity_tx
+        .send(IntegritySignal::new(RecordingIntegrityFault::CaptureEnded))
+        .unwrap();
+    rig.wait_for("take ended", |s| !s.recording).await;
+    rig.wait_status(id, Some("artifact_error")).await;
+}
+
+/// A frame dropped while recording lost audio from the file. Pausing before
+/// the service reads that signal must not turn it into a harmless pause fault.
+#[tokio::test]
+async fn a_drop_before_the_pause_still_ends_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+    rig.send(Command::PauseRecording);
+    // Commands are handled in order, so once the bookmark row exists the
+    // Pause before it has been handled.
+    rig.send(Command::AddBookmark);
+    let pool = rig.pool().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while db::get_bookmarks(&pool, &id).await.unwrap().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "bookmark never landed");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!rig.meeting.borrow().paused, "a pending fault refuses the pause");
+    rig.integrity_tx
+        .send(IntegritySignal::new(RecordingIntegrityFault::ProcessedFrameDropped))
+        .unwrap();
+    rig.wait_for("take ended", |s| !s.recording).await;
+    rig.wait_status(id, Some("artifact_error")).await;
+}
+
+/// PauseRecording and ResumeRecording are idempotent (lane A ruling).
+#[tokio::test]
+async fn repeated_pause_and_stray_resume_are_no_ops() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+
+    // Resume without a pause leaves the take untouched.
+    let first = rig.start().await;
+    rig.feed(10, 0.25).await;
+    rig.send(Command::ResumeRecording);
+    rig.feed(10, 0.25).await;
+    assert!(!rig.meeting.borrow().paused);
+    rig.stop().await;
+    assert_eq!(rig.wav_samples(first), 20 * 480);
+    assert!(rig.metadata(first).recording.pauses.is_empty());
+    assert_eq!(rig.status(first).await.as_deref(), Some("local_only"));
+
+    // Resume while idle does nothing either.
+    rig.send(Command::ResumeRecording);
+    rig.send(Command::PauseRecording);
+
+    // Pause, Pause, Resume: one closed pause span, and the take finalizes.
+    let second = rig.start().await;
+    assert!(!rig.meeting.borrow().paused, "an idle Pause is not carried into the take");
+    rig.feed(10, 0.25).await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.send(Command::PauseRecording);
+    rig.send(Command::ResumeRecording);
+    rig.wait_for("resumed", |s| !s.paused).await;
+    rig.feed(10, 0.25).await;
+    rig.stop().await;
+    assert_eq!(rig.wav_samples(second), 20 * 480);
+    let pauses = rig.metadata(second).recording.pauses;
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert_eq!(pauses[0].offset_ms, 100);
+    assert_eq!(rig.status(second).await.as_deref(), Some("local_only"));
 }

@@ -253,6 +253,11 @@ impl ActiveRecording {
         self.integrity_epoch
     }
 
+    /// Accept faults that happened while paused, when nothing was written.
+    pub(crate) fn rebase_integrity_epoch(&mut self, epoch: u64) {
+        self.integrity_epoch = epoch;
+    }
+
     pub fn append_pre_roll(&mut self, samples: &[f32]) -> std::io::Result<u64> {
         let written = self.append_samples_inner(samples)?;
         self.pre_roll_samples = self.pre_roll_samples.saturating_add(written);
