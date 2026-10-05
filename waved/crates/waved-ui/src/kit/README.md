@@ -163,6 +163,27 @@ screen. LVGL's own `LV_EVENT_GESTURE` is not used. Two runtime rules go with it:
 - If `send_swipe` returns true (a screen took the swipe), the runtime cancels the press
   (`lv_indev_wait_release`) exactly as for its own gestures, so a swipe never also fires a tap.
 
+## Runtime
+
+What the runtime (`src/runtime/`) does around screens, so a screen need not.
+
+- **Parking.** A screen is built fresh on each navigation and deleted when it is
+  replaced. The exception is the screen under `Resting`: when the resting screen is pushed
+  right on top of a route, that screen is parked (kept alive, not shown), and on wake it is
+  re-loaded as it was, not rebuilt. A screen that acts in `build` (Wi-Fi setup starts
+  provisioning) therefore does not act again on waking. Any other return rebuilds the screen
+  (Back from the power-off confirmation); `UiSnapshot::rebuilt` is `true` for that `build`
+  call, so a screen that acts in `build` can skip it.
+- **Leave commands.** A route can send commands when it goes away (Wi-Fi setup sends
+  `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays).
+  The runtime sends them once, when the route leaves the router stack by any path: a button
+  or swipe Back, `ToBase`, a base navigate or a meeting takeover (`runtime::gesture::leave_commands`).
+  A screen's own Back button may send the same command too; a duplicate is accepted.
+- **Press cancel.** A press is cancelled (`lv_indev_wait_release`) when the screen changes
+  under it, or when a swipe is taken (by the runtime, or by a screen's `on_swipe`), so it never
+  also taps. A press that only woke the screen is never delivered to LVGL. A new pending
+  decision or an incoming call also wakes the screen, without a press.
+
 ## Components
 
 | Component | Constructor | Used by |
