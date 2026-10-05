@@ -399,6 +399,9 @@ pub struct AudioService {
     /// (`processed_frame::rebuild_stereo`). Reset to 0 on a mode change so
     /// Stereo fades its side in.
     stereo_side_gain: f32,
+    /// Start-up microphone check; `None` before the first frame and after the verdict.
+    mic_monitor: Option<crate::mic_check::MicHealthMonitor>,
+    mic_check_done: bool,
 }
 
 impl AudioService {
@@ -479,6 +482,8 @@ impl AudioService {
             mode: initial_mode,
             beam_aim_deg: initial_aim,
             stereo_side_gain: 0.0,
+            mic_monitor: None,
+            mic_check_done: false,
         }
     }
 
@@ -729,6 +734,37 @@ impl AudioService {
         }
     }
 
+    /// Feed the start-up microphone check (C6). Called before mic mute so a
+    /// muted boot is still checked.
+    fn check_mics(&mut self, frame: &AudioFrame) {
+        if self.mic_check_done {
+            return;
+        }
+        let channels = frame.channels as usize;
+        let monitor = self.mic_monitor.get_or_insert_with(|| {
+            crate::mic_check::MicHealthMonitor::new(channels, frame.sample_rate)
+        });
+        if let Some(health) = monitor.push_i16(&frame.data, channels) {
+            match health {
+                waved_state::MicHealth::NotResponding { dead_mask } => {
+                    warn!("microphone check: ALSA channels {dead_mask:#010b} are not responding")
+                }
+                waved_state::MicHealth::Degraded { low_mask } => {
+                    warn!("microphone check: ALSA channels {low_mask:#010b} are much quieter than the rest")
+                }
+                other => info!("microphone check: {other:?}"),
+            }
+            self.audio_tx.send_modify(|s| s.mic_health = health);
+        }
+        if monitor.is_done() {
+            if self.audio_tx.borrow().mic_health == waved_state::MicHealth::Unknown {
+                info!("microphone check: the room stayed too quiet to judge");
+            }
+            self.mic_monitor = None;
+            self.mic_check_done = true;
+        }
+    }
+
     pub async fn run(mut self, mut cmd_rx: broadcast::Receiver<Command>) -> AudioServiceExit {
         info!(
             "audio_srv starting (DSP on: frame_size={} sample_rate={})",
@@ -742,6 +778,7 @@ impl AudioService {
                         self.audio_tx.send_modify(|state| state.capture_healthy = false);
                         return AudioServiceExit::RawFrameChannelClosed;
                     };
+                    self.check_mics(&frame);
                     let muted = self.audio_tx.borrow().mic_muted;
                     apply_mic_mute(&mut frame.data, muted);
                     let vu = compute_vu(&frame.data, 8);
@@ -1958,6 +1995,41 @@ mod tests {
             out.mic_mono_f32.iter().all(|&s| s == 0.0),
             "level 0 silences the uplink"
         );
+        cmd_tx.send(Command::Shutdown).unwrap();
+        assert_eq!(handle.await.unwrap(), AudioServiceExit::StopRequested);
+    }
+
+    #[tokio::test]
+    async fn mic_check_hears_the_microphones_before_mute() {
+        let state = Arc::new(
+            watch::channel(AudioState {
+                mic_muted: true, // mute zero-fills frames after the check
+                nr_level: NrLevel::Off,
+                ..AudioState::default()
+            })
+            .0,
+        );
+        let (frame_tx, _meeting_rx, cmd_tx, handle) = spawn_service(Arc::clone(&state), 256);
+        // 2 channels, channel 1 digitally silent: 2 × 72 000 frames = one 3 s window.
+        for _ in 0..2 {
+            let data: Vec<i16> = (0..72_000)
+                .flat_map(|i| [if i % 2 == 0 { 900 } else { -900 }, 0])
+                .collect();
+            frame_tx
+                .send(AudioFrame::mic_only(data, 2, 48_000, 0))
+                .await
+                .unwrap();
+        }
+        let mut seen = state.subscribe();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            seen.wait_for(|s| {
+                s.mic_health == waved_state::MicHealth::NotResponding { dead_mask: 0b10 }
+            }),
+        )
+        .await
+        .expect("verdict published")
+        .unwrap();
         cmd_tx.send(Command::Shutdown).unwrap();
         assert_eq!(handle.await.unwrap(), AudioServiceExit::StopRequested);
     }

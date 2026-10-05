@@ -60,6 +60,12 @@ pub struct AudioStats {
     /// Peak attenuation (dB, negative) the recording limiter applied during
     /// the last collection block. 0.0 when no limiting was needed.
     pub recording_limiter_reduction_db: f32,
+    /// Start-up microphone check: unknown / ok / degraded / not_responding.
+    pub mic_health: String,
+    /// ALSA channels that are silent (bit n = ALSA channel n).
+    pub mic_dead_mask: u8,
+    /// ALSA channels that are much quieter than the rest.
+    pub mic_low_mask: u8,
     #[cfg(feature = "capture-alsa")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uac: Option<crate::uac::UacStatsSnapshot>,
@@ -248,6 +254,7 @@ pub fn compute_stats_with_processed(
     } else {
         -120.0
     };
+    let (mic_health, mic_dead_mask, mic_low_mask) = mic_health_fields(audio_state.mic_health);
 
     AudioStats {
         last_updated_ms: frame.timestamp_ms,
@@ -286,9 +293,22 @@ pub fn compute_stats_with_processed(
         mic_gain_linear,
         mic_gain_db,
         recording_limiter_reduction_db,
+        mic_health,
+        mic_dead_mask,
+        mic_low_mask,
         #[cfg(feature = "capture-alsa")]
         uac,
         hid,
+    }
+}
+
+fn mic_health_fields(health: waved_state::MicHealth) -> (String, u8, u8) {
+    use waved_state::MicHealth;
+    match health {
+        MicHealth::Unknown => ("unknown".into(), 0, 0),
+        MicHealth::Ok => ("ok".into(), 0, 0),
+        MicHealth::Degraded { low_mask } => ("degraded".into(), 0, low_mask),
+        MicHealth::NotResponding { dead_mask } => ("not_responding".into(), dead_mask, 0),
     }
 }
 
@@ -622,6 +642,37 @@ mod tests {
             stats.recording_limiter_reduction_db
         );
     }
+
+    #[test]
+    fn mic_health_appears_in_stats() {
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let cs = CaptureStats::new();
+        let state = AudioState {
+            mic_health: waved_state::MicHealth::NotResponding {
+                dead_mask: 0b1000_0001,
+            },
+            ..Default::default()
+        };
+        let s = compute_stats_with_processed(
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            None,
+            &state,
+            None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+            None,
+        );
+        assert_eq!(s.mic_health, "not_responding");
+        assert_eq!(s.mic_dead_mask, 0b1000_0001);
+        assert_eq!(s.mic_low_mask, 0);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"mic_health\":\"not_responding\""));
+    }
 }
 
 #[cfg(test)]
@@ -686,6 +737,9 @@ mod tests_hid_wiring {
             mic_gain_linear: 1.0,
             mic_gain_db: 0.0,
             recording_limiter_reduction_db: 0.0,
+            mic_health: "unknown".into(),
+            mic_dead_mask: 0,
+            mic_low_mask: 0,
             #[cfg(feature = "capture-alsa")]
             uac: None,
             hid: None,
