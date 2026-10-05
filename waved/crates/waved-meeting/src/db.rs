@@ -159,9 +159,11 @@ pub async fn set_upload_status(
     id: &Uuid,
     status: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ?")
+    // A row being deleted only ever goes away (see `claim_for_removal`).
+    sqlx::query("UPDATE meetings SET upload_status = ? WHERE id = ? AND upload_status != ?")
         .bind(status)
         .bind(id.to_string())
+        .bind(MeetingStatus::Deleting.as_str())
         .execute(pool)
         .await?;
     Ok(())
@@ -270,10 +272,11 @@ pub async fn reset_attempt_cycle(pool: &SqlitePool, id: &Uuid) -> Result<(), sql
     sqlx::query(
         "UPDATE meetings SET upload_status = ?, attempt_cycle = 0, \
          last_error = NULL, last_status_code = NULL, next_attempt_at_ms = NULL \
-         WHERE id = ?",
+         WHERE id = ? AND upload_status != ?",
     )
     .bind(MeetingStatus::Queued.as_str())
     .bind(id.to_string())
+    .bind(MeetingStatus::Deleting.as_str())
     .execute(pool)
     .await?;
     Ok(())
@@ -531,9 +534,12 @@ pub enum RemovalClaim {
 
 /// Mark a recording `deleting` unless it is uploading right now. The worker
 /// only claims queued and retry_wait rows, so a claimed row is never picked
-/// up for delivery while its files go away.
+/// up for delivery while its files go away, and status writes skip it.
 pub async fn claim_for_removal(pool: &SqlitePool, id: &Uuid) -> Result<RemovalClaim, sqlx::Error> {
-    let mut tx = pool.begin().await?;
+    // IMMEDIATE takes the write lock up front: a deferred transaction that
+    // reads and then writes gets SQLITE_BUSY at once under contention
+    // instead of waiting out the busy timeout.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let row: Option<(String,)> = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
         .bind(id.to_string())
         .fetch_optional(&mut *tx)
@@ -746,6 +752,34 @@ mod tests {
                 .unwrap();
         assert_eq!(meeting_count.0, 0);
         assert_eq!(bookmark_count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn nothing_writes_over_a_deleting_row() {
+        let pool = fresh_pool().await;
+        let id = Uuid::new_v4();
+        insert_meeting(&pool, &id, "Omni", "/tmp/x").await.unwrap();
+        set_status(&pool, &id, MeetingStatus::AwaitingDecision)
+            .await
+            .unwrap();
+        assert_eq!(
+            claim_for_removal(&pool, &id).await.unwrap(),
+            RemovalClaim::Claimed {
+                previous_status: "awaiting_decision".into()
+            }
+        );
+        // Save, Send, the auto-Keep and the shutdown save use set_status;
+        // Retry uses reset_attempt_cycle.
+        set_status(&pool, &id, MeetingStatus::LocalOnly)
+            .await
+            .unwrap();
+        reset_attempt_cycle(&pool, &id).await.unwrap();
+        assert_eq!(
+            ids_with_status(&pool, MeetingStatus::Deleting)
+                .await
+                .unwrap(),
+            vec![id]
+        );
     }
 
     #[tokio::test]

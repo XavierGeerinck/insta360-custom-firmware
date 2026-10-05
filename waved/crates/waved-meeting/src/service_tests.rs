@@ -907,3 +907,57 @@ async fn discard_recomputes_the_storage_block() {
     rig.wait_for("unblocked", |s| !s.storage_blocked && s.pending_decision.is_none())
         .await;
 }
+
+/// A Delete of another recording during a take never stalls the take's frame
+/// intake: the producer only `try_send`s, and a full channel ends the take.
+/// The test holds the database write lock, so the removal cannot even claim
+/// its row while frames are fed; the take must keep draining them anyway.
+#[tokio::test]
+async fn deleting_another_recording_keeps_the_running_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let old = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    let take = rig.start().await;
+    rig.feed(10, 0.2).await;
+
+    let blocker = rig.pool().await;
+    let mut lock = blocker.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *lock).await.unwrap();
+    rig.send(Command::DeleteRecording(old));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    rig.feed(20, 0.3).await;
+    assert!(rig.dir(old).exists(), "the removal is still waiting for the lock");
+    sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
+    drop(lock);
+
+    wait_gone(&rig.dir(old)).await;
+    rig.wait_status(old, None).await;
+    rig.feed(5, 0.4).await;
+    rig.stop().await;
+    assert_eq!(rig.status(take).await.as_deref(), Some("local_only"));
+    assert_eq!(rig.wav_samples(take), 35 * 480);
+}
+
+/// A Delete of the pending take that fails after its claim still answers
+/// "Send this recording?", so the auto-Keep never writes over the claim.
+/// The rename fails because `.deleted-<id>` already exists and is not empty.
+#[tokio::test]
+async fn a_failed_delete_of_the_pending_take_answers_the_question() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), ask_after(1)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    let trash = rig.recordings_dir.join(format!("{}{id}", removal::DELETED_PREFIX));
+    std::fs::create_dir_all(&trash).unwrap();
+    std::fs::write(trash.join("in-the-way"), b"x").unwrap();
+
+    rig.send(Command::DeleteRecording(id));
+    rig.wait_for("answered", |s| s.pending_decision.is_none() && s.ask_deadline_secs.is_none())
+        .await;
+    rig.wait_status(id, Some("deleting")).await;
+    rig.send(Command::SaveRecording(id));
+    tokio::time::sleep(Duration::from_millis(1_500)).await; // past the ask timeout
+    assert_eq!(rig.status(id).await.as_deref(), Some("deleting"));
+}

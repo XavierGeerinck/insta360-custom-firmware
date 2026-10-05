@@ -45,18 +45,26 @@ pub(crate) async fn remove_recording(
 }
 
 async fn finish_one(pool: &SqlitePool, recordings_dir: &Path, id: Uuid) -> std::io::Result<()> {
-    let dir = recordings_dir.join(id.to_string());
     let trash = recordings_dir.join(format!("{DELETED_PREFIX}{id}"));
-    match tokio::fs::rename(&dir, &trash).await {
-        Ok(()) => std::fs::File::open(recordings_dir)?.sync_all()?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
+    let parent = recordings_dir.to_path_buf();
+    let target = trash.clone();
+    tokio::task::spawn_blocking(move || move_to_trash(&parent, id, &target))
+        .await
+        .map_err(std::io::Error::other)??;
     db::delete_meeting_cascade(pool, &id)
         .await
         .map_err(std::io::Error::other)?;
     match tokio::fs::remove_dir_all(&trash).await {
         Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Rename `<id>/` to the trash name and make the rename durable. Blocking.
+fn move_to_trash(recordings_dir: &Path, id: Uuid, trash: &Path) -> std::io::Result<()> {
+    match std::fs::rename(recordings_dir.join(id.to_string()), trash) {
+        Ok(()) => std::fs::File::open(recordings_dir)?.sync_all(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }

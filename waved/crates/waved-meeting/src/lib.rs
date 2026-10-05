@@ -789,14 +789,14 @@ impl MeetingService {
                                     upload_wake.notify_one();
                                 }
                                 Command::DiscardRecording(id) => {
-                                    self.handle_discard_recording(id).await;
+                                    self.handle_discard_recording(id);
                                 }
                                 Command::DeleteRecording(id) => {
                                     if active.as_ref().is_some_and(|rec| rec.id == id) {
                                         warn!("delete ignored: recording {id} is still running");
                                         continue;
                                     }
-                                    self.handle_delete_recording(id).await;
+                                    self.spawn_removal(id, AnswerWhen::Claimed);
                                 }
                                 Command::RetryUpload(id) => {
                                     if let Err(error) =
@@ -1168,44 +1168,67 @@ impl MeetingService {
         self.clear_pending();
     }
 
-    async fn handle_discard_recording(&self, id: Uuid) {
+    fn handle_discard_recording(&self, id: Uuid) {
         if self.validate_pending(&id).is_none() {
             return;
         }
-        self.handle_delete_recording(id).await;
         // The question is answered even if the files could not be removed.
-        self.clear_pending();
+        self.spawn_removal(id, AnswerWhen::Always);
     }
 
-    async fn handle_delete_recording(&self, id: Uuid) {
-        let was_pending = self
-            .meeting_tx
-            .borrow()
-            .pending_decision
-            .as_ref()
-            .is_some_and(|decision| decision.id == id);
-        match removal::remove_recording(&self.pool, &self.recordings_dir, id).await {
-            Ok(removal::RemoveOutcome::Removed { previous_status }) => {
-                info!("audit: recording {id} deleted on request (was {previous_status})");
-                if was_pending {
-                    self.clear_pending();
+    /// Remove a recording off the service loop: the removal syncs the disk,
+    /// deletes a WAV of up to hundreds of MB and waits for the database,
+    /// while the loop must keep draining a running take's frames.
+    fn spawn_removal(&self, id: Uuid, answer: AnswerWhen) {
+        let pool = self.pool.clone();
+        let recordings_dir = self.recordings_dir.clone();
+        let storage = self.config.storage.clone();
+        let meeting_tx = Arc::clone(&self.meeting_tx);
+        tokio::spawn(async move {
+            let outcome = removal::remove_recording(&pool, &recordings_dir, id).await;
+            let answered = match &outcome {
+                Ok(removal::RemoveOutcome::Uploading | removal::RemoveOutcome::NotFound) => {
+                    answer == AnswerWhen::Always
                 }
+                // Claimed: the row is `deleting` even if the files remain, so
+                // the question must not stay open for the auto-Keep.
+                Ok(removal::RemoveOutcome::Removed { .. }) | Err(_) => true,
+            };
+            match &outcome {
+                Ok(removal::RemoveOutcome::Removed { previous_status }) => {
+                    info!("audit: recording {id} deleted on request (was {previous_status})")
+                }
+                Ok(removal::RemoveOutcome::Uploading) => {
+                    warn!("delete refused: recording {id} is uploading right now")
+                }
+                Ok(removal::RemoveOutcome::NotFound) => warn!("delete ignored: no recording {id}"),
+                Err(error) => warn!("delete of recording {id} failed: {error}"),
+            }
+            if answered {
+                meeting_tx.send_if_modified(|state| {
+                    if !state.pending_decision.as_ref().is_some_and(|d| d.id == id) {
+                        return false;
+                    }
+                    state.pending_decision = None;
+                    state.ask_deadline_secs = None;
+                    true
+                });
+            }
+            if matches!(outcome, Ok(removal::RemoveOutcome::Removed { .. })) {
                 // Space was freed: lift a storage block now, not at the next Record.
-                retention::enforce(
-                    &self.pool,
-                    &self.recordings_dir,
-                    &self.config.storage,
-                    &self.meeting_tx,
-                )
-                .await;
+                retention::enforce(&pool, &recordings_dir, &storage, &meeting_tx).await;
             }
-            Ok(removal::RemoveOutcome::Uploading) => {
-                warn!("delete refused: recording {id} is uploading right now")
-            }
-            Ok(removal::RemoveOutcome::NotFound) => warn!("delete ignored: no recording {id}"),
-            Err(error) => warn!("delete of recording {id} failed: {error}"),
-        }
+        });
     }
+}
+
+/// When a removal answers "Send this recording?" for its take.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnswerWhen {
+    /// Discard: the user answered, whatever happens to the files.
+    Always,
+    /// Files → Delete: once the row is claimed (or the attempt failed).
+    Claimed,
 }
 
 #[cfg(feature = "recording-integrity-test-hooks")]
