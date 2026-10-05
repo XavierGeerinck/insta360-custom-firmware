@@ -10,6 +10,12 @@ use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 use waved_state::Command;
 
+const STEP_CONFIG: &str = "config";
+const STEP_DATABASE: &str = "database";
+const STEP_RECORDINGS: &str = "recordings";
+const STEP_WIFI: &str = "wifi";
+const STEPS: [&str; 4] = [STEP_CONFIG, STEP_DATABASE, STEP_RECORDINGS, STEP_WIFI];
+
 pub const MARKER_NAME: &str = "factory-reset.pending";
 /// Start-ups that try to finish a reset before it is given up.
 pub const MAX_ATTEMPTS: u32 = 3;
@@ -70,31 +76,44 @@ pub enum ResetOutcome {
 
 /// Leave the marker for the next start-up. Nothing is erased yet.
 pub fn request(paths: &ResetPaths) -> io::Result<()> {
-    write_marker(&paths.marker, 0)
+    write_marker(&paths.marker, 0, &[])
 }
 
 /// Finish a requested reset. Call first thing at start-up, before config.toml
 /// is loaded and before any service opens the database or recordings.
 pub fn complete_pending(paths: &ResetPaths) -> ResetOutcome {
-    let Some(previous) = read_attempts(&paths.marker) else {
+    let Some((previous, mut done)) = read_marker(&paths.marker) else {
         return ResetOutcome::NothingPending;
     };
     let attempt = previous.saturating_add(1);
-    if let Err(error) = write_marker(&paths.marker, attempt) {
+    if let Err(error) = write_marker(&paths.marker, attempt, &done) {
         warn!("factory reset: could not count attempt {attempt}: {error}");
     }
     let mut ok = true;
-    let mut step = |name: &str, result: io::Result<()>| {
-        if let Err(error) = result {
-            warn!("factory reset: {name} not erased: {error}");
-            ok = false;
+    // A step that finished on an earlier start-up is never run again: the user
+    // may have set the device up since.
+    let mut step = |name: &'static str, run: &dyn Fn() -> io::Result<()>| {
+        if done.contains(&name) {
+            return;
+        }
+        match run() {
+            Ok(()) => {
+                done.push(name);
+                if let Err(error) = write_marker(&paths.marker, attempt, &done) {
+                    warn!("factory reset: could not note that {name} is done: {error}");
+                }
+            }
+            Err(error) => {
+                warn!("factory reset: {name} not erased: {error}");
+                ok = false;
+            }
         }
     };
-    step("config", remove_prefixed(&paths.config));
-    step("database", remove_prefixed(&paths.database));
-    step("recordings", erase_recordings(paths));
+    step(STEP_CONFIG, &|| remove_prefixed(&paths.config));
+    step(STEP_DATABASE, &|| remove_prefixed(&paths.database));
+    step(STEP_RECORDINGS, &|| erase_recordings(paths));
     if let Some(conf) = &paths.wifi_conf {
-        step("Wi-Fi networks", reset_wifi(conf, paths.reload_wifi));
+        step(STEP_WIFI, &|| reset_wifi(conf, paths.reload_wifi));
     }
     if ok {
         finish(paths);
@@ -138,7 +157,8 @@ pub async fn run(paths: ResetPaths, mut commands: broadcast::Receiver<Command>, 
     }
 }
 
-fn write_marker(marker: &Path, attempts: u32) -> io::Result<()> {
+/// `attempts=N` and `done=config,database,...` (the steps already finished).
+fn write_marker(marker: &Path, attempts: u32, done: &[&str]) -> io::Result<()> {
     let temp = marker.with_extension("tmp");
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -147,6 +167,7 @@ fn write_marker(marker: &Path, attempts: u32) -> io::Result<()> {
         .mode(0o600)
         .open(&temp)?;
     writeln!(file, "attempts={attempts}")?;
+    writeln!(file, "done={}", done.join(","))?;
     file.sync_all()?;
     std::fs::rename(&temp, marker)?;
     if let Some(dir) = marker.parent() {
@@ -155,14 +176,20 @@ fn write_marker(marker: &Path, attempts: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn read_attempts(marker: &Path) -> Option<u32> {
+/// The attempts so far and the steps already done. An old, short or unreadable
+/// marker still counts as a request, with nothing done yet.
+fn read_marker(marker: &Path) -> Option<(u32, Vec<&'static str>)> {
     let text = std::fs::read_to_string(marker).ok()?;
-    Some(
-        text.trim()
-            .strip_prefix("attempts=")
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0),
-    )
+    let mut attempts = 0;
+    let mut done = Vec::new();
+    for line in text.lines() {
+        if let Some(n) = line.trim().strip_prefix("attempts=") {
+            attempts = n.parse().unwrap_or(0);
+        } else if let Some(list) = line.trim().strip_prefix("done=") {
+            done = STEPS.into_iter().filter(|step| list.split(',').any(|name| name == *step)).collect();
+        }
+    }
+    Some((attempts, done))
 }
 
 fn finish(paths: &ResetPaths) {
@@ -193,7 +220,35 @@ fn remove_prefixed(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// The directory to empty, only when it is a real place on the recordings
+/// volume: never empty, never the volume itself, never outside it.
+fn recordings_target(paths: &ResetPaths) -> io::Result<&Path> {
+    let recordings = paths.recordings.as_path();
+    let refuse = |why: &str| {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("recordings path {} {why}", recordings.display()),
+        ))
+    };
+    if recordings.as_os_str().is_empty() {
+        return refuse("is empty");
+    }
+    if recordings.components().any(|part| part == std::path::Component::ParentDir) {
+        return refuse("contains ..");
+    }
+    if let Some(mount) = &paths.recordings_mount {
+        if !recordings.is_absolute() || !recordings.starts_with(mount) {
+            return refuse(&format!("is not inside {}", mount.display()));
+        }
+        if recordings == mount.as_path() {
+            return refuse("is the volume itself");
+        }
+    }
+    Ok(recordings)
+}
+
 fn erase_recordings(paths: &ResetPaths) -> io::Result<()> {
+    let recordings = recordings_target(paths)?;
     if let Some(mount) = &paths.recordings_mount {
         if !is_mount_point(mount) {
             return Err(io::Error::new(
@@ -202,7 +257,7 @@ fn erase_recordings(paths: &ResetPaths) -> io::Result<()> {
             ));
         }
     }
-    let entries = match std::fs::read_dir(&paths.recordings) {
+    let entries = match std::fs::read_dir(recordings) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -318,9 +373,67 @@ mod tests {
         assert!(!d.paths.config.exists(), "the other steps still ran");
         assert!(d.paths.marker.exists());
         assert!(d.paths.recordings.join("stray.tmp").exists(), "an unmounted volume is never erased");
+        // The user sets the device up again between start-ups.
+        let conf = d.paths.wifi_conf.clone().unwrap();
+        let set_up = |d: &Device| {
+            std::fs::write(&d.paths.config, "config_version = 2\nfirst_run_done = true\n").unwrap();
+            std::fs::write(&d.paths.database, "new meetings").unwrap();
+            std::fs::write(&conf, "network={\n ssid=\"home\"\n}\n").unwrap();
+        };
+        set_up(&d);
         assert_eq!(complete_pending(&d.paths), ResetOutcome::Retrying { attempt: 2 });
+        assert!(d.paths.config.exists() && d.paths.database.exists(), "finished steps are not repeated");
+        assert!(std::fs::read_to_string(&conf).unwrap().contains("home"));
         assert_eq!(complete_pending(&d.paths), ResetOutcome::GaveUp { attempt: 3 });
+        assert!(d.paths.config.exists() && d.paths.database.exists());
+        assert!(std::fs::read_to_string(&conf).unwrap().contains("home"));
         assert!(!d.paths.marker.exists(), "no erase loop on every boot");
+    }
+
+    #[test]
+    fn a_step_not_noted_as_done_is_repeated() {
+        let d = device();
+        std::fs::write(&d.paths.marker, "attempts=1\ndone=database\n").unwrap();
+        std::fs::write(&d.paths.database, "new").unwrap();
+        assert_eq!(complete_pending(&d.paths), ResetOutcome::Completed);
+        assert!(!d.paths.config.exists(), "config was not noted, so it is erased");
+        assert!(d.paths.database.exists(), "the database was noted, so it is kept");
+    }
+
+    #[test]
+    fn an_unreadable_done_list_means_nothing_done() {
+        let d = device();
+        std::fs::write(&d.paths.marker, "attempts=1\ndone=%%,,wifi-ish\n").unwrap();
+        assert_eq!(complete_pending(&d.paths), ResetOutcome::Completed);
+        assert!(!d.paths.config.exists() && !d.paths.database.exists());
+    }
+
+    #[test]
+    fn recordings_are_erased_only_inside_the_volume() {
+        let mut d = device();
+        let mount = d.dir.path().join("udisk");
+        d.paths.recordings_mount = Some(mount.clone());
+        let invalid = |recordings: PathBuf| {
+            let mut paths = d.paths.clone();
+            paths.recordings = recordings;
+            erase_recordings(&paths).unwrap_err().kind() == io::ErrorKind::InvalidInput
+        };
+        assert!(invalid(mount.clone()), "the volume itself");
+        assert!(invalid(d.dir.path().join("data/waved")), "outside the volume");
+        assert!(invalid(PathBuf::new()), "empty");
+        assert!(invalid(mount.join("../data/waved")), "dot-dot");
+        assert!(invalid(PathBuf::from("udisk/recordings")), "relative");
+        let mut host = d.paths.clone();
+        host.recordings_mount = None;
+        host.recordings = PathBuf::new();
+        assert!(erase_recordings(&host).is_err(), "empty is refused without a mount too");
+        assert!(d.dir.path().join("data/waved/waved").exists());
+        assert!(mount.join("recordings/stray.tmp").exists());
+        // The reset as a whole does not report success for it.
+        d.paths.recordings = mount;
+        request(&d.paths).unwrap();
+        assert_eq!(complete_pending(&d.paths), ResetOutcome::Retrying { attempt: 1 });
+        assert!(d.paths.recordings.join("recordings/stray.tmp").exists());
     }
 
     #[test]
