@@ -164,7 +164,7 @@ y 181) and at y ≤ 193 otherwise (the main circle's top is at y 209).
 |---|---|---|---|---|
 | Nothing connected | grey `#2a3639` | Mic on | Not connected | Tap to mute |
 | Connected, mic not in use | grey | Mic on | Connected by USB / Bluetooth: *name* | Tap to mute |
-| Computer is using the mic (`upstream_active`) | teal 40 % + talker arc | Mic on | Computer is using the mic | Tap to mute |
+| Computer is using the mic (`upstream_active`) | teal 40 % + talker arc | Mic on | Computer is listening | Tap to mute |
 | In a call (HID off-hook) | teal 40 % + talker arc | Mic on | In a call | Tap to mute |
 | Muted | solid red | Muted (mic-off icon) | Call can't hear you / Mic is off | Tap to unmute |
 | Recording | red 35 % + red talker arc | timer | Speaker *n* talking | Tap to mute |

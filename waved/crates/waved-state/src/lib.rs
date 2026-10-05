@@ -54,7 +54,7 @@ pub struct AudioState {
     /// "the call is muted host-side". Informational only.
     pub call_host_muted: bool,
     /// The host has the USB microphone stream open (UAC "PCM Playback State").
-    /// Drives "Computer is using the mic" and the teal ring on Home.
+    /// Drives "Computer is listening" and the teal ring on Home.
     pub host_listening: bool,
     /// Confidence of the latest DoA estimate, 0..1.
     pub doa_confidence: f32,

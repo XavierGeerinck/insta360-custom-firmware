@@ -55,6 +55,8 @@ pub struct StatusArea {
     message_icon: Obj,
     message_text: Obj,
     message_until_ms: Option<u64>,
+    /// The last `UiSnapshot::message` seen, so each one shows once.
+    message_seq: Option<u64>,
     shown: Option<Shown>,
 }
 
@@ -132,12 +134,24 @@ impl StatusArea {
             message_icon,
             message_text,
             message_until_ms: None,
+            message_seq: None,
             shown: None,
         }
     }
 
-    /// Expire messages and refresh icons, clock and battery when they change.
+    /// Show the runtime's message, expire messages and refresh icons, clock
+    /// and battery when they change.
     pub fn update(&mut self, snap: &UiSnapshot) {
+        // Runtime messages arrive in the snapshot. Show each one once, timed
+        // from when it was posted, so a screen built mid-message shows the rest.
+        if let Some(active) = &snap.message {
+            if self.message_seq != Some(active.seq) {
+                self.message_seq = Some(active.seq);
+                if snap.now_ms < active.until_ms() {
+                    self.show(&active.message, active.since_ms);
+                }
+            }
+        }
         if self
             .message_until_ms
             .is_some_and(|until| snap.now_ms >= until)
@@ -240,6 +254,7 @@ pub fn battery_look(level: u8, charging: bool) -> (&'static str, u32) {
 mod tests {
     use super::*;
     use crate::kit::dispatch::UiEvent;
+    use crate::kit::snapshot::ActiveMessage;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
 
     fn snap() -> UiSnapshot {
@@ -336,6 +351,75 @@ mod tests {
             now.now_ms = 3_000;
             status.update(&now);
             assert!(!status.cluster().is_hidden() && status.message().is_hidden());
+        });
+    }
+
+    fn active(seq: u64, severity: Severity, text: &str, since_ms: u64) -> Option<ActiveMessage> {
+        Some(ActiveMessage {
+            seq,
+            message: Message::new(severity, text),
+            since_ms,
+        })
+    }
+
+    #[test]
+    fn a_snapshot_message_shows_on_a_new_status_area_until_it_expires() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut now = snap();
+            // Posted at 1 000 on the screen before; this one is built at 4 500.
+            now.now_ms = 4_500;
+            now.message = active(7, Severity::Error, "Upload failed, see Uploads", 1_000);
+            let mut status = StatusArea::plain(root);
+            status.update(&now);
+            assert!(!status.message().is_hidden() && status.cluster().is_hidden());
+            now.now_ms = 4_999;
+            status.update(&now);
+            assert!(!status.message().is_hidden());
+            now.now_ms = 5_000;
+            status.update(&now);
+            assert!(
+                status.message().is_hidden() && !status.cluster().is_hidden(),
+                "gone 4 s after it was posted, not after the screen was built"
+            );
+        });
+    }
+
+    #[test]
+    fn each_snapshot_message_shows_once_per_seq() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut status = StatusArea::plain(root);
+            let mut now = snap();
+            now.now_ms = 1_500;
+            now.message = active(1, Severity::Success, "Recording sent", 1_000);
+            status.update(&now);
+            assert!(!status.message().is_hidden());
+            now.now_ms = 3_000;
+            status.update(&now);
+            assert!(status.message().is_hidden(), "expired, and not shown again");
+            now.now_ms = 3_100;
+            status.update(&now);
+            assert!(status.message().is_hidden(), "same seq: still gone");
+            now.message = active(2, Severity::Success, "Recording sent", 3_100);
+            status.update(&now);
+            assert!(
+                !status.message().is_hidden(),
+                "the same text again is a new message"
+            );
+        });
+    }
+
+    #[test]
+    fn an_expired_snapshot_message_never_shows() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut now = snap();
+            now.now_ms = 10_000;
+            now.message = active(3, Severity::Info, "Saved", 1_000);
+            let mut status = StatusArea::plain(root);
+            status.update(&now);
+            assert!(status.message().is_hidden() && !status.cluster().is_hidden());
         });
     }
 

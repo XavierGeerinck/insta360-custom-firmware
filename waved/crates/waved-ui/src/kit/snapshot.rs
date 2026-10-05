@@ -1,9 +1,29 @@
 //! One consistent copy of every state channel per UI loop iteration.
 
+use crate::kit::dispatch::Message;
 use waved_state::{
     AudioState, BatteryState, BluetoothState, FilesState, McuState, MeetingState, PlaybackState,
-    ProvisioningState, SettingsState, StateBus, WifiState,
+    ProvisioningState, SettingsState, StateBus, SystemState, WifiState, CLOCK_VALID_AFTER_UNIX_S,
 };
+
+/// The message in the status slot. The runtime keeps it, so it survives a
+/// screen change (Send on After stop, then Home shows "Sending recording").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveMessage {
+    /// Increments for every message shown, so the same text twice shows twice.
+    pub seq: u64,
+    pub message: Message,
+    /// `now_ms` when the runtime accepted it. It expires at `until_ms()`.
+    pub since_ms: u64,
+}
+
+impl ActiveMessage {
+    /// When the message leaves the status slot:
+    /// `since_ms + message.severity.duration_ms()`.
+    pub fn until_ms(&self) -> u64 {
+        self.since_ms + self.message.severity.duration_ms()
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct UiSnapshot {
@@ -17,19 +37,29 @@ pub struct UiSnapshot {
     pub settings: SettingsState,
     pub files: FilesState,
     pub playback: PlaybackState,
+    /// Time zone offset and About (waved-system).
+    pub system: SystemState,
     /// Wall clock, seconds since the Unix epoch.
     pub now_unix_s: i64,
     /// Monotonic milliseconds for UI timers (messages, gauge, hold to stop).
     pub now_ms: u64,
-    /// Status clock text in the configured format.
+    /// Status clock text in the configured format and zone; `"--:--"` until
+    /// the wall clock is believable (`CLOCK_VALID_AFTER_UNIX_S`).
     pub clock: String,
+    /// Set by the runtime from `UiEvent::Show`; `capture` leaves it `None`.
+    pub message: Option<ActiveMessage>,
 }
 
 impl UiSnapshot {
     pub fn capture(bus: &StateBus, now_unix_s: i64, now_ms: u64) -> Self {
         let settings = bus.settings.borrow().clone();
-        // Time zones arrive with workstream E3; until then the clock shows UTC.
-        let clock = format_clock(now_unix_s, 0, settings.clock_24h);
+        let system = bus.system.borrow().clone();
+        // Before NTP or the RTC set the clock, show dashes instead of a 1970 time.
+        let clock = if now_unix_s >= CLOCK_VALID_AFTER_UNIX_S {
+            format_clock(now_unix_s, system.utc_offset_min, settings.clock_24h)
+        } else {
+            "--:--".into()
+        };
         Self {
             audio: bus.audio.borrow().clone(),
             meeting: bus.meeting.borrow().clone(),
@@ -41,10 +71,17 @@ impl UiSnapshot {
             settings,
             files: bus.files.borrow().clone(),
             playback: bus.playback.borrow().clone(),
+            system,
             now_unix_s,
             now_ms,
             clock,
+            message: None,
         }
+    }
+
+    /// Local wall-clock seconds (for date lines on Date and time and Resting).
+    pub fn local_unix_s(&self) -> i64 {
+        self.now_unix_s + i64::from(self.system.utc_offset_min) * 60
     }
 
     /// The host signals an active call (HID off-hook).
@@ -69,7 +106,7 @@ impl UiSnapshot {
         if self.in_call() {
             "In a call".into()
         } else if self.audio.host_listening {
-            "Computer is using the mic".into()
+            "Computer is listening".into()
         } else if self.mcu.usb_connected {
             "Connected by USB".into()
         } else if self.bt.connected && !self.bt.device_name.is_empty() {
@@ -98,6 +135,7 @@ pub fn format_clock(unix_s: i64, offset_minutes: i32, clock_24h: bool) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::dispatch::Severity;
 
     #[test]
     fn clock_formats_follow_the_setting() {
@@ -116,7 +154,8 @@ mod tests {
         snap.mcu.usb_connected = true;
         assert_eq!(snap.connection_line(), "Connected by USB");
         snap.audio.host_listening = true;
-        assert_eq!(snap.connection_line(), "Computer is using the mic");
+        // Fits inside the r 70 ring (contract R14).
+        assert_eq!(snap.connection_line(), "Computer is listening");
         snap.audio.call_off_hook = true;
         assert_eq!(snap.connection_line(), "In a call");
         snap.audio.mic_muted = true;
@@ -147,5 +186,78 @@ mod tests {
         assert!(!snap.settings.clock_24h);
         assert_eq!(snap.clock, "2:32 pm");
         assert_eq!(snap.now_ms, 42);
+        assert!(snap.message.is_none(), "the runtime adds the message");
+    }
+
+    #[test]
+    fn capture_shows_the_clock_in_the_zone_waved_system_resolved() {
+        let bus = StateBus::new();
+        let _keep = bus.system.subscribe();
+        bus.system.send_modify(|s| {
+            s.utc_offset_min = 120;
+            s.about.serial = "IWB0123".into();
+        });
+        let snap = UiSnapshot::capture(&bus, 1_759_588_320, 0);
+        assert_eq!(snap.clock, "16:32");
+        assert_eq!(snap.system.utc_offset_min, 120);
+        assert_eq!(snap.system.about.serial, "IWB0123", "About travels too");
+    }
+
+    #[test]
+    fn zones_without_daylight_saving_shift_by_their_fixed_offset() {
+        let bus = StateBus::new();
+        let _keep = bus.system.subscribe();
+        // Asia/Kolkata, UTC+5:30 all year: 14:32 UTC is 20:02.
+        bus.system.send_modify(|s| s.utc_offset_min = 330);
+        let snap = UiSnapshot::capture(&bus, 1_759_588_320, 0);
+        assert_eq!(snap.clock, "20:02");
+        assert_eq!(snap.local_unix_s(), 1_759_588_320 + 330 * 60);
+        // America/Sao_Paulo, UTC-3 all year: 14:32 UTC is 11:32.
+        bus.system.send_modify(|s| s.utc_offset_min = -180);
+        let snap = UiSnapshot::capture(&bus, 1_759_588_320, 0);
+        assert_eq!(snap.clock, "11:32");
+        assert_eq!(snap.local_unix_s(), 1_759_588_320 - 180 * 60);
+    }
+
+    #[test]
+    fn the_clock_shows_dashes_until_it_is_believable() {
+        let bus = StateBus::new();
+        assert_eq!(UiSnapshot::capture(&bus, 0, 0).clock, "--:--");
+        assert_eq!(
+            UiSnapshot::capture(&bus, CLOCK_VALID_AFTER_UNIX_S - 1, 0).clock,
+            "--:--"
+        );
+        assert_eq!(
+            UiSnapshot::capture(&bus, CLOCK_VALID_AFTER_UNIX_S, 0).clock,
+            "00:00"
+        );
+        // The zone does not make a 1970 clock believable.
+        bus.system.send_modify(|s| s.utc_offset_min = 120);
+        assert_eq!(UiSnapshot::capture(&bus, 60, 0).clock, "--:--");
+    }
+
+    #[test]
+    fn local_time_is_utc_until_a_zone_arrives() {
+        let snap = UiSnapshot {
+            now_unix_s: 1_759_588_320,
+            ..UiSnapshot::default()
+        };
+        assert_eq!(snap.local_unix_s(), 1_759_588_320);
+    }
+
+    #[test]
+    fn active_messages_end_after_their_severity() {
+        let sent = ActiveMessage {
+            seq: 1,
+            message: Message::new(Severity::Success, "Recording sent"),
+            since_ms: 1_000,
+        };
+        assert_eq!(sent.until_ms(), 3_000);
+        let failed = ActiveMessage {
+            seq: 2,
+            message: Message::new(Severity::Error, "Upload failed, see Uploads"),
+            since_ms: 1_000,
+        };
+        assert_eq!(failed.until_ms(), 5_000);
     }
 }
