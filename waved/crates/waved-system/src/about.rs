@@ -15,7 +15,8 @@ pub const LICENCES: &[&str] = &[
     "Other libraries: listed in the waved source code",
 ];
 
-/// "0.1.0 (374015f)", or just "0.1.0" when the build had no git.
+/// "0.1.0 (374015f)", or just "0.1.0" when the build had no build id (no
+/// `WAVED_BUILD_ID` and no git).
 pub fn version() -> String {
     let id = env!("WAVED_BUILD_ID");
     if id.is_empty() {

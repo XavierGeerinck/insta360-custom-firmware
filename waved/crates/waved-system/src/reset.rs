@@ -68,7 +68,8 @@ impl ResetPaths {
 pub enum ResetOutcome {
     NothingPending,
     Completed,
-    /// A step failed; the next start-up tries again.
+    /// A step failed, or the attempt could not be saved (then nothing was
+    /// erased); the next start-up tries again.
     Retrying { attempt: u32 },
     /// Still failing after `MAX_ATTEMPTS`; the marker is removed.
     GaveUp { attempt: u32 },
@@ -86,9 +87,19 @@ pub fn complete_pending(paths: &ResetPaths) -> ResetOutcome {
         return ResetOutcome::NothingPending;
     };
     let attempt = previous.saturating_add(1);
+    // Without a saved count the attempt cap cannot hold, and steps that still
+    // work (recordings, Wi-Fi) would repeat on every boot. Erase nothing.
     if let Err(error) = write_marker(&paths.marker, attempt, &done) {
-        warn!("factory reset: could not count attempt {attempt}: {error}");
+        error!(
+            "factory reset: attempt {attempt} could not be saved, so nothing is erased this start-up; the next start-up tries again: {error}"
+        );
+        return ResetOutcome::Retrying { attempt };
     }
+    let next = if attempt >= MAX_ATTEMPTS {
+        "the reset gives up"
+    } else {
+        "the next start-up tries again"
+    };
     let mut ok = true;
     // A step that finished on an earlier start-up is never run again: the user
     // may have set the device up since.
@@ -100,11 +111,11 @@ pub fn complete_pending(paths: &ResetPaths) -> ResetOutcome {
             Ok(()) => {
                 done.push(name);
                 if let Err(error) = write_marker(&paths.marker, attempt, &done) {
-                    warn!("factory reset: could not note that {name} is done: {error}");
+                    warn!("factory reset: {name} erased but not noted as done; a retry would erase it again: {error}");
                 }
             }
             Err(error) => {
-                warn!("factory reset: {name} not erased: {error}");
+                warn!("factory reset: {name} not erased; {next}: {error}");
                 ok = false;
             }
         }
@@ -121,7 +132,7 @@ pub fn complete_pending(paths: &ResetPaths) -> ResetOutcome {
         ResetOutcome::Completed
     } else if attempt >= MAX_ATTEMPTS {
         finish(paths);
-        error!("factory reset still incomplete after {attempt} attempts; giving up");
+        error!("factory reset gave up after {attempt} attempts; the steps that failed are not tried again");
         ResetOutcome::GaveUp { attempt }
     } else {
         ResetOutcome::Retrying { attempt }
@@ -146,11 +157,11 @@ pub async fn run(paths: ResetPaths, mut commands: broadcast::Receiver<Command>, 
                     info!("factory reset requested; restarting to erase");
                     let _ = bus.send(Command::RestartForConfig);
                 }
-                Err(error) => error!("factory reset not started: {error}"),
+                Err(error) => error!("factory reset not started, nothing was erased and waved keeps running: {error}"),
             },
             Ok(_) => {}
             Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                warn!("factory reset handler lagged {skipped} commands");
+                warn!("factory reset handler lagged {skipped} commands; a reset request may have been missed");
             }
             Err(broadcast::error::RecvError::Closed) => return,
         }
@@ -176,10 +187,12 @@ fn write_marker(marker: &Path, attempts: u32, done: &[&str]) -> io::Result<()> {
     Ok(())
 }
 
-/// The attempts so far and the steps already done. An old, short or unreadable
-/// marker still counts as a request, with nothing done yet.
+/// The attempts so far and the steps already done. An old, short or garbled
+/// marker (even one that is not UTF-8) still counts as a request, with nothing
+/// done yet.
 fn read_marker(marker: &Path) -> Option<(u32, Vec<&'static str>)> {
-    let text = std::fs::read_to_string(marker).ok()?;
+    let bytes = std::fs::read(marker).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
     let mut attempts = 0;
     let mut done = Vec::new();
     for line in text.lines() {
@@ -194,7 +207,7 @@ fn read_marker(marker: &Path) -> Option<(u32, Vec<&'static str>)> {
 
 fn finish(paths: &ResetPaths) {
     if let Err(error) = std::fs::remove_file(&paths.marker) {
-        warn!("factory reset: marker not removed: {error}");
+        warn!("factory reset: marker not removed; the next start-up runs only the steps not noted as done, then removes it: {error}");
     }
 }
 
@@ -270,7 +283,29 @@ fn erase_recordings(paths: &ResetPaths) -> io::Result<()> {
             std::fs::remove_file(entry.path())?;
         }
     }
-    Ok(())
+    // The recordings volume is not /data: the marker's sync does not cover it.
+    // Flush the deletes before the step is noted as done.
+    sync_filesystem(recordings)
+}
+
+/// Flush the filesystem that holds `dir` to disk.
+fn sync_filesystem(dir: &Path) -> io::Result<()> {
+    let file = std::fs::File::open(dir)?;
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: `file` stays open for the call, so the descriptor is valid,
+        // and syncfs reads no memory of ours.
+        if unsafe { libc::syncfs(file.as_raw_fd()) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Host builds only: syncfs is Linux-only.
+        file.sync_all()
+    }
 }
 
 /// Written in place, because `/etc/wpa_supplicant.conf` may be a link into `/data`.
@@ -287,8 +322,11 @@ fn reset_wifi(conf: &Path, reload: bool) -> io::Result<()> {
     if reload {
         match std::process::Command::new("wpa_cli").args(["-i", "wlan0", "reconfigure"]).output() {
             Ok(output) if output.status.success() => {}
-            Ok(output) => warn!("factory reset: wpa_cli reconfigure exited with {}", output.status),
-            Err(error) => warn!("factory reset: wpa_cli not run: {error}"),
+            Ok(output) => warn!(
+                "factory reset: wpa_cli reconfigure exited with {}; saved networks stay live until the next restart",
+                output.status
+            ),
+            Err(error) => warn!("factory reset: wpa_cli not run; saved networks stay live until the next restart: {error}"),
         }
     }
     Ok(())
@@ -442,6 +480,40 @@ mod tests {
         std::fs::write(&d.paths.marker, "attempts=1\n").unwrap(); // cut after the first count
         assert_eq!(complete_pending(&d.paths), ResetOutcome::Completed);
         assert!(!d.paths.config.exists() && !d.paths.marker.exists());
+    }
+
+    #[test]
+    fn an_attempt_that_cannot_be_counted_erases_nothing() {
+        let d = device();
+        // A directory where the marker's temp file goes: every marker write
+        // fails, as it would on a read-only /data, even for root.
+        std::fs::create_dir(d.paths.marker.with_extension("tmp")).unwrap();
+        for (marker, attempt) in [("attempts=0\ndone=\n", 1), ("attempts=2\ndone=\n", 3)] {
+            std::fs::write(&d.paths.marker, marker).unwrap();
+            assert_eq!(complete_pending(&d.paths), ResetOutcome::Retrying { attempt });
+            assert!(d.paths.config.exists() && d.paths.database.exists(), "no step ran");
+            assert!(d.paths.recordings.join("stray.tmp").exists(), "recordings are not erased");
+            let conf = std::fs::read_to_string(d.paths.wifi_conf.as_ref().unwrap()).unwrap();
+            assert!(conf.contains("office"), "saved networks stay");
+            assert_eq!(std::fs::read_to_string(&d.paths.marker).unwrap(), marker, "the marker is left as it was");
+        }
+    }
+
+    #[test]
+    fn a_marker_that_is_not_text_still_counts_as_a_request() {
+        let d = device();
+        std::fs::write(&d.paths.marker, b"attempts=1\n\xff\xfe\x80\n").unwrap();
+        assert_eq!(complete_pending(&d.paths), ResetOutcome::Completed);
+        assert!(!d.paths.config.exists() && !d.paths.database.exists());
+        assert!(names(&d.paths.recordings).is_empty());
+        assert!(!d.paths.marker.exists());
+    }
+
+    #[test]
+    fn flushing_the_recordings_volume_reports_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        sync_filesystem(dir.path()).unwrap();
+        assert!(sync_filesystem(&dir.path().join("missing")).is_err());
     }
 
     #[test]

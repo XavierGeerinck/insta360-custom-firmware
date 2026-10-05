@@ -44,7 +44,12 @@ sits behind a path or a trait so the crate tests on the host:
     settings the user has made since are not erased again.
   - After `MAX_ATTEMPTS` (3) start-ups the reset gives up and removes the
     marker, so it never erases on every boot.
-  - The recordings step empties the directory and keeps it. It refuses a
+  - If a start-up cannot save its attempt count (for example `/data` is
+    read-only), it erases nothing and reports `Retrying`, since the cap could
+    not hold otherwise.
+  - The recordings step empties the directory, keeps it, and flushes the
+    recordings volume (`syncfs`) before the step counts as done, since the
+    marker's own sync covers only `/data`. It refuses a
     recordings path that is empty, contains `..` or, when a mount is set (on the
     device, `/mnt/udisk`), is not absolute and strictly inside that mount. It
     does not wait for the mount: while the mount is not a mount point the step
@@ -53,6 +58,12 @@ sits behind a path or a trait so the crate tests on the host:
     marker and the recordings are never erased.
   - `config.toml*` and `meetings.db*` match by name prefix, regular files only,
     so the `waved` binary beside them stays.
+- **Build id.** `build.rs` takes the About version's id from the
+  `WAVED_BUILD_ID` environment variable when it is set and not blank, otherwise
+  from `git rev-parse --short=7 HEAD`, otherwise there is none and About shows
+  just `0.1.0`. The cross build container has no git, so a device build must
+  pass `WAVED_BUILD_ID` in (for example `WAVED_BUILD_ID=$(git rev-parse --short=7 HEAD)`
+  with a Cross.toml passthrough, which the integrator adds).
 - **Wi-Fi reset.** The `wpa_supplicant.conf` header is taken from the stock image.
   `wpa_cli reconfigure` follows, because waved-wifi's `save_config` would
   otherwise write the running networks back.
@@ -66,7 +77,8 @@ In short:
 - `reset::complete_pending(&ResetPaths::new(config, database, recordings).on_device())` first at start-up,
   before the config loads; `reset::run` handles `Command::FactoryReset`.
 - `SystemService::device(system_tx, storage_path).run(settings, wifi)` publishes `SystemState`.
-- `power_key::start(events)` (the `DeviceEvent` sender) feeds `DeviceEvent::PowerKey`.
+- `power_key::start(events)` (the `DeviceEvent` sender) feeds `DeviceEvent::PowerKey`,
+  once device step 4 (including its negative check) has passed.
 - `tones::run(meeting, settings, sink)` with a `ToneSink` over the playback service.
 - The UI loop owns one `DisplayPower` and one `Backlight`.
 
@@ -92,6 +104,11 @@ Push to `/data/waved/waved.new`, compare `md5sum`, then `mv` it over `waved`.
    - Run `adb shell hexdump -C /dev/input/event0`. Press the power key briefly, then hold it for 3 s.
    - Expect records with type `01 00`, code `74 00` and value `01 00 00 00` / `00 00 00 00`.
    - Check `waved.log` for `power key: Short press` / `Long press`.
+   - **Negative check.** `vad_keypad` may be the Amlogic VAD speech-wake input
+     rather than the physical key. With the screen awake, talk or clap near the
+     unit for 30 s without touching the key. Expect no records on the
+     `vad_keypad` node and no `power key:` lines in `waved.log`.
+   - The integrator wires `power_key::start` only after this check passes.
    - **If nothing arrives:** the physical key reaches the MCU, not Linux. The stock firmware handles it in `mcu_evt_handle` (`BTN_CLICK`, `BTN_LONG_PRESS_2s_*`). Record this in this README and hand an MCU source for `DeviceEvent::PowerKey` to workstream F (milestone 3). `DisplayPower` and the event contract stay the same.
    - Also note whether holding the key for 5 s or more cuts power in hardware.
 5. **Power key behaviour.**
@@ -120,7 +137,8 @@ Push to `/data/waved/waved.new`, compare `md5sum`, then `mv` it over `waved`.
     - `wpa_cli -i wlan0 list_networks` shows none.
     - `ls /data/waved` still has `waved`, and no `factory-reset.pending` is left.
 11. **About.**
-    - The version shows the git id.
+    - The version shows the git id. If it shows just `0.1.0`, the build did not
+      pass `WAVED_BUILD_ID` (see Build id above).
     - Compare the serial with the label on the unit. If it is empty or wrong, find the source (`ls /unifykey`, `cat /proc/device-tree/serial-number`) and update `SERIAL_SOURCES`.
     - Storage matches `df /mnt/udisk`.
 12. **Binary size.** Compare the stripped release binary with the previous deploy. `waved-system` should add well under 1 MB.

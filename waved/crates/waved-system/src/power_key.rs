@@ -16,6 +16,8 @@ pub const POWER_KEY_HOLD_MS: u64 = 2_000;
 pub const SYS_INPUT: &str = "/sys/class/input";
 pub const DEV_INPUT: &str = "/dev/input";
 /// The input device that advertises KEY_POWER (docs/AUDIO_HARDWARE.md).
+/// It may be the Amlogic VAD speech-wake input rather than the physical key:
+/// README device step 4 checks that speech alone produces no presses.
 pub const POWER_KEY_DEVICE: &str = "vad_keypad";
 /// `struct input_event` on 64-bit Linux: timeval (16) + type (2) + code (2) + value (4).
 pub const INPUT_EVENT_SIZE: usize = 24;
@@ -165,7 +167,7 @@ pub fn spawn(node: PathBuf, events: broadcast::Sender<DeviceEvent>) -> io::Resul
             let mut raw = [0u8; INPUT_EVENT_SIZE];
             loop {
                 if let Err(error) = file.read_exact(&mut raw) {
-                    warn!("power key: read failed, no more presses: {error}");
+                    warn!("power key: read failed; the key does nothing until waved restarts: {error}");
                     return;
                 }
                 if let Some(pressed) = power_edge(parse_event(&raw)) {
@@ -177,7 +179,7 @@ pub fn spawn(node: PathBuf, events: broadcast::Sender<DeviceEvent>) -> io::Resul
         })?;
     std::thread::Builder::new().name("power-key".into()).spawn(move || {
         run_decoder(rx, POWER_KEY_HOLD_MS, |press| {
-            info!("power key: {press:?} press");
+            info!("power key: {press:?} press; the UI decides what it does");
             let _ = events.send(DeviceEvent::PowerKey(press));
         })
     })?;
@@ -194,7 +196,7 @@ pub fn start(events: broadcast::Sender<DeviceEvent>) -> bool {
     match spawn(node, events) {
         Ok(()) => true,
         Err(error) => {
-            warn!("power key: not started: {error}");
+            warn!("power key: not started; the key does nothing until waved restarts: {error}");
             false
         }
     }

@@ -110,7 +110,7 @@ async fn play(tone: Tone, sink: &dyn ToneSink) {
     let pace = Duration::from_micros(format.period_frames as u64 * 1_000_000 / u64::from(format.sample_rate.max(1)));
     for chunk in samples.chunks(period) {
         if !sink.submit(chunk.to_vec()) {
-            debug!("{tone:?} tone cut short: playback stopped or its queue is full");
+            debug!("{tone:?} tone cut short because playback stopped or its queue is full; the rest of the tone is dropped");
             return;
         }
         tokio::time::sleep(pace).await;

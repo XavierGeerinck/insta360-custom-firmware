@@ -437,6 +437,16 @@ mod tests {
         let sydney = footer_only(36_000, "AEST-10AEDT,M10.1.0,M4.1.0/3");
         assert_eq!(sydney.offset_at(JAN_15_2026), 39_600);
         assert_eq!(sydney.offset_at(JUL_15_2026), 36_000);
+        // 2026-04-04 16:00 UTC (03:00 AEDT) and 2026-10-03 16:00 UTC (02:00 AEST).
+        assert_eq!(sydney.offset_at(1_775_318_399), 39_600);
+        assert_eq!(sydney.offset_at(1_775_318_400), 36_000);
+        assert_eq!(sydney.offset_at(1_791_043_199), 36_000);
+        assert_eq!(sydney.offset_at(1_791_043_200), 39_600);
+        // Europe/Dublin: summer is standard time, winter is negative DST.
+        // 2026-10-25 01:00 UTC (02:00 IST).
+        let dublin = footer_only(3_600, "IST-1GMT0,M10.5.0,M3.5.0/1");
+        assert_eq!(dublin.offset_at(1_792_889_999), 3_600);
+        assert_eq!(dublin.offset_at(1_792_890_000), 0);
         let new_york = footer_only(-18_000, "EST5EDT,M3.2.0,M11.1.0");
         assert_eq!(new_york.offset_at(JAN_15_2026), -18_000);
         assert_eq!(new_york.offset_at(JUL_15_2026), -14_400);

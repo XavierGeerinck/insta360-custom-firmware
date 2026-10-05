@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
-use waved_state::{SettingsState, SystemState, WifiState};
+use waved_state::{SettingsState, SystemState, WifiState, CLOCK_VALID_AFTER_UNIX_S};
 
 pub struct SystemService {
     system_tx: Arc<watch::Sender<SystemState>>,
@@ -114,14 +114,19 @@ impl SystemService {
         let Some(rtc) = self.rtc.as_mut() else {
             return;
         };
+        let system_now = self.clock.now_unix_s();
         match rtc.read() {
-            Ok(rtc_now) => match restore_time(self.clock.now_unix_s(), rtc_now) {
+            Ok(rtc_now) => match restore_time(system_now, rtc_now) {
                 Some(time) => match self.clock.set(time) {
                     Ok(()) => info!("clock restored from the RTC: {time}"),
-                    Err(error) => warn!("clock not restored from the RTC: {error}"),
+                    Err(error) => warn!("clock not restored from the RTC; the clock waits for network time: {error}"),
                 },
-                None if rtc_now.is_none() => info!("the RTC holds no valid time yet; waiting for network time"),
-                None => {}
+                // The system clock is already right: nothing to restore.
+                None if system_now >= CLOCK_VALID_AFTER_UNIX_S => {}
+                None => match rtc_now {
+                    Some(time) => info!("the RTC has no believable time ({time}); the clock waits for network time"),
+                    None => info!("the RTC has no believable time; the clock waits for network time"),
+                },
             },
             Err(error) => warn!("RTC read failed, the clock waits for network time: {error}"),
         }
@@ -133,13 +138,13 @@ impl SystemService {
         };
         match rtc.write(self.clock.now_unix_s()) {
             Ok(()) => info!("RTC set from network time"),
-            Err(error) => warn!("RTC not set from network time: {error}"),
+            Err(error) => warn!("RTC not set from network time; tried again at the next sync: {error}"),
         }
     }
 
     fn load_zone(&self, name: &str) -> TimeZone {
         TimeZone::load(&self.zoneinfo, name).unwrap_or_else(|error| {
-            warn!("time zone {name}: {error}; the clock shows UTC");
+            warn!("time zone {name} could not be loaded; the clock shows UTC: {error}");
             TimeZone::utc()
         })
     }

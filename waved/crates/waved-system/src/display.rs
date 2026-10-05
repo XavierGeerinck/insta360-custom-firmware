@@ -291,6 +291,48 @@ mod tests {
     }
 
     #[test]
+    fn a_touch_wakes_an_off_screen_and_only_wakes() {
+        let s = SettingsState::default();
+        let mut p = DisplayPower::new(0);
+        p.tick(10 * MIN, &s, false);
+        assert_eq!(p.state(), ScreenPower::Off);
+        let wake = p.on_touch(true, 10 * MIN + 10);
+        assert_eq!(wake.disposition, TouchDisposition::Swallow);
+        assert_eq!(
+            wake.transition,
+            Some(Transition {
+                from: ScreenPower::Off,
+                to: ScreenPower::Awake
+            })
+        );
+        assert!(wake.transition.unwrap().wakes());
+        assert_eq!(p.state(), ScreenPower::Awake);
+        assert_eq!(p.backlight_pct(80), 80);
+        assert_eq!(p.on_touch(false, 10 * MIN + 90).disposition, TouchDisposition::Swallow);
+        assert_eq!(p.on_touch(true, 10 * MIN + 500).disposition, TouchDisposition::Deliver);
+    }
+
+    #[test]
+    fn a_touch_after_a_key_sleep_resumes_the_timers() {
+        let s = SettingsState::default(); // 120 s / 600 s
+        let mut p = DisplayPower::new(0);
+        p.on_power_key(PowerKeyPress::Short, 9 * MIN, false);
+        assert_eq!(p.state(), ScreenPower::Off);
+        let wake = p.on_touch(true, 11 * MIN);
+        assert_eq!(wake.disposition, TouchDisposition::Swallow);
+        assert!(wake.transition.unwrap().wakes());
+        p.on_touch(false, 11 * MIN + 100);
+        // Both timers have run out since the last touch before the key sleep,
+        // but not since the touch that woke the screen: it stays awake.
+        assert_eq!(p.tick(11 * MIN + 1_000, &s, false), None);
+        assert_eq!(p.state(), ScreenPower::Awake);
+        assert_eq!(p.tick(13 * MIN - 1, &s, false), None);
+        assert!(p.tick(13 * MIN, &s, false).unwrap().rests());
+        assert_eq!(p.tick(21 * MIN - 1, &s, false), None);
+        assert_eq!(p.tick(21 * MIN, &s, false).unwrap().to, ScreenPower::Off);
+    }
+
+    #[test]
     fn touches_while_awake_keep_the_screen_awake() {
         let s = SettingsState::default();
         let mut p = DisplayPower::new(0);
