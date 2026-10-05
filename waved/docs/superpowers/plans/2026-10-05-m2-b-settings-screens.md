@@ -224,8 +224,8 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
     | Menu | `menu::MenuScreen::default()` |
     | AudioMode | `audio_mode::AudioModeScreen::default()` |
     | NoiseReduction | `noise::NoiseScreen::default()` |
-    | Volume | `volume::LevelScreen::speaker()` |
-    | MicLevel | `volume::LevelScreen::mic()` |
+    | Volume | `volume::VolumeScreen::speaker()` |
+    | MicLevel | `volume::VolumeScreen::mic()` |
     | System | `system::SystemScreen::default()` |
     | Display | `display::DisplayScreen::default()` |
     | DimAfter | `display::DimAfterScreen::default()` |
@@ -238,8 +238,7 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
     | Uploads | `uploads::UploadsScreen::default()` |
     | UploadMode | `upload_mode::UploadModeScreen::default()` |
 
-    Two cross-workstream notes:
-    - **A and D:** Decision (A3) and File detail (D2) open `Route::Confirm(ConfirmKind::DeleteRecording(id))`. B's confirmation discards the pending recording or deletes a kept one, and pops the right number of screens (Task 7).
+    One cross-workstream note:
     - **A5:** First start's "Set up Wi-Fi" navigates to `Route::WifiSetup` without sending `OpenWifiProvisioning`, because the setup screen starts provisioning itself (Task 14).
 
 ---
@@ -252,7 +251,7 @@ The integrator lands these in M2.0 before any task below runs. Every task assume
 | `crates/waved-ui/src/kit/components/mode_picker.rs` | `ModePicker`, pattern geometry, `aim_angle`, `blend565`, `dash_segments`, canvas painter | Fill stub |
 | `crates/waved-ui/src/screens_v2/audio_mode.rs` | `AudioModeScreen`, `ModeChoice` | Fill stub |
 | `crates/waved-ui/src/screens_v2/noise.rs` | `NoiseScreen` | Fill stub |
-| `crates/waved-ui/src/screens_v2/volume.rs` | `LevelScreen` (Volume, Mic level), `step_level`, `BigNumber` | Fill stub |
+| `crates/waved-ui/src/screens_v2/volume.rs` | `VolumeScreen` (Volume, Mic level), `step_level`, `BigNumber` | Fill stub |
 | `crates/waved-ui/src/screens_v2/confirm.rs` | `ConfirmScreen`, `spec`, `outcome` | Fill stub |
 | `crates/waved-ui/src/screens_v2/system.rs` | `SystemScreen` | Fill stub |
 | `crates/waved-ui/src/screens_v2/display.rs` | `DisplayScreen`, `DimAfterScreen`, `duration_label` | Fill stub |
@@ -6025,7 +6024,7 @@ Note every deviation in the PR description. Known ones are under "Open points".
   6. Confirmation:
      - Power off from System and from the power key (E2) powers down only after the action pill.
      - Factory reset runs only on a test unit (E6).
-     - Delete from File detail returns to Files.
+     - Delete from File detail: the confirmation does one back and the detail leaves itself, landing on Files.
   7. Uploads: Retry re-queues failed uploads (watch `waved.log`), and the count drops.
   8. Every settings screen: every target is reachable with a fingertip at the panel's bottom curve (Back, the Display "Dim after" row, the radio rows at y 180).
 
@@ -6033,9 +6032,8 @@ Note every deviation in the PR description. Known ones are under "Open points".
 
 ## Open points
 
-- **Wi-Fi signal arcs.** wifi.png ("signal good") greys the *innermost* r 9 arc and lights the outer three. This plan lights from the inside out (3 bars = r 9 / 22 / 35), the usual reading of "arcs grey out as the signal drops". Confirm with the user. Flipping it is one line in `SignalArcs::set_bars`.
-- **Mic level range.** The arc maps 0–100 to `mic_volume` 0–200 % (unity mid-arc), and the label shows the real percentage. Higher gains set by the host (up to 800) are kept and shown, but can't be reached on the device. C5 may prefer another mapping.
+- **Wi-Fi signal arcs.** wifi.png ("signal good") greys the *innermost* r 9 arc and lights the outer three. Implemented inside-out (controller ruling P18; 3 bars = r 9 / 22 / 35), the usual reading of "arcs grey out as the signal drops". Confirm with the user at the device pass. Flipping it is one line in `SignalArcs::set_bars`.
+- **Mic level range.** Decided (user decision 2026-10-05): 0–200 % on the device (unity mid-arc). The arc maps 0–100 to `mic_volume` 0–200 %, and the label shows the real percentage. Higher gains set by the host (up to 800) are kept and shown, but can't be reached on the device.
 - **"Sent" count.** It comes from `FilesState` (Uploaded recordings still on Wave). Retention prunes delivered files, so it is not a lifetime total. A lifetime count needs a `MeetingState` field from C, which this plan does not request.
 - **Time zones.** The device offers a curated list of 29 zones. E3 must resolve each of them, through the zoneinfo database or its own table.
 - **Mic level discoverability.** Only the swipe reaches it, as the mockup says. A second Menu row "Mic level" would be a spec change.
-- **Messages on settings screens.** `StatusArea::show` needs the runtime to route `UiEvent::Show` to the current screen's status area. The `Screen` trait has no hook for it yet; that is the integrator's runtime-switch design.
