@@ -283,6 +283,7 @@ mod tests {
             let shown = values(&screen);
             assert_eq!(shown[1], "0.2.0 (abc1234)");
             assert_eq!(shown[2], "Not connected");
+            assert_targets_ok(root);
         });
     }
 
@@ -299,6 +300,7 @@ mod tests {
             let value = screen.rows[0].1;
             assert!(value.text().ends_with("..."), "{}", value.text());
             assert!(value.coords().x2 <= 340 - 16);
+            assert_targets_ok(root);
         });
     }
 }

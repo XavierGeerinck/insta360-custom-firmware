@@ -238,6 +238,27 @@ mod tests {
     }
 
     #[test]
+    fn factory_reset_only_after_confirming() {
+        lvgl(|lv| {
+            let (mut f, screen, root) = build(ConfirmKind::FactoryReset, &snap(), lv);
+            assert_targets_ok(root);
+            assert!(f.commands().is_empty());
+            lv.click(screen.row.as_ref().unwrap().obj(0)); // Cancel
+            assert!(f.commands().is_empty());
+            assert_eq!(f.events(), vec![UiEvent::Back]);
+            lv.click(screen.row.as_ref().unwrap().obj(1)); // Factory reset
+            assert!(matches!(f.commands().as_slice(), [Command::FactoryReset]));
+            assert_eq!(
+                f.events(),
+                vec![
+                    UiEvent::Back,
+                    UiEvent::Show(Message::new(Severity::Info, "Resetting Wave"))
+                ]
+            );
+        });
+    }
+
+    #[test]
     fn deleting_a_kept_file_sends_delete_recording() {
         let kept = Uuid::new_v4();
         let done = outcome(ConfirmKind::DeleteRecording(kept));

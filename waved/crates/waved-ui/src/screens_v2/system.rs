@@ -353,6 +353,7 @@ mod tests {
                 f.commands().as_slice(),
                 [Command::SetAlertTones(true)]
             ));
+            assert_targets_ok(root);
         });
     }
 
@@ -380,6 +381,7 @@ mod tests {
             snap.settings.tones_enabled = false;
             screen.update(&snap);
             assert_eq!(value(&screen, 2), "Off");
+            assert_targets_ok(root);
         });
     }
 
@@ -425,6 +427,7 @@ mod tests {
                     UiEvent::Navigate(Route::About),
                 ]
             );
+            assert_targets_ok(root);
         });
     }
 
@@ -458,6 +461,7 @@ mod tests {
             snap.system.about.version = "0.2.0 (abc1234)".into();
             screen.update(&snap);
             assert_eq!(value(&screen, 4), "0.2.0 (abc1234)");
+            assert_targets_ok(root);
         });
     }
 }
