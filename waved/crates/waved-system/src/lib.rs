@@ -4,3 +4,4 @@
 
 pub mod backlight;
 pub mod display;
+pub mod power_key;
