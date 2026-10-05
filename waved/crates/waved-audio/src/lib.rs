@@ -359,9 +359,9 @@ pub struct AudioService {
     aec_residual_scratch: Vec<i16>,
     beamformer: Beamformer,
     doa: DoaBackendImpl,
-    /// When `Some((az, el))`, the beamformer steers to this fixed direction
-    /// instead of tracking the live DOA. Settable via `Command::SetDoaOverride`.
-    /// Used by the on-device FBR acceptance test.
+    /// When `Some((az, el))`, the directional and Stereo modes steer to this
+    /// direction instead of their aim or orientation (`beam::aim`). Settable
+    /// via `Command::SetDoaOverride`. Used by the on-device FBR acceptance test.
     doa_override: Option<(f32, f32)>,
     mic_8ch_f32_scratch: Vec<f32>,
     /// FFT-based magnitude-spectrum binner for the recording-screen pill.
@@ -389,6 +389,12 @@ pub struct AudioService {
     /// Some when current mode is AudioMode::Steered. Reset to None when
     /// switching to any other mode.
     steered: Option<SteeredBeam>,
+    /// Current audio mode, for steering.
+    mode: waved_state::AudioMode,
+    /// Fixed aim for Focused / Narrow / Two sides (device degrees). Seeded
+    /// from AudioState, which main.rs seeds from config before this service
+    /// is built.
+    beam_aim_deg: f32,
 }
 
 impl AudioService {
@@ -408,9 +414,9 @@ impl AudioService {
         // thread death by preventing frame_rx from ever closing.
         drop(frame_tx);
         let (integrity_tx, _integrity_rx) = mpsc::unbounded_channel();
-        let (initial_nr, initial_mode) = {
+        let (initial_nr, initial_mode, initial_aim) = {
             let s = audio_tx.borrow();
-            (s.nr_level.clone(), s.mode.clone())
+            (s.nr_level.clone(), s.mode.clone(), s.beam_aim_deg)
         };
         let aec_config = AecConfig::default();
         let dsp_chain = build_dsp_chain(frame_size, sample_rate, initial_nr, aec_config.clone());
@@ -463,6 +469,8 @@ impl AudioService {
             doa_backend,
             doa_frame_counter: 0,
             steered,
+            mode: initial_mode,
+            beam_aim_deg: initial_aim,
         }
     }
 
@@ -655,12 +663,12 @@ impl AudioService {
                 let dir = beam.on_doa_frame(&doa_frame);
                 self.beamformer.set_doa(dir.az_deg, dir.el_deg);
                 self.beamformer.set_omni_mix(dir.omni_mix);
-            } else {
-                let (steer_az, steer_el) = self
-                    .doa_override
-                    .unwrap_or((doa.azimuth_deg, doa.elevation_deg));
-                self.beamformer.set_doa(steer_az, steer_el);
-                // No omni_mix change; remains at the value set by mode switch.
+            } else if let Some((az, el)) =
+                crate::beam::aim::fixed_direction(&self.mode, self.beam_aim_deg, self.doa_override)
+            {
+                // Directional modes hold their aim and Stereo its orientation
+                // instead of chasing the raw DoA every frame (BUG-17).
+                self.beamformer.set_doa(az, el);
             }
 
             let beam_out = self.beamformer.process(&self.mic_8ch_f32_scratch);
@@ -778,60 +786,11 @@ impl AudioService {
                 }
                 cmd = cmd_rx.recv() => {
                     match cmd {
-                        Ok(Command::SetAudioMode(mode)) => {
-                            info!("audio mode → {mode:?}");
-                            self.steered = match &mode {
-                                waved_state::AudioMode::Steered { initial_az_deg } => {
-                                    Some(SteeredBeam::new(*initial_az_deg))
-                                }
-                                _ => None,
-                            };
-                            self.beamformer.set_mode(mode.clone());
-                            self.beamformer.set_omni_mix(0.0); // reset crossfade for non-steered modes
-                            self.audio_tx.send_modify(|s| s.mode = mode);
-                        }
-                        Ok(Command::SetDoaOverride(ov)) => {
-                            match ov {
-                                Some((az, el)) => info!("DOA override → ({az:.1}°, {el:.1}°)"),
-                                None => info!("DOA override cleared — resuming DOA tracking"),
+                        Ok(command) => {
+                            if let Some(exit) = self.handle_command(command) {
+                                return exit;
                             }
-                            self.doa_override = ov;
                         }
-                        Ok(Command::SetNrLevel(level)) => {
-                            info!("NR level -> {level:?}; rebuilding DSP chain");
-                            self.dsp_chain = build_dsp_chain(
-                                self.frame_size,
-                                self.sample_rate,
-                                level.clone(),
-                                self.aec_config.clone(),
-                            );
-                            self.audio_tx.send_modify(|s| s.nr_level = level);
-                        }
-                        Ok(Command::SetPlaybackPreset(p)) => {
-                            info!("playback preset → {p:?}");
-                            self.audio_tx.send_modify(|s| s.playback_preset = p);
-                        }
-                        Ok(Command::ToggleMicMute) => {
-                            self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
-                        }
-                        Ok(Command::ToggleSpeakerMute) => {
-                            let new_muted = !self.audio_tx.borrow().speaker_muted;
-                            self.audio_tx.send_modify(|s| {
-                                s.speaker_muted = new_muted;
-                                if !new_muted && s.speaker_volume < 10 { s.speaker_volume = 10; }
-                            });
-                            // SP#6: UacControl mirrors the new state to hw:1
-                            // PCM Playback Switch on the next state-watch tick.
-                        }
-                        Ok(Command::SetSpeakerVolume(v)) => {
-                            self.audio_tx.send_modify(|s| s.speaker_volume = v);
-                            // SP#6: UacControl mirrors to hw:1 PCM Playback Volume.
-                        }
-                        Ok(Command::SetMicVolume(v)) => {
-                            self.audio_tx.send_modify(|s| s.mic_volume = v);
-                        }
-                        Ok(Command::Shutdown) => return AudioServiceExit::StopRequested,
-                        Ok(_) => {}
                         Err(broadcast::error::RecvError::Closed) => {
                             return AudioServiceExit::StopRequested;
                         }
@@ -842,6 +801,70 @@ impl AudioService {
                 }
             }
         }
+    }
+
+    /// Apply one bus command. Returns the exit when the command stops the service.
+    fn handle_command(&mut self, command: Command) -> Option<AudioServiceExit> {
+        match command {
+            Command::SetAudioMode(mode) => {
+                info!("audio mode → {mode:?}");
+                self.steered = match &mode {
+                    waved_state::AudioMode::Steered { initial_az_deg } => {
+                        Some(SteeredBeam::new(*initial_az_deg))
+                    }
+                    _ => None,
+                };
+                self.beamformer.set_mode(mode.clone());
+                self.beamformer.set_omni_mix(0.0); // reset crossfade for non-steered modes
+                self.mode = mode.clone();
+                self.audio_tx.send_modify(|s| s.mode = mode);
+            }
+            Command::SetDoaOverride(ov) => {
+                match ov {
+                    Some((az, el)) => info!("DOA override → ({az:.1}°, {el:.1}°)"),
+                    None => info!("DOA override cleared — back to the mode's steering"),
+                }
+                self.doa_override = ov;
+            }
+            Command::SetNrLevel(level) => {
+                info!("NR level -> {level:?}; rebuilding DSP chain");
+                self.dsp_chain = build_dsp_chain(
+                    self.frame_size,
+                    self.sample_rate,
+                    level.clone(),
+                    self.aec_config.clone(),
+                );
+                self.audio_tx.send_modify(|s| s.nr_level = level);
+            }
+            Command::SetPlaybackPreset(p) => {
+                info!("playback preset → {p:?}");
+                self.audio_tx.send_modify(|s| s.playback_preset = p);
+            }
+            Command::ToggleMicMute => {
+                self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
+            }
+            Command::ToggleSpeakerMute => {
+                let new_muted = !self.audio_tx.borrow().speaker_muted;
+                self.audio_tx.send_modify(|s| {
+                    s.speaker_muted = new_muted;
+                    if !new_muted && s.speaker_volume < 10 {
+                        s.speaker_volume = 10;
+                    }
+                });
+                // SP#6: UacControl mirrors the new state to hw:1
+                // PCM Playback Switch on the next state-watch tick.
+            }
+            Command::SetSpeakerVolume(v) => {
+                self.audio_tx.send_modify(|s| s.speaker_volume = v);
+                // SP#6: UacControl mirrors to hw:1 PCM Playback Volume.
+            }
+            Command::SetMicVolume(v) => {
+                self.audio_tx.send_modify(|s| s.mic_volume = v);
+            }
+            Command::Shutdown => return Some(AudioServiceExit::StopRequested),
+            _ => {}
+        }
+        None
     }
 
     fn publish_integrity_fault(&self, fault: waved_state::RecordingIntegrityFault) {
@@ -1698,6 +1721,99 @@ mod tests {
         assert_eq!(
             svc.run(cmd_rx).await,
             AudioServiceExit::ProcessedFrameChannelClosed
+        );
+    }
+
+    /// A 1 kHz plane wave arriving from `az_deg` (device degrees).
+    fn plane_wave_8ch(az_deg: f32, frame_size: usize) -> AudioFrame {
+        let geom = crate::beam::MicGeometry::default();
+        let sr = 48_000.0_f32;
+        let omega = 2.0 * std::f32::consts::PI * 1_000.0 / sr;
+        let (cos, sin) = (az_deg.to_radians().cos(), az_deg.to_radians().sin());
+        let mut samples = vec![0i16; frame_size * 8];
+        for ch in 0..8 {
+            let p = geom.position_for_alsa(ch);
+            let tau = -((p.x * cos + p.y * sin) * 1e-3) / 343.0 * sr;
+            for i in 0..frame_size {
+                samples[i * 8 + ch] =
+                    (((i as f32 - tau) * omega).sin() * 0.3 * i16::MAX as f32) as i16;
+            }
+        }
+        AudioFrame::mic_only(samples, 8, 48_000, 0)
+    }
+
+    /// A service whose state was seeded with `mode` and `aim`, as main.rs does.
+    fn service_with(
+        mode: waved_state::AudioMode,
+        aim: f32,
+    ) -> (AudioService, Arc<watch::Sender<AudioState>>) {
+        let state = AudioState {
+            mode,
+            beam_aim_deg: aim,
+            nr_level: NrLevel::Off,
+            ..AudioState::default()
+        };
+        let audio_tx = Arc::new(watch::channel(state).0);
+        let (frame_tx, frame_rx) = mpsc::channel(4);
+        let (meeting_tx, _meeting_rx) = mpsc::channel(4);
+        let svc = AudioService::new(
+            Arc::clone(&audio_tx),
+            frame_tx,
+            frame_rx,
+            meeting_tx,
+            480,
+            48_000,
+            crate::beam::MicGeometry::default(),
+        );
+        (svc, audio_tx)
+    }
+
+    #[test]
+    fn cardioid_holds_the_aim_while_the_talker_moves() {
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Cardioid, 90.0);
+        for az in [0.0, 180.0, 270.0] {
+            svc.process_frame(&plane_wave_8ch(az, 480));
+            assert_eq!(svc.beamformer.direction(), (90.0, 0.0), "talker at {az}°");
+        }
+    }
+
+    #[test]
+    fn stereo_keeps_the_device_orientation() {
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Stereo, 200.0);
+        svc.process_frame(&plane_wave_8ch(90.0, 480));
+        assert_eq!(svc.beamformer.direction(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn doa_override_still_wins_for_the_beamforming_test() {
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Cardioid, 90.0);
+        svc.handle_command(Command::SetDoaOverride(Some((45.0, 10.0))));
+        svc.process_frame(&plane_wave_8ch(0.0, 480));
+        assert_eq!(svc.beamformer.direction(), (45.0, 10.0));
+        svc.handle_command(Command::SetDoaOverride(None));
+        svc.process_frame(&plane_wave_8ch(0.0, 480));
+        assert_eq!(
+            svc.beamformer.direction(),
+            (90.0, 0.0),
+            "clearing it restores the aim"
+        );
+    }
+
+    #[test]
+    fn mode_switch_changes_the_steering() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Cardioid, 90.0);
+        // Ruling D4: prove the directional mode held its aim before the switch.
+        svc.process_frame(&plane_wave_8ch(90.0, 480));
+        assert_eq!(svc.beamformer.direction(), (90.0, 0.0));
+        assert!(svc
+            .handle_command(Command::SetAudioMode(waved_state::AudioMode::Stereo))
+            .is_none());
+        assert_eq!(state.borrow().mode, waved_state::AudioMode::Stereo);
+        svc.process_frame(&plane_wave_8ch(90.0, 480));
+        assert_eq!(svc.beamformer.direction(), (0.0, 0.0));
+        assert_eq!(
+            svc.handle_command(Command::Shutdown),
+            Some(AudioServiceExit::StopRequested)
         );
     }
 }
