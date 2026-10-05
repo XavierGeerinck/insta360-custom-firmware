@@ -40,6 +40,7 @@ struct RadioRow {
 }
 
 pub struct RadioList {
+    viewport: Obj,
     rows: Rc<Vec<RadioRow>>,
     selected: Rc<Cell<usize>>,
 }
@@ -92,6 +93,7 @@ impl RadioList {
             })
             .collect();
         let list = Self {
+            viewport,
             rows: Rc::new(rows),
             selected: Rc::new(Cell::new(selected)),
         };
@@ -116,6 +118,14 @@ impl RadioList {
 
     pub fn selected(&self) -> usize {
         self.selected.get()
+    }
+
+    /// Scroll the list so the row at `index` is fully visible, without
+    /// animation (Time zone and Dim after open on the selected row).
+    pub fn scroll_to(&self, index: usize) {
+        // SAFETY: live row inside the live viewport.
+        unsafe { lv_obj_scroll_to_view(self.rows[index].obj.raw(), lv_anim_enable_t_LV_ANIM_OFF) };
+        self.viewport.update_layout();
     }
 
     pub fn row(&self, index: usize) -> Obj {
@@ -346,6 +356,35 @@ mod tests {
             assert!(viewport.coords().y2 < BACK.y, "the list stops above Back");
             lv.click(list.row(2));
             assert_eq!((picked.get(), list.selected()), (2, 2));
+        });
+    }
+
+    #[test]
+    fn a_long_radio_list_opens_on_the_selected_row() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let options = (0..12)
+                .map(|i| RadioOption::new(format!("Zone {i}"), "UTC+01:00"))
+                .collect();
+            let list = RadioList::new(root, RADIO_TOP, options, 9, |_| {});
+            root.update_layout();
+            let viewport = root.child(0).coords();
+            let fully_visible = |index: usize| {
+                let a = list.row(index).coords();
+                a.y1 >= viewport.y1 && a.y2 <= viewport.y2
+            };
+            assert!(
+                fully_visible(0) && !fully_visible(9),
+                "lists open at the top"
+            );
+            list.scroll_to(9);
+            assert!(fully_visible(9), "row 9 shows without animation");
+            list.scroll_to(11);
+            assert!(fully_visible(11), "the last row");
+            list.scroll_to(1);
+            assert!(fully_visible(1));
+            list.scroll_to(0);
+            assert_eq!(list.row(0).coords().y1, RADIO_TOP, "back at the top");
         });
     }
 

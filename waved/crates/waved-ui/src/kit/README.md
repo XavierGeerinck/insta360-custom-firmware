@@ -159,12 +159,13 @@ screen. LVGL's own `LV_EVENT_GESTURE` is not used.
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
 | Round bottom buttons | `RoundButton::record(root, on_tap)`, `RoundButton::stop(root, on_tap, on_stop)` (holds for `HOLD_TO_STOP_MS`), `RoundButton::new(root, BottomSpot::Left, icons::MARK, "Mark", Tone::Neutral, on_tap)`; `.hold(ms, on_complete)`, `.icon_font(font)` to override the icon size; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
+| Round button at a spot | `RoundButton::at(root, DETAIL_SIDE_RIGHT, DETAIL_SIDE_RIGHT_LABEL, icons::SEND, "Send", Tone::LiveIcon, on_tap)`: 26 px icon, taps only (no hold, no repeat) | File detail (Delete / Send) |
 | Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` (a round button at the side spot) | Home, Recording, File detail |
 | Pill pair | `ButtonRow::two(root, [cancel, action], on_tap)` at `BOTTOM_PILL_PAIR` | Confirmation |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Call, Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
-| Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)` | After a recording, Time zone, Dim after |
+| Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`; `.scroll_to(index)` shows a row without animation | After a recording, Time zone, Dim after |
 | Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
 
@@ -177,8 +178,9 @@ Notes on the parts that carry state:
   accent on what is drawn on it: `Tone::fg()` colours the icon (and a pill's words),
   `Tone::label()` a round button's label. `Neutral` is a Text icon with a Text 2 label (Mark,
   Pause), `Rec` a red icon with a calm label (Record's dot), `RecText` red icon and label (Stop,
-  Delete, Decline), `Live` teal (Send, Answer), `WarnText` amber (Resume). `Tone::accent()` is
-  the colour a dialog uses for that tone: red for destructive tones, teal otherwise.
+  Delete, Decline), `Live` teal (Send, Answer), `LiveIcon` a teal icon over a Text 2 label
+  (File detail's Send), `WarnText` amber (Resume). `Tone::accent()` is the colour a dialog uses
+  for that tone: red for destructive tones, teal otherwise.
 - Round buttons (`RoundButton`, `SideButton`) share one implementation: a Surface circle at a
   spot (`BottomSpot::{Main, Left, Right, PairLeft, PairRight}` or `Side`), a 26 px icon (22 px
   at the companions) and a micro label under it. Pressed is Raised with a 2 px teal ring drawn

@@ -46,6 +46,8 @@ pub enum Tone {
     RecText,
     /// Amber icon and words: Resume.
     WarnText,
+    /// Teal icon over a Text 2 label: File detail's Send / Send again.
+    LiveIcon,
 }
 
 impl Tone {
@@ -53,7 +55,7 @@ impl Tone {
     pub fn fg(self) -> u32 {
         match self {
             Tone::Neutral => TEXT,
-            Tone::Live => LIVE,
+            Tone::Live | Tone::LiveIcon => LIVE,
             Tone::Rec | Tone::RecText => REC,
             Tone::WarnText => WARN,
         }
@@ -62,7 +64,7 @@ impl Tone {
     /// The colour of a round button's label under the circle.
     pub fn label(self) -> u32 {
         match self {
-            Tone::Neutral | Tone::Rec => TEXT_2,
+            Tone::Neutral | Tone::Rec | Tone::LiveIcon => TEXT_2,
             Tone::Live | Tone::RecText | Tone::WarnText => self.fg(),
         }
     }
@@ -72,7 +74,7 @@ impl Tone {
     pub fn accent(self) -> u32 {
         match self {
             Tone::Rec | Tone::RecText => REC,
-            Tone::Neutral | Tone::Live | Tone::WarnText => LIVE,
+            Tone::Neutral | Tone::Live | Tone::LiveIcon | Tone::WarnText => LIVE,
         }
     }
 }
@@ -208,10 +210,35 @@ impl RoundButton {
         icon: &str,
         label: &str,
         accent: Tone,
-        mut on_tap: impl FnMut() + 'static,
+        on_tap: impl FnMut() + 'static,
     ) -> Self {
-        let button = Self::build(parent, spot.spot(), icon, label, accent);
-        let (obj, held) = (button.obj, button.held.clone());
+        Self::build(parent, spot.spot(), icon, label, accent).on_tap(on_tap)
+    }
+
+    /// A round button at an explicit spot: a circle filling `rect`, a 26 px
+    /// icon (media glyphs 20 px, as everywhere) and a `ROUND_LABEL_W`-wide
+    /// micro label whose top-left is `label`. Taps only; no hold, no repeat
+    /// (File detail's Delete and Send, which `SideButton` would repeat).
+    pub fn at(
+        parent: Obj,
+        rect: Rect,
+        label: (i32, i32),
+        icon: &str,
+        text: &str,
+        accent: Tone,
+        on_tap: impl FnMut() + 'static,
+    ) -> Self {
+        let spot = Spot {
+            rect,
+            icon: Font::Icon26,
+            label,
+        };
+        Self::build(parent, spot, icon, text, accent).on_tap(on_tap)
+    }
+
+    /// Run `on_tap` on every tap while enabled.
+    fn on_tap(self, mut on_tap: impl FnMut() + 'static) -> Self {
+        let (obj, held) = (self.obj, self.held.clone());
         on_click(obj, move || {
             // A disabled button ignores taps even when the event is sent
             // directly, and the release that ends a completed hold is no tap.
@@ -219,7 +246,7 @@ impl RoundButton {
                 on_tap();
             }
         });
-        button
+        self
     }
 
     /// Home's Record: the main spot, a red dot and a calm "Record" label.
@@ -508,7 +535,10 @@ mod tests {
     };
     use crate::kit::dispatch::UiEvent;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl, Frame};
-    use crate::kit::tokens::HOLD_TO_STOP_MS;
+    use crate::kit::tokens::{
+        DETAIL_SIDE_LEFT, DETAIL_SIDE_LEFT_LABEL, DETAIL_SIDE_RIGHT, DETAIL_SIDE_RIGHT_LABEL,
+        HOLD_TO_STOP_MS,
+    };
 
     fn rect_of(obj: Obj) -> Rect {
         let a = obj.coords();
@@ -612,11 +642,12 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             for (tone, icon, label) in [
-                (Tone::Neutral, TEXT, TEXT_2), // Mark, Pause
-                (Tone::Rec, REC, TEXT_2),      // Record: only the dot is red
-                (Tone::RecText, REC, REC),     // Stop, Delete, Decline
-                (Tone::Live, LIVE, LIVE),      // Send, Answer
-                (Tone::WarnText, WARN, WARN),  // Resume
+                (Tone::Neutral, TEXT, TEXT_2),  // Mark, Pause
+                (Tone::Rec, REC, TEXT_2),       // Record: only the dot is red
+                (Tone::RecText, REC, REC),      // Stop, Delete, Decline
+                (Tone::Live, LIVE, LIVE),       // Send, Answer
+                (Tone::WarnText, WARN, WARN),   // Resume
+                (Tone::LiveIcon, LIVE, TEXT_2), // File detail's Send / Send again
             ] {
                 let button =
                     RoundButton::new(root, BottomSpot::Main, icons::STOP, "Stop", tone, || {});
@@ -628,6 +659,99 @@ mod tests {
             }
             // Red is never a fill.
             assert!(near(&lv.render(), 200, 215, SURFACE));
+        });
+    }
+
+    #[test]
+    fn a_live_icon_is_a_teal_accent_in_dialogs() {
+        assert_eq!(
+            (
+                Tone::LiveIcon.fg(),
+                Tone::LiveIcon.label(),
+                Tone::LiveIcon.accent()
+            ),
+            (LIVE, TEXT_2, LIVE)
+        );
+    }
+
+    #[test]
+    fn a_round_button_at_an_explicit_spot_taps_once_and_never_repeats() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let taps = Rc::new(Cell::new(0));
+            let count = taps.clone();
+            let send = RoundButton::at(
+                root,
+                DETAIL_SIDE_RIGHT,
+                DETAIL_SIDE_RIGHT_LABEL,
+                icons::SEND,
+                "Send",
+                Tone::LiveIcon,
+                move || count.set(count.get() + 1),
+            );
+            root.update_layout();
+            assert_eq!(rect_of(send.obj()), DETAIL_SIDE_RIGHT);
+            let label = rect_of(send.label);
+            assert_eq!(
+                (label.x, label.y, label.w),
+                (
+                    DETAIL_SIDE_RIGHT_LABEL.0,
+                    DETAIL_SIDE_RIGHT_LABEL.1,
+                    ROUND_LABEL_W
+                )
+            );
+            assert_eq!(font_of(send.icon), Font::Icon26.ptr().cast());
+            assert_eq!(
+                (text_color(send.icon), text_color(send.label)),
+                (LIVE, TEXT_2)
+            );
+            assert!(send.ring.is_none(), "no hold ring");
+
+            lv.click(send.obj());
+            assert_eq!(taps.get(), 1, "one tap, one call");
+            // Holding it does not repeat, unlike the side buttons.
+            lv.send(send.obj(), lv_event_code_t_LV_EVENT_PRESSED);
+            lv.advance(1_000);
+            lv.send(send.obj(), lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT);
+            lv.send(send.obj(), lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT);
+            lv.send(send.obj(), lv_event_code_t_LV_EVENT_RELEASED);
+            assert_eq!(taps.get(), 1, "a hold is not a tap and does not repeat");
+
+            let label = send.label;
+            send.obj().delete();
+            // SAFETY: only compares the pointer against live objects.
+            assert!(
+                !unsafe { lv_obj_is_valid(label.raw()) },
+                "the label goes with its button"
+            );
+            assert_eq!(root.child_count(), 0);
+        });
+    }
+
+    #[test]
+    fn the_file_detail_sides_match_the_mockup() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            RoundButton::at(
+                root,
+                DETAIL_SIDE_LEFT,
+                DETAIL_SIDE_LEFT_LABEL,
+                icons::TRASH,
+                "Delete",
+                Tone::Rec,
+                || {},
+            );
+            RoundButton::at(
+                root,
+                DETAIL_SIDE_RIGHT,
+                DETAIL_SIDE_RIGHT_LABEL,
+                icons::REFRESH,
+                "Send again",
+                Tone::LiveIcon,
+                || {},
+            );
+            assert_golden("round_detail_sides", &lv.render());
+            assert_targets_ok(root);
         });
     }
 

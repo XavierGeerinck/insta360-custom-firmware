@@ -349,7 +349,9 @@ fn scrollbar(parent: Obj) -> Obj {
 }
 
 /// A black gradient over the list edge so rows fade out instead of being cut.
-fn fade(parent: Obj, rect: Rect, top: bool) {
+/// `top` fades from black at the top edge; otherwise to black at the bottom.
+/// Shared with the other scrolling lists in `kit::components` (Files).
+pub(super) fn fade(parent: Obj, rect: Rect, top: bool) {
     let obj = Obj::plain(parent).rect(rect).bg(BG);
     let (from, to) = if top { (255, 0) } else { (0, 255) };
     // SAFETY: live object.
