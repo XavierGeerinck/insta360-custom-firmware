@@ -67,7 +67,8 @@ fn home_from_kit_parts() {
             "Record",
             Tone::Rec,
             || {},
-        );
+        )
+        .icon_font(Font::Icon20);
 
         assert_golden("kit_home", &lv.render());
         assert_targets_ok(root);
@@ -123,6 +124,7 @@ fn recording_from_kit_parts() {
             Tone::RecText,
             || {},
         )
+        .icon_font(Font::Icon20)
         .hold(HOLD_TO_STOP_MS as u32, || {});
         RoundButton::new(
             root,
@@ -131,7 +133,8 @@ fn recording_from_kit_parts() {
             "Pause",
             Tone::Neutral,
             || {},
-        );
+        )
+        .icon_font(Font::Icon20);
 
         assert_golden("kit_recording", &lv.render());
         assert_targets_ok(root);

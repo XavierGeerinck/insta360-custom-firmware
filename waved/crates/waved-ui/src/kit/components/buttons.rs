@@ -5,10 +5,11 @@
 use crate::bindings::{
     lv_anim_delete, lv_anim_init, lv_anim_set_completed_cb, lv_anim_set_duration,
     lv_anim_set_exec_cb, lv_anim_set_values, lv_anim_set_var, lv_anim_start, lv_anim_t,
-    lv_arc_set_value, lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT,
-    lv_event_code_t_LV_EVENT_PRESSED, lv_event_code_t_LV_EVENT_PRESS_LOST,
-    lv_event_code_t_LV_EVENT_READY, lv_event_code_t_LV_EVENT_RELEASED, lv_obj_send_event,
-    lv_tick_elaps, lv_tick_get,
+    lv_arc_set_value, lv_event_code_t_LV_EVENT_DELETE,
+    lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT, lv_event_code_t_LV_EVENT_PRESSED,
+    lv_event_code_t_LV_EVENT_PRESS_LOST, lv_event_code_t_LV_EVENT_READY,
+    lv_event_code_t_LV_EVENT_RELEASED, lv_obj_is_valid, lv_obj_send_event, lv_tick_elaps,
+    lv_tick_get,
 };
 use crate::kit::components::dial::{arc, arc_style, full_ring, INDICATOR, MAIN};
 use crate::kit::dispatch::Dispatcher;
@@ -17,10 +18,10 @@ use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{
-    Rect, BACK, BOTTOM_HOLD_R, BOTTOM_HOLD_WIDTH, BOTTOM_LABEL_W, BOTTOM_LEFT, BOTTOM_LEFT_LABEL,
-    BOTTOM_MAIN, BOTTOM_MAIN_LABEL, BOTTOM_PAIR_LEFT, BOTTOM_PAIR_LEFT_LABEL, BOTTOM_PAIR_RIGHT,
+    Rect, BACK, BOTTOM_HOLD_R, BOTTOM_HOLD_WIDTH, BOTTOM_LEFT, BOTTOM_LEFT_LABEL, BOTTOM_MAIN,
+    BOTTOM_MAIN_LABEL, BOTTOM_PAIR_LEFT, BOTTOM_PAIR_LEFT_LABEL, BOTTOM_PAIR_RIGHT,
     BOTTOM_PAIR_RIGHT_LABEL, BOTTOM_RIGHT, BOTTOM_RIGHT_LABEL, LINE, LIVE, RAISED, REC,
-    SIDE_LABEL_Y, SIDE_LEFT, SIDE_RIGHT, SURFACE, TEXT, TEXT_2, TEXT_3, WARN,
+    ROUND_LABEL_W, SIDE_LABEL_Y, SIDE_LEFT, SIDE_RIGHT, SURFACE, TEXT, TEXT_2, TEXT_3, WARN,
 };
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
@@ -103,7 +104,7 @@ pub fn text_button(parent: Obj, rect: Rect, text: &str, on_tap: impl FnMut() + '
 }
 
 /// Where a round button goes: its circle, its icon size and the top-left of
-/// its label (`BOTTOM_LABEL_W` wide, centred under the circle).
+/// its label (`ROUND_LABEL_W` wide, centred under the circle).
 #[derive(Clone, Copy)]
 struct Spot {
     rect: Rect,
@@ -154,7 +155,7 @@ impl Side {
             Side::Left => SIDE_LEFT,
             Side::Right => SIDE_RIGHT,
         };
-        let label = (rect.x + rect.w / 2 - BOTTOM_LABEL_W / 2, SIDE_LABEL_Y);
+        let label = (rect.x + rect.w / 2 - ROUND_LABEL_W / 2, SIDE_LABEL_Y);
         Spot {
             rect,
             icon: Font::Icon26,
@@ -213,7 +214,7 @@ impl RoundButton {
         let icon = Obj::label(obj, icon, spot.icon, accent.fg()).center();
         let (x, y) = spot.label;
         let label = Obj::label(parent, label, Font::Micro, accent.label())
-            .centered_text(BOTTOM_LABEL_W)
+            .centered_text(ROUND_LABEL_W)
             .pos(x, y);
         Self {
             parent,
@@ -254,6 +255,16 @@ impl RoundButton {
         on(obj, lv_event_code_t_LV_EVENT_PRESS_LOST, move |_| {
             stop_hold(ring)
         });
+        // The ring is a sibling (it reaches past the circle), so it goes with
+        // the button: a deleted button's fill can never complete later.
+        on(obj, lv_event_code_t_LV_EVENT_DELETE, move |_| {
+            // SAFETY: only compares the pointer against live objects. When the
+            // whole screen goes, the ring (created after the button) is still
+            // live here and LVGL tolerates deleting a sibling mid-teardown.
+            if unsafe { lv_obj_is_valid(ring.raw()) } {
+                ring.delete();
+            }
+        });
         let held = self.held.clone();
         on(ring, lv_event_code_t_LV_EVENT_READY, move |_| {
             if !held.replace(true) {
@@ -261,6 +272,15 @@ impl RoundButton {
             }
         });
         self.ring = Some(ring);
+        self
+    }
+
+    /// Draw the icon in `font` instead of the spot's size. Tabler's solid media
+    /// glyphs fill more of their em than the mockup's symbols, so Stop, Record,
+    /// Pause and Resume use `Font::Icon20` to match the mockups (a 12–13 px
+    /// square or dot). `set_icon` keeps the font.
+    pub fn icon_font(self, font: Font) -> Self {
+        self.icon.font(font);
         self
     }
 
@@ -502,7 +522,7 @@ mod tests {
                 let label = rect_of(button.label);
                 assert_eq!(
                     (label.x, label.y, label.w),
-                    (x, y, BOTTOM_LABEL_W),
+                    (x, y, ROUND_LABEL_W),
                     "{spot:?}"
                 );
                 assert_eq!(font_of(button.icon), icon.ptr().cast(), "{spot:?}");
@@ -678,6 +698,95 @@ mod tests {
         });
     }
 
+    /// Width and height of the red pixels inside the main circle.
+    fn red_box(frame: &Frame) -> (i32, i32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for y in BOTTOM_MAIN.y + 4..BOTTOM_MAIN.y + BOTTOM_MAIN.h - 4 {
+            for x in BOTTOM_MAIN.x + 4..BOTTOM_MAIN.x + BOTTOM_MAIN.w - 4 {
+                let [r, g, _] = frame.pixel(x, y);
+                if r > 180 && g < 140 {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+        }
+        (x1 - x0 + 1, y1 - y0 + 1)
+    }
+
+    #[test]
+    fn stop_and_record_glyphs_can_be_drawn_at_the_mockup_size() {
+        lvgl(|lv| {
+            // recording.png draws a 12 px square, home.png a 13 px dot.
+            for (icon, tone) in [(icons::STOP, Tone::RecText), (icons::RECORD, Tone::Rec)] {
+                let root = lv.screen();
+                let button = RoundButton::new(root, BottomSpot::Main, icon, "Stop", tone, || {})
+                    .icon_font(Font::Icon20);
+                assert_eq!(font_of(button.icon), Font::Icon20.ptr().cast());
+                let (w, h) = red_box(&lv.render());
+                assert!((12..=14).contains(&w) && (12..=14).contains(&h), "{w}x{h}");
+                // The swap keeps the size, and the glyph stays centred.
+                button.set_icon(icons::RECORD);
+                assert_eq!(font_of(button.icon), Font::Icon20.ptr().cast());
+                button.obj().update_layout();
+                let (c, i) = (rect_of(button.obj()), rect_of(button.icon));
+                assert_eq!(i.x - c.x, c.x + c.w - (i.x + i.w));
+            }
+        });
+    }
+
+    #[test]
+    fn deleting_the_button_mid_hold_takes_its_ring_and_never_completes() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let done = Rc::new(Cell::new(0));
+            let count = done.clone();
+            let stop = RoundButton::new(
+                root,
+                BottomSpot::Main,
+                icons::STOP,
+                "Stop",
+                Tone::RecText,
+                || {},
+            )
+            .hold(HOLD_TO_STOP_MS as u32, move || count.set(count.get() + 1));
+            let ring = stop.ring.expect("hold ring");
+            lv.send(stop.obj(), lv_event_code_t_LV_EVENT_PRESSED);
+            lv.advance(400);
+            stop.obj().delete();
+            // SAFETY: only compares the pointer against live objects.
+            assert!(
+                !unsafe { lv_obj_is_valid(ring.raw()) },
+                "the ring goes with its button"
+            );
+            lv.advance(HOLD_TO_STOP_MS as u32 + 200);
+            lv.render();
+            assert_eq!(done.get(), 0);
+        });
+    }
+
+    #[test]
+    fn replacing_the_screen_mid_hold_never_completes() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let done = Rc::new(Cell::new(0));
+            let count = done.clone();
+            let stop = RoundButton::new(
+                root,
+                BottomSpot::Main,
+                icons::STOP,
+                "Stop",
+                Tone::RecText,
+                || {},
+            )
+            .hold(HOLD_TO_STOP_MS as u32, move || count.set(count.get() + 1));
+            lv.send(stop.obj(), lv_event_code_t_LV_EVENT_PRESSED);
+            lv.advance(400);
+            lv.screen(); // deletes the old screen with the button and its ring
+            lv.advance(HOLD_TO_STOP_MS as u32 + 200);
+            lv.render();
+            assert_eq!(done.get(), 0);
+        });
+    }
+
     #[test]
     fn home_record_matches_the_mockup() {
         lvgl(|lv| {
@@ -689,7 +798,8 @@ mod tests {
                 "Record",
                 Tone::Rec,
                 || {},
-            );
+            )
+            .icon_font(Font::Icon20);
             assert_golden("round_record", &lv.render());
             assert_targets_ok(root);
         });
@@ -714,6 +824,7 @@ mod tests {
                 Tone::RecText,
                 || {},
             )
+            .icon_font(Font::Icon20)
             .hold(HOLD_TO_STOP_MS as u32, || {}),
             RoundButton::new(
                 root,
@@ -722,7 +833,8 @@ mod tests {
                 "Pause",
                 Tone::Neutral,
                 || {},
-            ),
+            )
+            .icon_font(Font::Icon20),
         ]
     }
 

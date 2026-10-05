@@ -83,8 +83,8 @@ pub const SIDE_LABEL_Y: i32 = 155;
 
 /// Bottom round buttons are centred on this arc around (PANEL_CX, PANEL_CY).
 pub const BOTTOM_ARC_R: i32 = 135;
-/// Width of every bottom-button label (micro 12, centred under its button).
-pub const BOTTOM_LABEL_W: i32 = 90;
+/// Width of every round-button label, bottom and side (micro 12, centred under its button).
+pub const ROUND_LABEL_W: i32 = 90;
 /// The main spot at the bottom of the arc: Record and Stop (one control),
 /// also Send and Set up Wi-Fi. Icon 26 px.
 pub const BOTTOM_MAIN: Rect = Rect::new(168, 209, 64, 64);
@@ -284,7 +284,7 @@ mod tests {
             (BOTTOM_PAIR_LEFT, BOTTOM_PAIR_LEFT_LABEL),
             (BOTTOM_PAIR_RIGHT, BOTTOM_PAIR_RIGHT_LABEL),
         ] {
-            assert!((x as f32 + BOTTOM_LABEL_W as f32 / 2.0 - centre(rect).0).abs() <= 0.5);
+            assert!((x as f32 + ROUND_LABEL_W as f32 / 2.0 - centre(rect).0).abs() <= 0.5);
             assert!(y > rect.y + rect.h, "{rect:?}: label below the button");
         }
     }

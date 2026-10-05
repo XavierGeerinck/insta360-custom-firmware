@@ -58,7 +58,7 @@ below y 304 do not exist, so the bottom of the circle is cut by the framebuffer 
 - **Bottom actions:** round buttons centred on `BOTTOM_ARC_R` (135) around the panel centre:
   `BOTTOM_MAIN` (Record and Stop, Send, Set up Wi-Fi), `BOTTOM_LEFT/RIGHT` companions,
   `BOTTOM_PAIR_LEFT/RIGHT` (Decline / Answer), each with a `*_LABEL` position for a
-  `BOTTOM_LABEL_W`-wide label; `BOTTOM_PILL_WIDE` and `BOTTOM_PILL_PAIR` for actions whose
+  `ROUND_LABEL_W`-wide label; `BOTTOM_PILL_WIDE` and `BOTTOM_PILL_PAIR` for actions whose
   words matter. Content above companions ends by y 166, above the main button by y 193.
 
 ## A screen
@@ -100,7 +100,7 @@ impl Screen for AboutScreen {
 | Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active` | every screen |
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
-| Round bottom buttons | `RoundButton::new(root, BottomSpot::Main, icons::RECORD, "Record", Tone::Rec, on_tap)`; `.hold(HOLD_TO_STOP_MS as u32, on_stop)` for Stop; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
+| Round bottom buttons | `RoundButton::new(root, BottomSpot::Main, icons::RECORD, "Record", Tone::Rec, on_tap)`; `.icon_font(Font::Icon20)` for the solid media glyphs (Record, Stop, Pause / Resume); `.hold(HOLD_TO_STOP_MS as u32, on_stop)` for Stop; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |
 | Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` (a round button at the side spot) | Home, Recording, File detail |
 | Pill pair | `ButtonRow::two(root, [cancel, action], on_tap)` at `BOTTOM_PILL_PAIR` | Confirmation |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
@@ -130,7 +130,11 @@ Notes on the parts that carry state:
   around the circle while pressed. It fills clockwise over the duration and calls back once when
   full; letting go early empties it, and that release still counts as a tap (Stop explains the
   hold), a completed hold does not. While held the circle is Raised without the teal ring. The
-  ring is not tappable.
+  ring is not tappable; it is a sibling of the button (it reaches past the circle) and is
+  deleted with it, so a deleted button's hold never completes.
+- Tabler's solid media glyphs fill more of the em than the mockup's symbols, so Record, Stop and
+  Pause / Resume use `icon_font(Font::Icon20)` (a 12–13 px dot or square, as in the mockups);
+  `set_icon` keeps the font.
 - The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
   with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
   centre over 62°–122°. Rows fade and change band with distance from the focus line.
