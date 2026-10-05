@@ -5,7 +5,7 @@
 //! initializes it once and serializes access with a mutex.
 
 use crate::bindings::*;
-use crate::kit::event::resume_handler_panic;
+use crate::kit::event::{resume_handler_panic, send_swipe, Swipe};
 use crate::kit::obj::Obj;
 use crate::kit::tokens::{
     Rect, MIN_TARGET, PANEL_CX, PANEL_CY, PANEL_R, SCREEN_H, SCREEN_W, TAP_LIMIT_R, TAP_MIN_Y,
@@ -113,6 +113,13 @@ impl Lvgl {
         unsafe {
             lv_obj_send_event(obj.raw(), code, std::ptr::null_mut());
         }
+        resume_handler_panic();
+    }
+
+    /// Deliver a swipe in `direction` to `obj`'s swipe handlers, as the
+    /// runtime does once it recognises one (`event::send_swipe`).
+    pub fn swipe(&mut self, obj: Obj, direction: Swipe) {
+        send_swipe(obj, direction);
         resume_handler_panic();
     }
 

@@ -69,6 +69,142 @@ pub fn on_click(obj: Obj, mut handler: impl FnMut() + 'static) {
     on(obj, lv_event_code_t_LV_EVENT_CLICKED, move |_| handler());
 }
 
+/// A swipe direction, in screen coordinates (y grows downwards).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Swipe {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Travel along the swipe direction before a movement counts as a swipe.
+pub const SWIPE_MIN_PX: i32 = 60;
+/// Longest time from press to swipe; a slower movement is a drag.
+pub const SWIPE_MAX_MS: u64 = 700;
+
+impl Swipe {
+    /// The one swipe recogniser, shared by screens (`on_swipe`) and the
+    /// runtime's Menu and Back gestures. A finger that moved `(dx, dy)` px in
+    /// `elapsed_ms` since it pressed swipes when it travelled at least
+    /// `SWIPE_MIN_PX` along one axis and at most half as far across it (within
+    /// about 27° of the direction), in at most `SWIPE_MAX_MS`.
+    pub fn recognise(dx: i32, dy: i32, elapsed_ms: u64) -> Option<Swipe> {
+        if elapsed_ms > SWIPE_MAX_MS {
+            return None;
+        }
+        let (along_x, along_y) = (dx.abs(), dy.abs());
+        if along_x >= SWIPE_MIN_PX && along_y * 2 <= along_x {
+            Some(if dx > 0 { Swipe::Right } else { Swipe::Left })
+        } else if along_y >= SWIPE_MIN_PX && along_x * 2 <= along_y {
+            Some(if dy > 0 { Swipe::Down } else { Swipe::Up })
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Press {
+    x: i32,
+    y: i32,
+    at_ms: u64,
+    done: bool,
+}
+
+/// Follows one finger through its touch samples and applies
+/// [`Swipe::recognise`] from where the press started. Reports at most one
+/// swipe per press.
+#[derive(Debug, Default)]
+pub struct SwipeTracker {
+    press: Option<Press>,
+}
+
+impl SwipeTracker {
+    /// Feed every touch sample, in screen pixels.
+    pub fn sample(&mut self, x: i32, y: i32, pressed: bool, now_ms: u64) -> Option<Swipe> {
+        if !pressed {
+            self.press = None;
+            return None;
+        }
+        let Some(press) = self.press.as_mut() else {
+            self.press = Some(Press {
+                x,
+                y,
+                at_ms: now_ms,
+                done: false,
+            });
+            return None;
+        };
+        if press.done {
+            return None;
+        }
+        let swipe = Swipe::recognise(x - press.x, y - press.y, now_ms.saturating_sub(press.at_ms));
+        press.done = swipe.is_some();
+        swipe
+    }
+
+    /// Where the current press started, while a finger is down.
+    pub fn start(&self) -> Option<(i32, i32)> {
+        self.press.map(|press| (press.x, press.y))
+    }
+}
+
+/// What a swipe event carries to the handlers.
+struct SwipeParam {
+    direction: Swipe,
+    handled: std::cell::Cell<bool>,
+}
+
+/// The kit's own event code for a recognised swipe. LVGL's built-in
+/// `LV_EVENT_GESTURE` uses a different recogniser, so `on_swipe` ignores it.
+fn swipe_code() -> lv_event_code_t {
+    static CODE: std::sync::OnceLock<lv_event_code_t> = std::sync::OnceLock::new();
+    // SAFETY: LVGL is initialised before any object exists to swipe on.
+    *CODE.get_or_init(|| unsafe { lv_event_register_id() } as lv_event_code_t)
+}
+
+/// Run `handler` when a swipe in `direction` is delivered to `obj` (see
+/// [`send_swipe`]). Like `on`, the closure is dropped with `obj`.
+pub fn on_swipe(obj: Obj, direction: Swipe, mut handler: impl FnMut() + 'static) {
+    on(obj, swipe_code(), move |event| {
+        // SAFETY: only `send_swipe` sends this code, with a `SwipeParam` that
+        // outlives the event.
+        let param = unsafe { &*(lv_event_get_param(event.raw) as *const SwipeParam) };
+        if param.direction == direction {
+            param.handled.set(true);
+            handler();
+        }
+    });
+}
+
+/// Deliver a recognised swipe whose press started on `obj`. It goes where
+/// LVGL sends gestures: to `obj` if it keeps its drags
+/// (`Obj::keep_gestures`), else to its nearest ancestor that does, else to
+/// the screen. Returns whether an `on_swipe` handler for `direction` ran.
+pub fn send_swipe(obj: Obj, direction: Swipe) -> bool {
+    let mut target = obj;
+    while target.has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE) {
+        match target.parent() {
+            Some(parent) => target = parent,
+            None => break,
+        }
+    }
+    let param = SwipeParam {
+        direction,
+        handled: std::cell::Cell::new(false),
+    };
+    // SAFETY: live object; `param` outlives the synchronous send.
+    unsafe {
+        lv_obj_send_event(
+            target.raw(),
+            swipe_code(),
+            (&raw const param).cast_mut().cast(),
+        );
+    }
+    param.handled.get()
+}
+
 unsafe extern "C" fn dispatch(e: *mut lv_event_t) {
     let slot = lv_event_get_user_data(e) as *mut Slot;
     if slot.is_null() {
@@ -248,6 +384,129 @@ mod tests {
                 2,
                 "the handler is back in its slot after a nested send"
             );
+        });
+    }
+
+    #[test]
+    fn a_swipe_travels_sixty_px_along_one_axis_within_700_ms() {
+        assert_eq!(Swipe::recognise(60, 0, 100), Some(Swipe::Right));
+        assert_eq!(Swipe::recognise(-60, 0, 100), Some(Swipe::Left));
+        assert_eq!(Swipe::recognise(0, 60, 100), Some(Swipe::Down));
+        assert_eq!(Swipe::recognise(0, -60, 100), Some(Swipe::Up));
+        assert_eq!(Swipe::recognise(59, 0, 100), None, "too short");
+        assert_eq!(Swipe::recognise(0, -59, 100), None, "too short");
+        assert_eq!(
+            Swipe::recognise(80, 40, 100),
+            Some(Swipe::Right),
+            "half as far across"
+        );
+        assert_eq!(Swipe::recognise(80, 41, 100), None, "too diagonal");
+        assert_eq!(Swipe::recognise(-41, -80, 100), None, "too diagonal");
+        assert_eq!(Swipe::recognise(80, 0, SWIPE_MAX_MS), Some(Swipe::Right));
+        assert_eq!(
+            Swipe::recognise(80, 0, SWIPE_MAX_MS + 1),
+            None,
+            "a slow drag"
+        );
+    }
+
+    #[test]
+    fn the_tracker_reports_one_swipe_per_press() {
+        let mut t = SwipeTracker::default();
+        assert_eq!(t.sample(300, 150, true, 1_000), None);
+        assert_eq!(t.start(), Some((300, 150)));
+        assert_eq!(
+            t.sample(260, 152, true, 1_080),
+            None,
+            "40 px is not yet a swipe"
+        );
+        assert_eq!(t.sample(235, 156, true, 1_160), Some(Swipe::Left));
+        assert_eq!(t.sample(150, 156, true, 1_240), None, "once per press");
+        assert_eq!(t.sample(150, 156, false, 1_300), None);
+        assert_eq!(t.start(), None);
+        // The next press starts afresh; one that moves too slowly never swipes.
+        assert_eq!(t.sample(100, 150, true, 2_000), None);
+        assert_eq!(t.sample(130, 150, true, 2_500), None);
+        assert_eq!(
+            t.sample(190, 150, true, 2_800),
+            None,
+            "800 ms after the press"
+        );
+        assert_eq!(t.sample(100, 150, false, 2_900), None);
+        // Down, then up.
+        t.sample(200, 12, true, 3_000);
+        assert_eq!(t.sample(205, 80, true, 3_150), Some(Swipe::Down));
+        t.sample(0, 0, false, 3_200);
+        t.sample(200, 200, true, 4_000);
+        assert_eq!(t.sample(190, 120, true, 4_150), Some(Swipe::Up));
+    }
+
+    #[test]
+    fn swipe_handlers_hear_only_their_direction() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (left, right) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+            let (l, r) = (left.clone(), right.clone());
+            on_swipe(root, Swipe::Left, move || l.set(l.get() + 1));
+            on_swipe(root, Swipe::Right, move || r.set(r.get() + 1));
+            lv.swipe(root, Swipe::Left);
+            assert_eq!((left.get(), right.get()), (1, 0));
+            lv.swipe(root, Swipe::Right);
+            assert_eq!((left.get(), right.get()), (1, 1));
+            assert!(!send_swipe(root, Swipe::Up), "nobody listens for up");
+            assert!(send_swipe(root, Swipe::Left));
+            assert_eq!(left.get(), 2);
+        });
+    }
+
+    #[test]
+    fn a_swipe_on_a_child_reaches_the_screen_unless_a_control_keeps_it() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let swipes = Rc::new(Cell::new(0));
+            let count = swipes.clone();
+            on_swipe(root, Swipe::Left, move || count.set(count.get() + 1));
+            let card = Obj::plain(root).rect(Rect::new(60, 60, 280, 120));
+            let button = Obj::plain(card)
+                .rect(Rect::new(10, 10, 100, 60))
+                .clickable(true);
+            let knob = Obj::plain(card)
+                .rect(Rect::new(150, 10, 100, 60))
+                .clickable(true)
+                .keep_gestures();
+            assert!(
+                send_swipe(button, Swipe::Left),
+                "a plain button passes it up"
+            );
+            assert_eq!(swipes.get(), 1);
+            assert!(!send_swipe(knob, Swipe::Left), "the knob keeps its drags");
+            assert_eq!(swipes.get(), 1);
+            // A control that keeps its drags can still take a swipe itself.
+            let kept = Rc::new(Cell::new(0));
+            let mine = kept.clone();
+            on_swipe(knob, Swipe::Left, move || mine.set(mine.get() + 1));
+            lv.swipe(knob, Swipe::Left);
+            assert_eq!((swipes.get(), kept.get()), (1, 1));
+        });
+    }
+
+    #[test]
+    fn a_swipe_handler_may_delete_its_own_page() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let page = Obj::plain(root)
+                .rect(Rect::new(0, 0, 400, 304))
+                .keep_gestures();
+            let counter = Rc::new(Cell::new(0));
+            let guard = DropCounter(counter.clone());
+            let swipes = counter.clone();
+            on_swipe(page, Swipe::Left, move || {
+                let _owned = &guard;
+                swipes.set(swipes.get() + 1);
+                page.delete();
+            });
+            lv.swipe(page, Swipe::Left);
+            assert_eq!(counter.get(), 101, "ran once, then its state was dropped");
         });
     }
 

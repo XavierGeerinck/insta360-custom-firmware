@@ -6,7 +6,7 @@ deleted when the runtime switches over.
 
 ## Rules
 
-- Screens use `Obj`, `event::on`/`on_click` and the components. Raw `crate::bindings`
+- Screens use `Obj`, `event::on`/`on_click`/`on_swipe` and the components. Raw `crate::bindings`
   calls belong only in `kit/obj.rs`, `kit/event.rs`, `kit/testkit.rs` and `kit/components/`.
   `Obj::from_raw` is `unsafe`; only the kit's own code needs it.
 - Every position and colour comes from `kit::tokens`. Every string is plain, sentence-case copy.
@@ -143,6 +143,14 @@ the value arc, the audio-mode aim, the playback scrubber — calls
 read as a swipe. `ValueArc` already does. Screens never handle these two swipes
 themselves.
 
+Other swipes belong to the screen: `on_swipe(root, Swipe::Left, ..)` (Volume opens Mic
+level). There is one recogniser, `Swipe::recognise` (at least `SWIPE_MIN_PX` 60 along one
+axis, at most half that across, within `SWIPE_MAX_MS` 700), applied per press by
+`SwipeTracker`. The runtime feeds it the touch samples and hands a swipe it does not take
+itself to `send_swipe(obj_under_the_press, direction)`, which delivers it as LVGL routes
+gestures: to the nearest object from the pressed one up that keeps its drags, else to the
+screen. LVGL's own `LV_EVENT_GESTURE` is not used.
+
 ## Components
 
 | Component | Constructor | Used by |
@@ -234,7 +242,8 @@ fn about_matches_the_mockup() {
 - A mismatch writes the actual frame to `target/golden-diff/<name>.actual.png`.
 - A new screen needs a `Route` variant in `kit/route.rs` (the router builds screens from it);
   `Route::About` already exists.
-- Taps in tests: `lv.click(obj)`, `lv.send(obj, code)`, and `lv.advance(ms)` for held buttons.
+- Taps in tests: `lv.click(obj)`, `lv.send(obj, code)`, and `lv.advance(ms)` for held buttons;
+  `lv.swipe(obj, Swipe::Left)` delivers a recognised swipe.
 - `components/compositions.rs` shows Home, Recording and After a recording built from kit parts.
 
 ## Fonts and icons

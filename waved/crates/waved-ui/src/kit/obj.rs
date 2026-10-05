@@ -483,6 +483,14 @@ impl Obj {
         area
     }
 
+    /// The parent, or `None` for a screen.
+    pub fn parent(self) -> Option<Obj> {
+        self.check_live();
+        // SAFETY: live object.
+        let parent = unsafe { lv_obj_get_parent(self.0) };
+        (!parent.is_null()).then_some(Obj(parent))
+    }
+
     pub fn child_count(self) -> u32 {
         self.check_live();
         // SAFETY: live object.
