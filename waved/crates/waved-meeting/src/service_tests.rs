@@ -961,3 +961,52 @@ async fn a_failed_delete_of_the_pending_take_answers_the_question() {
     tokio::time::sleep(Duration::from_millis(1_500)).await; // past the ask timeout
     assert_eq!(rig.status(id).await.as_deref(), Some("deleting"));
 }
+
+/// Discard answers the question at once: a Record tapped right after it
+/// starts the next take instead of being refused as "awaiting decision".
+#[tokio::test]
+async fn start_right_after_discard_starts_the_next_take() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    let discarded = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+    rig.send(Command::DiscardRecording(discarded));
+    rig.send(Command::StartRecording);
+    rig.wait_for("next take", |s| s.recording).await;
+    assert_ne!(rig.meeting.borrow().meeting_id, Some(discarded));
+    wait_gone(&rig.dir(discarded)).await;
+}
+
+/// A Send that lands right after Discard finds no question to answer, so a
+/// discarded take is never queued, even while its removal still waits for
+/// the database (the test holds the write lock).
+#[tokio::test]
+async fn send_right_after_discard_never_queues_it() {
+    let rig = start_rig(with_server(quiet_config(UploadMode::Ask)), settings_for(UploadMode::Ask)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.send(Command::StopRecording);
+    rig.wait_for("pending", |s| s.pending_decision.is_some()).await;
+
+    let blocker = rig.pool().await;
+    let mut lock = blocker.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *lock).await.unwrap();
+    rig.send(Command::DiscardRecording(id));
+    rig.send(Command::SendRecording(id));
+    rig.wait_for("answered", |s| s.pending_decision.is_none() && s.ask_deadline_secs.is_none())
+        .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Read through the lock holder: opening a new pool writes the schema.
+    let (status,): (String,) = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+        .bind(id.to_string())
+        .fetch_one(&mut *lock)
+        .await
+        .unwrap();
+    assert_eq!(status, "awaiting_decision", "the stray Send must not queue it");
+    sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
+    drop(lock);
+
+    wait_gone(&rig.dir(id)).await;
+    rig.wait_status(id, None).await;
+}

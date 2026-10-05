@@ -796,7 +796,7 @@ impl MeetingService {
                                         warn!("delete ignored: recording {id} is still running");
                                         continue;
                                     }
-                                    self.spawn_removal(id, AnswerWhen::Claimed);
+                                    self.spawn_removal(id);
                                 }
                                 Command::RetryUpload(id) => {
                                     if let Err(error) =
@@ -1172,28 +1172,30 @@ impl MeetingService {
         if self.validate_pending(&id).is_none() {
             return;
         }
-        // The question is answered even if the files could not be removed.
-        self.spawn_removal(id, AnswerWhen::Always);
+        // Answered here, before the removal runs, so the commands that follow
+        // (Record, a stray Send) already see no pending decision. The question
+        // is answered even if the files cannot be removed.
+        self.clear_pending();
+        self.spawn_removal(id);
     }
 
     /// Remove a recording off the service loop: the removal syncs the disk,
     /// deletes a WAV of up to hundreds of MB and waits for the database,
     /// while the loop must keep draining a running take's frames.
-    fn spawn_removal(&self, id: Uuid, answer: AnswerWhen) {
+    fn spawn_removal(&self, id: Uuid) {
         let pool = self.pool.clone();
         let recordings_dir = self.recordings_dir.clone();
         let storage = self.config.storage.clone();
         let meeting_tx = Arc::clone(&self.meeting_tx);
         tokio::spawn(async move {
             let outcome = removal::remove_recording(&pool, &recordings_dir, id).await;
-            let answered = match &outcome {
-                Ok(removal::RemoveOutcome::Uploading | removal::RemoveOutcome::NotFound) => {
-                    answer == AnswerWhen::Always
-                }
-                // Claimed: the row is `deleting` even if the files remain, so
-                // the question must not stay open for the auto-Keep.
-                Ok(removal::RemoveOutcome::Removed { .. }) | Err(_) => true,
-            };
+            // A Delete of the pending take answers its question once the row
+            // is claimed (`deleting` even if the files remain) or the attempt
+            // failed, so the auto-Keep never writes over it.
+            let answered = !matches!(
+                outcome,
+                Ok(removal::RemoveOutcome::Uploading | removal::RemoveOutcome::NotFound)
+            );
             match &outcome {
                 Ok(removal::RemoveOutcome::Removed { previous_status }) => {
                     info!("audit: recording {id} deleted on request (was {previous_status})")
@@ -1220,15 +1222,6 @@ impl MeetingService {
             }
         });
     }
-}
-
-/// When a removal answers "Send this recording?" for its take.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AnswerWhen {
-    /// Discard: the user answered, whatever happens to the files.
-    Always,
-    /// Files → Delete: once the row is claimed (or the attempt failed).
-    Claimed,
 }
 
 #[cfg(feature = "recording-integrity-test-hooks")]

@@ -241,8 +241,16 @@ async fn discard_removes_file_and_db_row() {
     let id = record_and_stop(&mut h).await;
     h.cmd_tx.send(Command::DiscardRecording(id)).unwrap();
     wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
+    // Discard answers at once; the files go in the background.
     let dir = h.recordings_dir.join(id.to_string());
-    assert!(!dir.exists(), "discard must rm -rf the recording dir");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while dir.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "discard must rm -rf the recording dir"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
