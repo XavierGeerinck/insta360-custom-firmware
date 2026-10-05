@@ -212,6 +212,10 @@ Rules for the parallel milestones:
   - MeetingService reads `api.upload_mode` and the audio mode for metadata from the boot-time
     config, so `SetUploadMode` and audio-mode changes only apply after a restart.
   - Subscribe to `bus.settings` and the audio watch and use the live values.
+- [ ] **C12 Publish the pre-recording state** (S) — `waved-meeting/src/lib.rs`, needs C2
+  - `MeetingState.pre_recording_active` has no producer yet, so the kit's pre-recording dot in
+    the status pill (Home) never shows on the device.
+  - Set it while the pre-roll buffer is filling: setting on, not recording, not muted.
 
 ## D — Files
 
