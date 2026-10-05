@@ -34,15 +34,16 @@ const RETRY: Rect = Rect::new(120, 192, 160, 44);
 /// A timestamp up to this far in the future reads "just now" (clock skew).
 const SKEW_S: i64 = 60;
 
+/// The server's host (and port) for the panel. Never shows the userinfo
+/// (`user:password@`), path, query or fragment, which can carry secrets.
 pub fn host(endpoint: &str) -> Option<String> {
     let endpoint = endpoint.trim();
-    if endpoint.is_empty() {
-        return None;
-    }
     let rest = endpoint
         .split_once("://")
         .map_or(endpoint, |(_, rest)| rest);
-    Some(rest.split('/').next().unwrap_or(rest).to_string())
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    (!host.is_empty()).then(|| host.to_string())
 }
 
 /// Seconds since the epoch of "YYYY-MM-DD[T ]HH:MM:SS[.frac][Z|±HH:MM]"
@@ -434,5 +435,35 @@ mod tests {
         );
         assert_eq!(host(""), None);
         assert_eq!(retry_label(3), "Retry 3 failed");
+    }
+
+    #[test]
+    fn the_host_never_shows_credentials_or_query_strings() {
+        for (endpoint, shown) in [
+            (
+                "https://user:pw@notes.example.com/x",
+                Some("notes.example.com"),
+            ),
+            (
+                "https://us@r:p@ss@notes.example.com:8443/x",
+                Some("notes.example.com:8443"),
+            ),
+            ("user:pw@notes.example.com", Some("notes.example.com")),
+            (
+                "https://notes.example.com?token=s3cret",
+                Some("notes.example.com"),
+            ),
+            (
+                "https://notes.example.com#token=s3cret",
+                Some("notes.example.com"),
+            ),
+            (
+                "https://user:pw@notes.example.com?token=s3cret#x",
+                Some("notes.example.com"),
+            ),
+            ("https://user:pw@/hook", None),
+        ] {
+            assert_eq!(host(endpoint).as_deref(), shown, "{endpoint}");
+        }
     }
 }
