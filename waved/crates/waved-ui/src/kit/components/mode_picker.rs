@@ -254,14 +254,25 @@ impl ModePicker {
                 (shared.on_select.borrow_mut())(index);
             });
         }
+        let shared = inner.clone();
+        on(area, lv_event_code_t_LV_EVENT_PRESSED, move |_| {
+            // A new drag: an aim left from a press that never ended is stale.
+            shared.last_aim.set(None);
+            shared.drag_from_indev(false);
+        });
         for (code, done) in [
-            (lv_event_code_t_LV_EVENT_PRESSED, false),
             (lv_event_code_t_LV_EVENT_PRESSING, false),
             (lv_event_code_t_LV_EVENT_RELEASED, true),
         ] {
             let shared = inner.clone();
             on(area, code, move |_| shared.drag_from_indev(done));
         }
+        // A lost press (the input was reset or the area went away under the
+        // finger) ends the drag like a release, at the last aim.
+        let shared = inner.clone();
+        on(area, lv_event_code_t_LV_EVENT_PRESS_LOST, move |_| {
+            shared.finish(None)
+        });
         inner.select(inner.selected.get());
         Self { inner }
     }
@@ -326,14 +337,22 @@ impl Inner {
         }
         let angle = aim_angle(CENTRE.0, CENTRE.1, x, y, DEAD_ZONE);
         if done {
-            if let Some(angle) = angle.or(self.last_aim.get()) {
-                (self.on_aim.borrow_mut())(AimEvent::Done(angle));
-            }
-            self.last_aim.set(None);
+            self.finish(angle);
         } else if let Some(angle) = angle {
             self.last_aim.set(Some(angle));
             (self.on_aim.borrow_mut())(AimEvent::Moving(angle));
         }
+    }
+
+    /// End the drag at `angle`, or at the last valid aim when it has none.
+    fn finish(&self, angle: Option<f32>) {
+        if !self.area.is_clickable() {
+            return;
+        }
+        if let Some(angle) = angle.or(self.last_aim.get()) {
+            (self.on_aim.borrow_mut())(AimEvent::Done(angle));
+        }
+        self.last_aim.set(None);
     }
 
     fn drag_from_indev(&self, done: bool) {
@@ -772,6 +791,53 @@ mod picker_tests {
             // A press that never left the centre reports nothing.
             picker.drag_to(200, 134, true);
             assert_eq!(seen.borrow().len(), 2);
+        });
+    }
+
+    #[test]
+    fn a_lost_press_finishes_the_drag_like_a_release() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let log = seen.clone();
+            let picker = ModePicker::new(
+                root,
+                mockup_glyphs(),
+                2,
+                |_| {},
+                move |e| log.borrow_mut().push(e),
+            );
+            picker.set_aimable(true);
+            picker.drag_to(250, 134, false);
+            lv.send(picker.aim_area(), lv_event_code_t_LV_EVENT_PRESS_LOST);
+            assert_eq!(
+                *seen.borrow(),
+                vec![AimEvent::Moving(90.0), AimEvent::Done(90.0)]
+            );
+            // The drag is over: a later release on the centre reports nothing.
+            picker.drag_to(200, 134, true);
+            assert_eq!(seen.borrow().len(), 2);
+        });
+    }
+
+    #[test]
+    fn a_new_press_forgets_the_last_aim() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let log = seen.clone();
+            let picker = ModePicker::new(
+                root,
+                mockup_glyphs(),
+                2,
+                |_| {},
+                move |e| log.borrow_mut().push(e),
+            );
+            picker.set_aimable(true);
+            picker.drag_to(250, 134, false); // a drag whose release never arrived
+            lv.send(picker.aim_area(), lv_event_code_t_LV_EVENT_PRESSED);
+            picker.drag_to(200, 134, true); // a tap on the centre dot
+            assert_eq!(*seen.borrow(), vec![AimEvent::Moving(90.0)]);
         });
     }
 

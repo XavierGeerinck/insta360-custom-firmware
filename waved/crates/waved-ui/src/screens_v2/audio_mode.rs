@@ -229,6 +229,11 @@ impl Screen for AudioModeScreen {
         }
         let aim = {
             let mut aim = self.aim.borrow_mut();
+            if self.shown.is_some_and(|shown| shown != mode) {
+                // The mode changed under the finger: that drag is over (the
+                // picker forgets its last aim in set_aimable below).
+                aim.dragging = None;
+            }
             if aim
                 .pending
                 .is_some_and(|p| same_angle(p, snap.audio.beam_aim_deg))
@@ -331,6 +336,36 @@ mod tests {
             applied.audio.beam_aim_deg = 90.0;
             screen.update(&applied);
             assert!(screen.aim.borrow().pending.is_none());
+        });
+    }
+
+    #[test]
+    fn the_finger_aim_wins_until_the_mode_changes_under_it() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let f = fixture();
+            let mut snap = focused_snap();
+            let mut screen = AudioModeScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            assert_targets_ok(root);
+            let bright = |[r, g, b]: [u8; 3]| r > 200 && g > 200 && b > 200;
+            screen.picker.as_ref().unwrap().drag_to(250, 134, false);
+            // Mid-drag, a snapshot still at 300° doesn't pull the handle away.
+            screen.update(&snap);
+            assert!(
+                bright(lv.render().pixel(250, 134)),
+                "handle under the finger"
+            );
+            // The mode changes elsewhere mid-drag: the drag is over.
+            snap.audio.mode = AudioMode::Supercardioid;
+            screen.update(&snap);
+            assert!(screen.aim.borrow().dragging.is_none());
+            let frame = lv.render();
+            assert!(
+                bright(frame.pixel(157, 109)),
+                "handle back at the reported 300°"
+            );
+            assert!(!bright(frame.pixel(250, 134)));
         });
     }
 
