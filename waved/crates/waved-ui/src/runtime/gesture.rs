@@ -81,8 +81,10 @@ pub fn runtime_gesture(
     }
 }
 
-/// Commands that go with leaving `current` other than by its own Back/Cancel
-/// button — the same commands that button sends:
+/// Commands that go with leaving `current` — the same commands its own
+/// Back/Cancel button sends. The runtime sends them once when the route leaves
+/// the router stack, whatever removed it (a duplicate of the button's own
+/// send is accepted):
 /// WifiSetup -> [CancelWifiProvisioning] (always, as its Cancel does; the
 /// provisioning service ignores a Cancel when idle);
 /// FileDetail(id) with snap.playback.recording == Some(id) -> [StopPlayback];
@@ -101,11 +103,8 @@ pub fn leave_commands(current: &Route, snap: &UiSnapshot) -> Vec<Command> {
 /// (`lv_indev_wait_release`) so a swipe never also fires a tap.
 #[derive(Debug, PartialEq)]
 pub enum SwipeTaken {
-    /// The runtime's Menu or Back, plus the leave commands for a Back.
-    Runtime {
-        event: UiEvent,
-        commands: Vec<Command>,
-    },
+    /// The runtime's Menu or Back.
+    Runtime(UiEvent),
     /// A screen's `on_swipe` handler ran (`send_swipe` returned true).
     Screen,
 }
@@ -131,8 +130,7 @@ impl Gestures {
     /// press is fed as released). At press start it records the press target on
     /// `root` and whether it keeps its drags: such a press never swipes, in any
     /// direction (checked before recognising anything). On a recognised swipe:
-    /// `runtime_gesture` first (a Back carries `leave_commands(current, snap)`);
-    /// otherwise `send_swipe(target, dir)`, where target is the recorded press
+    /// `runtime_gesture` first; otherwise `send_swipe(target, dir)`, where target is the recorded press
     /// target if still valid (`lv_obj_is_valid`, and still on `root`), else
     /// `root` -> `Screen` if it returned true. Returns None when nobody took it.
     ///
@@ -145,7 +143,6 @@ impl Gestures {
         root: Obj,
         current: &Route,
         depth: usize,
-        snap: &UiSnapshot,
     ) -> Option<SwipeTaken> {
         if !s.pressed {
             self.press = None;
@@ -165,12 +162,7 @@ impl Gestures {
         let direction = self.tracker.sample(s.x, s.y, true, now_ms)?;
         let (_, start_y) = self.tracker.start()?;
         if let Some(event) = runtime_gesture(direction, start_y, current, depth) {
-            let commands = if event == UiEvent::Back {
-                leave_commands(current, snap)
-            } else {
-                Vec::new()
-            };
-            return Some(SwipeTaken::Runtime { event, commands });
+            return Some(SwipeTaken::Runtime(event));
         }
         if root.is_null() {
             return None;
@@ -232,32 +224,22 @@ mod tests {
         to: (i32, i32),
         ms: u64,
     ) -> Option<SwipeTaken> {
-        let snap = UiSnapshot::default();
         let mut g = Gestures::default();
         assert_eq!(
-            g.sample(down(from.0, from.1), 1_000, root, current, depth, &snap),
+            g.sample(down(from.0, from.1), 1_000, root, current, depth),
             None
         );
-        let taken = g.sample(down(to.0, to.1), 1_000 + ms, root, current, depth, &snap);
-        assert_eq!(
-            g.sample(up(), 1_000 + ms + 20, root, current, depth, &snap),
-            None
-        );
+        let taken = g.sample(down(to.0, to.1), 1_000 + ms, root, current, depth);
+        assert_eq!(g.sample(up(), 1_000 + ms + 20, root, current, depth), None);
         taken
     }
 
     fn menu() -> Option<SwipeTaken> {
-        Some(SwipeTaken::Runtime {
-            event: UiEvent::Navigate(Route::Menu),
-            commands: Vec::new(),
-        })
+        Some(SwipeTaken::Runtime(UiEvent::Navigate(Route::Menu)))
     }
 
     fn back() -> Option<SwipeTaken> {
-        Some(SwipeTaken::Runtime {
-            event: UiEvent::Back,
-            commands: Vec::new(),
-        })
+        Some(SwipeTaken::Runtime(UiEvent::Back))
     }
 
     fn counter(root: Obj, direction: Swipe) -> Rc<Cell<u32>> {
@@ -271,9 +253,8 @@ mod tests {
     fn swipe_down_from_the_top_edge_opens_menu_once_per_press() {
         lvgl(|lv| {
             let root = lv.screen();
-            let snap = UiSnapshot::default();
             let mut g = Gestures::default();
-            let mut feed = |s, at| g.sample(s, at, root, &Route::Home, 1, &snap);
+            let mut feed = |s, at| g.sample(s, at, root, &Route::Home, 1);
             assert_eq!(feed(down(200, 12), 0), None);
             assert_eq!(feed(down(202, 50), 80), None, "38 px is not yet a swipe");
             assert_eq!(feed(down(206, 75), 160), menu());
@@ -640,32 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn a_swipe_back_carries_the_leave_commands() {
-        lvgl(|lv| {
-            let root = lv.screen();
-            let id = Uuid::from_u128(7);
-            let mut snap = UiSnapshot::default();
-            snap.playback.recording = Some(id);
-            for (route, commands) in [
-                (Route::WifiSetup, vec![Command::CancelWifiProvisioning]),
-                (Route::FileDetail(id), vec![Command::StopPlayback]),
-                (Route::Menu, vec![]),
-            ] {
-                let mut g = Gestures::default();
-                g.sample(down(100, 150), 0, root, &route, 2, &snap);
-                assert_eq!(
-                    g.sample(down(170, 150), 100, root, &route, 2, &snap),
-                    Some(SwipeTaken::Runtime {
-                        event: UiEvent::Back,
-                        commands
-                    }),
-                    "{route:?}"
-                );
-            }
-        });
-    }
-
-    #[test]
     fn the_volume_dial_centre_lets_swipes_through() {
         lvgl(|lv| {
             let root = lv.screen();
@@ -711,9 +666,8 @@ mod tests {
                 .clickable(true)
                 .keep_gestures();
             root.update_layout();
-            let snap = UiSnapshot::default();
             let mut g = Gestures::default();
-            let mut feed = |s, at| g.sample(s, at, root, &Route::Volume, 2, &snap);
+            let mut feed = |s, at| g.sample(s, at, root, &Route::Volume, 2);
             assert_eq!(feed(down(90, 90), 0), None);
             assert_eq!(feed(down(170, 90), 100), None, "blocked");
             assert_eq!(feed(up(), 150), None);
@@ -736,16 +690,15 @@ mod tests {
                 .rect(Rect::new(150, 120, 100, 60))
                 .clickable(true);
             root.update_layout();
-            let snap = UiSnapshot::default();
             let mut g = Gestures::default();
             assert_eq!(
-                g.sample(down(230, 150), 0, root, &Route::Volume, 2, &snap),
+                g.sample(down(230, 150), 0, root, &Route::Volume, 2),
                 None
             );
             assert_eq!(press_target(root, 230, 150), Some(button));
             page.delete();
             assert_eq!(
-                g.sample(down(160, 150), 100, root, &Route::Volume, 2, &snap),
+                g.sample(down(160, 150), 100, root, &Route::Volume, 2),
                 Some(SwipeTaken::Screen)
             );
             assert_eq!(lefts.get(), 1);
@@ -761,15 +714,14 @@ mod tests {
                 .rect(Rect::new(150, 120, 100, 60))
                 .clickable(true);
             old.update_layout();
-            let snap = UiSnapshot::default();
             let mut g = Gestures::default();
-            g.sample(down(230, 150), 0, old, &Route::Volume, 2, &snap);
+            g.sample(down(230, 150), 0, old, &Route::Volume, 2);
             assert_eq!(press_target(old, 230, 150), Some(button));
             // A second screen, loaded while the old one still exists.
             let new = Obj::screen();
             let new_lefts = counter(new, Swipe::Left);
             assert_eq!(
-                g.sample(down(160, 150), 100, new, &Route::Volume, 2, &snap),
+                g.sample(down(160, 150), 100, new, &Route::Volume, 2),
                 Some(SwipeTaken::Screen)
             );
             assert_eq!((old_lefts.get(), new_lefts.get()), (0, 1));

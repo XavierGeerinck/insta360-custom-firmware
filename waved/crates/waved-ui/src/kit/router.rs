@@ -31,6 +31,11 @@ impl Router {
         self.stack.len()
     }
 
+    /// Every route on the stack, the base first and the current one last.
+    pub fn stack(&self) -> &[Route] {
+        &self.stack
+    }
+
     /// The meeting-driven base screen.
     pub fn base_for(snap: &UiSnapshot) -> Route {
         if snap.meeting.recording {
@@ -183,6 +188,15 @@ mod tests {
         snap.settings.first_run_done = true;
         router.sync(&snap);
         assert_eq!(router.current(), &Route::Home);
+    }
+
+    #[test]
+    fn the_stack_lists_the_routes_base_first() {
+        let snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Rest, &snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Menu, Route::Resting]);
     }
 
     #[test]

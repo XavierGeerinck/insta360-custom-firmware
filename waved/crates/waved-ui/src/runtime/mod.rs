@@ -66,6 +66,9 @@ pub struct Runtime {
     gestures: Gestures,
     boot_done: bool,
     shown: Option<Shown>,
+    /// The router stack after the last step: a route missing from it now has
+    /// left, by whatever path, and sends its leave commands.
+    last_stack: Vec<Route>,
 }
 
 impl Runtime {
@@ -89,6 +92,7 @@ impl Runtime {
             gestures: Gestures::default(),
             boot_done: false,
             shown: None,
+            last_stack: Vec::new(),
         }
     }
 
@@ -123,7 +127,7 @@ impl Runtime {
     /// press that only wakes the screen is reported released until it is
     /// lifted), then the swipes on the shown root. A wake and the runtime's
     /// own swipe (Menu, Back) go on the ui channel and are routed by the next
-    /// `step`; a swipe's leave commands go to the bus at once.
+    /// `step`.
     pub fn touch(&mut self, raw: TouchSample, snap: &UiSnapshot) -> TouchReport {
         let gate = self.power.on_touch(raw.pressed, snap.now_ms);
         if let Some(event) = gate.event {
@@ -144,13 +148,9 @@ impl Runtime {
             root,
             self.router.current(),
             self.router.depth(),
-            snap,
         );
         let cancel_press = taken.is_some();
-        if let Some(SwipeTaken::Runtime { event, commands }) = taken {
-            for command in commands {
-                self.ctx.dispatch.command(command);
-            }
+        if let Some(SwipeTaken::Runtime(event)) = taken {
             self.ctx.dispatch.ui(event);
         }
         TouchReport {
@@ -164,8 +164,9 @@ impl Runtime {
     /// then the service events (power keys are held back); BootDone once
     /// `BOOT_MIN_MS` has passed; the ui channel (taps, touch wakes, swipes);
     /// then the power keys, so a key's Rest is not undone by a Wake or a tap
-    /// from the same iteration; the power tick; the meeting sync; then the
-    /// routed screen is shown and the top screen updated.
+    /// from the same iteration; the power tick; the meeting sync; the leave
+    /// commands of every route that left the stack; then the routed screen
+    /// is shown and the top screen updated.
     pub fn step(&mut self, mut snap: UiSnapshot, events: &[DeviceEvent]) {
         // R13: no PIN screen until milestone 3, so routing treats the device
         // password as off. Screens get the real value back below (Menu's
@@ -199,24 +200,32 @@ impl Runtime {
         self.router.sync(&snap);
         snap.settings.pin_enabled = pin_enabled;
         snap.message = self.slot.current(snap.now_ms);
+        self.send_leave_commands(&snap);
         self.show_current(&snap);
+        self.last_stack = self.router.stack().to_vec();
         if let Some(shown) = self.shown.as_mut() {
             shown.screen.update(&snap);
         }
     }
 
-    /// One UiEvent: a message goes to the slot, ToBase first sends what
-    /// leaving the current screen sends, everything goes to the router.
+    /// One UiEvent: a message goes to the slot, everything else to the router.
     fn route(&mut self, event: &UiEvent, snap: &UiSnapshot) {
         match event {
             UiEvent::Show(message) => self.slot.post(message.clone(), snap.now_ms),
-            UiEvent::ToBase => {
-                for command in leave_commands(self.router.current(), snap) {
-                    self.ctx.dispatch.command(command);
-                }
-                self.router.handle(event, snap);
-            }
             other => self.router.handle(other, snap),
+        }
+    }
+
+    /// Every route that left the router stack since the last step sends what
+    /// leaving it sends (`leave_commands`), exactly once, whatever removed it:
+    /// a swipe or button Back, ToBase, a base Navigate, a meeting takeover.
+    /// This is the one place leave commands are sent.
+    fn send_leave_commands(&self, snap: &UiSnapshot) {
+        let stack = self.router.stack();
+        for route in self.last_stack.iter().filter(|route| !stack.contains(route)) {
+            for command in leave_commands(route, snap) {
+                self.ctx.dispatch.command(command);
+            }
         }
     }
 
@@ -772,28 +781,89 @@ mod tests {
         });
     }
 
+    fn booted_with_bus(lv: &mut Lvgl) -> (Runtime, broadcast::Receiver<Command>) {
+        lv.screen();
+        let (mut rt, bus) = runtime_with_bus();
+        rt.step(ready(0), &[]);
+        rt.step(ready(BOOT_MIN_MS), &[]);
+        (rt, bus)
+    }
+
     #[test]
-    fn leaving_by_swipe_or_to_the_base_sends_the_leave_commands() {
+    fn a_swipe_back_or_to_the_base_sends_the_leave_commands_once() {
         lvgl(|lv| {
-            lv.screen();
-            let (mut rt, mut bus) = runtime_with_bus();
-            rt.step(ready(0), &[]);
-            rt.step(ready(BOOT_MIN_MS), &[]);
+            let (mut rt, mut bus) = booted_with_bus(lv);
             let id = Uuid::new_v4();
             send(&mut rt, UiEvent::Navigate(Route::Files), 2_000);
             send(&mut rt, UiEvent::Navigate(Route::FileDetail(id)), 2_100);
             let mut playing = ready(2_200);
             playing.playback.recording = Some(id);
             assert!(swipe_right(&mut rt, (100, 150), &playing));
-            assert_eq!(drain(&mut bus), [Command::StopPlayback], "sent at once");
+            assert!(
+                drain(&mut bus).is_empty(),
+                "sent when the route leaves the stack, not by the swipe"
+            );
             playing.now_ms = 2_400;
-            rt.step(playing, &[]);
+            rt.step(playing.clone(), &[]);
             assert_eq!(rt.shown_route(), Some(&Route::Files));
+            assert_eq!(drain(&mut bus), [Command::StopPlayback]);
+            playing.now_ms = 2_450;
+            rt.step(playing, &[]);
+            assert!(drain(&mut bus).is_empty(), "exactly once");
 
             send(&mut rt, UiEvent::Navigate(Route::Wifi), 2_500);
             send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_600);
             drain(&mut bus);
             assert_eq!(send(&mut rt, UiEvent::ToBase, 2_700), Some(Route::Home));
+            assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_button_back_from_the_playing_file_detail_stops_playback_once() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = booted_with_bus(lv);
+            let id = Uuid::new_v4();
+            send(&mut rt, UiEvent::Navigate(Route::Files), 2_000);
+            send(&mut rt, UiEvent::Navigate(Route::FileDetail(id)), 2_100);
+            drain(&mut bus);
+            // What the screen's Back button sends (the Probe sends no command).
+            rt.dispatcher().back();
+            let mut playing = ready(2_200);
+            playing.playback.recording = Some(id);
+            rt.step(playing.clone(), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Files));
+            assert_eq!(drain(&mut bus), [Command::StopPlayback]);
+            playing.now_ms = 2_300;
+            rt.step(playing, &[]);
+            assert!(drain(&mut bus).is_empty(), "exactly once");
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_takeover_or_a_base_navigate_cancels_wifi_setup() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = booted_with_bus(lv);
+            send(&mut rt, UiEvent::Navigate(Route::Wifi), 2_000);
+            send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_100);
+            drain(&mut bus);
+            let mut takeover = ready(2_200);
+            takeover.meeting.pending_decision = Some(decision());
+            rt.step(takeover, &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Decision));
+            assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+
+            rt.step(ready(2_300), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Home));
+            send(&mut rt, UiEvent::Navigate(Route::Wifi), 2_400);
+            send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_500);
+            drain(&mut bus);
+            assert_eq!(
+                send(&mut rt, UiEvent::Navigate(Route::Home), 2_600),
+                Some(Route::Home)
+            );
             assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
             rt.close();
         });
