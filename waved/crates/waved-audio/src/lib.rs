@@ -875,6 +875,9 @@ impl AudioService {
                 // SP#6: UacControl mirrors to hw:1 PCM Playback Volume.
             }
             Command::SetMicVolume(v) => {
+                // The UI's Mic level and the host both land here; keep
+                // AudioState in the documented 0..=800 range.
+                let v = waved_config::clamp_mic_volume(v);
                 self.audio_tx.send_modify(|s| s.mic_volume = v);
             }
             Command::SetBeamAim(degrees) => match waved_config::wrap_beam_aim(degrees) {
@@ -1882,5 +1885,80 @@ mod tests {
                 frame.mic_mono_f32[i]
             );
         }
+    }
+
+    /// A running `AudioService` over `state`, for tests that drive it through
+    /// its channels. Returns the frame sender, the processed-frame receiver
+    /// (what the meeting layer sees), the command sender and the task handle.
+    #[allow(clippy::type_complexity)]
+    fn spawn_service(
+        state: Arc<watch::Sender<AudioState>>,
+        frame_size: usize,
+    ) -> (
+        mpsc::Sender<AudioFrame>,
+        mpsc::Receiver<ProcessedAudioFrame>,
+        broadcast::Sender<Command>,
+        tokio::task::JoinHandle<AudioServiceExit>,
+    ) {
+        let (frame_tx, frame_rx) = mpsc::channel(8);
+        let (meeting_tx, meeting_rx) = mpsc::channel(8);
+        let svc = AudioService::new(
+            state,
+            frame_tx.clone(),
+            frame_rx,
+            meeting_tx,
+            frame_size,
+            48_000,
+            crate::beam::MicGeometry::default(),
+        );
+        let (cmd_tx, cmd_rx) = broadcast::channel(8);
+        let handle = tokio::spawn(svc.run(cmd_rx));
+        (frame_tx, meeting_rx, cmd_tx, handle)
+    }
+
+    #[test]
+    fn set_mic_volume_is_clamped_into_state() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        svc.handle_command(Command::SetMicVolume(5_000));
+        assert_eq!(state.borrow().mic_volume, 800);
+        svc.handle_command(Command::SetMicVolume(0));
+        assert_eq!(state.borrow().mic_volume, 0);
+        svc.handle_command(Command::SetMicVolume(250));
+        assert_eq!(state.borrow().mic_volume, 250);
+    }
+
+    #[tokio::test]
+    async fn the_device_mic_level_reaches_the_gain_stage() {
+        let state = Arc::new(
+            watch::channel(AudioState {
+                nr_level: NrLevel::Off,
+                ..AudioState::default()
+            })
+            .0,
+        );
+        let (frame_tx, mut meeting_rx, cmd_tx, handle) = spawn_service(Arc::clone(&state), 256);
+        cmd_tx.send(Command::SetMicVolume(0)).unwrap();
+        let mut seen = state.subscribe();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            seen.wait_for(|s| s.mic_volume == 0),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        frame_tx
+            .send(AudioFrame::mic_only(vec![8_000; 256], 1, 48_000, 0))
+            .await
+            .unwrap();
+        let out = tokio::time::timeout(std::time::Duration::from_secs(1), meeting_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            out.mic_mono_f32.iter().all(|&s| s == 0.0),
+            "level 0 silences the uplink"
+        );
+        cmd_tx.send(Command::Shutdown).unwrap();
+        assert_eq!(handle.await.unwrap(), AudioServiceExit::StopRequested);
     }
 }
