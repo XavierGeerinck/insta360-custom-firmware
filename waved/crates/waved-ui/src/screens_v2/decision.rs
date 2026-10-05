@@ -219,9 +219,16 @@ impl Screen for DecisionScreen {
                     Severity::Success,
                     copy::DELETED,
                 ),
-                move || {
-                    confirm.hidden(true);
-                    main.hidden(false);
+                {
+                    let decided = decided.clone();
+                    move || {
+                        // Once Delete is confirmed the folder is going; the
+                        // question must not come back with greyed buttons.
+                        if !decided.get() {
+                            confirm.hidden(true);
+                            main.hidden(false);
+                        }
+                    }
                 },
             ));
         }
@@ -415,6 +422,32 @@ mod tests {
                     copy::DELETED
                 ))]
             );
+        });
+    }
+
+    #[test]
+    fn cancel_after_a_confirmed_delete_does_nothing() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (ctx, mut bus, ui) = ctx();
+            let snap = pending("https://notes.example.com/hook");
+            let mut screen = DecisionScreen::default();
+            screen.build(root, &ctx, &snap);
+            let p = screen.parts.as_ref().unwrap();
+            let (main, confirm, delete) = (p.main, p.confirm, p.delete.as_ref().unwrap().obj());
+            let row = p.confirm_row.as_ref().unwrap();
+            let (cancel, confirm_delete) = (row.obj(0), row.obj(1));
+            lv.click(delete);
+            lv.click(confirm_delete);
+            lv.click(cancel);
+            lv.click(confirm_delete);
+            assert!(
+                main.is_hidden() && !confirm.is_hidden(),
+                "the question screen does not come back"
+            );
+            let id = Uuid::from_u128(ID);
+            assert_eq!(sent(&mut bus), [format!("DiscardRecording({id:?})")]);
+            assert_eq!(events(&ui).len(), 1, "one message");
         });
     }
 
