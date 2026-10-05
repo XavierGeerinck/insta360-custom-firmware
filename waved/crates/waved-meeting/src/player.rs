@@ -645,11 +645,14 @@ mod tests {
         .unwrap();
         assert!(!state.borrow().playing, "no playback while recording");
         meeting.send_modify(|m| m.recording = false);
-        commands.send(Command::ResumePlayback).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), state.wait_for(|s| s.playing))
-            .await
-            .unwrap()
-            .unwrap();
+        // The end of the take and Resume reach the player on different
+        // channels, in either order; Resume works once the end is seen.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+        while !state.borrow().playing {
+            assert!(tokio::time::Instant::now() < deadline, "Resume refused after the take");
+            commands.send(Command::ResumePlayback).unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         commands.send(Command::Shutdown).unwrap();
         task.await.unwrap();
     }
