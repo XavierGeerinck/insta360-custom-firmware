@@ -1,4 +1,3 @@
-pub mod audio_fx;
 pub mod bindings;
 pub mod display;
 pub mod i18n;
@@ -6,13 +5,6 @@ pub mod input;
 pub mod kit;
 pub mod runtime;
 pub mod screens_v2;
-
-// Legacy UI, no longer run; deleted in Z9.
-pub mod nav;
-pub mod screens;
-pub mod status_bar;
-pub mod theme;
-pub mod toast;
 
 use std::sync::Arc;
 use tracing::error;
@@ -44,16 +36,5 @@ impl UiService {
         if let Some(h) = self.thread_handle.take() {
             let _ = h.join();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::nav::*;
-
-    #[test]
-    fn screen_manager_starts_at_home() {
-        let nav = ScreenManager::new();
-        assert_eq!(nav.current, UiScreen::Home);
     }
 }

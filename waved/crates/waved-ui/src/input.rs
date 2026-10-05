@@ -6,6 +6,7 @@ use crate::runtime::touch::TouchSample;
 use tracing::info;
 
 /// Evdev event structure (matches kernel input_event).
+#[cfg(not(feature = "simulate"))]
 #[repr(C)]
 struct InputEvent {
     tv_sec: libc::time_t,
@@ -15,12 +16,17 @@ struct InputEvent {
     value: i32,
 }
 
+#[cfg(not(feature = "simulate"))]
 const EV_KEY: u16 = 0x01;
+#[cfg(not(feature = "simulate"))]
 const EV_ABS: u16 = 0x03;
+#[cfg(not(feature = "simulate"))]
 const BTN_TOUCH: u16 = 0x14a;
 // The ILITEK TDDI driver uses the multi-touch (MT-B) protocol exclusively —
 // it emits ABS_MT_POSITION_X/Y, NOT the legacy ABS_X/ABS_Y.
+#[cfg(not(feature = "simulate"))]
 const ABS_MT_POSITION_X: u16 = 0x35;
+#[cfg(not(feature = "simulate"))]
 const ABS_MT_POSITION_Y: u16 = 0x36;
 
 /// ILITEK_TDDI reports native screen pixels (x 0-399), not 0-2047, and the

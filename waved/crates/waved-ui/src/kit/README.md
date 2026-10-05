@@ -1,8 +1,8 @@
 # UI kit
 
 The building blocks for the revision-2 screens (`docs/mockups`). Milestone 2
-builds every screen from these pieces. The legacy screens in `src/screens/` are
-deleted when the runtime switches over.
+builds every screen from these pieces. The runtime (`src/runtime/`) builds them
+by route; the legacy screens are gone.
 
 ## Rules
 

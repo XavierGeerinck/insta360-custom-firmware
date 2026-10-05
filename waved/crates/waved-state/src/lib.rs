@@ -538,21 +538,6 @@ pub enum Command {
     RetryFailedUploads,
     SetMotorPosition(MotorPosition),
     Shutdown,
-    /// UI-only: navigate to the "More" screen (pspapp page 0xb / `ui_setting_screen`).
-    OpenSettings,
-    /// UI-only: navigate back one level (from AudioMode → More, More → Home/Recording,
-    /// System → More).
-    CloseSettings,
-    /// UI-only: show CC overlay on the Audio Mode sub-page.
-    OpenAudioMode,
-    /// UI-only: navigate to the Noise Reduction screen (SP#4 — DFN3 strength selector).
-    OpenNoiseReduction,
-    /// UI-only: navigate to the System Settings screen (pspapp page 0xe / `ui_setting_system`).
-    OpenSystemSettings,
-    /// UI-only: show webhook configuration and delivery status.
-    OpenWebhookStatus,
-    /// UI-only: navigate to the Speaker Volume screen (pspapp page 0xd / `ui_volume_screen`).
-    OpenVolume,
     /// Test hook: force the beamformer to steer at a fixed (azimuth_deg, elevation_deg)
     /// instead of tracking the live DOA estimate. `None` clears the override.
     /// Used by `scripts/test-beamforming.sh` Test 1 to measure front-to-back ratio
@@ -567,16 +552,15 @@ pub enum Command {
     /// User chose Discard on the confirmation screen — hard-delete the
     /// recording dir, the meeting row, and any bookmarks for it.
     DiscardRecording(Uuid),
-    /// UI-only: open the non-disruptive Wi-Fi status/management screen.
-    OpenWifiSettings,
-    /// UI-only: enter WiFi provisioning (scan → AP → web form).
+    /// Start Wi-Fi provisioning: scan, bring up the setup access point and
+    /// serve the setup page (waved-provision). Sent by the Wi-Fi setup screen.
     OpenWifiProvisioning,
     /// Provisioning web form / WifiService: join this network.
     WifiConnect {
         ssid: String,
         password: String,
     },
-    /// UI-only: abort provisioning and revert to STA.
+    /// Abort provisioning and return to station mode (waved-provision).
     CancelWifiProvisioning,
     /// Internal lifecycle command emitted after setup has persisted settings,
     /// restored station connectivity, and is ready to reload all services.

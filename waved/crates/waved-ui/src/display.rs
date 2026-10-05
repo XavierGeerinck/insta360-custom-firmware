@@ -10,7 +10,6 @@ use std::os::unix::io::RawFd;
 pub const SCREEN_W: u32 = 400;
 pub const SCREEN_H: u32 = 304;
 pub const BYTES_PER_PIXEL: usize = 2; // RGB565
-const STRIDE: usize = SCREEN_W as usize * BYTES_PER_PIXEL; // 800 bytes per row
 
 pub struct FramebufferDisplay {
     #[cfg(not(feature = "simulate"))]
@@ -21,35 +20,41 @@ pub struct FramebufferDisplay {
 }
 
 impl FramebufferDisplay {
+    #[cfg(feature = "simulate")]
     pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
-        let buf_size = (SCREEN_W * SCREEN_H / 2) as usize * BYTES_PER_PIXEL;
-        let buf1 = vec![0u8; buf_size].into_boxed_slice();
-        let buf2 = vec![0u8; buf_size].into_boxed_slice();
-
-        #[cfg(not(feature = "simulate"))]
-        {
-            let fb_size = (SCREEN_W * SCREEN_H) as usize * BYTES_PER_PIXEL;
-            // Kick the fb_ili79400 SPI refresh using dd — the only method
-            // proven to reliably wake the display at boot.
-            let _ = std::process::Command::new("dd")
-                .args(["if=/dev/zero", "of=/dev/fb0", "bs=4096", "count=60"])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status();
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            // Open fd for flush writes
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open("/dev/fb0")?;
-            let fd = std::os::unix::io::IntoRawFd::into_raw_fd(file);
-            // Turn on backlight
-            let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", "255");
-            return Ok(Self { fd, buf1, buf2 });
-        }
-
-        #[cfg(feature = "simulate")]
+        let (buf1, buf2) = Self::draw_buffers();
         Ok(Self { buf1, buf2 })
+    }
+
+    #[cfg(not(feature = "simulate"))]
+    pub fn init() -> Result<Self, Box<dyn std::error::Error>> {
+        let (buf1, buf2) = Self::draw_buffers();
+        // Kick the fb_ili79400 SPI refresh using dd — the only method
+        // proven to reliably wake the display at boot.
+        let _ = std::process::Command::new("dd")
+            .args(["if=/dev/zero", "of=/dev/fb0", "bs=4096", "count=60"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Open fd for flush writes
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/fb0")?;
+        let fd = std::os::unix::io::IntoRawFd::into_raw_fd(file);
+        // Backlight on until the power driver applies the brightness setting.
+        let _ = std::fs::write("/sys/class/leds/lcd-backlight/brightness", "255");
+        Ok(Self { fd, buf1, buf2 })
+    }
+
+    /// Two half-screen RGB565 draw buffers.
+    fn draw_buffers() -> (Box<[u8]>, Box<[u8]>) {
+        let size = (SCREEN_W * SCREEN_H / 2) as usize * BYTES_PER_PIXEL;
+        (
+            vec![0u8; size].into_boxed_slice(),
+            vec![0u8; size].into_boxed_slice(),
+        )
     }
 
     /// Called by LVGL flush callback — writes the dirty area to /dev/fb0.

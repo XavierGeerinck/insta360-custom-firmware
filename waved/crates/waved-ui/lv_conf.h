@@ -60,12 +60,10 @@
  *   FONT USAGE
  *===================*/
 
-#define LV_FONT_MONTSERRAT_12 1
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_16 1
-#define LV_FONT_MONTSERRAT_20 1
-#define LV_FONT_MONTSERRAT_24 1
-#define LV_FONT_DEFAULT &lv_font_montserrat_16
+/* Kit fonts (src/kit/fonts, built by fonts/build_fonts.sh). Every kit label
+ * sets its font; the default only covers LVGL's own fallbacks. */
+#define LV_FONT_CUSTOM_DECLARE LV_FONT_DECLARE(font_body_15)
+#define LV_FONT_DEFAULT &font_body_15
 
 /* Dark default theme: unstyled widgets render dark instead of white discs. */
 #define LV_USE_THEME_DEFAULT 1
@@ -93,16 +91,8 @@
  * OTHERS
  *===================*/
 
-#define LV_USE_LODEPNG 1  /* built-in PNG decoder */
-#define LV_USE_QRCODE  1  /* built-in Wi-Fi provisioning QR encoder */
-
-/* POSIX file system driver — maps drive letter 'A' to the root filesystem.
- * Image paths: "A:/etc/pspapp/lvgl/icon/msc/bg_main.png" → /etc/pspapp/... */
-#define LV_USE_FS_POSIX 1
-#if LV_USE_FS_POSIX
-    #define LV_FS_POSIX_LETTER 'A'
-    #define LV_FS_POSIX_PATH   ""
-    #define LV_FS_POSIX_CACHE_SIZE 0
-#endif
+#define LV_USE_LODEPNG 0  /* no PNG assets: icons are the kit icon font */
+#define LV_USE_QRCODE  1  /* Wi-Fi setup QR code */
+#define LV_USE_FS_POSIX 0 /* no asset files are read */
 
 #endif /* LV_CONF_H */

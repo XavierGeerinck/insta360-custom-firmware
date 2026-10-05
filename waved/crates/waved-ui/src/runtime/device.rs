@@ -140,4 +140,13 @@ mod tests {
             assert!(!top.is_clickable(), "a clickable top layer swallows every tap (BUG-3)");
         });
     }
+
+    #[test]
+    fn the_default_font_is_the_kit_body_font() {
+        lvgl(|_lv| {
+            // SAFETY: returns a static font descriptor.
+            let default = unsafe { lv_font_default() };
+            assert_eq!(default, crate::kit::fonts::Font::Body.ptr(), "no Montserrat left");
+        });
+    }
 }

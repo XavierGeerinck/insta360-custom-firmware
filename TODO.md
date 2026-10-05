@@ -93,7 +93,7 @@ Rules for the parallel milestones:
     value row, switch.
   - Controls: value arc, confirmation dialog. The radial picker moves to B2, the only screen that uses it.
   - Each component gets a host-side LVGL snapshot test.
-- [ ] **P0.5 Navigation** (M) — `waved-ui/src/nav.rs`, `lib.rs`
+- [x] **P0.5 Navigation** (M) — `waved-ui/src/nav.rs`, `lib.rs`
   - Navigation stack with `back()`.
   - Gestures: swipe down from the top edge opens Menu; swipe right goes back.
   - Wake guard: the first touch after dimming only wakes the screen.
@@ -345,7 +345,7 @@ Rules for the parallel milestones:
 - [ ] **L1 Display docs** (S) — panel type, and the stale home layout in `DISPLAY_HARDWARE.md:82`.
 - [ ] **L2 UI docs** (S) — `docs/ui/HOME_SCREEN.md`, plus the stale `bg_main.png` warning in
   `ASSETS.md:13`.
-- [ ] **L3 Dead code** (S) — delete `screens/control_center.rs`, which isn't compiled, and the
+- [x] **L3 Dead code** (S) — delete `screens/control_center.rs`, which isn't compiled, and the
   `cc.*` strings.
 - [ ] **L4 Single roadmap** (S) — reduce `waved/TODO.md` to acceptance evidence and point it here.
 - [ ] **L5 Parity matrix** (S) — update `docs/FIRMWARE_GAP_ANALYSIS.md` as workstreams land.
@@ -374,17 +374,17 @@ The redesign fixes these unless an item ID is given.
 |---|---|---|
 | BUG-1 | Back button outside the visible circle on System and Webhook | `system.rs:123`, `webhook.rs:179` |
 | BUG-2 | Titles hidden under the status bar | `system.rs:115`, `webhook.rs:173` |
-| BUG-3 | Toast and status-bar roots are clickable and swallow taps; the toast covers Save for 1.5 s after every stop | `toast.rs:16`, `status_bar.rs:61` |
+| BUG-3 | Toast and status-bar roots are clickable and swallow taps; the toast covers Save for 1.5 s after every stop | `toast.rs:16`, `status_bar.rs:61` — fixed by the M2 runtime switch |
 | BUG-4 | `…` and `·` render as boxes (no glyph) | fonts, P0.3 |
-| BUG-5 | Save/Send/Discard icons never deployed, buttons render blank | `confirmation.rs:244` |
+| BUG-5 | Save/Send/Discard icons never deployed, buttons render blank | `confirmation.rs:244` — fixed by the M2 runtime switch |
 | BUG-6 | Done buttons are white discs (light default theme) | `audio_mode.rs:488`, `noise_reduction.rs:282` |
 | BUG-7 | Power off has no confirmation | `system.rs:52` |
 | BUG-8 | Six System rows and Files show "Bookmark added" | `system.rs:37`, `settings.rs:70` |
 | BUG-9 | Status clock shows UTC and goes stale | `status_bar.rs:143`, E3 |
 | BUG-10 | Webhook labels overlap when text wraps | `webhook.rs:147` |
-| BUG-11 | Audio mode always returns to More, even when opened from System | `lib.rs:474`, P0.5 |
+| BUG-11 | Audio mode always returns to More, even when opened from System | `lib.rs:474`, P0.5 — fixed by the M2 runtime switch |
 | BUG-12 | No way to reach settings or volume while recording | A2 |
-| BUG-13 | Meeting-state screen switching only works on the three main screens | `lib.rs:253`, P0.5 |
+| BUG-13 | Meeting-state screen switching only works on the three main screens | `lib.rs:253`, P0.5 — fixed by the M2 runtime switch |
 | BUG-14 | Language table loaded and thrown away | `lib.rs:71`, E4 |
 | BUG-15 | Stereo mode sends mono | `uac/upstream.rs:110`, C4 |
 | BUG-16 | Pause and resume commands are never handled | `waved-meeting/src/lib.rs`, C1 |

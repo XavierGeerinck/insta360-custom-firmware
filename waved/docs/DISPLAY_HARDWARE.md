@@ -64,13 +64,12 @@ In PARTIAL render mode, LVGL transforms the `lv_area_t` coordinates passed to `f
 |---------|-------|--------|
 | `LV_COLOR_DEPTH` | `16` | RGB565 matches fb0 |
 | `LV_USE_STDLIB_MALLOC` | `LV_STDLIB_CLIB` | System malloc required — decoded PNGs (~240 KB for 400×304) exceed the old 128 KB fixed pool |
-| `LV_USE_LODEPNG` | `1` | Built-in PNG decoder |
-| `LV_USE_FS_POSIX` | `1` | Maps `A:` drive letter to device root filesystem |
-| `LV_FS_POSIX_LETTER` | `'A'` | Asset paths like `A:/etc/pspapp/lvgl/...` resolve to real device files |
-
-Call `lv_fs_posix_init()` immediately after `lv_init()`.
+| `LV_USE_LODEPNG`, `LV_USE_FS_POSIX` | `0` | No PNG assets since the milestone 2 runtime switch: icons come from the kit icon font |
+| `LV_FONT_DEFAULT` | `&font_body_15` | The kit body font; Montserrat is not built |
 
 `LV_COLOR_16_SWAP` was removed in LVGL 9. Byte-swapping is handled in `flush()` instead.
+
+These stock pspapp assets are no longer used by waved (milestone 2); the table stays as a record of the stock firmware.
 
 ## Asset Paths on Device
 
