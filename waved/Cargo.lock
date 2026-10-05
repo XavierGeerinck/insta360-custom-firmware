@@ -3833,6 +3833,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-system"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nix 0.29.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "waved-state",
+]
+
+[[package]]
 name = "waved-uart"
 version = "0.1.0"
 dependencies = [
