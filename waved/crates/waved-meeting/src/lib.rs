@@ -1053,6 +1053,74 @@ mod wiring_tests {
         }
     }
 
+    /// Longest any wiring test waits for an asynchronous condition. Generous
+    /// on purpose: a slow container must not fail a test that is only waiting.
+    const WAIT_DEADLINE: Duration = Duration::from_secs(5);
+
+    async fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + WAIT_DEADLINE;
+        while !ready() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Waits until the service has published an active take and returns its id.
+    async fn wait_for_recording(meeting_tx: &watch::Sender<MeetingState>) -> Uuid {
+        wait_until("the recording to start", || {
+            let state = meeting_tx.borrow();
+            state.recording && state.meeting_id.is_some()
+        })
+        .await;
+        let id = meeting_tx.borrow().meeting_id;
+        id.expect("recording started")
+    }
+
+    async fn wait_for_upload_status(pool: &sqlx::SqlitePool, id: Uuid, want: MeetingStatus) {
+        let deadline = tokio::time::Instant::now() + WAIT_DEADLINE;
+        loop {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap();
+            let got = row.map(|(status,)| status);
+            if got.as_deref() == Some(want.as_str()) {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for upload_status {} of {id}, last seen {got:?}",
+                want.as_str()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    async fn wait_for_diarization_rows(pool: &sqlx::SqlitePool, at_least: usize) -> Vec<(i64,)> {
+        let deadline = tokio::time::Instant::now() + WAIT_DEADLINE;
+        loop {
+            let rows: Vec<(i64,)> =
+                sqlx::query_as("SELECT speaker_id FROM diarization_segments ORDER BY id")
+                    .fetch_all(pool)
+                    .await
+                    .unwrap();
+            if rows.len() >= at_least {
+                return rows;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {at_least} diarization segments, got {}",
+                rows.len()
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test]
     async fn meeting_service_writes_diarization_segments_end_to_end() {
         // Per-test SQLite tempdir.
@@ -1090,9 +1158,9 @@ mod wiring_tests {
         let _ = (audio_processed_tx, wifi_tx); // keep alive for the run loop
         let _svc_handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
 
-        // Start recording.
+        // Start recording. DoA frames sent before the take exists are dropped.
         cmd_tx.send(Command::StartRecording).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        wait_for_recording(&meeting_tx).await;
 
         // Push DoA frames: 500ms at az=45°, then 500ms at az=180°.
         for i in 0..24u64 {
@@ -1101,19 +1169,17 @@ mod wiring_tests {
         for i in 24..48u64 {
             doa_tx_handle.send(high(i * 21, 180.0)).unwrap();
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // The service holds the only receiver, so an empty queue means every
+        // frame was handled. Stop must not overtake queued frames.
+        wait_until("the service to drain the DoA frames", || {
+            doa_tx_handle.is_empty()
+        })
+        .await;
 
-        // Stop recording → finalize diarizer.
+        // Stop recording → finalize diarizer; wait for the segments it writes.
         cmd_tx.send(Command::StopRecording).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-        // Query the db directly.
         let pool = db::init_pool(db_path.to_str().unwrap()).await.unwrap();
-        let rows: Vec<(i64,)> =
-            sqlx::query_as("SELECT speaker_id FROM diarization_segments ORDER BY id")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let rows = wait_for_diarization_rows(&pool, 2).await;
         assert!(rows.len() >= 2, "expected ≥ 2 segments, got {}", rows.len());
         assert_eq!(rows[0].0, 1, "first segment should be speaker_id=1");
         assert_eq!(rows[1].0, 2, "second segment should be speaker_id=2");
@@ -1155,10 +1221,14 @@ mod wiring_tests {
         let _handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
 
         cmd_tx.send(Command::StartRecording).unwrap();
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        let id = meeting_tx.borrow().meeting_id.expect("recording started");
+        let id = wait_for_recording(&meeting_tx).await;
         audio_tx.send(processed_frame(0)).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // The fault must hit a take that already holds audio: wait until the
+        // service has taken the frame off the channel.
+        wait_until("the service to consume the audio frame", || {
+            audio_tx.capacity() == audio_tx.max_capacity()
+        })
+        .await;
 
         integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -1350,8 +1420,7 @@ mod wiring_tests {
         let _handle = tokio::spawn(svc.run(cmd_rx, wifi_rx));
 
         cmd_tx.send(Command::StartRecording).unwrap();
-        tokio::time::sleep(Duration::from_millis(40)).await;
-        let id = meeting_tx.borrow().meeting_id.expect("recording started");
+        let id = wait_for_recording(&meeting_tx).await;
         audio_tx.send(processed_frame(0)).await.unwrap();
         integrity.record_fault(RecordingIntegrityFault::WavWriteFailed);
         integrity_tx
@@ -1360,9 +1429,13 @@ mod wiring_tests {
             ))
             .unwrap();
         cmd_tx.send(Command::StopRecording).unwrap();
-        tokio::time::sleep(Duration::from_millis(80)).await;
 
         let pool = db::init_pool(db_path.to_str().unwrap()).await.unwrap();
+        wait_for_upload_status(&pool, id, MeetingStatus::ArtifactError).await;
+        wait_until("the storage fault to block restarts", || {
+            meeting_tx.borrow().recording_blocked_reason.is_some()
+        })
+        .await;
         let (status,): (String,) =
             sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
                 .bind(id.to_string())
