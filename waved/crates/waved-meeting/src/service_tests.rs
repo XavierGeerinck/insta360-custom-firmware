@@ -1010,3 +1010,85 @@ async fn send_right_after_discard_never_queues_it() {
     wait_gone(&rig.dir(id)).await;
     rig.wait_status(id, None).await;
 }
+
+#[tokio::test]
+async fn resend_only_requeues_kept_or_failed_recordings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = db::init_pool(tmp.path().join("t.db").to_str().unwrap()).await.unwrap();
+    use MeetingStatus as M;
+    for status in [
+        M::LocalOnly,
+        M::RetryWait,
+        M::ConfigurationError,
+        M::Uploaded,
+        M::ArtifactError,
+        M::Uploading,
+        M::AwaitingDecision,
+        M::Deleting,
+    ] {
+        let id = Uuid::new_v4();
+        db::insert_meeting(&pool, &id, "Omni", "/nonexistent").await.unwrap();
+        db::set_status(&pool, &id, status).await.unwrap();
+        let requeued = db::requeue_for_delivery(&pool, &id).await.unwrap();
+        let expected = matches!(status, M::LocalOnly | M::RetryWait | M::ConfigurationError);
+        assert_eq!(requeued, expected, "{status:?}");
+        let want = if expected { "queued" } else { status.as_str() };
+        assert_eq!(Rig::status_in(&pool, id).await.as_deref(), Some(want), "{status:?}");
+    }
+}
+
+#[tokio::test]
+async fn send_from_files_queues_a_kept_recording() {
+    let rig = start_rig(
+        with_server(quiet_config(UploadMode::LocalOnly)),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    rig.send(Command::SendRecording(id));
+    rig.wait_status(id, Some("queued")).await;
+}
+
+#[tokio::test]
+async fn retry_resets_a_failed_recording_and_ignores_others() {
+    let rig = start_rig(
+        with_server(quiet_config(UploadMode::LocalOnly)),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    let pool = rig.pool().await;
+    db::set_status(&pool, &id, MeetingStatus::Uploaded).await.unwrap();
+    rig.send(Command::RetryUpload(id));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("uploaded"), "already delivered");
+    db::set_status(&pool, &id, MeetingStatus::RetryWait).await.unwrap();
+    rig.send(Command::RetryUpload(id));
+    rig.wait_status(id, Some("queued")).await;
+}
+
+/// No upload server configured (empty endpoint): Send and Retry on a kept or
+/// failed take queue nothing and leave it as it was, never a fake "sending".
+#[tokio::test]
+async fn send_and_retry_without_a_server_queue_nothing() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    rig.send(Command::SendRecording(id));
+    rig.send(Command::RetryUpload(id));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    assert_eq!(rig.meeting.borrow().pending_uploads, 0);
+    let pool = rig.pool().await;
+    db::set_status(&pool, &id, MeetingStatus::RetryWait).await.unwrap();
+    rig.send(Command::RetryUpload(id));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("retry_wait"), "a failed take stays failed");
+}

@@ -785,8 +785,18 @@ impl MeetingService {
                                     self.handle_save_recording(id).await;
                                 }
                                 Command::SendRecording(id) => {
-                                    self.handle_send_recording(id).await;
-                                    upload_wake.notify_one();
+                                    let pending = self
+                                        .meeting_tx
+                                        .borrow()
+                                        .pending_decision
+                                        .as_ref()
+                                        .is_some_and(|decision| decision.id == id);
+                                    if pending {
+                                        self.handle_send_recording(id).await;
+                                        upload_wake.notify_one();
+                                    } else if self.requeue(id, "send").await {
+                                        upload_wake.notify_one();
+                                    }
                                 }
                                 Command::DiscardRecording(id) => {
                                     self.handle_discard_recording(id);
@@ -799,11 +809,7 @@ impl MeetingService {
                                     self.spawn_removal(id);
                                 }
                                 Command::RetryUpload(id) => {
-                                    if let Err(error) =
-                                        db::reset_attempt_cycle(&self.pool, &id).await
-                                    {
-                                        warn!("retry: db update failed for {id}: {error}");
-                                    } else {
+                                    if self.requeue(id, "retry").await {
                                         upload_wake.notify_one();
                                     }
                                 }
@@ -1144,6 +1150,31 @@ impl MeetingService {
         }
         self.clear_pending();
         info!("save: {id} kept locally");
+    }
+
+    /// Queue a kept or failed recording for delivery again, from Files.
+    /// Returns true when it was queued. Without an upload server nothing is
+    /// queued: the recording stays as it was instead of looking like it is on
+    /// its way.
+    async fn requeue(&self, id: Uuid, why: &str) -> bool {
+        if !upload_server_configured(&self.config.api.endpoint) {
+            info!("{why} ignored: no webhook endpoint is configured; {id} stays on Wave");
+            return false;
+        }
+        match db::requeue_for_delivery(&self.pool, &id).await {
+            Ok(true) => {
+                info!("{why}: {id} queued for delivery");
+                true
+            }
+            Ok(false) => {
+                warn!("{why} ignored: {id} is not a kept or failed recording");
+                false
+            }
+            Err(error) => {
+                warn!("{why}: db update failed for {id}: {error}");
+                false
+            }
+        }
     }
 
     async fn handle_send_recording(&self, id: Uuid) {

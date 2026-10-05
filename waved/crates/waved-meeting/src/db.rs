@@ -282,6 +282,22 @@ pub async fn reset_attempt_cycle(pool: &SqlitePool, id: &Uuid) -> Result<(), sql
     Ok(())
 }
 
+/// Queue a kept or failed recording for delivery again ("Send" / "Send
+/// again" in Files). Uploaded, damaged, pending, in-flight and deleting
+/// recordings are left alone. Returns true when the row was queued.
+pub async fn requeue_for_delivery(pool: &SqlitePool, id: &Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE meetings SET upload_status = ?, attempt_cycle = 0, \
+         last_error = NULL, last_status_code = NULL, next_attempt_at_ms = NULL \
+         WHERE id = ? AND upload_status IN ('local_only', 'retry_wait', 'configuration_error')",
+    )
+    .bind(MeetingStatus::Queued.as_str())
+    .bind(id.to_string())
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 pub async fn reset_retryable_failures(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         "UPDATE meetings SET upload_status = ?, attempt_cycle = 0, \
