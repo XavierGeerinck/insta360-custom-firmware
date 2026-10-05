@@ -9,8 +9,8 @@ use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{Rect, RADIO_TOP, SCREEN_W, TEXT, TEXT_2, TITLE_Y};
+use crate::screens_v2::menu::Pending;
 use crate::screens_v2::volume::BigNumber;
-use std::cell::Cell;
 use std::rc::Rc;
 use waved_state::{Command, CLOCK_VALID_AFTER_UNIX_S};
 
@@ -145,12 +145,12 @@ pub fn zone_choices(current: &str) -> (Vec<String>, usize) {
 }
 
 /// What the time and date read: dashes until the clock is believable.
-fn time_and_date(snap: &UiSnapshot) -> (String, &'static str, String) {
+fn time_and_date(snap: &UiSnapshot, clock_24h: bool) -> (String, &'static str, String) {
     if snap.now_unix_s < CLOCK_VALID_AFTER_UNIX_S {
         return ("--:--".into(), "", "--".into());
     }
     let local = snap.local_unix_s();
-    let (digits, suffix) = clock_parts(local, snap.settings.clock_24h);
+    let (digits, suffix) = clock_parts(local, clock_24h);
     (digits, suffix, date_line(local))
 }
 
@@ -161,8 +161,8 @@ pub struct DateTimeScreen {
     date: Option<Obj>,
     zone: Option<ValueRow>,
     clock: Option<SwitchRow>,
-    /// The value a tap on the switch sent, until the service reports it.
-    pending_24h: Rc<Cell<Option<bool>>>,
+    /// The 24-hour switch: a tap shows at once, until the service reports it.
+    clock_24h: Rc<Pending<bool>>,
     shown: Option<(String, &'static str, String, String)>,
 }
 
@@ -186,14 +186,14 @@ impl Screen for DateTimeScreen {
             &zone_label(&snap.settings.time_zone),
             move || dispatch.navigate(Route::TimeZone),
         ));
-        let (dispatch, pending) = (ctx.dispatch.clone(), self.pending_24h.clone());
+        let (dispatch, pending) = (ctx.dispatch.clone(), self.clock_24h.clone());
         self.clock = Some(SwitchRow::new(
             root,
             CLOCK_ROW,
             "24-hour clock",
             snap.settings.clock_24h,
             move |on| {
-                pending.set(Some(on));
+                pending.set(on);
                 dispatch.command(Command::SetClock24h(on))
             },
         ));
@@ -206,25 +206,15 @@ impl Screen for DateTimeScreen {
         if let Some(status) = self.status.as_mut() {
             status.update(snap);
         }
-        // A tap moved the switch at once: ignore snapshots that still report
-        // the old value. Once the service reports it (or a change made
-        // elsewhere arrives) the snapshot is the truth again.
-        let reported = snap.settings.clock_24h;
-        let mut snap_24h = reported;
-        match self.pending_24h.get() {
-            Some(pending) if reported != pending => snap_24h = pending,
-            _ => {
-                self.pending_24h.set(None);
-                if let Some(clock) = self.clock.as_ref() {
-                    clock.set_on(reported);
-                }
+        // A tap moved the switch at once: snapshots that still report the old
+        // value don't move it back (`Pending`).
+        let clock_24h = self.clock_24h.follow(snap.settings.clock_24h);
+        if let Some(clock) = self.clock.as_ref() {
+            if clock.is_on() != clock_24h {
+                clock.set_on(clock_24h);
             }
         }
-        let (digits, suffix, date) = {
-            let mut shown = snap.clone();
-            shown.settings.clock_24h = snap_24h;
-            time_and_date(&shown)
-        };
+        let (digits, suffix, date) = time_and_date(snap, clock_24h);
         let next = (digits, suffix, date, zone_label(&snap.settings.time_zone));
         if self.shown.as_ref() == Some(&next) {
             return;
@@ -384,6 +374,8 @@ mod tests {
             // A stale snapshot does not flip the switch back.
             screen.update(&brussels());
             assert!(!screen.clock.as_ref().unwrap().is_on());
+            // The big time already reads in the tapped format.
+            assert_eq!(screen.time.as_ref().unwrap().digits().text(), "2:37");
             // Once the service confirms, the snapshot is the truth again.
             let mut snap = brussels();
             snap.settings.clock_24h = false;

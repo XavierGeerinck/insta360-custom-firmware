@@ -2,7 +2,7 @@
 //! aren't built yet (USB storage, PIN, Firmware update) stay hidden until
 //! milestone 3. Power off and Factory reset go through the confirmation.
 //! The two switch rows are optimistic: a tap shows the new value at once and
-//! a stale snapshot does not revert it (see `Switch`).
+//! a stale snapshot does not revert it (see `menu::Pending`).
 
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::list::{ListItem, RotaryList};
@@ -12,6 +12,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::{ConfirmKind, Route};
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::screens_v2::menu::Pending;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use waved_state::Command;
@@ -85,41 +86,19 @@ impl SystemRow {
     }
 }
 
-/// An on/off setting the screen changes optimistically. A tap flips `value`
-/// at once and remembers it in `pending`. Snapshots that still report the old
-/// value are ignored until the service reports the pending one; after that
-/// the snapshot is the truth again, so a change made elsewhere is followed.
-#[derive(Clone, Copy, Default)]
-struct Switch {
-    value: bool,
-    pending: Option<bool>,
-}
-
-impl Switch {
-    /// Flip and return the value to send. Two taps within one frame flip
-    /// twice, so the same value is never sent twice in a row.
-    fn tap(&mut self) -> bool {
-        self.value = !self.value;
-        self.pending = Some(self.value);
-        self.value
-    }
-
-    fn follow(&mut self, reported: bool) {
-        match self.pending {
-            Some(pending) if reported != pending => {}
-            _ => {
-                self.pending = None;
-                self.value = reported;
-            }
-        }
-    }
+/// Flip an on/off setting and return the value to send. Two taps within one
+/// frame flip twice, so the same value is never sent twice in a row.
+fn flip(switch: &Pending<bool>) -> bool {
+    let on = !switch.value().unwrap_or_default();
+    switch.set(on);
+    on
 }
 
 /// Shared between the screen and the list's tap handler.
 #[derive(Default)]
 struct State {
-    tones: Switch,
-    pre_recording: Switch,
+    tones: Pending<bool>,
+    pre_recording: Pending<bool>,
     /// What each row shows now.
     shown: Vec<Option<String>>,
     list: Weak<RotaryList>,
@@ -133,8 +112,8 @@ impl State {
 
     fn value(&self, row: SystemRow, snap: &UiSnapshot) -> Option<String> {
         match row {
-            SystemRow::AlertTones => Some(on_off(self.tones.value)),
-            SystemRow::PreRecording => Some(on_off(self.pre_recording.value)),
+            SystemRow::AlertTones => self.tones.value().map(on_off),
+            SystemRow::PreRecording => self.pre_recording.value().map(on_off),
             _ => row.value(snap),
         }
     }
@@ -163,14 +142,8 @@ impl Screen for SystemScreen {
         self.status = Some(StatusArea::plain(root));
         {
             let mut state = self.state.borrow_mut();
-            state.tones = Switch {
-                value: snap.settings.tones_enabled,
-                pending: None,
-            };
-            state.pre_recording = Switch {
-                value: snap.settings.pre_recording,
-                pending: None,
-            };
+            state.tones = Pending::new(snap.settings.tones_enabled);
+            state.pre_recording = Pending::new(snap.settings.pre_recording);
             state.shown = ROWS.iter().map(|row| state.value(*row, snap)).collect();
         }
         let items = ROWS
@@ -196,13 +169,13 @@ impl Screen for SystemScreen {
                 SystemRow::DateTime => dispatch.navigate(Route::DateTime),
                 SystemRow::AlertTones => {
                     let mut state = state.borrow_mut();
-                    let on = state.tones.tap();
+                    let on = flip(&state.tones);
                     state.show(index, Some(on_off(on)));
                     dispatch.command(Command::SetAlertTones(on));
                 }
                 SystemRow::PreRecording => {
                     let mut state = state.borrow_mut();
-                    let on = state.pre_recording.tap();
+                    let on = flip(&state.pre_recording);
                     state.show(index, Some(on_off(on)));
                     dispatch.command(Command::SetPreRecording(on));
                 }

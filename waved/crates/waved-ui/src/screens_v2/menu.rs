@@ -10,6 +10,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use std::cell::Cell;
 use waved_state::{AudioMode, NrLevel, UploadMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +134,59 @@ pub fn upload_mode_name(mode: UploadMode) -> &'static str {
         UploadMode::Automatic => "Automatic",
         UploadMode::Ask => "Ask me",
         UploadMode::LocalOnly => "Keep on Wave",
+    }
+}
+
+/// A value a settings screen changes optimistically (System's switches, the
+/// 24-hour clock, the audio mode, the noise level). `set` shows the user's
+/// choice at once and remembers it as sent. `follow` ignores snapshots that
+/// still report something else until the service reports the sent value;
+/// after that the snapshot is the truth again, so a change made elsewhere is
+/// followed. The cells let a tap handler and `update` share it in an `Rc`.
+pub(crate) struct Pending<T> {
+    value: Cell<Option<T>>,
+    sent: Cell<Option<T>>,
+}
+
+impl<T> Default for Pending<T> {
+    fn default() -> Self {
+        Self {
+            value: Cell::new(None),
+            sent: Cell::new(None),
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> Pending<T> {
+    pub(crate) fn new(value: T) -> Self {
+        let pending = Self::default();
+        pending.value.set(Some(value));
+        pending
+    }
+
+    /// The user chose `value`: show it until the service reports it. Two
+    /// choices within one frame keep the second.
+    pub(crate) fn set(&self, value: T) {
+        self.value.set(Some(value));
+        self.sent.set(Some(value));
+    }
+
+    /// Take what the snapshot reports; returns the value to show.
+    pub(crate) fn follow(&self, reported: T) -> T {
+        match self.sent.get() {
+            Some(sent) if sent != reported => sent,
+            _ => {
+                self.sent.set(None);
+                self.value.set(Some(reported));
+                reported
+            }
+        }
+    }
+
+    /// What shows now: the value sent, else the last one reported (`None`
+    /// before either).
+    pub(crate) fn value(&self) -> Option<T> {
+        self.value.get()
     }
 }
 
@@ -296,6 +350,28 @@ mod tests {
             assert_golden("screen_menu", &lv.render());
             assert_targets_ok(root);
         });
+    }
+
+    #[test]
+    fn a_pending_value_holds_until_the_service_reports_it() {
+        let level = Pending::new(1);
+        assert_eq!(level.follow(1), 1);
+        level.set(3);
+        assert_eq!(level.value(), Some(3));
+        // Stale snapshots still report the old value.
+        assert_eq!(level.follow(1), 3);
+        assert_eq!(level.follow(2), 3);
+        // Reported: the snapshot is the truth again.
+        assert_eq!(level.follow(3), 3);
+        assert_eq!(level.follow(0), 0, "a change made elsewhere is followed");
+        assert_eq!(level.value(), Some(0));
+        // Two choices within one frame: the first being reported doesn't end the wait.
+        level.set(1);
+        level.set(2);
+        assert_eq!(level.follow(1), 2);
+        assert_eq!(level.follow(2), 2);
+        assert_eq!(level.follow(1), 1);
+        assert_eq!(Pending::<bool>::default().value(), None);
     }
 
     #[test]

@@ -10,8 +10,7 @@ use crate::kit::obj::Obj;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{Rect, LINE, LIVE, SCREEN_W, SURFACE, TEXT, TEXT_2, TEXT_3, TITLE_Y};
-use crate::screens_v2::menu::nr_name;
-use std::cell::Cell;
+use crate::screens_v2::menu::{nr_name, Pending};
 use std::rc::Rc;
 use waved_state::{Command, NrLevel};
 
@@ -51,7 +50,7 @@ pub struct NoiseScreen {
     name: Option<Obj>,
     detail: Option<Obj>,
     /// The level the user tapped, shown until the snapshot reports it.
-    chosen: Rc<Cell<Option<usize>>>,
+    chosen: Rc<Pending<usize>>,
     shown: Option<usize>,
 }
 
@@ -73,7 +72,7 @@ impl Screen for NoiseScreen {
                 .pos(x + BAR_W / 2 - LABEL_W / 2, LABEL_Y);
             let (chosen, dispatch) = (self.chosen.clone(), ctx.dispatch.clone());
             on_click(column, move || {
-                chosen.set(Some(index));
+                chosen.set(index);
                 dispatch.command(Command::SetNrLevel(LEVELS[index].clone()));
             });
             #[cfg(test)]
@@ -100,11 +99,7 @@ impl Screen for NoiseScreen {
         if let Some(status) = self.status.as_mut() {
             status.update(snap);
         }
-        let reported = level_index(&snap.audio.nr_level);
-        if self.chosen.get() == Some(reported) {
-            self.chosen.set(None);
-        }
-        let selected = self.chosen.get().unwrap_or(reported);
+        let selected = self.chosen.follow(level_index(&snap.audio.nr_level));
         if self.shown == Some(selected) {
             return;
         }
@@ -190,8 +185,11 @@ mod tests {
             assert_eq!(screen.name.unwrap().text(), "Off");
             snap.audio.nr_level = NrLevel::Off;
             screen.update(&snap);
-            assert!(screen.chosen.get().is_none());
             assert_eq!(screen.name.unwrap().text(), "Off");
+            // Confirmed: a change made elsewhere is followed again.
+            snap.audio.nr_level = NrLevel::High;
+            screen.update(&snap);
+            assert_eq!(screen.name.unwrap().text(), "High");
         });
     }
 

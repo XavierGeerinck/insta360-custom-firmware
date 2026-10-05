@@ -14,8 +14,8 @@ use crate::kit::obj::Obj;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
 use crate::kit::tokens::{SCREEN_W, TEXT, TEXT_2, TITLE_Y};
-use crate::screens_v2::menu::mode_name;
-use std::cell::{Cell, RefCell};
+use crate::screens_v2::menu::{mode_name, Pending};
+use std::cell::RefCell;
 use std::rc::Rc;
 use waved_state::{AudioMode, Command};
 
@@ -161,7 +161,7 @@ pub struct AudioModeScreen {
     name: Option<Obj>,
     hint: Option<Obj>,
     /// A mode tapped but not yet reported by the audio service.
-    chosen: Rc<Cell<Option<ModeChoice>>>,
+    chosen: Rc<Pending<ModeChoice>>,
     aim: Rc<RefCell<Aim>>,
     last_doa: f32,
     shown: Option<ModeChoice>,
@@ -182,7 +182,7 @@ impl Screen for AudioModeScreen {
             current.index(),
             move |index| {
                 let choice = ModeChoice::ALL[index];
-                chosen.set(Some(choice));
+                chosen.set(choice);
                 select_dispatch.command(Command::SetAudioMode(choice.audio_mode()));
             },
             move |event| {
@@ -223,11 +223,7 @@ impl Screen for AudioModeScreen {
         else {
             return;
         };
-        let reported = ModeChoice::of(&snap.audio.mode);
-        if self.chosen.get() == Some(reported) {
-            self.chosen.set(None);
-        }
-        let mode = self.chosen.get().unwrap_or(reported);
+        let mode = self.chosen.follow(ModeChoice::of(&snap.audio.mode));
         if snap.audio.doa_active {
             self.last_doa = snap.audio.doa_horizontal;
         }
