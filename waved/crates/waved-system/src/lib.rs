@@ -9,6 +9,7 @@ pub mod display;
 pub mod power_key;
 pub mod rtc;
 mod service;
+pub mod tones;
 pub mod tz;
 
 pub use service::SystemService;
