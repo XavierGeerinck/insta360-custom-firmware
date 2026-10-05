@@ -488,3 +488,81 @@ async fn repeated_pause_and_stray_resume_are_no_ops() {
     assert_eq!(pauses[0].offset_ms, 100);
     assert_eq!(rig.status(second).await.as_deref(), Some("local_only"));
 }
+
+/// Pause, feed `talked_over` frames into the pause and leave it open long
+/// enough that the span has a duration.
+async fn pause_and_talk_over(rig: &Rig, talked_over: usize) {
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.feed(talked_over, 0.5).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+}
+
+/// Stop while still paused, with a frame-drop signal queued and no ack
+/// awaited. Stop and the signal are both ready when the service looks, so
+/// either the run loop or `drain_before_stop` handles the signal; 20 rounds
+/// make sure the drain path shows up (each round takes it with p = 1/2).
+#[tokio::test]
+async fn stop_while_paused_with_a_queued_drop_keeps_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    for round in 0..20 {
+        let id = rig.start().await;
+        rig.feed(10, 0.25).await;
+        pause_and_talk_over(&rig, 10).await;
+        rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+        rig.integrity_tx
+            .send(IntegritySignal::new(RecordingIntegrityFault::ProcessedFrameDropped))
+            .unwrap();
+        rig.stop().await;
+        assert_eq!(rig.status(id).await.as_deref(), Some("local_only"), "round {round}");
+        assert_eq!(rig.wav_samples(id), 10 * 480, "round {round}");
+        let pauses = rig.metadata(id).recording.pauses;
+        assert_eq!(pauses.len(), 1, "round {round}: {pauses:?}");
+        assert_eq!(pauses[0].offset_ms, 100, "round {round}");
+        assert!(pauses[0].duration_ms > 0, "round {round}: {pauses:?}");
+    }
+}
+
+/// A producer records its fault before it sends the signal. Stop can land in
+/// between: `drain_before_stop` finds the epoch moved with no signal queued
+/// and falls back to the last fault, which a paused take tolerates for a drop.
+#[tokio::test]
+async fn stop_while_paused_after_an_unsignalled_drop_keeps_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    pause_and_talk_over(&rig, 10).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+    assert_eq!(rig.wav_samples(id), 10 * 480);
+    let pauses = rig.metadata(id).recording.pauses;
+    assert_eq!(pauses.len(), 1, "{pauses:?}");
+    assert!(pauses[0].duration_ms > 0, "{pauses:?}");
+}
+
+/// The same two Stop races with a dead capture pipeline still end the take.
+#[tokio::test]
+async fn stop_while_paused_with_a_capture_failure_ends_the_take() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    for _ in 0..10 {
+        let id = rig.start().await;
+        rig.feed(10, 0.25).await;
+        pause_and_talk_over(&rig, 10).await;
+        rig.integrity.record_fault(RecordingIntegrityFault::CaptureEnded);
+        rig.integrity_tx
+            .send(IntegritySignal::new(RecordingIntegrityFault::CaptureEnded))
+            .unwrap();
+        rig.send(Command::StopRecording);
+        rig.wait_for("take ended", |s| !s.recording).await;
+        rig.wait_status(id, Some("artifact_error")).await;
+    }
+    // Recorded but not yet signalled when Stop lands.
+    let id = rig.start().await;
+    rig.feed(10, 0.25).await;
+    pause_and_talk_over(&rig, 10).await;
+    rig.integrity.record_fault(RecordingIntegrityFault::CaptureEnded);
+    rig.send(Command::StopRecording);
+    rig.wait_for("take ended", |s| !s.recording).await;
+    rig.wait_status(id, Some("artifact_error")).await;
+}
