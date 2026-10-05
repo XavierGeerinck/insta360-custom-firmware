@@ -566,3 +566,75 @@ async fn stop_while_paused_with_a_capture_failure_ends_the_take() {
     rig.wait_for("take ended", |s| !s.recording).await;
     rig.wait_status(id, Some("artifact_error")).await;
 }
+
+fn voiced(ms: u64, az: f32) -> DoaFrame {
+    DoaFrame {
+        frame_idx: 0,
+        timestamp_ms: ms,
+        azimuth_deg: az,
+        elevation_deg: 0.0,
+        confidence: 0.8,
+        vad: true,
+        backend: waved_audio::doa::DoaBackend::GccPhat,
+    }
+}
+
+#[tokio::test]
+async fn marks_count_per_take_and_ignore_paused_marks() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    rig.start().await;
+    rig.feed(10, 0.1).await;
+    rig.send(Command::AddBookmark);
+    rig.wait_for("one mark", |s| s.marks == 1).await;
+    rig.send(Command::PauseRecording);
+    rig.wait_for("paused", |s| s.paused).await;
+    rig.send(Command::AddBookmark);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rig.meeting.borrow().marks, 1, "Mark is dimmed while paused");
+    rig.send(Command::ResumeRecording);
+    rig.wait_for("resumed", |s| !s.paused).await;
+    rig.stop().await;
+    rig.start().await;
+    assert_eq!(rig.meeting.borrow().marks, 0, "a new take starts at zero");
+}
+
+#[tokio::test]
+async fn current_speaker_follows_the_talker_and_clears_at_stop() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings_for(UploadMode::LocalOnly)).await;
+    rig.start().await;
+    for i in 0..12u64 {
+        rig.doa.send(voiced(i * 21, 45.0)).unwrap();
+    }
+    rig.wait_for("speaker 1", |s| s.current_speaker == Some(1)).await;
+    rig.stop().await;
+    assert_eq!(rig.meeting.borrow().current_speaker, None);
+}
+
+#[tokio::test]
+async fn the_pending_decision_counts_marks_and_speakers() {
+    let rig = start_rig(quiet_config(UploadMode::Ask), settings_for(UploadMode::Ask)).await;
+    rig.start().await;
+    rig.feed(10, 0.1).await;
+    rig.send(Command::AddBookmark);
+    rig.wait_for("one mark", |s| s.marks == 1).await;
+    for i in 0..12u64 {
+        rig.doa.send(voiced(i * 21, 45.0)).unwrap();
+    }
+    // A closing silence makes the segment durable, which tells us the
+    // service has taken every voiced frame.
+    rig.doa
+        .send(DoaFrame::silent(0, 1_000, waved_audio::doa::DoaBackend::GccPhat))
+        .unwrap();
+    let id = rig.meeting.borrow().meeting_id.unwrap();
+    let pool = rig.pool().await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while db::get_speaker_segments(&pool, &id).await.unwrap().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "no speaker segment was saved");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    rig.send(Command::StopRecording);
+    rig.wait_for("a decision to make", |s| s.pending_decision.is_some()).await;
+    let decision = rig.meeting.borrow().pending_decision.clone().unwrap();
+    assert_eq!(decision.marks, 1);
+    assert_eq!(decision.speakers, 1);
+}

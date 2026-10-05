@@ -163,6 +163,13 @@ impl RecordingFinalizer {
                 warn!("failed to load speaker segments for {id}: {error}");
                 Vec::new()
             });
+        let mark_count = bookmarks.len() as u32;
+        let speaker_count = segments
+            .iter()
+            .map(|segment| segment.speaker_id)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            .min(usize::from(u8::MAX)) as u8;
         if let Err(error) = metadata::build_and_write(
             &finalized,
             &self.config,
@@ -176,6 +183,7 @@ impl RecordingFinalizer {
             let _ = db::set_status(&self.pool, &id, MeetingStatus::ArtifactError).await;
             self.meeting_tx.send_modify(|state| {
                 state.recording = false;
+                state.current_speaker = None;
                 state.paused = false;
                 state.meeting_id = None;
                 state.pending_decision = None;
@@ -194,6 +202,7 @@ impl RecordingFinalizer {
             error!("failed to persist final state for {id}: {error}");
             self.meeting_tx.send_modify(|state| {
                 state.recording = false;
+                state.current_speaker = None;
                 state.paused = false;
                 state.meeting_id = None;
                 state.duration_secs = duration;
@@ -209,13 +218,13 @@ impl RecordingFinalizer {
             duration_secs: duration,
             size_bytes: finalized.size_bytes,
             endpoint: self.config.api.endpoint.clone(),
-            // Workstream C fills these from the bookmarks and the diarizer.
-            speakers: 0,
-            marks: 0,
+            speakers: speaker_count,
+            marks: mark_count,
         });
 
         self.meeting_tx.send_modify(|state| {
             state.recording = false;
+            state.current_speaker = None;
             state.paused = false;
             state.meeting_id = None;
             state.duration_secs = duration;
@@ -248,6 +257,7 @@ impl RecordingFinalizer {
         }
         self.meeting_tx.send_modify(|state| {
             state.recording = false;
+            state.current_speaker = None;
             state.paused = false;
             state.meeting_id = None;
             state.duration_secs = duration;
@@ -476,6 +486,7 @@ impl MeetingService {
                                     }
                                 }
                             }
+                            self.publish_speaker(diarizer.as_ref().and_then(|d| d.current_speaker()));
                             // No active meeting → drop the frame silently.
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -488,6 +499,7 @@ impl MeetingService {
                                     let _ = db::insert_diarization_segment(&self.pool, &seg).await;
                                 }
                             }
+                            self.publish_speaker(diarizer.as_ref().and_then(|d| d.current_speaker()));
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             // DoA stream gone — finalize any open segment, leave the
@@ -497,6 +509,7 @@ impl MeetingService {
                                     let _ = db::insert_diarization_segment(&self.pool, &seg).await;
                                 }
                             }
+                            self.publish_speaker(diarizer.as_ref().and_then(|d| d.current_speaker()));
                             warn!("DoA stream closed; diarization paused");
                             doa_closed = true;
                         }
@@ -561,6 +574,8 @@ impl MeetingService {
                                                 s.paused = false;
                                                 s.meeting_id = Some(id);
                                                 s.duration_secs = 0;
+                                                s.marks = 0;
+                                                s.current_speaker = None;
                                             });
                                             active = Some(rec);
                                             diarizer = Some(crate::diarization::Diarizer::new(id));
@@ -671,9 +686,19 @@ impl MeetingService {
                                 }
                                 Command::AddBookmark => {
                                     if let Some(ref rec) = active {
+                                        if rec.is_paused() {
+                                            info!("bookmark ignored while paused");
+                                            continue;
+                                        }
                                         let ts = rec.duration_secs();
-                                        let _ = db::add_bookmark(&self.pool, &rec.id, ts).await;
-                                        info!("bookmark at {}s", ts);
+                                        match db::add_bookmark(&self.pool, &rec.id, ts).await {
+                                            Ok(()) => {
+                                                self.meeting_tx
+                                                    .send_modify(|s| s.marks = s.marks.saturating_add(1));
+                                                info!("bookmark at {}s", ts);
+                                            }
+                                            Err(error) => warn!("bookmark at {ts}s not saved: {error}"),
+                                        }
                                     }
                                 }
                                 Command::SaveRecording(id) => {
@@ -956,6 +981,7 @@ impl MeetingService {
         }
         self.meeting_tx.send_modify(|state| {
             state.recording = false;
+            state.current_speaker = None;
             state.paused = false;
             state.meeting_id = None;
             state.duration_secs = duration;
@@ -968,6 +994,16 @@ impl MeetingService {
         let _ = self.events_tx.send(DeviceEvent::RecordingIntegrityFailed {
             meeting_id: Some(id),
             fault,
+        });
+    }
+
+    fn publish_speaker(&self, speaker: Option<u8>) {
+        self.meeting_tx.send_if_modified(|state| {
+            if state.current_speaker == speaker {
+                return false;
+            }
+            state.current_speaker = speaker;
+            true
         });
     }
 

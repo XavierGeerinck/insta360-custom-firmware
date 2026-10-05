@@ -132,6 +132,13 @@ impl Diarizer {
         self.close_active(0)
     }
 
+    /// The speaker of the open segment ("Speaker n talking"), if any.
+    pub fn current_speaker(&self) -> Option<u8> {
+        self.active
+            .as_ref()
+            .map(|segment| segment.speaker_id.min(u32::from(u8::MAX)) as u8)
+    }
+
     /// Pause the take: close the open segment and ignore frames until `resume`.
     pub fn pause(&mut self) -> Option<DiarizationSegment> {
         self.paused = true;
@@ -387,6 +394,16 @@ mod tests {
 
     fn silent(ms: u64) -> DoaFrame {
         DoaFrame::silent(0, ms, waved_audio::doa::DoaBackend::GccPhat)
+    }
+
+    #[test]
+    fn current_speaker_is_the_open_segment() {
+        let mut d = Diarizer::new(uuid::Uuid::nil());
+        assert_eq!(d.current_speaker(), None);
+        d.on_doa_frame(&voiced(0, 45.0));
+        assert_eq!(d.current_speaker(), Some(1));
+        d.on_doa_frame(&silent(600)); // > 500 ms of silence closes it
+        assert_eq!(d.current_speaker(), None);
     }
 
     #[test]
