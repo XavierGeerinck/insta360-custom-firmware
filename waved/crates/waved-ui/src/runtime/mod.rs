@@ -5,6 +5,7 @@
 
 pub mod gesture;
 pub mod power;
+pub mod registry;
 pub mod slot;
 pub mod touch;
 
