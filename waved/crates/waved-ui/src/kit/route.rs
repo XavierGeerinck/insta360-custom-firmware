@@ -9,6 +9,8 @@ pub enum ConfirmKind {
     FactoryReset,
     DeleteRecording(Uuid),
     StopUsbStorage,
+    /// Wi-Fi "Change network": leave the current network for the setup network (B7).
+    ChangeNetwork,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +36,11 @@ pub enum Route {
     UploadMode,
     System,
     Display,
+    /// Dim after radio list, opened from Display.
+    DimAfter,
     DateTime,
+    /// Time zone radio list, opened from Date and time.
+    TimeZone,
     About,
     Confirm(ConfirmKind),
     /// PIN entry in front of a locked route.
@@ -57,12 +63,16 @@ impl Route {
             Route::Files
             | Route::FileDetail(_)
             | Route::Confirm(ConfirmKind::DeleteRecording(_)) => Some(Route::Files),
-            Route::Wifi | Route::WifiSetup => Some(Route::Wifi),
+            Route::Wifi | Route::WifiSetup | Route::Confirm(ConfirmKind::ChangeNetwork) => {
+                Some(Route::Wifi)
+            }
             Route::Bluetooth => Some(Route::Bluetooth),
             Route::Uploads | Route::UploadMode => Some(Route::Uploads),
             Route::System
             | Route::Display
+            | Route::DimAfter
             | Route::DateTime
+            | Route::TimeZone
             | Route::About
             | Route::Update
             | Route::UsbStorage
@@ -131,6 +141,9 @@ mod tests {
             (Route::UsbStorage, Route::System),
             (Route::Confirm(ConfirmKind::FactoryReset), Route::System),
             (Route::Confirm(ConfirmKind::StopUsbStorage), Route::System),
+            (Route::TimeZone, Route::System),
+            (Route::DimAfter, Route::System),
+            (Route::Confirm(ConfirmKind::ChangeNetwork), Route::Wifi),
         ];
         for (route, entry) in cases {
             assert_eq!(route.guarded_by(), Some(entry), "{route:?}");
@@ -149,6 +162,18 @@ mod tests {
             Route::IncomingCall,
         ] {
             assert_eq!(open.guarded_by(), None, "{open:?}");
+        }
+    }
+
+    #[test]
+    fn sub_lists_and_warnings_are_not_entry_points() {
+        for route in [
+            Route::TimeZone,
+            Route::DimAfter,
+            Route::Confirm(ConfirmKind::ChangeNetwork),
+        ] {
+            assert!(!route.requires_pin(), "{route:?}");
+            assert!(!route.is_base(), "{route:?}");
         }
     }
 
