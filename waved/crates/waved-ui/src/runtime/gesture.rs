@@ -28,9 +28,17 @@ pub fn press_target(root: Obj, x: i32, y: i32) -> Option<Obj> {
     if root.is_null() {
         return None;
     }
+    // The kit's debug-build liveness check (`Obj` handles are `Copy`).
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        // SAFETY: only compares the pointer against live objects.
+        unsafe { lv_obj_is_valid(root.raw()) },
+        "press_target on a deleted root"
+    );
     let mut point = lv_point_t { x, y };
-    // SAFETY: `root` is the live active screen; LVGL only reads the point
-    // (it transforms a copy).
+    // SAFETY: `root` is non-null and live (checked above in debug builds; the
+    // caller passes the loaded screen); LVGL only reads the point (it
+    // transforms a copy) and returns null or a live object under `root`.
     let hit = unsafe { lv_indev_search_obj(root.raw(), &mut point) };
     // SAFETY: LVGL returns null or a live descendant of `root`.
     (!hit.is_null()).then(|| unsafe { Obj::from_raw(hit) })
@@ -91,7 +99,7 @@ pub fn leave_commands(current: &Route, snap: &UiSnapshot) -> Vec<Command> {
 
 /// Who took a swipe. Either way the caller cancels the press
 /// (`lv_indev_wait_release`) so a swipe never also fires a tap.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SwipeTaken {
     /// The runtime's Menu or Back, plus the leave commands for a Back.
     Runtime {
@@ -100,27 +108,6 @@ pub enum SwipeTaken {
     },
     /// A screen's `on_swipe` handler ran (`send_swipe` returned true).
     Screen,
-}
-
-/// `waved_state::Command` has no `PartialEq`, so commands compare by their
-/// `Debug` form (every field is plain data).
-impl PartialEq for SwipeTaken {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                SwipeTaken::Runtime {
-                    event: a,
-                    commands: x,
-                },
-                SwipeTaken::Runtime {
-                    event: b,
-                    commands: y,
-                },
-            ) => a == b && format!("{x:?}") == format!("{y:?}"),
-            (SwipeTaken::Screen, SwipeTaken::Screen) => true,
-            _ => false,
-        }
-    }
 }
 
 /// What the runtime learnt when the current press started.
@@ -209,8 +196,11 @@ mod tests {
     use crate::kit::components::scrubber::{self, Scrubber};
     use crate::kit::event::on_swipe;
     use crate::kit::route::ConfirmKind;
+    use crate::kit::screen::Screen;
     use crate::kit::testkit::lvgl;
     use crate::kit::tokens::Rect;
+    use crate::screens_v2::menu::fixture::{fixture, snap};
+    use crate::screens_v2::volume::VolumeScreen;
     use std::cell::Cell;
     use std::rc::Rc;
     use uuid::Uuid;
@@ -517,8 +507,13 @@ mod tests {
                     "{at:?}"
                 );
             }
-            // Without ADV_HITTEST LVGL hit-tests the arc's whole box, centre included.
-            assert_eq!(press_target(root, 200, 160), Some(arc.obj()));
+            // Only the ring band takes presses: the dial centre lets swipes through.
+            assert_eq!(press_target(root, 200, 160), None, "the dial centre");
+            assert_eq!(
+                swipe(root, &Route::Volume, 2, (200, 160), (270, 160), 150),
+                back(),
+                "from the dial centre"
+            );
             assert_eq!(
                 swipe(root, &Route::Volume, 2, (20, 160), (90, 160), 150),
                 back(),
@@ -623,10 +618,10 @@ mod tests {
     fn leave_commands_cancel_setup_and_stop_this_recordings_playback() {
         let id = Uuid::from_u128(7);
         let mut snap = UiSnapshot::default();
-        assert!(matches!(
-            leave_commands(&Route::WifiSetup, &snap).as_slice(),
-            [Command::CancelWifiProvisioning]
-        ));
+        assert_eq!(
+            leave_commands(&Route::WifiSetup, &snap),
+            vec![Command::CancelWifiProvisioning]
+        );
         assert!(
             leave_commands(&Route::FileDetail(id), &snap).is_empty(),
             "nothing playing"
@@ -637,10 +632,10 @@ mod tests {
             "another recording plays"
         );
         snap.playback.recording = Some(id);
-        assert!(matches!(
-            leave_commands(&Route::FileDetail(id), &snap).as_slice(),
-            [Command::StopPlayback]
-        ));
+        assert_eq!(
+            leave_commands(&Route::FileDetail(id), &snap),
+            vec![Command::StopPlayback]
+        );
         assert!(leave_commands(&Route::Menu, &snap).is_empty());
     }
 
@@ -651,23 +646,83 @@ mod tests {
             let id = Uuid::from_u128(7);
             let mut snap = UiSnapshot::default();
             snap.playback.recording = Some(id);
-            for (route, expected) in [
-                (Route::WifiSetup, "[CancelWifiProvisioning]"),
-                (Route::FileDetail(id), "[StopPlayback]"),
-                (Route::Menu, "[]"),
+            for (route, commands) in [
+                (Route::WifiSetup, vec![Command::CancelWifiProvisioning]),
+                (Route::FileDetail(id), vec![Command::StopPlayback]),
+                (Route::Menu, vec![]),
             ] {
                 let mut g = Gestures::default();
                 g.sample(down(100, 150), 0, root, &route, 2, &snap);
-                match g.sample(down(170, 150), 100, root, &route, 2, &snap) {
+                assert_eq!(
+                    g.sample(down(170, 150), 100, root, &route, 2, &snap),
                     Some(SwipeTaken::Runtime {
                         event: UiEvent::Back,
-                        commands,
-                    }) => {
-                        assert_eq!(format!("{commands:?}"), expected, "{route:?}")
-                    }
-                    other => panic!("{route:?}: {other:?}"),
-                }
+                        commands
+                    }),
+                    "{route:?}"
+                );
             }
+        });
+    }
+
+    #[test]
+    fn the_volume_dial_centre_lets_swipes_through() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let f = fixture();
+            let mut screen = VolumeScreen::speaker();
+            screen.build(root, &f.ctx, &snap());
+            let centre = (200, 132);
+            assert_eq!(press_target(root, centre.0, centre.1), None);
+            assert_eq!(
+                swipe(root, &Route::Volume, 2, centre, (130, 132), 150),
+                Some(SwipeTaken::Screen),
+                "swipe left opens Mic level"
+            );
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::MicLevel)]);
+            assert_eq!(
+                swipe(root, &Route::Volume, 2, centre, (270, 132), 150),
+                back()
+            );
+            // The band stays clear of the − and + buttons and the mute button.
+            let ring = press_target(root, 200, 44).expect("the arc's ring");
+            for at in [(81, 132), (318, 132), (200, 200)] {
+                let hit = press_target(root, at.0, at.1);
+                assert!(hit.is_some() && hit != Some(ring), "{at:?} is a button");
+            }
+            // The ring and the knob still keep their drags.
+            for at in [(200, 44), (288, 132)] {
+                assert_eq!(
+                    swipe(root, &Route::Volume, 2, at, (at.0 - 70, at.1), 150),
+                    None,
+                    "{at:?}"
+                );
+            }
+            assert_eq!(f.events(), vec![]);
+        });
+    }
+
+    #[test]
+    fn one_tracker_blocks_a_press_and_lets_the_next_one_swipe() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            Obj::plain(root)
+                .rect(Rect::new(40, 60, 100, 60))
+                .clickable(true)
+                .keep_gestures();
+            root.update_layout();
+            let snap = UiSnapshot::default();
+            let mut g = Gestures::default();
+            let mut feed = |s, at| g.sample(s, at, root, &Route::Volume, 2, &snap);
+            assert_eq!(feed(down(90, 90), 0), None);
+            assert_eq!(feed(down(170, 90), 100), None, "blocked");
+            assert_eq!(feed(up(), 150), None);
+            assert_eq!(feed(down(200, 200), 1_000), None);
+            assert_eq!(feed(down(270, 200), 1_100), back(), "the next press swipes");
+            assert_eq!(feed(up(), 1_150), None);
+            // And back again: a blocked press after a swipe.
+            assert_eq!(feed(down(90, 90), 2_000), None);
+            assert_eq!(feed(down(170, 90), 2_100), None, "blocked again");
         });
     }
 

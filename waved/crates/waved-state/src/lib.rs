@@ -520,7 +520,7 @@ pub enum ButtonType {
 
 // --- Command Types (UI/external → modules) ---
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command {
     SetAudioMode(AudioMode),
     SetNrLevel(NrLevel),

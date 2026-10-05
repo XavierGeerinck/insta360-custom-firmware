@@ -6,7 +6,8 @@ use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::{color, text_width, Obj};
 use crate::kit::tokens::{
-    lvgl_angle, Rect, BACK, BG, LINE, LIVE, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3, WHITE,
+    lvgl_angle, Rect, BACK, BG, LINE, LIVE, MIN_TARGET, RAISED, SURFACE, TEXT, TEXT_2, TEXT_3,
+    WHITE,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -281,6 +282,12 @@ pub struct ValueArc {
 
 impl ValueArc {
     /// A 270° slider (−135°…135°) of radius `r` from 0 to 100 with a 22 px knob.
+    ///
+    /// Only a band around the ring takes presses: the ring plus
+    /// `(MIN_TARGET - width) / 2` px on either side, a 44 px target. Without
+    /// `ADV_HITTEST` LVGL hit-tests the arc's whole box, so a press in the
+    /// middle of the dial would neither drag (LVGL starts a drag only near the
+    /// ring) nor swipe (the arc keeps its drags).
     pub fn new(parent: Obj, cx: i32, cy: i32, r: i32, on_change: impl FnMut(u8) + 'static) -> Self {
         let width = 8;
         let size = 2 * r + width;
@@ -288,6 +295,8 @@ impl ValueArc {
             .pos(cx - size / 2, cy - size / 2)
             .size(size, size)
             .clickable(true)
+            .flag(lv_obj_flag_t_LV_OBJ_FLAG_ADV_HITTEST, true)
+            .ext_click((MIN_TARGET - width) / 2)
             .keep_gestures();
         // SAFETY: live arc.
         unsafe {
@@ -536,6 +545,32 @@ mod tests {
                 !arc.obj().has_flag(lv_obj_flag_t_LV_OBJ_FLAG_GESTURE_BUBBLE),
                 "dragging the knob right must not read as swipe-right-for-Back"
             );
+        });
+    }
+
+    #[test]
+    fn only_the_value_arcs_ring_band_takes_presses() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            // Volume's arc: the ring is 8 px wide at r 84..92 around (200, 132).
+            let arc = ValueArc::new(root, 200, 132, 88, |_| {});
+            root.update_layout();
+            let hits = |dx: i32, dy: i32| {
+                let point = lv_point_t {
+                    x: 200 + dx,
+                    y: 132 + dy,
+                };
+                // SAFETY: live arc; LVGL only reads the point.
+                unsafe { lv_obj_hit_test(arc.obj().raw(), &point) }
+            };
+            for (dx, dy) in [(0, -88), (88, 0), (0, 88), (-62, 62)] {
+                assert!(hits(dx, dy), "on the ring at {dx},{dy}");
+            }
+            // The band reaches 18 px either side of the ring: a 44 px target.
+            assert!(hits(0, -68) && hits(0, -108) && hits(-68, 0) && hits(108, 0));
+            for (dx, dy) in [(0, 0), (0, -40), (0, -62), (62, 0), (0, -114), (-114, 0)] {
+                assert!(!hits(dx, dy), "off the band at {dx},{dy}");
+            }
         });
     }
 
