@@ -160,12 +160,16 @@ impl Header {
     }
 }
 
+/// The bytes after a v2+ data block must be exactly `\n<tz>\n`; an empty
+/// `<tz>` means no rules. Anything shorter is a damaged file, not a zone
+/// without daylight saving time.
 fn parse_footer(rest: &[u8]) -> Result<Option<PosixTz>, TzError> {
     let text = std::str::from_utf8(rest).map_err(|_| TzError::Format("footer is not text"))?;
-    let Some(inner) = text.strip_prefix('\n') else {
-        return Ok(None);
-    };
-    let tz = inner.split('\n').next().unwrap_or("");
+    let tz = text
+        .strip_prefix('\n')
+        .and_then(|inner| inner.strip_suffix('\n'))
+        .filter(|tz| !tz.contains('\n'))
+        .ok_or(TzError::Format("truncated footer"))?;
     if tz.is_empty() {
         return Ok(None);
     }
@@ -483,6 +487,28 @@ mod tests {
         assert!(TimeZone::parse(&tzif(&[(5, 0), (1, 0)], &[(0, false)], "")).is_err(), "out of order");
         assert!(TimeZone::parse(&tzif(&[], &[(0, false)], "garbage!!")).is_err(), "bad footer");
         assert!(TimeZone::parse(&tzif(&[], &[], "UTC0")).is_err(), "no local time types");
+    }
+
+    #[test]
+    fn a_cut_or_damaged_footer_is_an_error_never_a_wrong_zone() {
+        let full = tzif(&[], &[(3_600, false)], "CET-1CEST,M3.5.0,M10.5.0/3");
+        let want = TimeZone::parse(&full).unwrap();
+        assert_eq!(want.offset_at(JUL_15_2026), 7_200);
+        for len in 0..full.len() {
+            if let Ok(zone) = TimeZone::parse(&full[..len]) {
+                assert_eq!(zone, want, "a {len}-byte prefix parsed as a different zone");
+            }
+        }
+        assert!(TimeZone::parse(&full[..full.len() - 1]).is_err(), "closing newline missing");
+        let junk = &full[..full.len() - 28]; // the data block plus nothing
+        assert!(TimeZone::parse(junk).is_err(), "no footer at all");
+        let mut no_lead = junk.to_vec();
+        no_lead.extend_from_slice(b"junk\n");
+        assert!(TimeZone::parse(&no_lead).is_err(), "footer without its leading newline");
+        let mut two_lines = full.clone();
+        two_lines.extend_from_slice(b"extra\n");
+        assert!(TimeZone::parse(&two_lines).is_err(), "text after the footer");
+        assert!(TimeZone::parse(&tzif(&[], &[(0, false)], "")).unwrap().footer.is_none(), "an empty footer is allowed");
     }
 
     #[test]
