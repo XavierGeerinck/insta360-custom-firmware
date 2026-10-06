@@ -26,6 +26,7 @@ ICONS = [  # (Rust constant, Tabler name)
     ("ALERT", "alert-triangle"), ("INFO", "info-circle"),
     ("DEVICE", "database"), ("SEND", "upload"), ("TRASH", "trash"), ("POWER", "power"),
     ("PHONE", "phone"), ("PHONE_OFF", "phone-off"), ("FOLDER", "folder"), ("REFRESH", "refresh"),
+    ("RELOAD", "reload"),
     ("LAPTOP", "device-laptop"), ("MOBILE", "device-mobile"), ("SUN", "sun"),
     ("BACKSPACE", "backspace"), ("MINUS", "minus"), ("PLUS", "plus"),
     ("NOISE", "wave-sine"), ("PATTERN", "ear"), ("SETTINGS", "settings"),

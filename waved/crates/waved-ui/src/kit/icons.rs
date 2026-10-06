@@ -75,6 +75,8 @@ pub const PHONE_OFF: &str = "\u{ecf5}";
 pub const FOLDER: &str = "\u{eaad}";
 /// Tabler `refresh`
 pub const REFRESH: &str = "\u{eb13}";
+/// Tabler `reload`
+pub const RELOAD: &str = "\u{f3ae}";
 /// Tabler `device-laptop`
 pub const LAPTOP: &str = "\u{eb64}";
 /// Tabler `device-mobile`
@@ -141,6 +143,7 @@ pub const ALL: &[&str] = &[
     PHONE_OFF,
     FOLDER,
     REFRESH,
+    RELOAD,
     LAPTOP,
     MOBILE,
     SUN,
