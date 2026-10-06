@@ -42,9 +42,11 @@ impl TalkerGate {
     pub fn step(&mut self, direction: Option<f32>, now_ms: u64) -> Option<f32> {
         let confident = direction.is_some();
         // A screen that was not stepped for a while (parked, or covered by a
-        // gauge) has no history: the count starts again.
+        // gauge) has no history at all: nothing shows until a fresh stretch of
+        // confident samples has passed the on-delay.
         if now_ms.saturating_sub(self.last_ms) > MAX_GAP_MS {
             self.run = None;
+            self.shown = false;
         }
         self.last_ms = now_ms;
         let since = match self.run {
@@ -133,5 +135,33 @@ mod tests {
         gate.step(Some(10.0), 0);
         assert_eq!(gate.step(Some(10.0), 60_000), None);
         assert_eq!(gate.step(Some(10.0), 60_000 + ON_MS), Some(10.0));
+    }
+
+    #[test]
+    fn a_wedge_showing_before_a_gap_does_not_come_back_without_the_on_delay() {
+        let (mut gate, mut t) = (TalkerGate::default(), 0);
+        assert_eq!(
+            run(&mut gate, &mut t, Some(40.0), 500),
+            Some(40.0),
+            "showing"
+        );
+        // The screen is parked for a minute, then updated again.
+        t += 60_000;
+        assert_eq!(
+            gate.step(Some(40.0), t),
+            None,
+            "a confident sample alone shows nothing"
+        );
+        assert_eq!(run(&mut gate, &mut t, Some(40.0), ON_MS - 10), None);
+        assert_eq!(
+            run(&mut gate, &mut t, Some(40.0), 20),
+            Some(40.0),
+            "after the on-delay"
+        );
+        // And a non-confident first sample after a gap does not show a stale wedge either.
+        let mut gate = TalkerGate::default();
+        run(&mut gate, &mut t, Some(40.0), 500);
+        t += 60_000;
+        assert_eq!(gate.step(None, t), None);
     }
 }
