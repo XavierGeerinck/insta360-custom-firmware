@@ -899,29 +899,25 @@ off by some multiple of 45°.
 
 ## Audio-Mode DOA Preview (UI)
 
-`screens/audio_mode.rs` overlays `bf_doa.png` on the carousel-centered card
-to show direction of arrival in real time, matching the original firmware's
-"preview before selecting" behavior. Three pipeline facts to keep authoritative:
-
-### State plumbing
+The Home/Recording dial wedge and the Audio mode picker show the direction of
+arrival; the picker's aim drag sets `beam_aim_deg`. Plumbing:
 `DoaUpdate.vad_active` (audio thread) → `AudioState.doa_active` (state bus)
-→ `AudioStatsSnapshot.doa_active` (stats JSON) → UI hysteresis (next).
-Set in `waved-audio/src/lib.rs` inside the `audio_tx.send_modify` block.
+→ `AudioStatsSnapshot.doa_active` (stats JSON) and the UI snapshot.
 
-### Asset orientation
-`bf_doa.png` (124×124 PNG under `/etc/pspapp/lvgl/icon/beamforming/`) draws
-its "source dot" on the **LVGL-LEFT** edge with the wave arcs opening
-rightward. This matters for any code that rotates the asset — see the
-`az_to_lvgl_rotation` helper in `screens/audio_mode.rs` for the +270° offset
-that puts the dot at LVGL-TOP for `az=0` (front of device).
+### Direction convention (measured on the device, 2026-10-06)
+`doa_horizontal` and `beam_aim_deg` are **device degrees**: 0° in front of the
+screen, counter-clockwise seen from above, 90° on the listener's left. Speaking
+~1 m away with the screen facing the listener read: front ≈ 355°, left ≈ 92°,
+behind ≈ 183°, right ≈ 260° (live from `/tmp/audio_stats.json`).
 
-LVGL coords = visual coords on this device (the FB flush 180° flip cancels
-with the OLED's 180° physical mount — see `docs/ui/COORDINATE_SYSTEM.md`),
-so the rotation formula is the natural identity mapping plus the asset offset:
+The dial is a top-down map seen by the listener: front at the bottom, their left
+on the left. Screen degrees (0° up, clockwise) = device degrees + 180°
+(`waved-ui/src/kit/direction.rs`). Drawing device degrees directly (the first
+M2 build) showed a front-left talker at the back-right.
 
-```
-rotation_lvgl = (az_deg.rem_euclid(360.0).round() * 10 + 2700) % 3600
-```
+The legacy carousel UI (`screens/audio_mode.rs`, `bf_doa.png`) and its
+hysteresis were deleted with the runtime switch; the notes below on the VAD
+threshold still apply.
 
 ### VAD threshold + UI hysteresis
 EnergyVad default is **0.0003** (~−70 dBFS). It is permissive on purpose —
@@ -930,20 +926,10 @@ Per-frame thresholding alone cannot cleanly separate the two on this device:
 silence-floor and phone-music both land in the 0.0003–0.0005 band on a
 quiet desk.
 
-The UI layer compensates with temporal hysteresis on `audio.doa_active`:
-require 3 consecutive `true` ticks to engage, 2 consecutive `false` ticks
-to release. `AudioModeScreen.{doa_show, doa_streak}` in
-`screens/audio_mode.rs`. At ~50 ms UI ticks this gives ~150 ms engage
-latency / ~100 ms release latency.
-
-### Carousel-centered tracking
-DOA arrow follows the **carousel-centered** card, not the selected mode —
-this is what makes the "preview before tapping" UX work. A
-`LV_EVENT_SCROLL_END` callback on the carousel maintains an
-`Arc<AtomicUsize>` with the index of the child closest to the carousel's
-viewport midline. On selection commit, `update_state` calls
-`lv_obj_scroll_to_view(LV_ANIM_ON)` so centered tracks selection after
-every tap, while still letting the user scroll-preview without committing.
+The legacy UI compensated with temporal hysteresis (3 `true` ticks to engage,
+2 `false` to release). The M2 screens don't yet; on the device pass the gate
+read open in almost every 0.5 s sample of a quiet office, so the wedge follows
+room noise between talkers.
 
 ### Measured mic-level reference (one device, quiet desk)
 | Source                              | Mic ch0 RMS (int16) | float RMS  |
