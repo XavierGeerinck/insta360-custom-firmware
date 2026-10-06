@@ -9,21 +9,33 @@
 //!     Cardioid       scale = 1.000, α = 1
 //!     Supercardioid  scale = 0.577, α = 1
 //!     Figure-8       scale = 0.000, α = 1
-//!     Omni           plain 8-mic average (no delay, no subtraction)
+//!     Omni           delay-and-sum on the talker (no subtraction)
 //! Stereo is two cardioids at DOA ± 45°.
+//!
+//! Each pattern output then goes through a bass shelf (`bass.rs`) that undoes
+//! the differential's 6 dB/octave roll-off, capped at +12 dB, and a flat
+//! make-up gain that puts its talker at Whole room's level over 1–3 kHz
+//! (`bass::presence_makeup`), so switching mode keeps the level. A mode change
+//! crossfades from the old pattern to the new one over `MODE_FADE_MS`.
 //!
 //! See `weights.rs` for the partitioning; see SP#3 design doc for the physics.
 
 pub mod geometry;
 pub mod aim;
+pub mod bass;
 pub mod delays;
 pub mod steered;
 pub mod weights;
 
 pub use geometry::{MicGeometry, Position3D};
 
+use bass::BassShelf;
 use delays::DelayLine;
 use waved_state::AudioMode;
+
+/// Crossfade from the previous mode's pattern to the new one, so a mode
+/// change does not click.
+pub const MODE_FADE_MS: u32 = 10;
 
 pub struct Beamformer {
     geom: MicGeometry,
@@ -32,14 +44,31 @@ pub struct Beamformer {
     doa_az_deg: f32,
     doa_el_deg: f32,
     delays: [DelayLine; 8],
+    pattern: Pattern,
+    /// The previous mode's pattern while it fades out after a mode change.
+    fading: Option<Pattern>,
+    fade_pos: u32,
+    fade_len: u32,
+    /// Samples went through since the last reset; before that a mode change
+    /// has nothing to fade from.
+    primed: bool,
+    /// Bass compensation and make-up on (always, outside tests that measure
+    /// the raw pattern).
+    bass_on: bool,
+}
+
+/// Everything one mode needs to form its output from the delay lines, plus
+/// the bass filter state of its outputs.
+#[derive(Clone)]
+struct Pattern {
+    is_omni: bool,
+    is_stereo: bool,
     w_front_l: [f32; 8],
     w_back_l: [f32; 8],
     back_delay_l: f32,
     w_front_r: [f32; 8],
     w_back_r: [f32; 8],
     back_delay_r: f32,
-    is_stereo: bool,
-    is_omni: bool,
     /// Whole room (Omni): per-channel delays that line the eight mics up on
     /// the tracked talker. Summing unaligned mics cancels the 2–6 kHz voice
     /// range off the vertical (−12 dB at 4 kHz from the side, −25 dB with the
@@ -49,34 +78,40 @@ pub struct Beamformer {
     /// omni-mix output. Steered mode blends towards the omni average; Whole
     /// room blends its aligned sum towards the plain average.
     omni_mix: f32,
+    /// Bass compensation of the differential outputs (L, or the mono pattern;
+    /// R in Stereo). Not used by Whole room.
+    bass_l: BassShelf,
+    bass_r: BassShelf,
+    /// Flat make-up gains (linear) that put the talker at Whole room's
+    /// level over 1–3 kHz (`bass::presence_makeup`). Applied with the shelf,
+    /// before the omni blend.
+    makeup_l: f32,
+    makeup_r: f32,
 }
 
 pub struct BeamOutput {
     pub mono: Vec<f32>,
-    /// `Some((L, R))` when mode = Stereo; `None` otherwise.
+    /// `Some((L, R))` when mode = Stereo, and while fading out of Stereo
+    /// after a mode change; `None` otherwise.
     pub stereo: Option<(Vec<f32>, Vec<f32>)>,
 }
 
 impl Beamformer {
     pub fn new(geom: MicGeometry, sample_rate: u32) -> Self {
+        let mode = AudioMode::Omni;
         let mut s = Self {
             geom,
             sample_rate,
-            mode: AudioMode::Omni,
+            pattern: Pattern::new(&mode),
+            mode,
             doa_az_deg: 0.0,
             doa_el_deg: 0.0,
             delays: std::array::from_fn(|_| DelayLine::new()),
-            w_front_l: [0.0; 8],
-            w_back_l: [0.0; 8],
-            back_delay_l: 0.0,
-            w_front_r: [0.0; 8],
-            w_back_r: [0.0; 8],
-            back_delay_r: 0.0,
-            is_stereo: false,
-            is_omni: true,
-            align_delays: [0.0; 8],
-            // Starts in Whole room with no direction: the plain average.
-            omni_mix: 1.0,
+            fading: None,
+            fade_pos: 0,
+            fade_len: (sample_rate * MODE_FADE_MS / 1_000).max(1),
+            primed: false,
+            bass_on: true,
         };
         s.recompute();
         s
@@ -85,8 +120,13 @@ impl Beamformer {
     pub fn set_mode(&mut self, mode: AudioMode) {
         if mode != self.mode {
             // Whole room starts on the plain average until it has a talker;
-            // the patterns start unblended.
-            self.omni_mix = if matches!(mode, AudioMode::Omni) { 1.0 } else { 0.0 };
+            // the patterns start unblended, with fresh bass filters.
+            let old = std::mem::replace(&mut self.pattern, Pattern::new(&mode));
+            if self.primed {
+                // A second change inside the fade drops the oldest pattern.
+                self.fading = Some(old);
+                self.fade_pos = 0;
+            }
             self.mode = mode;
             self.recompute();
         }
@@ -106,118 +146,213 @@ impl Beamformer {
     }
 
     pub fn set_omni_mix(&mut self, mix: f32) {
-        self.omni_mix = mix.clamp(0.0, 1.0);
+        self.pattern.omni_mix = mix.clamp(0.0, 1.0);
+    }
+
+    /// The current blend towards the plain average: 0 = the pattern (or, in
+    /// Whole room, the sum aligned on the talker), 1 = the plain average.
+    pub fn omni_mix(&self) -> f32 {
+        self.pattern.omni_mix
+    }
+
+    /// Measure the raw differential patterns, without shelf or make-up
+    /// (tests only).
+    #[cfg(test)]
+    fn set_bass_compensation(&mut self, on: bool) {
+        self.bass_on = on;
+    }
+
+    /// The pattern make-up gains (L, R) in dB (tests only).
+    #[cfg(test)]
+    fn makeup_db(&self) -> (f32, f32) {
+        (20.0 * self.pattern.makeup_l.log10(), 20.0 * self.pattern.makeup_r.log10())
     }
 
     fn recompute(&mut self) {
-        self.is_omni = matches!(self.mode, AudioMode::Omni);
-        self.is_stereo = matches!(self.mode, AudioMode::Stereo);
-        if self.is_omni {
-            self.align_delays = weights::align_delays(
-                &self.geom,
-                self.doa_az_deg,
-                self.doa_el_deg,
-                self.sample_rate,
-            );
-            return;
-        }
-
-        let scale = back_delay_scale(self.mode.clone());
-
-        let (az_l, az_r) = if self.is_stereo {
-            (self.doa_az_deg - 45.0, self.doa_az_deg + 45.0)
-        } else {
-            (self.doa_az_deg, self.doa_az_deg)
-        };
-
-        let hw_l = weights::hemispheric_weights(&self.geom, az_l, self.doa_el_deg, self.sample_rate);
-        self.w_front_l = hw_l.w_front;
-        self.w_back_l = hw_l.w_back;
-        self.back_delay_l = (scale * hw_l.delta_samples).max(0.0);
-
-        if self.is_stereo {
-            let hw_r =
-                weights::hemispheric_weights(&self.geom, az_r, self.doa_el_deg, self.sample_rate);
-            self.w_front_r = hw_r.w_front;
-            self.w_back_r = hw_r.w_back;
-            self.back_delay_r = (scale * hw_r.delta_samples).max(0.0);
-        }
+        self.pattern.steer(
+            &self.geom,
+            &self.mode,
+            self.doa_az_deg,
+            self.doa_el_deg,
+            self.sample_rate,
+        );
     }
 
     /// Process an 8-channel interleaved f32 frame. `interleaved.len()` must
     /// be a multiple of 8.
     pub fn process(&mut self, interleaved: &[f32]) -> BeamOutput {
         let frames = interleaved.len() / 8;
+        // Leaving Stereo, the pair keeps coming until its fade to the new
+        // mono output is over, so L and R don't jump to the mono.
+        let is_stereo =
+            self.pattern.is_stereo || self.fading.as_ref().is_some_and(|old| old.is_stereo);
         let mut mono = Vec::with_capacity(frames);
-        let mut stereo_l = if self.is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
-        let mut stereo_r = if self.is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
+        let mut stereo_l = if is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
+        let mut stereo_r = if is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
 
         for i in 0..frames {
             for alsa_ch in 0..8 {
                 self.delays[alsa_ch].write(interleaved[i * 8 + alsa_ch]);
             }
 
-            if self.is_omni {
-                // Delay-and-sum on the talker, faded towards the plain
-                // average while the direction is unknown (`omni_mix` 1).
-                let (mut aligned, mut plain) = (0.0f32, 0.0f32);
-                for alsa_ch in 0..8 {
-                    aligned += self.delays[alsa_ch].read(self.align_delays[alsa_ch]);
-                    plain += self.delays[alsa_ch].read(0.0);
-                }
-                let mix = self.omni_mix;
-                mono.push(((1.0 - mix) * aligned + mix * plain) / 8.0);
-                continue;
-            }
-
-            let (mut front_l, mut back_l) = (0.0f32, 0.0f32);
-            let (mut front_r, mut back_r) = (0.0f32, 0.0f32);
-            for alsa_ch in 0..8 {
-                let x_now = self.delays[alsa_ch].read(0.0);
-                let x_del_l = self.delays[alsa_ch].read(self.back_delay_l);
-                front_l += self.w_front_l[alsa_ch] * x_now;
-                back_l += self.w_back_l[alsa_ch] * x_del_l;
-                if self.is_stereo {
-                    let x_del_r = self.delays[alsa_ch].read(self.back_delay_r);
-                    front_r += self.w_front_r[alsa_ch] * x_now;
-                    back_r += self.w_back_r[alsa_ch] * x_del_r;
+            let (mut m, mut l, mut r) = self.pattern.sample(&self.delays, self.bass_on);
+            if let Some(old) = self.fading.as_mut() {
+                let (old_m, old_l, old_r) = old.sample(&self.delays, self.bass_on);
+                // Weight of the new pattern, rising linearly over the fade.
+                let w = (self.fade_pos + 1) as f32 / (self.fade_len + 1) as f32;
+                m = old_m + (m - old_m) * w;
+                l = old_l + (l - old_l) * w;
+                r = old_r + (r - old_r) * w;
+                self.fade_pos += 1;
+                if self.fade_pos >= self.fade_len {
+                    self.fading = None;
                 }
             }
-            let y_l = front_l - back_l;
 
-            // Compute omni sample (mean of all 8 mics' current values) if mixed.
-            let omni_sample = if self.omni_mix > 1e-3 {
-                let mut sum = 0.0f32;
-                for alsa_ch in 0..8 {
-                    sum += self.delays[alsa_ch].read(0.0);
-                }
-                sum / 8.0
-            } else {
-                0.0
-            };
-
-            let y_l_mixed = (1.0 - self.omni_mix) * y_l + self.omni_mix * omni_sample;
-
-            if self.is_stereo {
-                let y_r = front_r - back_r;
-                let y_r_mixed = (1.0 - self.omni_mix) * y_r + self.omni_mix * omni_sample;
-                mono.push(0.5 * (y_l_mixed + y_r_mixed));
-                stereo_l.push(y_l_mixed);
-                stereo_r.push(y_r_mixed);
-            } else {
-                mono.push(y_l_mixed);
+            mono.push(m);
+            if is_stereo {
+                stereo_l.push(l);
+                stereo_r.push(r);
             }
         }
+        self.primed |= frames > 0;
 
         BeamOutput {
             mono,
-            stereo: if self.is_stereo { Some((stereo_l, stereo_r)) } else { None },
+            stereo: if is_stereo { Some((stereo_l, stereo_r)) } else { None },
         }
     }
 
     pub fn reset(&mut self) {
         for d in &mut self.delays {
             d.reset();
+        }
+        self.pattern.bass_l.reset();
+        self.pattern.bass_r.reset();
+        self.fading = None;
+        self.primed = false;
+    }
+}
+
+impl Pattern {
+    fn new(mode: &AudioMode) -> Self {
+        let is_omni = matches!(mode, AudioMode::Omni);
+        Self {
+            is_omni,
+            is_stereo: matches!(mode, AudioMode::Stereo),
+            w_front_l: [0.0; 8],
+            w_back_l: [0.0; 8],
+            back_delay_l: 0.0,
+            w_front_r: [0.0; 8],
+            w_back_r: [0.0; 8],
+            back_delay_r: 0.0,
+            align_delays: [0.0; 8],
+            // Whole room starts with no direction: the plain average.
+            omni_mix: if is_omni { 1.0 } else { 0.0 },
+            bass_l: BassShelf::default(),
+            bass_r: BassShelf::default(),
+            makeup_l: 1.0,
+            makeup_r: 1.0,
+        }
+    }
+
+    /// Aim at (az, el). The bass filters are retuned, not reset, so a moving
+    /// beam stays smooth.
+    fn steer(&mut self, geom: &MicGeometry, mode: &AudioMode, az: f32, el: f32, sample_rate: u32) {
+        if self.is_omni {
+            self.align_delays = weights::align_delays(geom, az, el, sample_rate);
+            return;
+        }
+
+        let scale = back_delay_scale(mode.clone());
+
+        let (az_l, az_r) = if self.is_stereo { (az - 45.0, az + 45.0) } else { (az, az) };
+
+        // The bass shelves are tuned for the talker the pattern is for: on
+        // its axis the output is front − back delayed by Δ + τ. A Stereo side
+        // is for the centre of the image, 45° off its axis, where the
+        // acoustic part shrinks to Δ·cos 45°.
+        let acoustic = if self.is_stereo { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
+
+        // The make-up is levelled for a talker at most 30° up (`bass::tune`).
+        let level_el = el.min(bass::MAKEUP_MAX_ELEVATION_DEG);
+        let pattern_delay = |az: f32, el: f32| {
+            let hw = weights::hemispheric_weights(geom, az, el, sample_rate);
+            acoustic * hw.delta_samples + (scale * hw.delta_samples).max(0.0)
+        };
+
+        let hw_l = weights::hemispheric_weights(geom, az_l, el, sample_rate);
+        self.w_front_l = hw_l.w_front;
+        self.w_back_l = hw_l.w_back;
+        self.back_delay_l = (scale * hw_l.delta_samples).max(0.0);
+        let d_l = acoustic * hw_l.delta_samples + self.back_delay_l;
+        let level_l = if level_el < el { pattern_delay(az_l, level_el) } else { d_l };
+        self.makeup_l = bass::tune(&mut self.bass_l, d_l, level_l, sample_rate);
+
+        if self.is_stereo {
+            let hw_r = weights::hemispheric_weights(geom, az_r, el, sample_rate);
+            self.w_front_r = hw_r.w_front;
+            self.w_back_r = hw_r.w_back;
+            self.back_delay_r = (scale * hw_r.delta_samples).max(0.0);
+            let d_r = acoustic * hw_r.delta_samples + self.back_delay_r;
+            let level_r = if level_el < el { pattern_delay(az_r, level_el) } else { d_r };
+            self.makeup_r = bass::tune(&mut self.bass_r, d_r, level_r, sample_rate);
+        }
+    }
+
+    /// One output sample from the delay lines: (mono, L, R). Outside Stereo
+    /// L and R repeat the mono sample.
+    fn sample(&mut self, delays: &[DelayLine; 8], bass_on: bool) -> (f32, f32, f32) {
+        if self.is_omni {
+            // Delay-and-sum on the talker, faded towards the plain
+            // average while the direction is unknown (`omni_mix` 1).
+            let (mut aligned, mut plain) = (0.0f32, 0.0f32);
+            for (alsa_ch, d) in delays.iter().enumerate() {
+                aligned += d.read(self.align_delays[alsa_ch]);
+                plain += d.read(0.0);
+            }
+            let mix = self.omni_mix;
+            let y = ((1.0 - mix) * aligned + mix * plain) / 8.0;
+            return (y, y, y);
+        }
+
+        let (mut front_l, mut back_l) = (0.0f32, 0.0f32);
+        let (mut front_r, mut back_r) = (0.0f32, 0.0f32);
+        for (alsa_ch, d) in delays.iter().enumerate() {
+            let x_now = d.read(0.0);
+            front_l += self.w_front_l[alsa_ch] * x_now;
+            back_l += self.w_back_l[alsa_ch] * d.read(self.back_delay_l);
+            if self.is_stereo {
+                front_r += self.w_front_r[alsa_ch] * x_now;
+                back_r += self.w_back_r[alsa_ch] * d.read(self.back_delay_r);
+            }
+        }
+        // The shelves run every sample so their state stays continuous when
+        // the omni blend moves.
+        let mut y_l = front_l - back_l;
+        if bass_on {
+            y_l = self.makeup_l * self.bass_l.process(y_l);
+        }
+
+        // Compute omni sample (mean of all 8 mics' current values) if mixed.
+        // It is not bass-compensated: the plain average does not roll off.
+        let omni_sample = if self.omni_mix > 1e-3 {
+            delays.iter().map(|d| d.read(0.0)).sum::<f32>() / 8.0
+        } else {
+            0.0
+        };
+
+        let y_l_mixed = (1.0 - self.omni_mix) * y_l + self.omni_mix * omni_sample;
+
+        if self.is_stereo {
+            let mut y_r = front_r - back_r;
+            if bass_on {
+                y_r = self.makeup_r * self.bass_r.process(y_r);
+            }
+            let y_r_mixed = (1.0 - self.omni_mix) * y_r + self.omni_mix * omni_sample;
+            (0.5 * (y_l_mixed + y_r_mixed), y_l_mixed, y_r_mixed)
+        } else {
+            (y_l_mixed, y_l_mixed, y_l_mixed)
         }
     }
 }
@@ -268,12 +403,11 @@ mod tests {
         (sq / xs.len() as f32).sqrt()
     }
 
-    /// Gain in dB of the beam's mono output for a sine from (az, el).
-    fn tone_gain_db(b: &mut Beamformer, az: f32, el: f32, freq: f32) -> f32 {
+    /// 8-channel plane wave: a unit sine at `freq` from (az, el), `frames` long.
+    fn tone(az: f32, el: f32, freq: f32, frames: usize) -> Vec<f32> {
         let geom = MicGeometry::default();
         let d = weights::direction_vector(az, el);
         let omega = 2.0 * std::f32::consts::PI * freq / 48_000.0;
-        let frames = 9_600;
         let mut x = vec![0.0; frames * 8];
         for ch in 0..8 {
             let p = geom.position_for_alsa(ch);
@@ -282,8 +416,276 @@ mod tests {
                 x[i * 8 + ch] = ((i as f32 + tau) * omega).sin();
             }
         }
-        let y = b.process(&x);
-        20.0 * (rms(&y.mono[2_400..]) / std::f32::consts::FRAC_1_SQRT_2).log10()
+        x
+    }
+
+    /// Level in dB of a unit sine after settling (the first 50 ms are skipped).
+    fn sine_db(y: &[f32]) -> f32 {
+        20.0 * (rms(&y[2_400..]) / std::f32::consts::FRAC_1_SQRT_2).log10()
+    }
+
+    /// Gain in dB of the beam's mono output for a sine from (az, el).
+    fn tone_gain_db(b: &mut Beamformer, az: f32, el: f32, freq: f32) -> f32 {
+        let y = b.process(&tone(az, el, freq, 9_600));
+        sine_db(&y.mono)
+    }
+
+    /// A beam in `mode` aimed straight ahead at the horizon.
+    fn aimed(mode: AudioMode) -> Beamformer {
+        let mut b = Beamformer::new(MicGeometry::default(), 48_000);
+        b.set_mode(mode);
+        b.set_doa(0.0, 0.0);
+        b
+    }
+
+    /// Mono response to a talker in front at el 0, at `freq` relative to 1 kHz.
+    fn front_response(mode: AudioMode, freq: f32) -> f32 {
+        let mut b = aimed(mode);
+        let at_1k = tone_gain_db(&mut b, 0.0, 0.0, 1_000.0);
+        b.reset();
+        tone_gain_db(&mut b, 0.0, 0.0, freq) - at_1k
+    }
+
+    #[test]
+    fn directional_patterns_keep_their_bass() {
+        // Uncompensated, a front talker in Cardioid read −15.7 dB at 125 Hz
+        // and −9.7 dB at 250 Hz against 1 kHz (first-order differential
+        // roll-off). Cardioid's own on-axis null sits at fs/D ≈ 4.8 kHz, so
+        // its band ends at 3 kHz (see `cardioid_top_octave_is_the_pattern_null`).
+        let voice = [125.0, 250.0, 500.0, 2_000.0, 3_000.0];
+        let wide = [125.0, 250.0, 500.0, 2_000.0, 3_000.0, 4_000.0];
+        // Figure-8 needs the most make-up (+12.4 dB), so the +18 dB total
+        // cap leaves its shelf +5.6 dB: flat within 4 dB from 250 Hz, and
+        // 125 Hz about −5 dB (was −17.9 uncompensated).
+        let fig8 = [250.0, 500.0, 2_000.0, 3_000.0, 4_000.0];
+        let cases: [(AudioMode, &[f32], f32); 4] = [
+            (AudioMode::Cardioid, &voice, 3.0),
+            (AudioMode::Steered { initial_az_deg: 0.0 }, &voice, 3.0),
+            (AudioMode::Supercardioid, &wide, 3.0),
+            (AudioMode::Figure8, &fig8, 4.0),
+        ];
+        for (mode, freqs, tol) in cases {
+            for &freq in freqs {
+                let db = front_response(mode.clone(), freq);
+                assert!(db.abs() <= tol, "{mode:?} {freq} Hz: {db:+.1} dB vs 1 kHz (±{tol})");
+            }
+        }
+        let db = front_response(AudioMode::Figure8, 125.0);
+        assert!(db.abs() <= 5.5, "Figure8 125 Hz: {db:+.1} dB vs 1 kHz (±5.5)");
+    }
+
+    /// Mean level (dB) over the presence band, 1–3 kHz, of a front talker
+    /// at el 0: (mono, L, R).
+    fn presence_db(mode: AudioMode) -> (f32, f32, f32) {
+        let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+        let (mut m, mut l, mut r) = (0.0, 0.0, 0.0);
+        for freq in freqs {
+            let mut b = aimed(mode.clone());
+            let out = b.process(&tone(0.0, 0.0, freq, 9_600));
+            let mono = sine_db(&out.mono);
+            let (dl, dr) = out.stereo.map_or((mono, mono), |(sl, sr)| (sine_db(&sl), sine_db(&sr)));
+            m += mono;
+            l += dl;
+            r += dr;
+        }
+        let n = freqs.len() as f32;
+        (m / n, l / n, r / n)
+    }
+
+    #[test]
+    fn switching_mode_keeps_the_talkers_level() {
+        // Every pattern carries a talker in front at the level Whole room
+        // gives it once aligned on them, over the voice presence band.
+        let whole_room = {
+            let mut b = aimed(AudioMode::Omni);
+            b.set_omni_mix(0.0);
+            let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+            freqs
+                .iter()
+                .map(|&f| {
+                    b.reset();
+                    tone_gain_db(&mut b, 0.0, 0.0, f)
+                })
+                .sum::<f32>()
+                / freqs.len() as f32
+        };
+        for mode in [
+            AudioMode::Cardioid,
+            AudioMode::Supercardioid,
+            AudioMode::Figure8,
+            AudioMode::Steered { initial_az_deg: 0.0 },
+            AudioMode::Stereo,
+        ] {
+            let (m, l, r) = presence_db(mode.clone());
+            for (name, db) in [("mono", m), ("L", l), ("R", r)] {
+                assert!(
+                    (db - whole_room).abs() <= 1.0,
+                    "{mode:?} {name}: {db:+.1} dB vs Whole room {whole_room:+.1} dB"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn low_frequency_gain_stays_within_eighteen_db_at_50_hz() {
+        // Shelf × make-up against the raw pattern: what non-plane-wave
+        // content (self-noise, knocks) gets ahead of the clip before the AEC.
+        for mode in [
+            AudioMode::Cardioid,
+            AudioMode::Supercardioid,
+            AudioMode::Figure8,
+            AudioMode::Steered { initial_az_deg: 0.0 },
+            AudioMode::Stereo,
+        ] {
+            let mut raw = aimed(mode.clone());
+            raw.set_bass_compensation(false);
+            let mut compensated = aimed(mode.clone());
+            let total = tone_gain_db(&mut compensated, 0.0, 0.0, 50.0)
+                - tone_gain_db(&mut raw, 0.0, 0.0, 50.0);
+            let shelf = total - compensated.makeup_db().0;
+            assert!(total <= bass::MAX_TOTAL_DB, "{mode:?}: {total:+.1} dB at 50 Hz");
+            assert!(shelf <= bass::MAX_BOOST_DB, "{mode:?}: shelf {shelf:+.1} dB at 50 Hz");
+            assert!(shelf > 3.0, "{mode:?}: the bass is lifted ({shelf:+.1} dB)");
+        }
+    }
+
+    #[test]
+    fn an_elevated_talker_is_not_over_boosted() {
+        // At el 60 the Steered pattern's null falls to ~2.5 kHz; levelling
+        // the make-up on that response lifted 1 kHz by +7 dB. It is levelled
+        // for el 30 instead.
+        let at = |mode: AudioMode, mix: Option<f32>| {
+            let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+            let mut b = Beamformer::new(MicGeometry::default(), 48_000);
+            b.set_mode(mode);
+            b.set_doa(0.0, 60.0);
+            if let Some(mix) = mix {
+                b.set_omni_mix(mix);
+            }
+            let dbs: Vec<f32> = freqs
+                .iter()
+                .map(|&f| {
+                    b.reset();
+                    tone_gain_db(&mut b, 0.0, 60.0, f)
+                })
+                .collect();
+            let max = dbs.iter().copied().fold(f32::MIN, f32::max);
+            (dbs.iter().sum::<f32>() / dbs.len() as f32, max)
+        };
+        let (whole_room, _) = at(AudioMode::Omni, Some(0.0));
+        let (steered, peak) = at(AudioMode::Steered { initial_az_deg: 0.0 }, None);
+        assert!(
+            steered - whole_room <= 3.0,
+            "Steered at el 60: {steered:+.1} dB vs Whole room {whole_room:+.1} dB"
+        );
+        assert!(peak - whole_room <= 5.0, "Steered at el 60 peaks {peak:+.1} dB");
+    }
+
+    #[test]
+    fn reset_clears_the_bass_filters() {
+        let mut b = aimed(AudioMode::Stereo);
+        b.process(&tone(0.0, 0.0, 100.0, 4_800));
+        b.reset();
+        let out = b.process(&vec![0.0; 8 * 64]);
+        let (l, r) = out.stereo.unwrap();
+        assert!(out.mono.iter().chain(&l).chain(&r).all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn cardioid_top_octave_is_the_pattern_null() {
+        // The compensation only shapes the bass; at 4 kHz the cardioid is
+        // already falling into its on-axis null (fs/D, D = 10.1 samples).
+        // Guard it from getting worse than the design table in the report.
+        let db = front_response(AudioMode::Cardioid, 4_000.0);
+        assert!(db > -8.0, "Cardioid 4 kHz: {db:+.1} dB vs 1 kHz");
+    }
+
+    #[test]
+    fn stereo_sides_each_keep_their_bass() {
+        // Each side is a cardioid 45° off the front talker; its null for
+        // that talker is near 3.9 kHz, so the band checked ends at 2 kHz.
+        let side_db = |freq: f32| {
+            let mut b = aimed(AudioMode::Stereo);
+            let (l, r) = b.process(&tone(0.0, 0.0, freq, 9_600)).stereo.unwrap();
+            (sine_db(&l), sine_db(&r))
+        };
+        let (l_1k, r_1k) = side_db(1_000.0);
+        for freq in [125.0, 250.0, 500.0, 2_000.0] {
+            let (l, r) = side_db(freq);
+            assert!((l - l_1k).abs() <= 3.0, "L {freq} Hz: {:+.1} dB", l - l_1k);
+            assert!((r - r_1k).abs() <= 3.0, "R {freq} Hz: {:+.1} dB", r - r_1k);
+        }
+    }
+
+    #[test]
+    fn whole_room_gets_no_bass_boost() {
+        for mix in [0.0, 1.0] {
+            let mut b = aimed(AudioMode::Omni);
+            b.set_omni_mix(mix);
+            for freq in [50.0, 125.0, 1_000.0] {
+                b.reset();
+                let db = tone_gain_db(&mut b, 0.0, 0.0, freq);
+                assert!(db.abs() < 0.5, "omni_mix {mix}, {freq} Hz: {db:+.1} dB");
+            }
+        }
+    }
+
+    #[test]
+    fn steered_omni_blend_is_not_boosted() {
+        // At omni_mix 1 Steered is the plain average: flat, like Whole room
+        // without a talker.
+        let mut b = aimed(AudioMode::Steered { initial_az_deg: 0.0 });
+        b.set_omni_mix(1.0);
+        let db = tone_gain_db(&mut b, 0.0, 0.0, 125.0);
+        assert!(db.abs() < 0.5, "125 Hz: {db:+.1} dB");
+    }
+
+    #[test]
+    fn mode_change_does_not_click() {
+        // A 150 Hz talker: the band the compensation boosts most. In front,
+        // and 60° to the side so the Stereo sides differ. The largest
+        // sample-to-sample step after a switch, on the mono output and on
+        // the L and R the uplink sends (the mono twice outside Stereo), must
+        // stay within what the louder of the two modes produces on its own.
+        let max_step = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        // (mono, L, R) of one output.
+        let channels = |out: BeamOutput| {
+            let (l, r) = out.stereo.unwrap_or_else(|| (out.mono.clone(), out.mono.clone()));
+            [out.mono, l, r]
+        };
+        let pairs = [
+            (AudioMode::Cardioid, AudioMode::Figure8),
+            (AudioMode::Cardioid, AudioMode::Omni),
+            (AudioMode::Omni, AudioMode::Stereo),
+            (AudioMode::Stereo, AudioMode::Supercardioid),
+        ];
+        for az in [0.0, 60.0] {
+            let x = tone(az, 0.0, 150.0, 9_600);
+            let half = 4_800 * 8;
+            for (from, to) in pairs.clone() {
+                let steady = |mode: AudioMode| {
+                    let mut b = aimed(mode);
+                    channels(b.process(&x))
+                        .iter()
+                        .map(|c| max_step(&c[2_400..]))
+                        .fold(0.0f32, f32::max)
+                };
+                let bound = steady(from.clone()).max(steady(to.clone()));
+                let mut b = aimed(from.clone());
+                let before = channels(b.process(&x[..half]));
+                b.set_mode(to.clone());
+                b.set_doa(0.0, 0.0);
+                let after = channels(b.process(&x[half..]));
+                for (name, (pre, post)) in ["mono", "L", "R"].iter().zip(before.iter().zip(&after)) {
+                    let joined: Vec<f32> = pre[2_400..].iter().chain(post).copied().collect();
+                    let step = max_step(&joined);
+                    assert!(
+                        step <= 1.5 * bound,
+                        "az {az}, {from:?} → {to:?} {name}: step {step:.4} vs steady {bound:.4}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

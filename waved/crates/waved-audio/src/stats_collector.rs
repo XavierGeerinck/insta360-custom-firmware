@@ -6,7 +6,7 @@ use crate::callbacks::AudioFrame;
 use crate::capture::{CaptureStats, ChannelMapSource};
 use crate::metrics::{clipping_rate, correlation_matrix, dc_offset, rms_per_channel};
 use crate::playback::DspMetrics;
-use crate::processed_frame::{AecFrameMetrics, ProcessedAudioFrame};
+use crate::processed_frame::{AecFrameMetrics, BeamMetrics, ProcessedAudioFrame};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -43,6 +43,10 @@ pub struct AudioStats {
     /// same audio frame.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aec: Option<AecFrameMetrics>,
+    /// Where the beam points and its blend towards the plain average, from
+    /// the latest processed frame. Absent until a beamformed frame arrives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub beam: Option<BeamMetrics>,
     pub doa_horizontal: f32,
     pub doa_pitch: f32,
     pub doa_active: bool,
@@ -281,6 +285,7 @@ pub fn compute_stats_with_processed(
             .as_ref()
             .map(|m| m.mic_uplink_rms)
             .or(mic_post_aec_rms),
+        beam: aec_metrics.as_ref().and_then(|m| m.beam),
         aec: aec_metrics,
         doa_horizontal: audio_state.doa_horizontal,
         doa_pitch: audio_state.doa_pitch,
@@ -644,6 +649,49 @@ mod tests {
     }
 
     #[test]
+    fn beam_tracker_appears_in_stats() {
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let cs = CaptureStats::new();
+        let beam = crate::processed_frame::BeamMetrics {
+            az_deg: 92.5,
+            el_deg: 12.0,
+            omni_mix: 0.25,
+        };
+        let metrics = AecFrameMetrics {
+            beam: Some(beam),
+            ..Default::default()
+        };
+        let s = compute_stats_with_processed(
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            Some(metrics),
+            &AudioState::default(),
+            None,
+            #[cfg(feature = "capture-alsa")]
+            None,
+            None,
+        );
+        assert_eq!(s.beam, Some(beam));
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["beam"]["az_deg"], 92.5);
+        assert_eq!(json["beam"]["el_deg"], 12.0);
+        assert_eq!(json["beam"]["omni_mix"], 0.25);
+        assert!(json["aec"].get("beam").is_none(), "published once, at the top");
+    }
+
+    #[test]
+    fn beam_is_omitted_without_a_beamformed_frame() {
+        let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
+        let s = compute_stats(&frame, &CaptureStats::new(), ChannelMapSource::File, None, "none");
+        assert_eq!(s.beam, None);
+        assert!(serde_json::to_value(&s).unwrap().get("beam").is_none());
+    }
+
+    #[test]
     fn mic_health_appears_in_stats() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
         let cs = CaptureStats::new();
@@ -726,6 +774,7 @@ mod tests_hid_wiring {
             mic_post_aec_rms: None,
             mic_uplink_rms: None,
             aec: None,
+            beam: None,
             doa_horizontal: 0.0,
             doa_pitch: 0.0,
             doa_active: false,

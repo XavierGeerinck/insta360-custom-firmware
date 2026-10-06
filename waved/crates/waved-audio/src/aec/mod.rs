@@ -38,6 +38,12 @@ pub trait EchoCanceller: Send {
 /// state for residual-echo suppression (see `speex::SpeexNoiseSuppressor`).
 pub trait NoiseSuppressor: Send {
     fn process(&mut self, samples: &mut [i16]);
+
+    /// How many samples `process` currently delays its input by. Stereo mode
+    /// delays the raw side by the same amount (`crate::stereo_align`).
+    fn latency_samples(&self) -> usize {
+        0
+    }
 }
 
 /// Returns a no-op canceller. Used when AEC is disabled (spec §8 `Raw` path

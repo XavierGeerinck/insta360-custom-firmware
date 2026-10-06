@@ -458,8 +458,65 @@ promotion to `AudioConfig` only if tuning evidence demands.
   distant voice. Omni now delay-and-sums on the talker tracked by `SteeredBeam`
   (`Beamformer::align_delays`; flat within 1.5 dB to 8 kHz on axis) and fades to the
   plain average (`omni_mix` 1) while no direction is confident.
-- **The directional modes lose bass** (first-order differential: −16 dB at 125 Hz,
-  −10 dB at 250 Hz, simulated). See TODO C18.
+- **The directional modes lost bass** (first-order differential: −16 dB at 125 Hz,
+  −10 dB at 250 Hz, simulated). Now compensated: "Directional-mode bass" below.
+
+`/tmp/audio_stats.json` carries `beam: { az_deg, el_deg, omni_mix }` from
+the latest processed frame (C19): where the beam points and how far it leans
+on the plain average. In Whole room `omni_mix` 0 means the mics are lined up
+on the talker, 1 the plain average (−12 to −25 dB at 4 kHz off-axis); in
+Steered it is the omni blend above. The fixed modes report their aim and 0.
+
+### Directional-mode bass (C18, simulated 2026-10-06)
+
+A first-order differential `front − back(t − τ)` responds like
+`2·sin(ω·D/2)`, `D` = acoustic front-to-back delay + back delay. At 48 kHz,
+aimed at 0° el 0: Cardioid D = 10.1 samples, Supercardioid 8.0, Figure-8
+5.0, a Stereo side 12.2 for the talker in the middle (14.3 on its own axis).
+Below its peak that is a 6 dB/octave high-pass, and its first null is at
+fs/D (4.8 kHz for Cardioid, 3.9 kHz for a Stereo side and for a Cardioid
+aimed at a mic diagonal).
+
+`beam::bass::BassShelf` undoes the slope on each pattern output (not on
+Whole room, not on Steered's omni blend): a one-pole low shelf, at most
++12 dB at DC (for mic self-noise), pole at 85 Hz, zero at `ω·D = 2.2`. A flat
+make-up gain (`bass::presence_makeup`, before the omni blend) then puts the
+talker at Whole room's level over 1–3 kHz, so switching mode keeps the
+level. It is derived from `2·|sin(π·f·D/fs)|` × the shelf, averaged over the
+band, for a talker at most 30° up (steeper, the pattern's null moves into the
+band and levelling it lifted 1 kHz by +7 dB at el 60; now +4.5).
+
+Shelf and make-up together are capped at +18 dB at low frequencies against
+Whole room (`bass::tune`): content that is not a plane wave (self-noise, mic
+mismatch, structure-borne echo, knocks) otherwise reached +18 to +24 dB ahead
+of the hard clip before the echo canceller. The shelf's DC boost is
+`min(12, 18 − make-up)`: it keeps the gain above its zero and raises its
+pole instead, and the two are iterated to agreement.
+
+| Mode | Make-up | Shelf at DC | Total |
+|---|---|---|---|
+| Cardioid / Steered | +6.2 dB | +11.8 dB | +18.0 dB |
+| Supercardioid | +8.1 dB | +9.9 dB | +18.0 dB |
+| Figure-8 | +12.4 dB | +5.6 dB | +18.0 dB |
+| Stereo L or R | +5.3 dB | +12.0 dB | +17.3 dB |
+
+Front talker, el 0, mono output vs plain average (`beam::tests`):
+
+| Mode | 50 | 125 | 250 | 500 | 1k | 2k | 3k | 4k Hz |
+|---|---|---|---|---|---|---|---|---|
+| Cardioid, before | −23.6 | −15.7 | −9.7 | −3.8 | +1.8 | +5.7 | +5.3 | −0.4 |
+| Cardioid / Steered, after | −6.8 | −2.5 | −1.2 | −0.7 | −0.1 | +0.4 | −1.2 | −7.4 |
+| Supercardioid, after | −8.5 | −3.4 | −1.6 | −1.0 | −0.5 | +0.2 | −0.1 | −2.0 |
+| Figure-8, after | −11.9 | −5.4 | −2.3 | −1.0 | −0.5 | +0.0 | +0.4 | +0.4 |
+| Stereo L or R, after | −6.0 | −1.7 | −0.5 | +0.1 | +0.8 | +0.7 | −3.5 | −26.9 |
+
+Figure-8, with the shallowest shelf, is within 4 dB of 1 kHz from 250 Hz to
+4 kHz and about −5 dB at 125 Hz.
+Cardioid stays within ±3 dB of 1 kHz from 125 Hz to 3 kHz; its 4 kHz point
+is the pattern's own null, which no low shelf can lift without breaking the
+2 kHz side (a monotonic filter can't both cut 2 kHz and keep 4 kHz). A mode
+change crossfades the old and new patterns over 10 ms (`MODE_FADE_MS`);
+leaving Stereo, L and R fade into the new mono output.
 
 ## Full-duplex AEC pipeline
 
@@ -895,6 +952,18 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
   (SP#5/SP#6) were taken with that filter in place.
 - Noise reduction is **Off** on the device for now: DeepFilterNet on the CPU
   can't keep up during speech. Running it on the NPU is deferred (TODO).
+- **Stereo alignment (C15).** Stereo adds the raw beam side to the processed
+  mid, which lags the beam. Measured on the host through
+  `AudioService::process_frame` (`mid_latency_matches_an_impulse_through_the_service`):
+  the Speex residual stage shifts by one analysis frame (128 samples at the
+  1024 period, 240 at 480; the linear canceller adds none); DeepFilterNet adds
+  480 (its model) plus the zeros its hop queue inserted while filling (448 at
+  1024, none at 480), so 1056 samples (22 ms) with NR on at 1024. The fallback
+  standalone Speex denoiser shifts by a whole period. `stereo_align::SideDelay`
+  holds the raw pair back by `mid_latency_samples()`; side and mid now line up
+  within 4 samples with NR Off and Low (they were 128 / 1056 apart). The
+  recording limiter's 96-sample lookahead comes after the rebuild and delays
+  mono and pair alike.
 
 ## Microphone check (milestone 2)
 

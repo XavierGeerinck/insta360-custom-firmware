@@ -14,6 +14,7 @@ pub mod playback;
 pub mod processed_frame;
 pub mod spectrum;
 pub mod stats_collector;
+pub mod stereo_align;
 
 #[cfg(feature = "simulate")]
 pub mod simulate;
@@ -204,6 +205,15 @@ impl AecProcessor {
         matches!(self, Self::Coupled(_))
     }
 
+    /// The residual stage shifts by one Speex analysis frame; the linear
+    /// canceller adds no delay.
+    fn latency_samples(&self) -> usize {
+        match self {
+            Self::Coupled(stage) => stage.analysis_frame_size(),
+            Self::LinearOnly { .. } => 0,
+        }
+    }
+
     fn config(&self) -> &AecConfig {
         match self {
             Self::Coupled(stage) => stage.config(),
@@ -216,6 +226,17 @@ struct DspChain {
     aec: AecProcessor,
     environmental_ns: Option<Box<dyn NoiseSuppressor>>,
     environmental_ns_backend: &'static str,
+}
+
+impl DspChain {
+    /// How far the processed mid lags the beam, in samples.
+    fn latency_samples(&self) -> usize {
+        self.aec.latency_samples()
+            + self
+                .environmental_ns
+                .as_ref()
+                .map_or(0, |ns| ns.latency_samples())
+    }
 }
 
 /// Build the DSP chain for a given NR level.
@@ -397,6 +418,9 @@ pub struct AudioService {
     /// from AudioState, which main.rs seeds from config before this service
     /// is built.
     beam_aim_deg: f32,
+    /// Holds the raw Stereo pair back by the mid's DSP latency so the side
+    /// lines up with the processed mid (C15).
+    side_delay: crate::stereo_align::SideDelay,
     /// Side gain the Stereo pair reached at the end of the last period
     /// (`processed_frame::rebuild_stereo`). Reset to 0 on a mode change so
     /// Stereo fades its side in.
@@ -491,6 +515,7 @@ impl AudioService {
             steered,
             mode: initial_mode,
             beam_aim_deg: initial_aim,
+            side_delay: crate::stereo_align::SideDelay::default(),
             stereo_side_gain: 0.0,
             mic_monitor: None,
             mic_check_done: false,
@@ -545,6 +570,13 @@ impl AudioService {
         let nr = self.audio_tx.borrow().nr_level.clone();
         self.dsp_chain = build_dsp_chain(self.frame_size, self.sample_rate, nr, config.clone());
         self.aec_config = config;
+    }
+
+    /// How far the processed mid lags the beam (echo canceller, residual
+    /// stage, noise suppression), in samples. The Stereo side is delayed by
+    /// the same amount.
+    pub fn mid_latency_samples(&self) -> usize {
+        self.dsp_chain.latency_samples()
     }
 
     /// Replace the standalone test integrity state with the production-shared
@@ -631,6 +663,8 @@ impl AudioService {
             residual_echo_suppress_active_db: config.residual_echo_suppress_active_db,
             uplink_makeup_gain_db: config.uplink_makeup_gain_db,
             noise_suppression_backend: self.dsp_chain.environmental_ns_backend.to_string(),
+            // Filled in by the beamforming path.
+            beam: None,
         };
         metrics.update_suppression();
         metrics
@@ -724,7 +758,14 @@ impl AudioService {
                 &self.ref_mono_scratch,
             );
             p.aec_metrics = metrics;
+            let (az_deg, el_deg) = self.beamformer.direction();
+            p.aec_metrics.beam = Some(crate::processed_frame::BeamMetrics {
+                az_deg,
+                el_deg,
+                omni_mix: self.beamformer.omni_mix(),
+            });
             if let Some((l, r)) = beam_out.stereo {
+                let (l, r) = self.side_delay.process(&l, &r, self.dsp_chain.latency_samples());
                 let (left, right, gain) = crate::processed_frame::rebuild_stereo(
                     &l,
                     &r,
@@ -901,8 +942,14 @@ impl AudioService {
                 // heard; the other non-steered modes don't blend.
                 let start_mix = if matches!(mode, waved_state::AudioMode::Omni) { 1.0 } else { 0.0 };
                 self.beamformer.set_omni_mix(start_mix);
+                // Entering Stereo, the side starts from silence and fades in.
+                // Leaving it, the beam fades the pair into the new mono output
+                // (`Beamformer::process`), so the side keeps its state.
+                if mode == waved_state::AudioMode::Stereo && self.mode != mode {
+                    self.stereo_side_gain = 0.0;
+                    self.side_delay.reset();
+                }
                 self.mode = mode.clone();
-                self.stereo_side_gain = 0.0;
                 self.audio_tx.send_modify(|s| s.mode = mode);
             }
             Command::SetDoaOverride(ov) => {
@@ -920,6 +967,10 @@ impl AudioService {
                     level.clone(),
                     self.aec_config.clone(),
                 );
+                // The mid's latency changes with the chain: restart the side
+                // from silence rather than replaying it at the new offset.
+                self.side_delay.reset();
+                self.stereo_side_gain = 0.0;
                 self.audio_tx.send_modify(|s| s.nr_level = level);
             }
             Command::SetPlaybackPreset(p) => {
@@ -1850,10 +1901,20 @@ mod tests {
         mode: waved_state::AudioMode,
         aim: f32,
     ) -> (AudioService, Arc<watch::Sender<AudioState>>) {
+        service_with_dsp(mode, aim, NrLevel::Off, 480)
+    }
+
+    /// As `service_with`, with a noise-reduction level and period size.
+    fn service_with_dsp(
+        mode: waved_state::AudioMode,
+        aim: f32,
+        nr_level: NrLevel,
+        frame_size: usize,
+    ) -> (AudioService, Arc<watch::Sender<AudioState>>) {
         let state = AudioState {
             mode,
             beam_aim_deg: aim,
-            nr_level: NrLevel::Off,
+            nr_level,
             ..AudioState::default()
         };
         let audio_tx = Arc::new(watch::channel(state).0);
@@ -1864,7 +1925,7 @@ mod tests {
             frame_tx,
             frame_rx,
             meeting_tx,
-            480,
+            frame_size,
             48_000,
             crate::beam::MicGeometry::default(),
         );
@@ -1965,6 +2026,159 @@ mod tests {
         }
     }
 
+    /// A broadband talker at `az_deg` (device degrees): 40 incommensurate
+    /// sines from 150 Hz to 3.5 kHz, `amplitude` each, starting at sample
+    /// `start` so consecutive frames join up.
+    fn broadband_8ch(az_deg: f32, start: usize, frame_size: usize, amplitude: f32) -> AudioFrame {
+        let geom = crate::beam::MicGeometry::default();
+        let sr = 48_000.0_f32;
+        let (cos, sin) = (az_deg.to_radians().cos(), az_deg.to_radians().sin());
+        let tones: Vec<(f32, f32)> = (0..40)
+            .map(|k| {
+                let f = 150.0 * (3_500.0f32 / 150.0).powf(k as f32 / 39.0) * (1.0 + 0.013 * k as f32);
+                (2.0 * std::f32::consts::PI * f / sr, k as f32 * 2.399)
+            })
+            .collect();
+        let mut samples = vec![0i16; frame_size * 8];
+        for ch in 0..8 {
+            let p = geom.position_for_alsa(ch);
+            let tau = -((p.x * cos + p.y * sin) * 1e-3) / 343.0 * sr;
+            for i in 0..frame_size {
+                let t = (start + i) as f32 - tau;
+                let v: f32 = tones.iter().map(|(w, ph)| (t * w + ph).sin()).sum();
+                samples[i * 8 + ch] = (v * amplitude * i16::MAX as f32) as i16;
+            }
+        }
+        AudioFrame::mic_only(samples, 8, 48_000, 0)
+    }
+
+    /// The lag (samples, `b` behind `a` when positive) that best lines `b`
+    /// up with `a`, by absolute cross-correlation.
+    fn best_lag(a: &[f32], b: &[f32], max_lag: i64) -> i64 {
+        let score = |lag: i64| -> f64 {
+            let mut sum = 0.0f64;
+            for (i, &x) in a.iter().enumerate() {
+                let j = i as i64 + lag;
+                if j >= 0 && (j as usize) < b.len() {
+                    sum += x as f64 * b[j as usize] as f64;
+                }
+            }
+            sum.abs()
+        };
+        (-max_lag..=max_lag)
+            .max_by(|&x, &y| score(x).total_cmp(&score(y)))
+            .unwrap()
+    }
+
+    #[test]
+    fn mid_latency_matches_an_impulse_through_the_service() {
+        // Measured: the Speex residual stage shifts by one analysis frame
+        // (128 samples at a 1024 period, 240 at 480); DeepFilterNet adds its
+        // 480-sample model delay plus the zeros its hop queue inserted while
+        // filling (448 at a 1024 period, none at 480). The recording limiter's
+        // lookahead comes after the Stereo rebuild, so it is left out.
+        // DeepFilterNet gates a lone impulse as silence (its 10 ms hop is
+        // too quiet), so with NR on the probe is an 85 ms noise burst and
+        // the lag is read off the cross-correlation.
+        let lookahead = LimiterParams::DEFAULT.lookahead_samples;
+        let cases = [
+            (1_024, NrLevel::Off, 128),
+            (480, NrLevel::Off, 240),
+            (1_024, NrLevel::Low, 128 + 448 + 480),
+            (480, NrLevel::Low, 240 + 480),
+        ];
+        for (frame_size, nr, expected) in cases {
+            let (mut svc, _state) =
+                service_with_dsp(waved_state::AudioMode::Omni, 0.0, nr.clone(), frame_size);
+            // Room after the probe for the longest lag searched.
+            let frames = 31 + (3_000 + 4_096) / frame_size + 1;
+            let at = frame_size * 30 + 77;
+            let mut probe = vec![0i16; frame_size * frames];
+            if nr == NrLevel::Off {
+                probe[at] = 2_000;
+            } else {
+                let mut seed = 0x2545_f491_u32;
+                for sample in &mut probe[at..at + 4_096] {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    *sample = ((seed >> 16) as i32 - 32_768) as i16 / 16;
+                }
+            }
+            let mut out = Vec::new();
+            for frame in probe.chunks(frame_size) {
+                // One-channel frames take the plain mono path into the same DSP.
+                let p = svc.process_frame(&AudioFrame::mic_only(frame.to_vec(), 1, 48_000, 0));
+                out.extend(p.mic_mono_f32);
+            }
+            // The probe is silent outside `at..at + 4096`.
+            let score = |lag: usize| -> f64 {
+                probe[at..at + 4_096]
+                    .iter()
+                    .zip(&out[at + lag..])
+                    .map(|(&x, &y)| f64::from(x) * f64::from(y))
+                    .sum::<f64>()
+                    .abs()
+            };
+            let lag = (0..3_000).max_by(|&a, &b| score(a).total_cmp(&score(b))).unwrap();
+            let measured = lag - lookahead;
+            assert_eq!(measured, expected, "{frame_size} {nr:?}: the probe came out {measured} late");
+            assert_eq!(svc.mid_latency_samples(), measured, "{frame_size} {nr:?}");
+        }
+    }
+
+    #[test]
+    fn an_nr_change_fades_the_side_back_in() {
+        // Turning NR on adds DeepFilterNet's delay to the mid. The side must
+        // not replay the old period at the new offset: it restarts from
+        // silence and its gain ramps in, as after a mode change.
+        let (mut svc, _state) =
+            service_with_dsp(waved_state::AudioMode::Stereo, 0.0, NrLevel::Off, 1_024);
+        let side_of = |p: ProcessedAudioFrame| -> Vec<f32> {
+            let (l, r) = p.mic_stereo_f32.expect("Stereo mode carries a pair");
+            l.iter().zip(&r).map(|(a, b)| 0.5 * (a - b)).collect()
+        };
+        let max_step = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let mut steady = 0.0f32;
+        for k in 0..20 {
+            let side = side_of(svc.process_frame(&broadband_8ch(90.0, k * 1_024, 1_024, 0.003)));
+            if k >= 10 {
+                steady = steady.max(max_step(&side));
+            }
+        }
+        assert!(steady > 0.0, "the side carries the talker");
+        svc.handle_command(Command::SetNrLevel(NrLevel::Low));
+        let side = side_of(svc.process_frame(&broadband_8ch(90.0, 20 * 1_024, 1_024, 0.003)));
+        // The recording limiter's lookahead still holds the end of the last
+        // period; after it, nothing until the new mid latency has passed.
+        let lookahead = LimiterParams::DEFAULT.lookahead_samples;
+        let latency = svc.mid_latency_samples().min(side.len());
+        assert!(
+            side[lookahead..latency].iter().all(|v| v.abs() < 1e-6),
+            "no old side ahead of the new mid latency ({latency} samples)"
+        );
+        assert!(max_step(&side) <= steady, "{} vs steady {steady}", max_step(&side));
+    }
+
+    #[test]
+    fn stereo_side_lines_up_with_the_processed_mid() {
+        // The side comes from the raw beam; the mid went through the echo
+        // canceller, the residual stage and, with NR on, DeepFilterNet.
+        for nr in [NrLevel::Off, NrLevel::Low] {
+            let (mut svc, _state) =
+                service_with_dsp(waved_state::AudioMode::Stereo, 0.0, nr.clone(), 1_024);
+            let (mut mid, mut side) = (Vec::new(), Vec::new());
+            for k in 0..40 {
+                let p = svc.process_frame(&broadband_8ch(90.0, k * 1_024, 1_024, 0.003));
+                if k >= 20 {
+                    let (l, r) = p.mic_stereo_f32.expect("Stereo mode carries a pair");
+                    mid.extend(l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)));
+                    side.extend(l.iter().zip(&r).map(|(a, b)| 0.5 * (a - b)));
+                }
+            }
+            let lag = best_lag(&mid, &side, 1_500);
+            assert!(lag.abs() <= 4, "{nr:?}: the side is {lag} samples off the mid");
+        }
+    }
+
     /// A running `AudioService` over `state`, for tests that drive it through
     /// its channels. Returns the frame sender, the processed-frame receiver
     /// (what the meeting layer sees), the command sender and the task handle.
@@ -2050,6 +2264,27 @@ mod tests {
         let frame = frame.unwrap();
         assert!(frame.confidence > 0.0, "a clean plane wave is not zero-confidence");
         assert_eq!(state.borrow().doa_confidence, frame.confidence);
+    }
+
+    #[test]
+    fn the_frame_carries_what_the_beam_is_doing() {
+        // Whole room tracking a talker at 90°: the frame reports the
+        // beamformer's own direction and blend, for /tmp/audio_stats.json.
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        let mut last = None;
+        for _ in 0..20 {
+            last = Some(svc.process_frame(&plane_wave_8ch(90.0, 480)));
+        }
+        let beam = last
+            .unwrap()
+            .aec_metrics
+            .beam
+            .expect("8-channel frames report the beam");
+        let (az, el) = svc.beamformer.direction();
+        assert_eq!(beam.az_deg, az);
+        assert_eq!(beam.el_deg, el);
+        assert_eq!(beam.omni_mix, svc.beamformer.omni_mix());
+        assert!(beam.omni_mix < 1.0, "a clear talker ramps off the plain average");
     }
 
     #[test]
