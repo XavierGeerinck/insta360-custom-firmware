@@ -217,6 +217,11 @@ Rules for the parallel milestones:
     the status pill (Home) never shows on the device.
   - Set it while the pre-roll buffer is filling: setting on, not recording, not muted.
 
+- [ ] **C13 Neural noise reduction on the NPU** (L) — deferred until milestone 2 is done (user, 2026-10-06). DeepFilterNet on the CPU takes ≈ 84 % of a Cortex-A55 core during speech; in series with the DSP chain the UAC2 uplink underran (183 gaps / 20 s), and a dedicated thread didn't help (it alone is ≈ 8.5 ms per 10 ms hop). Noise reduction stays Off on the device until it runs on the NPU (see `memory/project_sp4_npu_status`, `docs/AUDIO_HARDWARE.md` "Uplink Level and CPU").
+- [ ] **C14 Re-measure ERLE after the 48 kHz echo canceller fix** (S) — SP#5/SP#6 figures were taken while Speex assumed 8 kHz. Quick check on 2026-10-06: linear 15.6 dB, effective 23.5 dB with speech from the Wave speaker; residual echo sits ≈ 10 dB under near-end speech in the uplink. Rerun the acceptance script.
+- [ ] **C15 Stereo alignment** (S) — in Stereo mode the side signal comes from the raw beam while the mid carries the AEC/NS delay (DeepFilterNet adds ≈ 40 ms when on); delay the side to match.
+- [ ] **C16 Talker wedge follows room noise** (S) — the DoA VAD gate reads open in almost every sample of a quiet room; the M2 screens have no hysteresis (the legacy UI did).
+
 ## D — Files
 
 - [ ] **D1 Files list** (M) — new `screens/files.rs`
