@@ -11,6 +11,7 @@ use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::talker::TalkerGate;
 use crate::kit::tokens::{
     DIAL_CX, DIAL_HINT_Y, DIAL_ICON_X, DIAL_ICON_Y, DIAL_LINE_Y, DIAL_TITLE_Y, LIVE, REC, SCREEN_W,
     TEXT, TEXT_2, TEXT_3,
@@ -89,6 +90,8 @@ struct Parts {
     gate: Rc<Cell<RecordGate>>,
     shown: Option<HomeView>,
     stack_hidden: bool,
+    /// Hysteresis for the talker wedge (`kit::talker`).
+    talker: TalkerGate,
 }
 
 impl Screen for HomeScreen {
@@ -133,6 +136,7 @@ impl Screen for HomeScreen {
             gate,
             shown: None,
             stack_hidden: false,
+            talker: TalkerGate::default(),
         });
         self.update(snap);
     }
@@ -146,7 +150,7 @@ impl Screen for HomeScreen {
         gate.blocked = record_blocked(snap);
         gate.now_ms = snap.now_ms;
         p.gate.set(gate);
-        let gauge = p.dial.update(snap, home_ring(snap));
+        let gauge = p.dial.update(snap, home_ring(snap, &mut p.talker));
         if gauge != p.stack_hidden {
             for obj in [p.icon, p.title, p.line, p.hint] {
                 obj.hidden(gauge);
@@ -178,13 +182,13 @@ mod tests {
     use crate::kit::obj::text_width;
     use crate::kit::route::Route;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
-    use crate::screens_v2::main_parts::fixtures::{ctx, events, sent, snap, with_message};
+    use crate::screens_v2::main_parts::fixtures::{ctx, events, sent, settle, snap, with_message};
 
     /// home.png: in a call, someone talking at 307°, pre-recording on.
     fn in_a_call() -> UiSnapshot {
         let mut snap = snap();
         snap.audio.call_off_hook = true;
-        snap.audio.doa_active = true;
+        snap.audio.doa_confidence = 0.8;
         snap.audio.doa_horizontal = 127.0; // screen 307°
         snap.meeting.pre_recording_active = true;
         snap
@@ -233,7 +237,10 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let (ctx, _bus, _ui) = ctx();
-            HomeScreen::default().build(root, &ctx, &in_a_call());
+            let mut snap = in_a_call();
+            let mut screen = HomeScreen::default();
+            screen.build(root, &ctx, &snap);
+            settle(&mut screen, &mut snap);
             assert_golden("home", &lv.render());
             assert_targets_ok(root);
         });

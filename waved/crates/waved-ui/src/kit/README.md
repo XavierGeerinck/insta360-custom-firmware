@@ -183,7 +183,9 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   A screen's own Back button may send the same command too; a duplicate is accepted.
 - **Press cancel.** A press is cancelled (`lv_indev_wait_release`) when the screen changes
   under it, or when a swipe is taken (by the runtime, or by a screen's `on_swipe`), so it never
-  also taps. A press that only woke the screen is never delivered to LVGL.
+  also taps. When the screen is parked under a press, the pressed object also gets `LV_EVENT_PRESS_LOST`
+  at once (LVGL sends its own only on the release), so a hold-to-Stop in progress resets instead of
+  completing on the hidden screen. A press that only woke the screen is never delivered to LVGL.
 - **Wake on arrival.** A new pending decision (a recording stopped) or an incoming call
   (`audio.call_ringing`) wakes a resting or dark screen without delivering a press.
 
@@ -246,6 +248,12 @@ Notes on the parts that carry state:
 - The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
   with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
   centre over 62°–122°. Rows fade and change band with distance from the focus line.
+- The talker wedge (Home, Recording) and Audio mode's Follow talker preview never read
+  `audio.doa_active`: the VAD flag reads open in a quiet room. They gate on
+  `audio.doa_confidence >= 0.30` through `kit::talker::TalkerGate` (state per screen): a talker
+  shows after 150 ms of confident samples and goes after 100 ms without one, and the last
+  confident direction is held through dropouts. `home_ring` / `recording_ring` take the screen's
+  gate; screens are updated every loop iteration (~10 ms), so the delays are in time, not samples.
 - The status pill's pre-recording dot follows `MeetingState::pre_recording_active` (the buffer
   is filling now), not the `SettingsState::pre_recording` setting.
 

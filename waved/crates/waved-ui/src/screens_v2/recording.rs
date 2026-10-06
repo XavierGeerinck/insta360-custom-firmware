@@ -12,6 +12,7 @@ use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::talker::TalkerGate;
 use crate::kit::tokens::{
     DIAL_CX, REC, REC_CHIP_Y, REC_DOT, REC_DOT_GAP, REC_HINT_Y, REC_LINE_Y, REC_TIMER_Y, SCREEN_W,
     TEXT, TEXT_2, TEXT_3, WARN,
@@ -105,6 +106,8 @@ struct Parts {
     live: Rc<Cell<Live>>,
     shown: Option<RecordingView>,
     stack_hidden: bool,
+    /// Hysteresis for the talker wedge (`kit::talker`).
+    talker: TalkerGate,
 }
 
 impl Screen for RecordingScreen {
@@ -211,6 +214,7 @@ impl Screen for RecordingScreen {
             live,
             shown: None,
             stack_hidden: false,
+            talker: TalkerGate::default(),
         });
         self.update(snap);
     }
@@ -225,7 +229,7 @@ impl Screen for RecordingScreen {
             duration_secs: snap.meeting.duration_secs,
             upload_mode: snap.settings.upload_mode,
         });
-        let gauge = p.dial.update(snap, recording_ring(snap));
+        let gauge = p.dial.update(snap, recording_ring(snap, &mut p.talker));
         if gauge != p.stack_hidden {
             for obj in [p.chip, p.timer, p.line, p.hint] {
                 obj.hidden(gauge);
@@ -274,7 +278,7 @@ mod tests {
     use crate::kit::obj::text_width;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
     use crate::kit::tokens::HOLD_TO_STOP_MS;
-    use crate::screens_v2::main_parts::fixtures::{ctx, events, sent, snap, with_message};
+    use crate::screens_v2::main_parts::fixtures::{ctx, events, sent, settle, snap, with_message};
     use crate::screens_v2::main_parts::TIMER_HOURS_Y;
 
     /// recording.png: speaker 2 talking at 60°.
@@ -283,7 +287,7 @@ mod tests {
         snap.meeting.recording = true;
         snap.meeting.duration_secs = secs;
         snap.meeting.current_speaker = Some(2);
-        snap.audio.doa_active = true;
+        snap.audio.doa_confidence = 0.8;
         snap.audio.doa_horizontal = 240.0; // screen 60°
         snap
     }
@@ -328,7 +332,10 @@ mod tests {
             (view.line.as_str(), view.line_color, view.hint),
             ("Muted, not recorded", REC, "Tap to unmute")
         );
-        assert_eq!(recording_ring(&snap).style, RingStyle::RecordingMuted);
+        assert_eq!(
+            recording_ring(&snap, &mut TalkerGate::default()).style,
+            RingStyle::RecordingMuted
+        );
     }
 
     #[test]
@@ -336,7 +343,10 @@ mod tests {
         lvgl(|lv| {
             let root = lv.screen();
             let (ctx, _bus, _ui) = ctx();
-            RecordingScreen::default().build(root, &ctx, &recording(2_537));
+            let mut snap = recording(2_537);
+            let mut screen = RecordingScreen::default();
+            screen.build(root, &ctx, &snap);
+            settle(&mut screen, &mut snap);
             assert_golden("recording", &lv.render());
             assert_targets_ok(root);
         });
@@ -364,6 +374,7 @@ mod tests {
             let mut snap = recording(2_538);
             let mut screen = RecordingScreen::default();
             screen.build(root, &ctx, &snap);
+            settle(&mut screen, &mut snap);
             let stop = screen.parts.as_ref().unwrap().stop.obj();
             stop.set_state(LV_STATE_PRESSED, true);
             lv.send(stop, lv_event_code_t_LV_EVENT_PRESSED);
@@ -433,7 +444,10 @@ mod tests {
             assert_eq!(sent(&mut bus), ["StopRecording"]);
             assert_eq!(
                 events(&ui).last(),
-                Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic, false)))
+                Some(&UiEvent::Show(copy::after_stop(
+                    UploadMode::Automatic,
+                    false
+                )))
             );
         });
     }
@@ -482,7 +496,10 @@ mod tests {
             assert_eq!(sent(&mut bus), ["StopRecording"]);
             assert_eq!(
                 events(&ui).last(),
-                Some(&UiEvent::Show(copy::after_stop(UploadMode::Automatic, true)))
+                Some(&UiEvent::Show(copy::after_stop(
+                    UploadMode::Automatic,
+                    true
+                )))
             );
         });
     }
@@ -542,8 +559,9 @@ mod tests {
             let root = lv.screen();
             let (ctx, _bus, _ui) = ctx();
             let mut screen = RecordingScreen::default();
-            let snap = recording(3_723);
+            let mut snap = recording(3_723);
             screen.build(root, &ctx, &snap);
+            settle(&mut screen, &mut snap);
             let view = RecordingView::from_snapshot(&snap);
             assert_eq!(
                 (view.timer.as_str(), view.timer_font),

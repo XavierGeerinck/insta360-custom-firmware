@@ -6,6 +6,7 @@ use crate::input::TouchInput;
 use crate::kit::snapshot::UiSnapshot;
 use crate::runtime::device::Device;
 use crate::runtime::power::PowerDriver;
+use crate::runtime::touch::{OpenRetry, TouchSample};
 use crate::runtime::{registry, Runtime};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -18,11 +19,13 @@ use waved_state::StateBus;
 const LOOP_SLEEP: Duration = Duration::from_millis(10);
 
 /// Runs the UI on the calling thread until the process exits. Returns only
-/// when the display or the touch panel cannot be opened.
+/// when the display cannot be opened. A touch device that will not open does
+/// not stop the UI: it keeps rendering and the open is retried every 2 s.
 pub fn run(bus: Arc<StateBus>, config: WavedConfig) -> Result<(), Box<dyn std::error::Error>> {
     info!("UI thread starting");
     let device = Device::init(FramebufferDisplay::init()?);
-    let mut touch = TouchInput::init()?;
+    let mut touch: Option<TouchInput> = None;
+    let mut touch_retry = OpenRetry::default();
     let mut events_rx = bus.events.subscribe();
     let mut commands_rx = bus.commands.subscribe();
     let mut runtime = Runtime::new(
@@ -42,7 +45,24 @@ pub fn run(bus: Arc<StateBus>, config: WavedConfig) -> Result<(), Box<dyn std::e
         // One snapshot for the touch sample and the step.
         let snap = UiSnapshot::capture(&bus, unix_now(), now_ms);
 
-        let report = runtime.touch(touch.poll(), &snap);
+        if touch.is_none() && touch_retry.due(now_ms) {
+            match TouchInput::init() {
+                Ok(opened) => {
+                    info!("touch input ready");
+                    touch_retry.opened();
+                    touch = Some(opened);
+                }
+                Err(error) => {
+                    if touch_retry.failed(now_ms) {
+                        warn!("touch input unavailable ({error}); the UI runs without it and retries every 2 s");
+                    }
+                }
+            }
+        }
+        let sample = touch
+            .as_mut()
+            .map_or_else(TouchSample::default, TouchInput::poll);
+        let report = runtime.touch(sample, &snap);
         device.report(report.sample);
         if report.cancel_press {
             device.cancel_press();

@@ -346,15 +346,20 @@ impl Runtime {
     /// screen, and a parked screen's pressed object would still click.
     fn replace_shown(&mut self, next: Shown) {
         if let Some(old) = self.shown.take() {
-            if self.pressed {
-                self.cancel_press = true;
-                self.gestures.ignore_press();
-            }
             let stack = self.router.stack();
             let parks = next.route == Route::Resting
                 && self.parked.is_none()
                 && stack.len() >= 2
                 && stack[stack.len() - 2] == old.route;
+            if self.pressed {
+                self.cancel_press = true;
+                // A parked screen stays alive under the press: what the press
+                // started there (a hold) must not run on while hidden.
+                if parks {
+                    self.gestures.press_lost(old.root);
+                }
+                self.gestures.ignore_press();
+            }
             if parks {
                 self.parked = Some(old);
             } else {
@@ -1024,6 +1029,50 @@ mod tests {
     }
 
     #[test]
+    fn to_base_sends_the_leave_commands_of_every_route_it_drops() {
+        lvgl(|lv| {
+            let (mut rt, mut bus) = booted_with_bus(lv);
+            let id = Uuid::new_v4();
+            // The screen rests above Wi-Fi setup: the top route is Resting,
+            // which leaves nothing, but the route under it still must.
+            send(&mut rt, UiEvent::Navigate(Route::Wifi), 2_000);
+            send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 2_100);
+            rt.step(ready(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            drain(&mut bus);
+            assert_eq!(
+                send(&mut rt, UiEvent::ToBase, 2 * MIN + 100),
+                Some(Route::Home)
+            );
+            assert_eq!(drain(&mut bus), [Command::CancelWifiProvisioning]);
+            rt.step(ready(2 * MIN + 200), &[]);
+            assert!(drain(&mut bus).is_empty(), "exactly once");
+
+            // Two routes with leave commands in one stack: both send, once,
+            // whichever of them is on top.
+            send(&mut rt, UiEvent::Navigate(Route::Wifi), 3 * MIN);
+            send(&mut rt, UiEvent::Navigate(Route::WifiSetup), 3 * MIN + 100);
+            send(
+                &mut rt,
+                UiEvent::Navigate(Route::FileDetail(id)),
+                3 * MIN + 200,
+            );
+            drain(&mut bus);
+            let mut playing = ready(3 * MIN + 300);
+            playing.playback.recording = Some(id);
+            rt.dispatcher().ui(UiEvent::ToBase);
+            rt.step(playing, &[]);
+            let mut sent = drain(&mut bus);
+            sent.sort_by_key(|command| format!("{command:?}"));
+            assert_eq!(
+                sent,
+                [Command::CancelWifiProvisioning, Command::StopPlayback]
+            );
+            rt.close();
+        });
+    }
+
+    #[test]
     fn a_button_back_from_the_playing_file_detail_stops_playback_once() {
         lvgl(|lv| {
             let (mut rt, mut bus) = booted_with_bus(lv);
@@ -1364,6 +1413,65 @@ mod tests {
             iterate(&mut rt, &pointer, down(x, y), ready(2_200), true);
             iterate(&mut rt, &pointer, up(), ready(2_250), true);
             assert_eq!(taps(), 0, "the parked Menu's button is not tapped");
+            drop(pointer);
+            rt.close();
+        });
+    }
+
+    /// The real Recording screen (its Stop holds), Probes elsewhere.
+    fn with_recording(route: &Route) -> Option<Box<dyn Screen>> {
+        match route {
+            Route::Recording => registry::screen_for(route),
+            other => probes(other),
+        }
+    }
+
+    #[test]
+    fn a_hold_to_stop_in_progress_when_the_screen_rests_never_completes() {
+        lvgl(|lv| {
+            lv.screen();
+            let (mut rt, mut bus) = runtime_with(Box::new(with_recording));
+            rt.step(ready(0), &[]);
+            rt.step(ready(BOOT_MIN_MS), &[]);
+            rt.step(recording(2_000), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Recording));
+            let pointer = Pointer::create();
+            let (x, y) = (200, 241); // Stop, at the main bottom spot
+            rt.root().unwrap().update_layout();
+            assert!(
+                press_target(rt.root().unwrap(), x, y).is_some(),
+                "the Stop button"
+            );
+            drain(&mut bus);
+            iterate(&mut rt, &pointer, down(x, y), recording(2_100), true);
+            lv.advance(400);
+            // The power key rests the screen under the finger: Recording is parked.
+            let short = [DeviceEvent::PowerKey(PowerKeyPress::Short)];
+            iterate_with(
+                &mut rt,
+                &pointer,
+                down(x, y),
+                recording(2_150),
+                &short,
+                true,
+            );
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            // The finger stays down past the hold time (1 s).
+            for i in 0..14 {
+                lv.advance(100);
+                iterate(
+                    &mut rt,
+                    &pointer,
+                    down(x, y),
+                    recording(2_200 + 100 * i),
+                    true,
+                );
+            }
+            iterate(&mut rt, &pointer, up(), recording(4_000), true);
+            assert!(
+                !drain(&mut bus).contains(&Command::StopRecording),
+                "a hold on the hidden screen stopped the recording"
+            );
             drop(pointer);
             rt.close();
         });

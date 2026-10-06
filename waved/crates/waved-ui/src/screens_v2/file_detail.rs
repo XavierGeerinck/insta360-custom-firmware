@@ -66,7 +66,7 @@ impl SendAction {
     pub fn icon(self) -> &'static str {
         match self {
             SendAction::Send => icons::SEND,
-            SendAction::SendAgain => icons::REFRESH,
+            SendAction::SendAgain => icons::RELOAD,
         }
     }
 
@@ -622,7 +622,7 @@ mod tests {
         );
         assert_eq!(
             (SendAction::SendAgain.icon(), SendAction::SendAgain.label()),
-            (icons::REFRESH, "Send again")
+            (icons::RELOAD, "Send again")
         );
     }
 
