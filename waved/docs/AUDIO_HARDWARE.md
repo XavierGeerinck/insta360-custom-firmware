@@ -850,9 +850,10 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
   plus a 1.7 LSB noise floor, it removed 10.5 dB at −60 dBFS (NR Low, 12 dB cap)
   and 20 dB at High, but nothing at −40 dBFS or louder. The user mic level was
   applied after the denoiser, so the uplink sat near −58 dBFS. Fix:
-  `aec.uplink_makeup_gain_db` (default 24, `crate::makeup`, soft knee above
-  half scale) between residual-echo suppression and noise suppression. With it,
-  the denoiser loses ≈ 2.7 dB and the uplink sits at ≈ −28 dBFS.
+  `aec.uplink_makeup_gain_db` (`crate::makeup`, soft knee above half scale)
+  between residual-echo suppression and noise suppression. At +24 dB the
+  denoiser lost ≈ 2.7 dB; after the echo canceller fix below the default is
+  +18 dB (speech ≈ −26 dBFS into the denoiser and, at mic level 100 %, out).
 - **CPU.** DeepFilterNet skips its network on quiet input and runs it fully on
   speech. During speech the audio worker rose from ≈ 11 % to ≈ 84 % of one
   core (NR Off: ≈ 17 %). The whole DSP chain runs in series on that worker, so
@@ -865,8 +866,14 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
 - **Drop bursts of 78–140 frames** follow the end of a host stream: `writei`
   blocks until the control poll clears `upstream_active` (≈ 1.6 s). They are
   inaudible.
-- The linear AEC lowers near-end speech by ≈ 9–11 dB even with a silent
-  reference (pre-AEC 105 → post-residual 28). Not yet explained.
+- **Echo canceller at 8 kHz.** The linear AEC cut near-end speech by 11–17 dB
+  with a silent reference. `speex_echo_state_init` assumes 8 kHz until
+  `SPEEX_ECHO_SET_SAMPLING_RATE`, and its DC notch (radius 0.9 at "8 kHz")
+  high-passed the 48 kHz signal near 760 Hz, which is most of a voice. Setting
+  the rate brought the loss to ≈ 0.7 dB. ERLE figures measured before this fix
+  (SP#5/SP#6) were taken with that filter in place.
+- Noise reduction is **Off** on the device for now: DeepFilterNet on the CPU
+  can't keep up during speech. Running it on the NPU is deferred (TODO).
 
 ## Mic Gain Pipeline
 

@@ -1,11 +1,11 @@
 //! Fixed make-up gain between residual-echo suppression and noise suppression.
 //!
-//! The beam carries conversational speech at about −55 to −65 dBFS (device
-//! pass 2026-10-06, ~1 m away). DeepFilterNet treats speech that quiet as
-//! noise: offline it removed 10.5 dB of a −60 dBFS sentence at NR Low and
-//! 20 dB at High, but nothing at −40 dBFS or louder. Raising the level here,
-//! before the suppressor, keeps the voice; the user's mic level and the
-//! recording limiters still follow downstream. A soft knee above half scale
+//! The beam carries conversational speech at about −44 dBFS ~1 m away (device
+//! pass 2026-10-06, after the echo canceller's 48 kHz fix). DeepFilterNet
+//! treats quiet speech as noise: offline it removed 10.5 dB of a −60 dBFS
+//! sentence at NR Low and 20 dB at High, but nothing at −40 dBFS or louder.
+//! The default +18 dB puts speech near −26 dBFS before the suppressor; the
+//! user's mic level and the recording limiters still follow downstream. A soft knee above half scale
 //! keeps loud, close speech from clipping the i16 stage.
 
 /// Linear gain for a make-up gain in dB.

@@ -72,7 +72,7 @@ fn default_residual_echo_suppress_active_db() -> u8 {
     15
 }
 fn default_uplink_makeup_gain_db() -> u8 {
-    24
+    18
 }
 
 impl Default for AecConfig {

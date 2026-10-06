@@ -1268,10 +1268,10 @@ mod tests {
         assert_eq!(metrics.residual_echo_suppress_active_db, 15);
         assert_eq!(metrics.noise_suppression_backend, "off");
         assert!((metrics.mic_pre_aec_rms - 353.2).abs() < 1.0);
-        assert_eq!(metrics.uplink_makeup_gain_db, 24);
+        assert_eq!(metrics.uplink_makeup_gain_db, 18);
         let makeup = metrics.mic_post_noise_suppression_rms / metrics.mic_post_residual_echo_rms;
         assert!(
-            (makeup - crate::makeup::db_to_linear(24)).abs() < 0.05,
+            (makeup - crate::makeup::db_to_linear(18)).abs() < 0.05,
             "NR Off adds only the make-up gain before the (absent) denoiser; got {makeup:.3}"
         );
         let gain_ratio = metrics.mic_uplink_rms / metrics.mic_post_noise_suppression_rms.max(0.01);

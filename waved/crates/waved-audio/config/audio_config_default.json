@@ -18,7 +18,7 @@
   "aec": {
     "residual_echo_suppress_db": 40,
     "residual_echo_suppress_active_db": 15,
-    "uplink_makeup_gain_db": 24
+    "uplink_makeup_gain_db": 18
   },
   "period_frames": 1024,
   "buffer_periods": 8
