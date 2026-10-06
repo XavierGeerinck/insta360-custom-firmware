@@ -290,6 +290,7 @@ mod tests {
         let mut snap = snap();
         snap.clock = "15:14".into();
         snap.battery.level = 79;
+        snap.battery.voltage = 3_800;
         snap.meeting.pending_decision = Some(PendingDecision {
             id: Uuid::from_u128(ID),
             audio_path: "/mnt/udisk/recordings/x/audio.wav".into(),

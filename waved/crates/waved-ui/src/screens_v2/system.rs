@@ -233,6 +233,7 @@ mod tests {
             let f = fixture();
             let mut snap = snap();
             snap.clock = "14:37".into();
+            snap.settings.pre_recording = true; // as in system.png
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap);
             // system.png: Pre-recording, About (focus), ..., Power off in red.

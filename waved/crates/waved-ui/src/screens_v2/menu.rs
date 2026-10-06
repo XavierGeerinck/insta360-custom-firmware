@@ -298,6 +298,7 @@ pub(crate) mod fixture {
         snap.wifi.signal_strength = -60;
         snap.clock = "14:33".into();
         snap.battery.level = 82;
+        snap.battery.voltage = 3_800;
         snap
     }
 

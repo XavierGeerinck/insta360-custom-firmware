@@ -36,7 +36,8 @@ struct Shown {
     wifi: bool,
     bt: bool,
     clock: String,
-    battery: u8,
+    /// The level, once the MCU has sent a battery frame.
+    battery: Option<u8>,
     charging: bool,
     pre_recording: bool,
 }
@@ -49,6 +50,7 @@ pub struct StatusArea {
     wifi: Obj,
     bt: Obj,
     clock: Obj,
+    battery: Obj,
     battery_icon: Obj,
     battery_text: Obj,
     message: Obj,
@@ -128,6 +130,7 @@ impl StatusArea {
             wifi,
             bt,
             clock,
+            battery,
             battery_icon,
             battery_text,
             message,
@@ -165,7 +168,7 @@ impl StatusArea {
             wifi: snap.wifi.connected,
             bt: snap.bt.connected,
             clock: snap.clock.clone(),
-            battery: snap.battery.level,
+            battery: battery_reading(&snap.battery),
             charging: snap.battery.is_charging,
             pre_recording: snap.meeting.pre_recording_active,
         };
@@ -179,11 +182,14 @@ impl StatusArea {
         self.wifi.hidden(!next.wifi);
         self.bt.hidden(!next.bt);
         self.clock.set_text(&next.clock);
-        let (glyph, color) = battery_look(next.battery, next.charging);
-        self.battery_icon.text_color(color).set_text(glyph);
-        self.battery_text
-            .text_color(color)
-            .set_text(&format!("{}%", next.battery));
+        self.battery.hidden(next.battery.is_none());
+        if let Some(level) = next.battery {
+            let (glyph, color) = battery_look(level, next.charging);
+            self.battery_icon.text_color(color).set_text(glyph);
+            self.battery_text
+                .text_color(color)
+                .set_text(&format!("{level}%"));
+        }
         self.shown = Some(next);
     }
 
@@ -231,6 +237,13 @@ impl StatusArea {
 
 /// Battery glyph and colour: teal while charging, amber at or below 20 %,
 /// red at or below 10 %.
+/// The battery level, or `None` before the MCU has reported one:
+/// `BatteryState::default()` is level 0 with voltage 0, which must not show
+/// as an empty battery (the same rule as the battery messages).
+pub fn battery_reading(battery: &waved_state::BatteryState) -> Option<u8> {
+    (battery.voltage > 0).then_some(battery.level)
+}
+
 pub fn battery_look(level: u8, charging: bool) -> (&'static str, u32) {
     if charging {
         return (icons::BATTERY_CHARGING, LIVE);
@@ -263,6 +276,7 @@ mod tests {
         snap.wifi.connected = true;
         snap.clock = "14:32".into();
         snap.battery.level = 82;
+        snap.battery.voltage = 3_800;
         snap
     }
 
@@ -445,6 +459,24 @@ mod tests {
                 Font::Small.line_height(),
                 "one line, not wrapped"
             );
+        });
+    }
+
+    #[test]
+    fn no_battery_reading_hides_the_battery() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut status = StatusArea::plain(root);
+            let mut snap = snap();
+            snap.battery = Default::default();
+            status.update(&snap);
+            assert!(status.battery.is_hidden(), "no frame yet: no 0 %");
+            snap.battery.level = 64;
+            snap.battery.voltage = 3_700;
+            status.update(&snap);
+            assert!(!status.battery.is_hidden());
+            assert_eq!(status.battery_text.text(), "64%");
+            let _ = lv;
         });
     }
 

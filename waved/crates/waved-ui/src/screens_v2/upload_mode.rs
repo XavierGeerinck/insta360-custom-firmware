@@ -84,6 +84,7 @@ mod tests {
             let mut snap = snap();
             snap.clock = "15:22".into();
             snap.battery.level = 79;
+            snap.battery.voltage = 3_800;
             snap.settings.upload_mode = UploadMode::Ask;
             let mut screen = UploadModeScreen::default();
             screen.build(root, &f.ctx, &snap);

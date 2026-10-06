@@ -104,6 +104,7 @@ mod tests {
         snap.settings.first_run_done = true;
         snap.clock = "14:32".into();
         snap.battery.level = 64;
+        snap.battery.voltage = 3_800;
         snap.mcu.usb_connected = true;
         snap.now_ms = 10_000;
         snap.now_unix_s = 1_759_588_320;

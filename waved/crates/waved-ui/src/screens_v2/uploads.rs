@@ -248,6 +248,7 @@ mod tests {
         let mut snap = snap();
         snap.clock = "15:22".into();
         snap.battery.level = 79;
+        snap.battery.voltage = 3_800;
         snap.now_unix_s = 1_759_588_320;
         snap.meeting.last_upload_success_at = Some("2025-10-04T14:20:00+00:00".into());
         snap.meeting.pending_uploads = 1;

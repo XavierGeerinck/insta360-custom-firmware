@@ -30,6 +30,7 @@ fn home_from_kit_parts() {
         snap.wifi.connected = true;
         snap.clock = "14:32".into();
         snap.battery.level = 82;
+        snap.battery.voltage = 3_800;
         snap.audio.call_off_hook = true;
         snap.meeting.pre_recording_active = true;
 
@@ -67,6 +68,7 @@ fn recording_from_kit_parts() {
         snap.wifi.connected = true;
         snap.clock = "14:32".into();
         snap.battery.level = 82;
+        snap.battery.voltage = 3_800;
 
         let mut status = StatusArea::pill(root, &dispatch);
         status.update(&snap);
@@ -123,6 +125,7 @@ fn after_a_recording_from_kit_parts() {
         snap.wifi.connected = true;
         snap.clock = "15:22".into();
         snap.battery.level = 79;
+        snap.battery.voltage = 3_800;
 
         let mut status = StatusArea::plain(root);
         status.update(&snap);
