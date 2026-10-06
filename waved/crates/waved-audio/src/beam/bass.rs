@@ -13,8 +13,9 @@
 //! - between the two it falls at 6 dB/octave, cancelling the pattern's slope.
 //!
 //! The gain is highest at DC (+12 dB) and falls to `12 dB − depth` above the
-//! zero, so the flattened pattern sits a few dB below the plain average in
-//! the voice band (see the design table in `docs/AUDIO_HARDWARE.md`).
+//! zero, so the flattened pattern sits below the plain average in the voice
+//! band; `presence_makeup` adds the flat gain that brings its talker back to
+//! Whole room's level (design table in `docs/AUDIO_HARDWARE.md`).
 
 use std::f32::consts::PI;
 
@@ -94,6 +95,40 @@ impl BassShelf {
     }
 }
 
+/// The voice presence band a pattern's make-up gain levels, in Hz.
+pub const PRESENCE_BAND_HZ: (f32, f32) = (1_000.0, 3_000.0);
+/// Most make-up gain a pattern gets, in dB (a degenerate spacing must not
+/// turn into a huge gain).
+pub const MAX_MAKEUP_DB: f32 = 24.0;
+
+/// Flat gain that brings a pattern with front-to-back delay `d_samples`,
+/// bass-compensated by `shelf`, to 0 dB for its talker on average over the
+/// presence band, the level Whole room gives a talker it is aligned on. So
+/// switching mode does not change the talker's level.
+///
+/// Derived from the pattern's own response: the differential is
+/// `2·|sin(π·f·D/fs)|` on axis (matches the simulated beam to 0.1 dB, see
+/// `beam::tests`), times the shelf; the gain is minus its mean in dB over
+/// 21 evenly spaced points from 1 to 3 kHz.
+pub fn presence_makeup(d_samples: f32, sample_rate: u32, shelf: &BassShelf) -> f32 {
+    if d_samples.is_nan() || d_samples <= 0.5 || sample_rate == 0 {
+        return 1.0;
+    }
+    const POINTS: usize = 21;
+    let (lo, hi) = PRESENCE_BAND_HZ;
+    let fs = sample_rate as f32;
+    let mean_db = (0..POINTS)
+        .map(|i| {
+            let hz = lo + (hi - lo) * i as f32 / (POINTS - 1) as f32;
+            let pattern = 2.0 * (PI * hz * d_samples / fs).sin().abs();
+            // A null inside the band counts as −20 dB, not −∞.
+            20.0 * pattern.max(0.1).log10() + shelf.gain_db(hz, sample_rate)
+        })
+        .sum::<f32>()
+        / POINTS as f32;
+    10f32.powf((-mean_db).min(MAX_MAKEUP_DB) / 20.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +189,28 @@ mod tests {
         s.reset();
         assert_eq!(s.process(0.0), 0.0);
         assert_eq!(s.gain_db(100.0, 48_000), tuned.gain_db(100.0, 48_000));
+    }
+
+    #[test]
+    fn makeup_levels_the_presence_band() {
+        for d in DELAYS {
+            let shelf = BassShelf::for_delay(d, 48_000);
+            let g = presence_makeup(d, 48_000, &shelf);
+            let db_at = |hz: f32| {
+                20.0 * (g * 2.0 * (PI * hz * d / 48_000.0).sin().abs()).log10()
+                    + shelf.gain_db(hz, 48_000)
+            };
+            let mean = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0]
+                .iter()
+                .map(|&hz| db_at(hz))
+                .sum::<f32>()
+                / 5.0;
+            // Five points against the 21 of the derivation; the widest
+            // spacing falls steeply into its 3.4 kHz null at the top.
+            assert!(mean.abs() <= 1.0, "D {d}: presence mean {mean:+.2} dB");
+            assert!(g > 1.0 && 20.0 * g.log10() <= MAX_MAKEUP_DB);
+        }
+        assert_eq!(presence_makeup(0.0, 48_000, &BassShelf::default()), 1.0);
     }
 
     #[test]

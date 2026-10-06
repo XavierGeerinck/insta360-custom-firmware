@@ -13,7 +13,9 @@
 //! Stereo is two cardioids at DOA ± 45°.
 //!
 //! Each pattern output then goes through a bass shelf (`bass.rs`) that undoes
-//! the differential's 6 dB/octave roll-off, capped at +12 dB. A mode change
+//! the differential's 6 dB/octave roll-off, capped at +12 dB, and a flat
+//! make-up gain that puts its talker at Whole room's level over 1–3 kHz
+//! (`bass::presence_makeup`), so switching mode keeps the level. A mode change
 //! crossfades from the old pattern to the new one over `MODE_FADE_MS`.
 //!
 //! See `weights.rs` for the partitioning; see SP#3 design doc for the physics.
@@ -50,8 +52,8 @@ pub struct Beamformer {
     /// Samples went through since the last reset; before that a mode change
     /// has nothing to fade from.
     primed: bool,
-    /// Bass compensation on (always, outside tests that measure the raw
-    /// pattern).
+    /// Bass compensation and make-up on (always, outside tests that measure
+    /// the raw pattern).
     bass_on: bool,
 }
 
@@ -80,6 +82,11 @@ struct Pattern {
     /// R in Stereo). Not used by Whole room.
     bass_l: BassShelf,
     bass_r: BassShelf,
+    /// Flat make-up gains (linear) that put the talker at Whole room's
+    /// level over 1–3 kHz (`bass::presence_makeup`). Applied with the shelf,
+    /// before the omni blend.
+    makeup_l: f32,
+    makeup_r: f32,
 }
 
 pub struct BeamOutput {
@@ -147,10 +154,17 @@ impl Beamformer {
         self.pattern.omni_mix
     }
 
-    /// Measure the raw differential patterns (tests only).
+    /// Measure the raw differential patterns, without shelf or make-up
+    /// (tests only).
     #[cfg(test)]
     fn set_bass_compensation(&mut self, on: bool) {
         self.bass_on = on;
+    }
+
+    /// The pattern make-up gains (L, R) in dB (tests only).
+    #[cfg(test)]
+    fn makeup_db(&self) -> (f32, f32) {
+        (20.0 * self.pattern.makeup_l.log10(), 20.0 * self.pattern.makeup_r.log10())
     }
 
     fn recompute(&mut self) {
@@ -233,6 +247,8 @@ impl Pattern {
             omni_mix: if is_omni { 1.0 } else { 0.0 },
             bass_l: BassShelf::default(),
             bass_r: BassShelf::default(),
+            makeup_l: 1.0,
+            makeup_r: 1.0,
         }
     }
 
@@ -258,16 +274,18 @@ impl Pattern {
         self.w_front_l = hw_l.w_front;
         self.w_back_l = hw_l.w_back;
         self.back_delay_l = (scale * hw_l.delta_samples).max(0.0);
-        self.bass_l
-            .retune(acoustic * hw_l.delta_samples + self.back_delay_l, sample_rate);
+        let d_l = acoustic * hw_l.delta_samples + self.back_delay_l;
+        self.bass_l.retune(d_l, sample_rate);
+        self.makeup_l = bass::presence_makeup(d_l, sample_rate, &self.bass_l);
 
         if self.is_stereo {
             let hw_r = weights::hemispheric_weights(geom, az_r, el, sample_rate);
             self.w_front_r = hw_r.w_front;
             self.w_back_r = hw_r.w_back;
             self.back_delay_r = (scale * hw_r.delta_samples).max(0.0);
-            self.bass_r
-                .retune(acoustic * hw_r.delta_samples + self.back_delay_r, sample_rate);
+            let d_r = acoustic * hw_r.delta_samples + self.back_delay_r;
+            self.bass_r.retune(d_r, sample_rate);
+            self.makeup_r = bass::presence_makeup(d_r, sample_rate, &self.bass_r);
         }
     }
 
@@ -302,7 +320,7 @@ impl Pattern {
         // the omni blend moves.
         let mut y_l = front_l - back_l;
         if bass_on {
-            y_l = self.bass_l.process(y_l);
+            y_l = self.makeup_l * self.bass_l.process(y_l);
         }
 
         // Compute omni sample (mean of all 8 mics' current values) if mixed.
@@ -318,7 +336,7 @@ impl Pattern {
         if self.is_stereo {
             let mut y_r = front_r - back_r;
             if bass_on {
-                y_r = self.bass_r.process(y_r);
+                y_r = self.makeup_r * self.bass_r.process(y_r);
             }
             let y_r_mixed = (1.0 - self.omni_mix) * y_r + self.omni_mix * omni_sample;
             (0.5 * (y_l_mixed + y_r_mixed), y_l_mixed, y_r_mixed)
@@ -439,6 +457,58 @@ mod tests {
         }
     }
 
+    /// Mean level (dB) over the presence band, 1–3 kHz, of a front talker
+    /// at el 0: (mono, L, R).
+    fn presence_db(mode: AudioMode) -> (f32, f32, f32) {
+        let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+        let (mut m, mut l, mut r) = (0.0, 0.0, 0.0);
+        for freq in freqs {
+            let mut b = aimed(mode.clone());
+            let out = b.process(&tone(0.0, 0.0, freq, 9_600));
+            let mono = sine_db(&out.mono);
+            let (dl, dr) = out.stereo.map_or((mono, mono), |(sl, sr)| (sine_db(&sl), sine_db(&sr)));
+            m += mono;
+            l += dl;
+            r += dr;
+        }
+        let n = freqs.len() as f32;
+        (m / n, l / n, r / n)
+    }
+
+    #[test]
+    fn switching_mode_keeps_the_talkers_level() {
+        // Every pattern carries a talker in front at the level Whole room
+        // gives it once aligned on them, over the voice presence band.
+        let whole_room = {
+            let mut b = aimed(AudioMode::Omni);
+            b.set_omni_mix(0.0);
+            let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+            freqs
+                .iter()
+                .map(|&f| {
+                    b.reset();
+                    tone_gain_db(&mut b, 0.0, 0.0, f)
+                })
+                .sum::<f32>()
+                / freqs.len() as f32
+        };
+        for mode in [
+            AudioMode::Cardioid,
+            AudioMode::Supercardioid,
+            AudioMode::Figure8,
+            AudioMode::Steered { initial_az_deg: 0.0 },
+            AudioMode::Stereo,
+        ] {
+            let (m, l, r) = presence_db(mode.clone());
+            for (name, db) in [("mono", m), ("L", l), ("R", r)] {
+                assert!(
+                    (db - whole_room).abs() <= 1.0,
+                    "{mode:?} {name}: {db:+.1} dB vs Whole room {whole_room:+.1} dB"
+                );
+            }
+        }
+    }
+
     #[test]
     fn bass_boost_stays_within_twelve_db_at_50_hz() {
         for mode in [
@@ -451,8 +521,10 @@ mod tests {
             let mut raw = aimed(mode.clone());
             raw.set_bass_compensation(false);
             let mut compensated = aimed(mode.clone());
+            // The flat presence make-up is not bass boost.
             let boost = tone_gain_db(&mut compensated, 0.0, 0.0, 50.0)
-                - tone_gain_db(&mut raw, 0.0, 0.0, 50.0);
+                - tone_gain_db(&mut raw, 0.0, 0.0, 50.0)
+                - compensated.makeup_db().0;
             assert!(boost > 6.0, "{mode:?}: the bass is lifted ({boost:+.1} dB)");
             assert!(boost <= bass::MAX_BOOST_DB, "{mode:?}: {boost:+.1} dB at 50 Hz");
         }
