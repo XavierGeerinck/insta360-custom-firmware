@@ -222,6 +222,10 @@ Rules for the parallel milestones:
 - [ ] **C15 Stereo alignment** (S) — in Stereo mode the side signal comes from the raw beam while the mid carries the AEC/NS delay (DeepFilterNet adds ≈ 40 ms when on); delay the side to match.
 - [ ] **C16 Talker wedge follows room noise** (S) — the DoA VAD gate reads open in almost every sample of a quiet room; the M2 screens have no hysteresis (the legacy UI did).
 
+- [ ] **C17 Dereverberation** (L) — after today's fixes (2026-10-06) callers still hear the voice "subtly further away" in Whole room: mostly room reverb at desk distance. Stock firmware uses neural dereverb; do it with C13 on the NPU.
+- [ ] **C18 Bass for the directional modes** (S) — Focused, Narrow, Two sides, Follow talker and Stereo are first-order differential beams: −16 dB at 125 Hz, −10 dB at 250 Hz (simulated, front, el 0). Add a limited low-shelf compensation so they don't sound thin.
+- [ ] **C19 Show the Whole room tracker in the stats** (S) — Whole room delay-and-sums on the tracked talker and falls back to the plain average (−12 to −25 dB at 4 kHz) while no direction is confident. Publish `omni_mix` and the steered direction in `/tmp/audio_stats.json` to check it engages in real rooms.
+
 ## D — Files
 
 - [ ] **D1 Files list** (M) — new `screens/files.rs`
