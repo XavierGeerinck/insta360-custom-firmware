@@ -942,9 +942,14 @@ impl AudioService {
                 // heard; the other non-steered modes don't blend.
                 let start_mix = if matches!(mode, waved_state::AudioMode::Omni) { 1.0 } else { 0.0 };
                 self.beamformer.set_omni_mix(start_mix);
+                // Entering Stereo, the side starts from silence and fades in.
+                // Leaving it, the beam fades the pair into the new mono output
+                // (`Beamformer::process`), so the side keeps its state.
+                if mode == waved_state::AudioMode::Stereo && self.mode != mode {
+                    self.stereo_side_gain = 0.0;
+                    self.side_delay.reset();
+                }
                 self.mode = mode.clone();
-                self.stereo_side_gain = 0.0;
-                self.side_delay.reset();
                 self.audio_tx.send_modify(|s| s.mode = mode);
             }
             Command::SetDoaOverride(ov) => {
@@ -962,6 +967,10 @@ impl AudioService {
                     level.clone(),
                     self.aec_config.clone(),
                 );
+                // The mid's latency changes with the chain: restart the side
+                // from silence rather than replaying it at the new offset.
+                self.side_delay.reset();
+                self.stereo_side_gain = 0.0;
                 self.audio_tx.send_modify(|s| s.nr_level = level);
             }
             Command::SetPlaybackPreset(p) => {
@@ -2114,6 +2123,39 @@ mod tests {
             assert_eq!(measured, expected, "{frame_size} {nr:?}: the probe came out {measured} late");
             assert_eq!(svc.mid_latency_samples(), measured, "{frame_size} {nr:?}");
         }
+    }
+
+    #[test]
+    fn an_nr_change_fades_the_side_back_in() {
+        // Turning NR on adds DeepFilterNet's delay to the mid. The side must
+        // not replay the old period at the new offset: it restarts from
+        // silence and its gain ramps in, as after a mode change.
+        let (mut svc, _state) =
+            service_with_dsp(waved_state::AudioMode::Stereo, 0.0, NrLevel::Off, 1_024);
+        let side_of = |p: ProcessedAudioFrame| -> Vec<f32> {
+            let (l, r) = p.mic_stereo_f32.expect("Stereo mode carries a pair");
+            l.iter().zip(&r).map(|(a, b)| 0.5 * (a - b)).collect()
+        };
+        let max_step = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        let mut steady = 0.0f32;
+        for k in 0..20 {
+            let side = side_of(svc.process_frame(&broadband_8ch(90.0, k * 1_024, 1_024, 0.003)));
+            if k >= 10 {
+                steady = steady.max(max_step(&side));
+            }
+        }
+        assert!(steady > 0.0, "the side carries the talker");
+        svc.handle_command(Command::SetNrLevel(NrLevel::Low));
+        let side = side_of(svc.process_frame(&broadband_8ch(90.0, 20 * 1_024, 1_024, 0.003)));
+        // The recording limiter's lookahead still holds the end of the last
+        // period; after it, nothing until the new mid latency has passed.
+        let lookahead = LimiterParams::DEFAULT.lookahead_samples;
+        let latency = svc.mid_latency_samples().min(side.len());
+        assert!(
+            side[lookahead..latency].iter().all(|v| v.abs() < 1e-6),
+            "no old side ahead of the new mid latency ({latency} samples)"
+        );
+        assert!(max_step(&side) <= steady, "{} vs steady {steady}", max_step(&side));
     }
 
     #[test]

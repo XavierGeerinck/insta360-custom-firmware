@@ -462,28 +462,45 @@ fs/D (4.8 kHz for Cardioid, 3.9 kHz for a Stereo side and for a Cardioid
 aimed at a mic diagonal).
 
 `beam::bass::BassShelf` undoes the slope on each pattern output (not on
-Whole room, not on Steered's omni blend): a one-pole low shelf, +12 dB at
-DC (the cap, for mic self-noise), pole at 85 Hz, zero at `ω·D = 2.2`. A flat
+Whole room, not on Steered's omni blend): a one-pole low shelf, at most
++12 dB at DC (for mic self-noise), pole at 85 Hz, zero at `ω·D = 2.2`. A flat
 make-up gain (`bass::presence_makeup`, before the omni blend) then puts the
 talker at Whole room's level over 1–3 kHz, so switching mode keeps the
 level. It is derived from `2·|sin(π·f·D/fs)|` × the shelf, averaged over the
-band: Cardioid / Steered +6.2 dB, Supercardioid +8.1, Figure-8 +12.4, each
-Stereo side +5.3. That gain lifts mic self-noise by the same amount, on top
-of the shelf's bass boost.
+band, for a talker at most 30° up (steeper, the pattern's null moves into the
+band and levelling it lifted 1 kHz by +7 dB at el 60; now +4.5).
+
+Shelf and make-up together are capped at +18 dB at low frequencies against
+Whole room (`bass::tune`): content that is not a plane wave (self-noise, mic
+mismatch, structure-borne echo, knocks) otherwise reached +18 to +24 dB ahead
+of the hard clip before the echo canceller. The shelf's DC boost is
+`min(12, 18 − make-up)`: it keeps the gain above its zero and raises its
+pole instead, and the two are iterated to agreement.
+
+| Mode | Make-up | Shelf at DC | Total |
+|---|---|---|---|
+| Cardioid / Steered | +6.2 dB | +11.8 dB | +18.0 dB |
+| Supercardioid | +8.1 dB | +9.9 dB | +18.0 dB |
+| Figure-8 | +12.4 dB | +5.6 dB | +18.0 dB |
+| Stereo L or R | +5.3 dB | +12.0 dB | +17.3 dB |
+
 Front talker, el 0, mono output vs plain average (`beam::tests`):
 
 | Mode | 50 | 125 | 250 | 500 | 1k | 2k | 3k | 4k Hz |
 |---|---|---|---|---|---|---|---|---|
 | Cardioid, before | −23.6 | −15.7 | −9.7 | −3.8 | +1.8 | +5.7 | +5.3 | −0.4 |
-| Cardioid / Steered, after | −6.6 | −2.4 | −1.2 | −0.7 | −0.1 | +0.4 | −1.2 | −7.4 |
-| Supercardioid, after | −6.8 | −2.6 | −1.4 | −0.9 | −0.5 | +0.2 | −0.1 | −2.0 |
-| Figure-8, after | −6.5 | −2.3 | −1.1 | −0.7 | −0.4 | +0.0 | +0.4 | +0.4 |
+| Cardioid / Steered, after | −6.8 | −2.5 | −1.2 | −0.7 | −0.1 | +0.4 | −1.2 | −7.4 |
+| Supercardioid, after | −8.5 | −3.4 | −1.6 | −1.0 | −0.5 | +0.2 | −0.1 | −2.0 |
+| Figure-8, after | −11.9 | −5.4 | −2.3 | −1.0 | −0.5 | +0.0 | +0.4 | +0.4 |
 | Stereo L or R, after | −6.0 | −1.7 | −0.5 | +0.1 | +0.8 | +0.7 | −3.5 | −26.9 |
 
+Figure-8, with the shallowest shelf, is within 4 dB of 1 kHz from 250 Hz to
+4 kHz and about −5 dB at 125 Hz.
 Cardioid stays within ±3 dB of 1 kHz from 125 Hz to 3 kHz; its 4 kHz point
 is the pattern's own null, which no low shelf can lift without breaking the
 2 kHz side (a monotonic filter can't both cut 2 kHz and keep 4 kHz). A mode
-change crossfades the old and new patterns over 10 ms (`MODE_FADE_MS`).
+change crossfades the old and new patterns over 10 ms (`MODE_FADE_MS`);
+leaving Stereo, L and R fade into the new mono output.
 
 ## Full-duplex AEC pipeline
 

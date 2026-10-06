@@ -91,7 +91,8 @@ struct Pattern {
 
 pub struct BeamOutput {
     pub mono: Vec<f32>,
-    /// `Some((L, R))` when mode = Stereo; `None` otherwise.
+    /// `Some((L, R))` when mode = Stereo, and while fading out of Stereo
+    /// after a mode change; `None` otherwise.
     pub stereo: Option<(Vec<f32>, Vec<f32>)>,
 }
 
@@ -181,7 +182,10 @@ impl Beamformer {
     /// be a multiple of 8.
     pub fn process(&mut self, interleaved: &[f32]) -> BeamOutput {
         let frames = interleaved.len() / 8;
-        let is_stereo = self.pattern.is_stereo;
+        // Leaving Stereo, the pair keeps coming until its fade to the new
+        // mono output is over, so L and R don't jump to the mono.
+        let is_stereo =
+            self.pattern.is_stereo || self.fading.as_ref().is_some_and(|old| old.is_stereo);
         let mut mono = Vec::with_capacity(frames);
         let mut stereo_l = if is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
         let mut stereo_r = if is_stereo { Vec::with_capacity(frames) } else { Vec::new() };
@@ -270,13 +274,20 @@ impl Pattern {
         // acoustic part shrinks to Δ·cos 45°.
         let acoustic = if self.is_stereo { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
 
+        // The make-up is levelled for a talker at most 30° up (`bass::tune`).
+        let level_el = el.min(bass::MAKEUP_MAX_ELEVATION_DEG);
+        let pattern_delay = |az: f32, el: f32| {
+            let hw = weights::hemispheric_weights(geom, az, el, sample_rate);
+            acoustic * hw.delta_samples + (scale * hw.delta_samples).max(0.0)
+        };
+
         let hw_l = weights::hemispheric_weights(geom, az_l, el, sample_rate);
         self.w_front_l = hw_l.w_front;
         self.w_back_l = hw_l.w_back;
         self.back_delay_l = (scale * hw_l.delta_samples).max(0.0);
         let d_l = acoustic * hw_l.delta_samples + self.back_delay_l;
-        self.bass_l.retune(d_l, sample_rate);
-        self.makeup_l = bass::presence_makeup(d_l, sample_rate, &self.bass_l);
+        let level_l = if level_el < el { pattern_delay(az_l, level_el) } else { d_l };
+        self.makeup_l = bass::tune(&mut self.bass_l, d_l, level_l, sample_rate);
 
         if self.is_stereo {
             let hw_r = weights::hemispheric_weights(geom, az_r, el, sample_rate);
@@ -284,8 +295,8 @@ impl Pattern {
             self.w_back_r = hw_r.w_back;
             self.back_delay_r = (scale * hw_r.delta_samples).max(0.0);
             let d_r = acoustic * hw_r.delta_samples + self.back_delay_r;
-            self.bass_r.retune(d_r, sample_rate);
-            self.makeup_r = bass::presence_makeup(d_r, sample_rate, &self.bass_r);
+            let level_r = if level_el < el { pattern_delay(az_r, level_el) } else { d_r };
+            self.makeup_r = bass::tune(&mut self.bass_r, d_r, level_r, sample_rate);
         }
     }
 
@@ -443,11 +454,15 @@ mod tests {
         // its band ends at 3 kHz (see `cardioid_top_octave_is_the_pattern_null`).
         let voice = [125.0, 250.0, 500.0, 2_000.0, 3_000.0];
         let wide = [125.0, 250.0, 500.0, 2_000.0, 3_000.0, 4_000.0];
+        // Figure-8 needs the most make-up (+12.4 dB), so the +18 dB total
+        // cap leaves its shelf +5.6 dB: flat within 4 dB from 250 Hz, and
+        // 125 Hz about −5 dB (was −17.9 uncompensated).
+        let fig8 = [250.0, 500.0, 2_000.0, 3_000.0, 4_000.0];
         let cases: [(AudioMode, &[f32], f32); 4] = [
             (AudioMode::Cardioid, &voice, 3.0),
             (AudioMode::Steered { initial_az_deg: 0.0 }, &voice, 3.0),
             (AudioMode::Supercardioid, &wide, 3.0),
-            (AudioMode::Figure8, &wide, 4.0),
+            (AudioMode::Figure8, &fig8, 4.0),
         ];
         for (mode, freqs, tol) in cases {
             for &freq in freqs {
@@ -455,6 +470,8 @@ mod tests {
                 assert!(db.abs() <= tol, "{mode:?} {freq} Hz: {db:+.1} dB vs 1 kHz (±{tol})");
             }
         }
+        let db = front_response(AudioMode::Figure8, 125.0);
+        assert!(db.abs() <= 5.5, "Figure8 125 Hz: {db:+.1} dB vs 1 kHz (±5.5)");
     }
 
     /// Mean level (dB) over the presence band, 1–3 kHz, of a front talker
@@ -510,7 +527,9 @@ mod tests {
     }
 
     #[test]
-    fn bass_boost_stays_within_twelve_db_at_50_hz() {
+    fn low_frequency_gain_stays_within_eighteen_db_at_50_hz() {
+        // Shelf × make-up against the raw pattern: what non-plane-wave
+        // content (self-noise, knocks) gets ahead of the clip before the AEC.
         for mode in [
             AudioMode::Cardioid,
             AudioMode::Supercardioid,
@@ -521,13 +540,45 @@ mod tests {
             let mut raw = aimed(mode.clone());
             raw.set_bass_compensation(false);
             let mut compensated = aimed(mode.clone());
-            // The flat presence make-up is not bass boost.
-            let boost = tone_gain_db(&mut compensated, 0.0, 0.0, 50.0)
-                - tone_gain_db(&mut raw, 0.0, 0.0, 50.0)
-                - compensated.makeup_db().0;
-            assert!(boost > 6.0, "{mode:?}: the bass is lifted ({boost:+.1} dB)");
-            assert!(boost <= bass::MAX_BOOST_DB, "{mode:?}: {boost:+.1} dB at 50 Hz");
+            let total = tone_gain_db(&mut compensated, 0.0, 0.0, 50.0)
+                - tone_gain_db(&mut raw, 0.0, 0.0, 50.0);
+            let shelf = total - compensated.makeup_db().0;
+            assert!(total <= bass::MAX_TOTAL_DB, "{mode:?}: {total:+.1} dB at 50 Hz");
+            assert!(shelf <= bass::MAX_BOOST_DB, "{mode:?}: shelf {shelf:+.1} dB at 50 Hz");
+            assert!(shelf > 3.0, "{mode:?}: the bass is lifted ({shelf:+.1} dB)");
         }
+    }
+
+    #[test]
+    fn an_elevated_talker_is_not_over_boosted() {
+        // At el 60 the Steered pattern's null falls to ~2.5 kHz; levelling
+        // the make-up on that response lifted 1 kHz by +7 dB. It is levelled
+        // for el 30 instead.
+        let at = |mode: AudioMode, mix: Option<f32>| {
+            let freqs = [1_000.0, 1_500.0, 2_000.0, 2_500.0, 3_000.0];
+            let mut b = Beamformer::new(MicGeometry::default(), 48_000);
+            b.set_mode(mode);
+            b.set_doa(0.0, 60.0);
+            if let Some(mix) = mix {
+                b.set_omni_mix(mix);
+            }
+            let dbs: Vec<f32> = freqs
+                .iter()
+                .map(|&f| {
+                    b.reset();
+                    tone_gain_db(&mut b, 0.0, 60.0, f)
+                })
+                .collect();
+            let max = dbs.iter().copied().fold(f32::MIN, f32::max);
+            (dbs.iter().sum::<f32>() / dbs.len() as f32, max)
+        };
+        let (whole_room, _) = at(AudioMode::Omni, Some(0.0));
+        let (steered, peak) = at(AudioMode::Steered { initial_az_deg: 0.0 }, None);
+        assert!(
+            steered - whole_room <= 3.0,
+            "Steered at el 60: {steered:+.1} dB vs Whole room {whole_room:+.1} dB"
+        );
+        assert!(peak - whole_room <= 5.0, "Steered at el 60 peaks {peak:+.1} dB");
     }
 
     #[test]
@@ -591,35 +642,49 @@ mod tests {
 
     #[test]
     fn mode_change_does_not_click() {
-        // A 150 Hz talker in front: the band the compensation boosts most.
-        // The largest sample-to-sample step after a switch must stay within
-        // what the louder of the two modes produces on its own.
-        let x = tone(0.0, 0.0, 150.0, 9_600);
-        let half = 4_800 * 8;
+        // A 150 Hz talker: the band the compensation boosts most. In front,
+        // and 60° to the side so the Stereo sides differ. The largest
+        // sample-to-sample step after a switch, on the mono output and on
+        // the L and R the uplink sends (the mono twice outside Stereo), must
+        // stay within what the louder of the two modes produces on its own.
         let max_step = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        // (mono, L, R) of one output.
+        let channels = |out: BeamOutput| {
+            let (l, r) = out.stereo.unwrap_or_else(|| (out.mono.clone(), out.mono.clone()));
+            [out.mono, l, r]
+        };
         let pairs = [
             (AudioMode::Cardioid, AudioMode::Figure8),
             (AudioMode::Cardioid, AudioMode::Omni),
             (AudioMode::Omni, AudioMode::Stereo),
             (AudioMode::Stereo, AudioMode::Supercardioid),
         ];
-        for (from, to) in pairs {
-            let steady = |mode: AudioMode| {
-                let mut b = aimed(mode);
-                max_step(&b.process(&x).mono[2_400..])
-            };
-            let bound = steady(from.clone()).max(steady(to.clone()));
-            let mut b = aimed(from.clone());
-            let before = b.process(&x[..half]).mono;
-            b.set_mode(to.clone());
-            b.set_doa(0.0, 0.0);
-            let after = b.process(&x[half..]).mono;
-            let joined: Vec<f32> = before[2_400..].iter().chain(&after).copied().collect();
-            let step = max_step(&joined);
-            assert!(
-                step <= 1.5 * bound,
-                "{from:?} → {to:?}: step {step:.4} vs steady {bound:.4}"
-            );
+        for az in [0.0, 60.0] {
+            let x = tone(az, 0.0, 150.0, 9_600);
+            let half = 4_800 * 8;
+            for (from, to) in pairs.clone() {
+                let steady = |mode: AudioMode| {
+                    let mut b = aimed(mode);
+                    channels(b.process(&x))
+                        .iter()
+                        .map(|c| max_step(&c[2_400..]))
+                        .fold(0.0f32, f32::max)
+                };
+                let bound = steady(from.clone()).max(steady(to.clone()));
+                let mut b = aimed(from.clone());
+                let before = channels(b.process(&x[..half]));
+                b.set_mode(to.clone());
+                b.set_doa(0.0, 0.0);
+                let after = channels(b.process(&x[half..]));
+                for (name, (pre, post)) in ["mono", "L", "R"].iter().zip(before.iter().zip(&after)) {
+                    let joined: Vec<f32> = pre[2_400..].iter().chain(post).copied().collect();
+                    let step = max_step(&joined);
+                    assert!(
+                        step <= 1.5 * bound,
+                        "az {az}, {from:?} → {to:?} {name}: step {step:.4} vs steady {bound:.4}"
+                    );
+                }
+            }
         }
     }
 

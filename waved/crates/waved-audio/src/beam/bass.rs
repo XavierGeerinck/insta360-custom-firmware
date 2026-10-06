@@ -9,7 +9,9 @@
 //! - its upper corner (the zero) sits where the pattern stops rising,
 //!   `ω·D = ZERO_OMEGA_D`, so it follows the pattern's own roll-off;
 //! - below the lower corner (`FLOOR_HZ`, the pole) the gain flattens at
-//!   `MAX_BOOST_DB`, so mic self-noise is never lifted by more than that;
+//!   `MAX_BOOST_DB`, so mic self-noise is never lifted by more than that
+//!   (less where the make-up is large: `tune` keeps the two within
+//!   `MAX_TOTAL_DB`);
 //! - between the two it falls at 6 dB/octave, cancelling the pattern's slope.
 //!
 //! The gain is highest at DC (+12 dB) and falls to `12 dB − depth` above the
@@ -54,6 +56,13 @@ impl BassShelf {
     /// Redesign for a new delay (the beam was re-aimed), keeping the state
     /// so a moving beam does not click.
     pub fn retune(&mut self, d_samples: f32, sample_rate: u32) {
+        self.retune_capped(d_samples, MAX_BOOST_DB, sample_rate);
+    }
+
+    /// As `retune`, with the DC boost limited to `boost_db` (≤
+    /// `MAX_BOOST_DB`). The gain above the zero stays that of the full
+    /// design; the pole moves up instead, so the shelf is shallower.
+    pub fn retune_capped(&mut self, d_samples: f32, boost_db: f32, sample_rate: u32) {
         let fs = sample_rate as f32;
         if d_samples.is_nan() || d_samples <= 0.5 || fs <= 0.0 {
             // No usable front-to-back spacing: no differential roll-off.
@@ -64,10 +73,14 @@ impl BassShelf {
         // Bilinear transform of g·(s + ωz)/(s + ωp), corners pre-warped.
         let k = 2.0 * fs;
         let warp = |hz: f32| k * (PI * hz / fs).tan();
-        let (wp, wz) = (warp(FLOOR_HZ), warp(zero_hz));
+        let wz = warp(zero_hz);
         let max_boost = 10f32.powf(MAX_BOOST_DB / 20.0);
-        // DC gain g·ωz/ωp = max_boost; g is the gain above the zero.
-        let g = max_boost * wp / wz;
+        // Full design: DC gain g·ωz/ωp = max_boost; g is the gain above the zero.
+        let g = max_boost * warp(FLOOR_HZ) / wz;
+        // A smaller DC boost raises the pole, never above the zero.
+        let boost = 10f32.powf(boost_db.min(MAX_BOOST_DB) / 20.0).max(1.0);
+        let wp = (g * wz / boost).min(wz);
+        let g = if wp >= wz { 1.0 } else { g };
         self.b0 = g * (k + wz) / (k + wp);
         self.b1 = g * (wz - k) / (k + wp);
         self.a1 = (wp - k) / (k + wp);
@@ -77,6 +90,10 @@ impl BassShelf {
     pub fn process(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.state;
         self.state = self.b1 * x - self.a1 * y;
+        // Flush denormals once a signal has died away.
+        if self.state.abs() < 1e-20 {
+            self.state = 0.0;
+        }
         y
     }
 
@@ -127,6 +144,44 @@ pub fn presence_makeup(d_samples: f32, sample_rate: u32, shelf: &BassShelf) -> f
         .sum::<f32>()
         / POINTS as f32;
     10f32.powf((-mean_db).min(MAX_MAKEUP_DB) / 20.0)
+}
+
+/// Most low-frequency gain a pattern gets, shelf and make-up together,
+/// relative to Whole room, in dB. Content that is not a plane wave (self-noise,
+/// mic mismatch, structure-borne echo, knocks) gets this much at DC ahead of
+/// the hard clip before the echo canceller.
+pub const MAX_TOTAL_DB: f32 = 18.0;
+/// Least DC boost a shelf is cut back to for the total cap.
+pub const MIN_BOOST_DB: f32 = 5.0;
+/// Make-up is derived for a talker at most this far above the horizon;
+/// steeper, the pattern's null moves into the presence band and levelling it
+/// would over-boost 1–1.5 kHz.
+pub const MAKEUP_MAX_ELEVATION_DEG: f32 = 30.0;
+
+/// Tune `shelf` for a pattern with front-to-back delay `d_samples` and
+/// return its make-up gain (linear). The make-up is derived for
+/// `level_d_samples`, the same pattern with the talker's elevation clamped to
+/// `MAKEUP_MAX_ELEVATION_DEG`. The shelf's DC boost is `min(MAX_BOOST_DB,
+/// MAX_TOTAL_DB − make-up)`, not below `MIN_BOOST_DB`; a shallower shelf
+/// needs a little more make-up, so the two are iterated to agreement.
+pub fn tune(shelf: &mut BassShelf, d_samples: f32, level_d_samples: f32, sample_rate: u32) -> f32 {
+    let makeup_for = |boost_db: f32| {
+        let mut probe = BassShelf::default();
+        probe.retune_capped(level_d_samples, boost_db, sample_rate);
+        presence_makeup(level_d_samples, sample_rate, &probe)
+    };
+    let mut boost_db = MAX_BOOST_DB;
+    for _ in 0..8 {
+        let next =
+            (MAX_TOTAL_DB - 20.0 * makeup_for(boost_db).log10()).clamp(MIN_BOOST_DB, MAX_BOOST_DB);
+        let settled = (next - boost_db).abs() < 0.01;
+        boost_db = next;
+        if settled {
+            break;
+        }
+    }
+    shelf.retune_capped(d_samples, boost_db, sample_rate);
+    makeup_for(boost_db)
 }
 
 #[cfg(test)]
@@ -211,6 +266,39 @@ mod tests {
             assert!(g > 1.0 && 20.0 * g.log10() <= MAX_MAKEUP_DB);
         }
         assert_eq!(presence_makeup(0.0, 48_000, &BassShelf::default()), 1.0);
+    }
+
+    #[test]
+    fn shelf_and_makeup_stay_within_the_total_cap() {
+        for d in DELAYS {
+            let mut shelf = BassShelf::default();
+            let makeup_db = 20.0 * tune(&mut shelf, d, d, 48_000).log10();
+            let boost = shelf.gain_db(0.0, 48_000);
+            assert!(boost + makeup_db <= MAX_TOTAL_DB + 0.01, "D {d}: {boost:.2} + {makeup_db:.2} dB");
+            assert!((MIN_BOOST_DB - 0.01..=MAX_BOOST_DB + 0.01).contains(&boost), "D {d}: {boost:.2} dB");
+        }
+    }
+
+    #[test]
+    fn a_capped_shelf_keeps_its_top() {
+        // Cutting the DC boost moves the pole up; above the zero the gain is
+        // the full design's.
+        let mut full = BassShelf::default();
+        full.retune(5.05, 48_000);
+        let mut capped = BassShelf::default();
+        capped.retune_capped(5.05, 6.0, 48_000);
+        assert!((capped.gain_db(0.0, 48_000) - 6.0).abs() < 0.01);
+        assert!((capped.gain_db(12_000.0, 48_000) - full.gain_db(12_000.0, 48_000)).abs() < 0.2);
+    }
+
+    #[test]
+    fn dying_state_is_flushed_to_zero() {
+        let mut s = BassShelf::for_delay(10.09, 48_000);
+        s.process(1e-6);
+        for _ in 0..48_000 {
+            s.process(0.0);
+        }
+        assert_eq!(s.state, 0.0, "no denormals left in the state");
     }
 
     #[test]
