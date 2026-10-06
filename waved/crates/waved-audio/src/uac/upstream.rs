@@ -19,6 +19,7 @@ use tracing::{info, warn};
 
 use crate::processed_frame::ProcessedAudioFrame;
 use super::UacStats;
+use crate::cushion::Cushion;
 
 #[derive(Debug, Clone)]
 pub struct UacUpstreamConfig {
@@ -100,6 +101,8 @@ fn pump_loop(
     stats: &Arc<UacStats>,
 ) -> Result<(), alsa::Error> {
     let mut stereo: Vec<i16> = Vec::with_capacity(cfg.period_frames * cfg.channels as usize);
+    let silence = vec![0i16; cfg.period_frames * cfg.channels as usize];
+    let mut cushion = Cushion::new(cfg.buffer_periods);
     loop {
         match rx.blocking_recv() {
             Ok(frame) => {
@@ -111,6 +114,10 @@ fn pump_loop(
                 }
                 frame.uplink_interleaved_i16(&mut stereo);
                 let io = pcm.io_i16()?;
+                for _ in 0..cushion.take() {
+                    // An error here shows up on the frame's write below.
+                    let _ = io.writei(&silence);
+                }
                 match io.writei(&stereo) {
                     Ok(_) => {}
                     Err(e) => match e.errno() {
@@ -120,6 +127,7 @@ fn pump_loop(
                         libc::EPIPE => {
                             stats.upstream_underruns.fetch_add(1, Ordering::Relaxed);
                             pcm.prepare()?;
+                            cushion.restarted();
                         }
                         _ => return Err(e),
                     },
@@ -146,3 +154,4 @@ fn set_realtime_priority(prio: i32) {
 
 #[cfg(not(target_os = "linux"))]
 fn set_realtime_priority(_prio: i32) {}
+

@@ -3,6 +3,7 @@ pub mod audio_config;
 pub mod beam;
 pub mod callbacks;
 pub mod capture;
+pub mod cushion;
 pub mod doa;
 pub mod fixtures;
 pub mod integrity;

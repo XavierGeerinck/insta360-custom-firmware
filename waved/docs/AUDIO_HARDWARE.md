@@ -840,6 +840,34 @@ mechanism — `UacControl` → UAC2 mixer.
   acceptance signal is what `/tmp/audio_stats.json` reports on the
   device side.
 
+## Uplink Level and CPU (device pass, 2026-10-06)
+
+Calls sounded "very far" and choppy. Measured on the device, with stage RMS
+from `/tmp/audio_stats.json` while speaking ~1 m away:
+
+- **Level.** The beam carries conversational speech at about −55 to −65 dBFS.
+  DeepFilterNet treats speech that quiet as noise. Offline, on a `say` sentence
+  plus a 1.7 LSB noise floor, it removed 10.5 dB at −60 dBFS (NR Low, 12 dB cap)
+  and 20 dB at High, but nothing at −40 dBFS or louder. The user mic level was
+  applied after the denoiser, so the uplink sat near −58 dBFS. Fix:
+  `aec.uplink_makeup_gain_db` (default 24, `crate::makeup`, soft knee above
+  half scale) between residual-echo suppression and noise suppression. With it,
+  the denoiser loses ≈ 2.7 dB and the uplink sits at ≈ −28 dBFS.
+- **CPU.** DeepFilterNet skips its network on quiet input and runs it fully on
+  speech. During speech the audio worker rose from ≈ 11 % to ≈ 84 % of one
+  core (NR Off: ≈ 17 %). The whole DSP chain runs in series on that worker, so
+  21 ms frames finish late and the UAC2 uplink underruns: 183 underruns in 20 s
+  of streamed speech. NR Off gave none.
+- **Uplink cushion.** `uac::upstream` now writes `cushion::PREFILL_PERIODS` (2)
+  periods of silence whenever the stream (re)starts. That cut the underruns
+  from 183 to 78 under the same load. It does not cover a frame that arrives
+  more than ≈ 43 ms late.
+- **Drop bursts of 78–140 frames** follow the end of a host stream: `writei`
+  blocks until the control poll clears `upstream_active` (≈ 1.6 s). They are
+  inaudible.
+- The linear AEC lowers near-end speech by ≈ 9–11 dB even with a silent
+  reference (pre-AEC 105 → post-residual 28). Not yet explained.
+
 ## Mic Gain Pipeline
 
 Two stages, set independently:
