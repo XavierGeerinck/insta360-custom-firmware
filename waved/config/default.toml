@@ -22,7 +22,7 @@ zone = "UTC"
 clock_24h = true
 
 [recording]
-pre_recording = true
+pre_recording = false
 ask_timeout_s = 60
 
 [tones]

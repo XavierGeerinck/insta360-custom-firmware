@@ -285,7 +285,7 @@ impl Default for TimeConfig {
 impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
-            pre_recording: true,
+            pre_recording: false,
             ask_timeout_s: 60,
         }
     }
