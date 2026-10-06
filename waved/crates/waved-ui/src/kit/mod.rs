@@ -12,6 +12,7 @@ pub mod route;
 pub mod router;
 pub mod screen;
 pub mod snapshot;
+pub mod talker;
 #[cfg(test)]
 pub mod testkit;
 pub mod time;

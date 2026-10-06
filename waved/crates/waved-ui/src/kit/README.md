@@ -246,6 +246,12 @@ Notes on the parts that carry state:
 - The rotary list has uniform 48 px slots centred on y 144 inside `list::VIEW` (y 34–240),
   with 14 / 16 px fades at the top and bottom and an arc scrollbar of r 188 around the panel
   centre over 62°–122°. Rows fade and change band with distance from the focus line.
+- The talker wedge (Home, Recording) and Audio mode's Follow talker preview never read
+  `audio.doa_active`: the VAD flag reads open in a quiet room. They gate on
+  `audio.doa_confidence >= 0.30` through `kit::talker::TalkerGate` (state per screen): a talker
+  shows after 150 ms of confident samples and goes after 100 ms without one, and the last
+  confident direction is held through dropouts. `home_ring` / `recording_ring` take the screen's
+  gate; screens are updated every loop iteration (~10 ms), so the delays are in time, not samples.
 - The status pill's pre-recording dot follows `MeetingState::pre_recording_active` (the buffer
   is filling now), not the `SettingsState::pre_recording` setting.
 

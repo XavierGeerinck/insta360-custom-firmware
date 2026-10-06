@@ -6,14 +6,15 @@
 //! Applying the aim is C3/C10's job. Until the audio service reports it in
 //! `beam_aim_deg`, the screen keeps showing the aim the user chose.
 
-use crate::kit::direction::{device_from_screen, screen_from_device};
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::mode_picker::{AimEvent, Glyph, Lobe, ModePicker, Preview};
 use crate::kit::components::status::StatusArea;
+use crate::kit::direction::{device_from_screen, screen_from_device};
 use crate::kit::fonts::Font;
 use crate::kit::obj::Obj;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::talker::{is_confident, TalkerGate};
 use crate::kit::tokens::{SCREEN_W, TEXT, TEXT_2, TITLE_Y};
 use crate::screens_v2::menu::{mode_name, Pending};
 use std::cell::RefCell;
@@ -165,7 +166,10 @@ pub struct AudioModeScreen {
     /// A mode tapped but not yet reported by the audio service.
     chosen: Rc<Pending<ModeChoice>>,
     aim: Rc<RefCell<Aim>>,
+    /// The last direction that held confidently (device degrees).
     last_doa: f32,
+    /// Hysteresis for `last_doa` (`kit::talker`).
+    talker: TalkerGate,
     shown: Option<ModeChoice>,
 }
 
@@ -228,8 +232,11 @@ impl Screen for AudioModeScreen {
             return;
         };
         let mode = self.chosen.follow(ModeChoice::of(&snap.audio.mode));
-        if snap.audio.doa_active {
-            self.last_doa = snap.audio.doa_horizontal;
+        // Not `doa_active`: the VAD flag reads open in a quiet room.
+        let direction =
+            is_confident(snap.audio.doa_confidence).then_some(snap.audio.doa_horizontal);
+        if let Some(doa) = self.talker.step(direction, snap.now_ms) {
+            self.last_doa = doa;
         }
         let aim = {
             let mut aim = self.aim.borrow_mut();
@@ -262,6 +269,7 @@ impl Screen for AudioModeScreen {
 mod tests {
     use super::*;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
+    use crate::screens_v2::main_parts::fixtures::settle;
     use crate::screens_v2::menu::fixture::{fixture, snap};
     use waved_state::Command;
 
@@ -286,31 +294,65 @@ mod tests {
         });
     }
 
+    fn follow_snap() -> UiSnapshot {
+        let mut snap = snap();
+        snap.audio.mode = AudioMode::Steered {
+            initial_az_deg: 0.0,
+        };
+        snap.audio.doa_confidence = 0.8;
+        snap.audio.doa_horizontal = 220.0; // screen 40°
+        snap
+    }
+
     #[test]
     fn follow_talker_turns_with_the_talker() {
         lvgl(|lv| {
             let root = lv.screen();
             let f = fixture();
-            let mut snap = snap();
-            snap.audio.mode = AudioMode::Steered {
-                initial_az_deg: 0.0,
-            };
-            snap.audio.doa_active = true;
-            snap.audio.doa_horizontal = 220.0; // screen 40°
+            let mut snap = follow_snap();
             let mut screen = AudioModeScreen::default();
             screen.build(root, &f.ctx, &snap);
             assert_targets_ok(root);
             let first = lv.render();
             assert_golden("screen_audio_mode_follow", &first);
             assert!(!screen.picker.as_ref().unwrap().aim_area().is_clickable());
-            // Silence keeps the last direction; voice from 200° turns it.
-            snap.audio.doa_active = false;
+            // Losing the talker keeps the last direction; a talker from 200° turns it.
+            snap.audio.doa_confidence = 0.1;
             snap.audio.doa_horizontal = 20.0; // screen 200°
-            screen.update(&snap);
+            settle(&mut screen, &mut snap);
             assert_eq!(first.pixel(219, 104), lv.render().pixel(219, 104));
-            snap.audio.doa_active = true;
-            screen.update(&snap);
+            snap.audio.doa_confidence = 0.8;
+            settle(&mut screen, &mut snap);
             assert_ne!(first.pixel(219, 104), lv.render().pixel(219, 104));
+        });
+    }
+
+    #[test]
+    fn room_noise_does_not_turn_the_preview() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let f = fixture();
+            let mut snap = follow_snap();
+            let mut screen = AudioModeScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            settle(&mut screen, &mut snap);
+            let steady = lv.render();
+            // The VAD flag open, the direction jumping, the confidence low.
+            snap.audio.doa_active = true;
+            snap.audio.doa_confidence = 0.1;
+            for deg in [20.0, 100.0, 300.0, 180.0, 60.0, 250.0] {
+                snap.audio.doa_horizontal = deg;
+                settle(&mut screen, &mut snap);
+                assert_eq!(steady.pixel(219, 104), lv.render().pixel(219, 104), "{deg}");
+            }
+            // A flicker of confidence shorter than the on-delay does not move it either.
+            snap.audio.doa_confidence = 0.9;
+            snap.audio.doa_horizontal = 20.0;
+            snap.now_ms += 10;
+            screen.update(&snap);
+            snap.audio.doa_confidence = 0.1;
+            settle(&mut screen, &mut snap);
+            assert_eq!(steady.pixel(219, 104), lv.render().pixel(219, 104));
         });
     }
 

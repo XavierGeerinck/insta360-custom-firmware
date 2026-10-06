@@ -12,6 +12,7 @@ use crate::kit::fonts::Font;
 use crate::kit::icons;
 use crate::kit::obj::{text_width, Obj};
 use crate::kit::snapshot::UiSnapshot;
+use crate::kit::talker::{is_confident, TalkerGate};
 use crate::kit::tokens::{DIAL_CX, DIAL_CY, DIAL_R, GAUGE_MS, REC_TIMER_Y, SCREEN_W, TEXT, TEXT_2};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -37,15 +38,19 @@ pub struct RingLook {
     pub talker: Option<i16>,
 }
 
-/// The wedge, while voice is detected and the dial style follows talkers.
-fn talker_if(snap: &UiSnapshot, follows: bool) -> Option<i16> {
-    (follows && snap.audio.doa_active)
-        .then(|| screen_from_device(snap.audio.doa_horizontal).round() as i16)
+/// The wedge, while a confident direction holds and the dial style follows
+/// talkers. `gate` is the screen's hysteresis (`kit::talker`): the VAD flag
+/// is not used, it reads open in a quiet room.
+fn talker_if(snap: &UiSnapshot, follows: bool, gate: &mut TalkerGate) -> Option<i16> {
+    let direction = (follows && is_confident(snap.audio.doa_confidence))
+        .then(|| screen_from_device(snap.audio.doa_horizontal));
+    gate.step(direction, snap.now_ms)
+        .map(|deg| deg.round() as i16)
 }
 
 /// Home's ring: red when muted, teal while a call or the computer uses the
 /// microphone, grey otherwise.
-pub fn home_ring(snap: &UiSnapshot) -> RingLook {
+pub fn home_ring(snap: &UiSnapshot, gate: &mut TalkerGate) -> RingLook {
     let style = if snap.audio.mic_muted {
         RingStyle::Muted
     } else if snap.in_call() || snap.audio.host_listening {
@@ -55,13 +60,13 @@ pub fn home_ring(snap: &UiSnapshot) -> RingLook {
     };
     RingLook {
         style,
-        talker: talker_if(snap, style == RingStyle::Live),
+        talker: talker_if(snap, style == RingStyle::Live, gate),
     }
 }
 
 /// Recording's ring: solid red when muted (the recording holds silence),
 /// dashed amber while paused, dim red with the talker wedge otherwise.
-pub fn recording_ring(snap: &UiSnapshot) -> RingLook {
+pub fn recording_ring(snap: &UiSnapshot, gate: &mut TalkerGate) -> RingLook {
     let style = if snap.audio.mic_muted {
         RingStyle::RecordingMuted
     } else if snap.meeting.paused {
@@ -71,7 +76,7 @@ pub fn recording_ring(snap: &UiSnapshot) -> RingLook {
     };
     RingLook {
         style,
-        talker: talker_if(snap, style == RingStyle::Recording),
+        talker: talker_if(snap, style == RingStyle::Recording, gate),
     }
 }
 
@@ -395,6 +400,15 @@ pub mod fixtures {
         ui.try_iter().collect()
     }
 
+    /// Lets time pass on a built screen (updates every 10 ms, like the runtime
+    /// loop) until the talker gate's on-delay is over; `snap.now_ms` ends later.
+    pub fn settle(screen: &mut impl crate::kit::screen::Screen, snap: &mut UiSnapshot) {
+        for _ in 0..(crate::kit::talker::ON_MS / 10 + 2) {
+            snap.now_ms += 10;
+            screen.update(snap);
+        }
+    }
+
     /// What the runtime does with `UiEvent::Show` (contract request 2).
     pub fn with_message(snap: &mut UiSnapshot, severity: Severity, text: &str) {
         let seq = snap.message.as_ref().map_or(1, |active| active.seq + 1);
@@ -409,6 +423,7 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kit::talker::{OFF_MS, ON_MS};
     use crate::kit::testkit::lvgl;
 
     #[test]
@@ -478,27 +493,96 @@ mod tests {
         }
     }
 
+    /// The ring after the screen has seen `snap` for a while (the talker gate's
+    /// on-delay has passed), like a screen updated every loop iteration.
+    fn settled(ring: fn(&UiSnapshot, &mut TalkerGate) -> RingLook, snap: &UiSnapshot) -> RingLook {
+        let (mut gate, mut at) = (TalkerGate::default(), snap.clone());
+        let mut look = ring(&at, &mut gate);
+        for _ in 0..=(ON_MS / 10 + 1) {
+            at.now_ms += 10;
+            look = ring(&at, &mut gate);
+        }
+        look
+    }
+
+    #[test]
+    fn the_vad_flag_alone_never_draws_a_wedge() {
+        // The device pass: doa_active read open in a quiet office.
+        let mut snap = UiSnapshot::default();
+        snap.audio.host_listening = true;
+        snap.audio.doa_active = true;
+        snap.audio.doa_confidence = 0.12;
+        snap.audio.doa_horizontal = 126.6;
+        assert_eq!(settled(home_ring, &snap).talker, None);
+        snap.audio.doa_confidence = 0.30;
+        assert_eq!(
+            settled(home_ring, &snap).talker,
+            Some(307),
+            "confident: shown"
+        );
+        snap.audio.doa_active = false;
+        assert_eq!(
+            settled(home_ring, &snap).talker,
+            Some(307),
+            "the VAD flag is not read"
+        );
+    }
+
+    #[test]
+    fn the_wedge_waits_for_a_steady_talker_and_rides_out_one_dropout() {
+        let mut snap = UiSnapshot::default();
+        snap.audio.host_listening = true;
+        snap.audio.doa_horizontal = 126.6;
+        let mut gate = TalkerGate::default();
+        let mut step = |snap: &mut UiSnapshot, confidence: f32, ms: u64| {
+            snap.audio.doa_confidence = confidence;
+            snap.now_ms += ms;
+            home_ring(snap, &mut gate).talker
+        };
+        // Noise: confident for a moment, then not.
+        for _ in 0..50 {
+            assert_eq!(step(&mut snap, 0.9, 10), None);
+            assert_eq!(step(&mut snap, 0.1, 40), None);
+        }
+        // A talker: shown once it has held for the on-delay.
+        let mut shown = None;
+        for _ in 0..(ON_MS / 10 + 1) {
+            shown = step(&mut snap, 0.9, 10);
+        }
+        assert_eq!(shown, Some(307));
+        assert_eq!(
+            step(&mut snap, 0.1, 50),
+            Some(307),
+            "one dropout keeps the wedge"
+        );
+        assert_eq!(step(&mut snap, 0.9, 10), Some(307));
+        for _ in 0..(OFF_MS / 10 + 1) {
+            shown = step(&mut snap, 0.1, 10);
+        }
+        assert_eq!(shown, None, "a real silence takes it away");
+    }
+
     #[test]
     fn ring_looks_follow_the_dial_table() {
         let mut snap = UiSnapshot::default();
         assert_eq!(
-            home_ring(&snap),
+            settled(home_ring, &snap),
             RingLook {
                 style: RingStyle::Idle,
                 talker: None
             }
         );
-        snap.audio.doa_active = true;
+        snap.audio.doa_confidence = 0.8;
         // Device 126.6° is screen 306.6°.
         snap.audio.doa_horizontal = 126.6;
         assert_eq!(
-            home_ring(&snap).talker,
+            settled(home_ring, &snap).talker,
             None,
             "no wedge while nothing listens"
         );
         snap.audio.host_listening = true;
         assert_eq!(
-            home_ring(&snap),
+            settled(home_ring, &snap),
             RingLook {
                 style: RingStyle::Live,
                 talker: Some(307)
@@ -506,10 +590,14 @@ mod tests {
         );
         snap.audio.host_listening = false;
         snap.audio.call_off_hook = true;
-        assert_eq!(home_ring(&snap).style, RingStyle::Live, "in a call");
+        assert_eq!(
+            settled(home_ring, &snap).style,
+            RingStyle::Live,
+            "in a call"
+        );
         snap.audio.mic_muted = true;
         assert_eq!(
-            home_ring(&snap),
+            settled(home_ring, &snap),
             RingLook {
                 style: RingStyle::Muted,
                 talker: None
@@ -518,20 +606,24 @@ mod tests {
 
         let mut rec = UiSnapshot::default();
         rec.meeting.recording = true;
-        rec.audio.doa_active = true;
+        rec.audio.doa_confidence = 0.8;
         rec.audio.doa_horizontal = 240.0;
         assert_eq!(
-            recording_ring(&rec),
+            settled(recording_ring, &rec),
             RingLook {
                 style: RingStyle::Recording,
                 talker: Some(60)
             }
         );
-        rec.audio.doa_active = false;
-        assert_eq!(recording_ring(&rec).talker, None, "no wedge without voice");
+        rec.audio.doa_confidence = 0.1;
+        assert_eq!(
+            settled(recording_ring, &rec).talker,
+            None,
+            "no wedge without a confident direction"
+        );
         rec.meeting.paused = true;
         assert_eq!(
-            recording_ring(&rec),
+            settled(recording_ring, &rec),
             RingLook {
                 style: RingStyle::Paused,
                 talker: None
@@ -539,7 +631,7 @@ mod tests {
         );
         rec.audio.mic_muted = true;
         assert_eq!(
-            recording_ring(&rec).style,
+            settled(recording_ring, &rec).style,
             RingStyle::RecordingMuted,
             "mute wins over pause"
         );
@@ -573,11 +665,11 @@ mod dial_tests {
             let mut now = snap();
             now.audio.speaker_volume = 60;
             let mut dial = MainDial::new(root, &dispatch, &now);
-            dial.update(&now, home_ring(&now));
+            dial.update(&now, home_ring(&now, &mut TalkerGate::default()));
             lv.send(dial.louder(), lv_event_code_t_LV_EVENT_PRESSED);
             for _ in 0..4 {
                 now.now_ms += 300;
-                dial.update(&now, home_ring(&now)); // the service has not caught up: still 60
+                dial.update(&now, home_ring(&now, &mut TalkerGate::default())); // the service has not caught up: still 60
                 lv.advance(300);
                 lv.send(dial.louder(), lv_event_code_t_LV_EVENT_LONG_PRESSED_REPEAT);
             }
@@ -634,7 +726,7 @@ mod dial_tests {
             let mut now = snap();
             now.audio.speaker_volume = 65;
             let mut dial = MainDial::new(root, &dispatch, &now);
-            dial.update(&now, home_ring(&now));
+            dial.update(&now, home_ring(&now, &mut TalkerGate::default()));
             lv.click(dial.quieter());
             lv.click(dial.hit());
             assert_eq!(sent(&mut bus), ["SetSpeakerVolume(60)", "ToggleMicMute"]);
