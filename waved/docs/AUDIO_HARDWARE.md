@@ -445,6 +445,35 @@ promotion to `AudioConfig` only if tuning evidence demands.
 **On-device test:** test 6 of `scripts/test-doa-improvements.sh`
 (subjective — operator listens to moving-source recording).
 
+### Directional-mode bass (C18, simulated 2026-10-06)
+
+A first-order differential `front − back(t − τ)` responds like
+`2·sin(ω·D/2)`, `D` = acoustic front-to-back delay + back delay. At 48 kHz,
+aimed at 0° el 0: Cardioid D = 10.1 samples, Supercardioid 8.0, Figure-8
+5.0, a Stereo side 12.2 for the talker in the middle (14.3 on its own axis).
+Below its peak that is a 6 dB/octave high-pass, and its first null is at
+fs/D (4.8 kHz for Cardioid, 3.9 kHz for a Stereo side and for a Cardioid
+aimed at a mic diagonal).
+
+`beam::bass::BassShelf` undoes the slope on each pattern output (not on
+Whole room, not on Steered's omni blend): a one-pole low shelf, +12 dB at
+DC (the cap, for mic self-noise), pole at 85 Hz, zero at `ω·D = 2.2`. The
++12 dB cap means the flattened patterns sit below the plain average.
+Front talker, el 0, mono output vs plain average (`beam::tests`):
+
+| Mode | 50 | 125 | 250 | 500 | 1k | 2k | 3k | 4k Hz |
+|---|---|---|---|---|---|---|---|---|
+| Cardioid, before | −23.6 | −15.7 | −9.7 | −3.8 | +1.8 | +5.7 | +5.3 | −0.4 |
+| Cardioid, after | −12.9 | −8.7 | −7.4 | −6.9 | −6.3 | −5.9 | −7.5 | −13.6 |
+| Supercardioid, after | −15.0 | −10.7 | −9.5 | −9.0 | −8.6 | −8.0 | −8.2 | −10.2 |
+| Figure-8, after | −18.9 | −14.7 | −13.5 | −13.1 | −12.8 | −12.4 | −12.0 | −12.0 |
+| Stereo L or R, after | −11.3 | −7.0 | −5.8 | −5.2 | −4.5 | −4.6 | −8.8 | −32.2 |
+
+Cardioid stays within ±3 dB of 1 kHz from 125 Hz to 3 kHz; its 4 kHz point
+is the pattern's own null, which no low shelf can lift without breaking the
+2 kHz side (a monotonic filter can't both cut 2 kHz and keep 4 kHz). A mode
+change crossfades the old and new patterns over 10 ms (`MODE_FADE_MS`).
+
 ## Full-duplex AEC pipeline
 
 The conferencing uplink runs the following order for every microphone frame:
