@@ -12,5 +12,6 @@ pub mod rtc;
 mod service;
 pub mod tones;
 pub mod tz;
+pub mod usb;
 
 pub use service::SystemService;

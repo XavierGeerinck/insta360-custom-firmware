@@ -169,6 +169,12 @@ async fn run_async(
     #[cfg(feature = "simulate")]
     let system = waved_system::SystemService::new(Arc::clone(&bus.system), RECORDINGS_DIR);
     tokio::spawn(system.run(bus.settings.subscribe(), bus.wifi.subscribe()));
+    // USB host connection from the device controller; the MCU never reports it.
+    #[cfg(not(feature = "simulate"))]
+    tokio::spawn(waved_system::usb::run(
+        std::path::PathBuf::from(waved_system::usb::UDC_DIR),
+        Arc::clone(&bus.mcu),
+    ));
 
     // Power key (E2, RS7): opt-in until the device pass confirms that the
     // `vad_keypad` node is the physical key and not voice activity.
