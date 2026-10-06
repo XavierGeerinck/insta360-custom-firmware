@@ -34,6 +34,8 @@ pub struct AecFrameMetrics {
     pub residual_echo_suppression_active: bool,
     pub residual_echo_suppress_db: u8,
     pub residual_echo_suppress_active_db: u8,
+    /// Fixed gain before noise suppression (`crate::makeup`), in dB.
+    pub uplink_makeup_gain_db: u8,
     pub noise_suppression_backend: String,
 }
 
@@ -51,6 +53,7 @@ impl Default for AecFrameMetrics {
             residual_echo_suppression_active: false,
             residual_echo_suppress_db: 0,
             residual_echo_suppress_active_db: 0,
+            uplink_makeup_gain_db: 0,
             noise_suppression_backend: "off".to_string(),
         }
     }
@@ -64,8 +67,10 @@ impl AecFrameMetrics {
             return;
         }
         self.linear_erle_db = attenuation_db(self.mic_pre_aec_rms, self.mic_post_linear_aec_rms);
-        self.effective_echo_suppression_db =
-            attenuation_db(self.mic_pre_aec_rms, self.mic_uplink_rms);
+        // The fixed make-up gain raises speech and residual echo alike; leave
+        // it out so the figure stays comparable with builds before it.
+        self.effective_echo_suppression_db = attenuation_db(self.mic_pre_aec_rms, self.mic_uplink_rms)
+            .map(|db| db + f32::from(self.uplink_makeup_gain_db));
     }
 }
 
@@ -227,7 +232,9 @@ pub fn side_gain(raw_mid_rms: f32, processed_mid_rms: f32) -> f32 {
 /// pair comes before AEC and NS, so it is not sent as is:
 /// `L = mid' + g·side`, `R = mid' − g·side`, with `side = (L − R)/2` from
 /// the beam and `g` the mid's suppression ratio, ramped linearly from
-/// `prev_side_gain` across the period so it never clicks. `(L + R)/2` is
+/// `prev_side_gain` across the period so it never clicks. `makeup` is the
+/// fixed gain the mid received before noise suppression; the side gets the
+/// same, and the ratio is measured without it. `(L + R)/2` is
 /// the processed mid (before the recording limiters, which run separately
 /// on the mono signal and the pair). Returns the pair and the gain reached.
 pub fn rebuild_stereo(
@@ -235,6 +242,7 @@ pub fn rebuild_stereo(
     raw_r: &[f32],
     processed_mid: &[f32],
     prev_side_gain: f32,
+    makeup: f32,
 ) -> (Vec<f32>, Vec<f32>, f32) {
     let n = processed_mid.len().min(raw_l.len()).min(raw_r.len());
     let raw_mid: Vec<f32> = raw_l[..n]
@@ -242,12 +250,12 @@ pub fn rebuild_stereo(
         .zip(&raw_r[..n])
         .map(|(l, r)| 0.5 * (l + r))
         .collect();
-    let target = side_gain(rms_f32(&raw_mid), rms_f32(&processed_mid[..n]));
+    let target = side_gain(rms_f32(&raw_mid) * makeup, rms_f32(&processed_mid[..n]));
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
     for i in 0..n {
         let gain = prev_side_gain + (target - prev_side_gain) * (i + 1) as f32 / n as f32;
-        let side = 0.5 * (raw_l[i] - raw_r[i]) * gain;
+        let side = 0.5 * (raw_l[i] - raw_r[i]) * gain * makeup;
         left.push(processed_mid[i] + side);
         right.push(processed_mid[i] - side);
     }
@@ -419,7 +427,7 @@ mod tests {
         let l = vec![0.4, 0.2, -0.1, 0.0];
         let r = vec![0.0, 0.2, 0.3, -0.2];
         let mid: Vec<f32> = l.iter().zip(&r).map(|(a, b)| 0.5 * (a + b)).collect();
-        let (sl, sr, gain) = rebuild_stereo(&l, &r, &mid, 1.0);
+        let (sl, sr, gain) = rebuild_stereo(&l, &r, &mid, 1.0, 1.0);
         assert!((gain - 1.0).abs() < 1e-6);
         for i in 0..4 {
             assert!(
@@ -434,7 +442,7 @@ mod tests {
         let l = vec![0.5; 480];
         let r = vec![-0.1; 480];
         let processed = vec![0.05; 480]; // AEC/NS took the mid from 0.2 to 0.05
-        let (sl, sr, gain) = rebuild_stereo(&l, &r, &processed, 0.25);
+        let (sl, sr, gain) = rebuild_stereo(&l, &r, &processed, 0.25, 1.0);
         assert!((gain - 0.25).abs() < 1e-6);
         for i in 0..480 {
             assert!((0.5 * (sl[i] + sr[i]) - processed[i]).abs() < 1e-6);
@@ -451,7 +459,7 @@ mod tests {
         let r = vec![-0.5; 100];
         let processed = vec![0.0; 100];
         // Raw mid is 0: no side at all, whatever came before.
-        let (sl, _, gain) = rebuild_stereo(&l, &r, &processed, 1.0);
+        let (sl, _, gain) = rebuild_stereo(&l, &r, &processed, 1.0, 1.0);
         assert_eq!(gain, 0.0);
         assert!(sl[0] > sl[99], "ramps down from the previous gain");
         assert!(sl[99].abs() < 1e-6);

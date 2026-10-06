@@ -6,6 +6,7 @@ pub mod capture;
 pub mod doa;
 pub mod fixtures;
 pub mod integrity;
+pub mod makeup;
 pub mod metrics;
 pub mod mic_check;
 pub mod playback;
@@ -600,6 +601,11 @@ impl AudioService {
             .process_residual(&mut self.aec_residual_scratch);
         let post_residual_rms = rms_i16(&self.aec_residual_scratch);
 
+        // Raise the voice before noise suppression, which removes speech
+        // that is still near the noise floor (`makeup`).
+        let makeup_db = self.dsp_chain.aec.config().uplink_makeup_gain_db;
+        crate::makeup::apply(&mut self.aec_residual_scratch, crate::makeup::db_to_linear(makeup_db));
+
         if let Some(ns) = self.dsp_chain.environmental_ns.as_mut() {
             ns.process(&mut self.aec_residual_scratch);
         }
@@ -617,6 +623,7 @@ impl AudioService {
             residual_echo_suppression_active: self.dsp_chain.aec.residual_active(),
             residual_echo_suppress_db: config.residual_echo_suppress_db,
             residual_echo_suppress_active_db: config.residual_echo_suppress_active_db,
+            uplink_makeup_gain_db: config.uplink_makeup_gain_db,
             noise_suppression_backend: self.dsp_chain.environmental_ns_backend.to_string(),
         };
         metrics.update_suppression();
@@ -717,6 +724,7 @@ impl AudioService {
                     &r,
                     &p.mic_mono_f32,
                     self.stereo_side_gain,
+                    crate::makeup::db_to_linear(p.aec_metrics.uplink_makeup_gain_db),
                 );
                 self.stereo_side_gain = gain;
                 p = p.with_stereo(left, right);
@@ -1259,10 +1267,11 @@ mod tests {
         assert_eq!(metrics.residual_echo_suppress_active_db, 15);
         assert_eq!(metrics.noise_suppression_backend, "off");
         assert!((metrics.mic_pre_aec_rms - 353.2).abs() < 1.0);
+        assert_eq!(metrics.uplink_makeup_gain_db, 24);
+        let makeup = metrics.mic_post_noise_suppression_rms / metrics.mic_post_residual_echo_rms;
         assert!(
-            (metrics.mic_post_residual_echo_rms - metrics.mic_post_noise_suppression_rms).abs()
-                < 1.0,
-            "NR Off must not add an environmental denoise stage"
+            (makeup - crate::makeup::db_to_linear(24)).abs() < 0.05,
+            "NR Off adds only the make-up gain before the (absent) denoiser; got {makeup:.3}"
         );
         let gain_ratio = metrics.mic_uplink_rms / metrics.mic_post_noise_suppression_rms.max(0.01);
         assert!(
@@ -1805,6 +1814,11 @@ mod tests {
 
     /// A 1 kHz plane wave arriving from `az_deg` (device degrees).
     fn plane_wave_8ch(az_deg: f32, frame_size: usize) -> AudioFrame {
+        plane_wave_8ch_at(az_deg, frame_size, 0.3)
+    }
+
+    /// As `plane_wave_8ch`, at `amplitude` of full scale.
+    fn plane_wave_8ch_at(az_deg: f32, frame_size: usize, amplitude: f32) -> AudioFrame {
         let geom = crate::beam::MicGeometry::default();
         let sr = 48_000.0_f32;
         let omega = 2.0 * std::f32::consts::PI * 1_000.0 / sr;
@@ -1815,7 +1829,7 @@ mod tests {
             let tau = -((p.x * cos + p.y * sin) * 1e-3) / 343.0 * sr;
             for i in 0..frame_size {
                 samples[i * 8 + ch] =
-                    (((i as f32 - tau) * omega).sin() * 0.3 * i16::MAX as f32) as i16;
+                    (((i as f32 - tau) * omega).sin() * amplitude * i16::MAX as f32) as i16;
             }
         }
         AudioFrame::mic_only(samples, 8, 48_000, 0)
@@ -1921,8 +1935,10 @@ mod tests {
     fn stereo_uplink_pair_averages_to_the_mono_uplink() {
         let (mut svc, _state) = service_with(waved_state::AudioMode::Stereo, 0.0);
         let mut last = None;
+        // Speech level on the device (about -50 dBFS): below the limiters,
+        // where the pair must average to the mono uplink.
         for _ in 0..4 {
-            last = Some(svc.process_frame(&plane_wave_8ch(60.0, 480)));
+            last = Some(svc.process_frame(&plane_wave_8ch_at(60.0, 480, 0.003)));
         }
         let frame = last.unwrap();
         let (l, r) = frame

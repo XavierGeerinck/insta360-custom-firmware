@@ -58,6 +58,11 @@ pub struct AecConfig {
     /// Lower than the far-end-only value to preserve double-talk.
     #[serde(default = "default_residual_echo_suppress_active_db")]
     pub residual_echo_suppress_active_db: u8,
+    /// Fixed gain in dB between residual-echo suppression and noise
+    /// suppression (`crate::makeup`). The beam's speech level is too low for
+    /// the neural denoiser, which would otherwise remove it. 0 disables it.
+    #[serde(default = "default_uplink_makeup_gain_db")]
+    pub uplink_makeup_gain_db: u8,
 }
 
 fn default_residual_echo_suppress_db() -> u8 {
@@ -66,12 +71,16 @@ fn default_residual_echo_suppress_db() -> u8 {
 fn default_residual_echo_suppress_active_db() -> u8 {
     15
 }
+fn default_uplink_makeup_gain_db() -> u8 {
+    24
+}
 
 impl Default for AecConfig {
     fn default() -> Self {
         Self {
             residual_echo_suppress_db: default_residual_echo_suppress_db(),
             residual_echo_suppress_active_db: default_residual_echo_suppress_active_db(),
+            uplink_makeup_gain_db: default_uplink_makeup_gain_db(),
         }
     }
 }
@@ -317,6 +326,12 @@ impl AudioConfig {
                 "aec.residual_echo_suppress_active_db ({}) must not exceed \
                  aec.residual_echo_suppress_db ({})",
                 self.aec.residual_echo_suppress_active_db, self.aec.residual_echo_suppress_db
+            )));
+        }
+        if self.aec.uplink_makeup_gain_db > 36 {
+            return Err(ConfigError::Invalid(format!(
+                "aec.uplink_makeup_gain_db must be in [0, 36], got {}",
+                self.aec.uplink_makeup_gain_db
             )));
         }
         if self.capture.mic_channels == 0 {

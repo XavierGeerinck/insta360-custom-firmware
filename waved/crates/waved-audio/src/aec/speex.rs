@@ -796,6 +796,7 @@ mod tests {
         let invalid = AecConfig {
             residual_echo_suppress_db: 15,
             residual_echo_suppress_active_db: 40,
+            ..AecConfig::default()
         };
         assert!(matches!(
             SpeexAecStage::try_new(480, 48_000, invalid),
