@@ -980,8 +980,14 @@ mod tests {
     #[test]
     fn settings_defaults_match_the_design_timings() {
         let s = SettingsState::default();
-        assert_eq!((s.dim_after_s, s.off_after_s, s.ask_timeout_s), (120, 600, 60));
-        assert!(!s.pre_recording, "pre-recording is off until the user turns it on");
+        assert_eq!(
+            (s.dim_after_s, s.off_after_s, s.ask_timeout_s),
+            (120, 600, 60)
+        );
+        assert!(
+            !s.pre_recording,
+            "pre-recording is off until the user turns it on"
+        );
         assert!(s.clock_24h && s.tones_enabled);
         assert!(!s.first_run_done && !s.pin_enabled);
         assert_eq!(s.time_zone, "UTC");

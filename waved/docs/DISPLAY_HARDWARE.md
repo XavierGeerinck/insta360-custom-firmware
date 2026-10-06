@@ -88,23 +88,38 @@ Original pspapp assets at `/etc/pspapp/lvgl/` (referenced via the `A:` LVGL FS d
 
 > **Do NOT use `bg_main.png`** — it is a 400×304 rectangular image with a glowing teal sphere that looks like a "weird orb" on the circular display.
 
-## Home Screen Layout
+## Screen layout
 
-- **Background**: solid `CLR_BG` (no background image)
-- **Status bar**: icons clustered around x=200 using `LV_ALIGN_CENTER` with offsets −46, −22, +2, +26, +52
-- **NR label**: `CENTER` offset (0, −80) → y ≈ 72
-- **Button row**: `CENTER` alignment, y_offset = −10 → button centres at y ≈ 142
-  - Mode button: x_offset = −130
-  - REC button:  x_offset = 0
-  - Mute button: x_offset = +130
-
-Use `LV_ALIGN_CENTER` (not `LV_ALIGN_BOTTOM_MID`) for the button row — `BOTTOM_MID` pushes buttons to y ≈ 216 where the circle narrows significantly.
+The UI is the milestone-2 kit (`crates/waved-ui/src/kit/README.md`) on the
+approved mockups (`../docs/mockups/`). Geometry tokens live in
+`kit/tokens.rs` and follow the measured visible area above. The stock
+firmware's own layout is kept for reference in `docs/ui/HOME_SCREEN.md`.
 
 ## Deploy
 
+`/data` is ~440 MB and nearly full; the stripped binary is ~63 MB. `adb push`
+over the running binary deletes the old file before it fails for space, leaving
+no binary. Deploy through `/tmp` and swap with the watchdog stopped:
+
 ```bash
-cross build --release --target aarch64-unknown-linux-gnu --features "ui" -p waved
-adb push target/aarch64-unknown-linux-gnu/release/waved /data/waved/waved
-adb shell "kill \$(ps | awk '/\/data\/waved\/waved/{print \$1}' | head -1)"
-# init.d script (PID 329) auto-restarts waved within ~3 s
+S=$(mktemp -d)
+WAVED_BUILD_ID=$(git rev-parse --short HEAD) \
+  cross build --release --target aarch64-unknown-linux-gnu --features "ui,capture-alsa" -p waved
+$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy --strip-all \
+  target/aarch64-unknown-linux-gnu/release/waved "$S/waved"
+adb push "$S/waved" /tmp/waved.new && adb shell md5sum /tmp/waved.new   # compare with md5 -q "$S/waved"
+adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; killall waved; sleep 3; \
+  rm /data/waved/waved && cp /tmp/waved.new /data/waved/waved && chmod 755 /data/waved/waved; \
+  start-stop-daemon -S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start'
 ```
+
+- If `~/.cargo/config.toml` sets `rustc-wrapper = "sccache"`, run `cross` with a copy
+  of `Cross.toml` (`CROSS_CONFIG=...`) that adds `"RUSTC_WRAPPER="` to
+  `[build.env] passthrough`. Don't use `CROSS_BUILD_ENV_PASSTHROUGH`: it replaces the
+  list and drops the `CFLAGS ... -D__ARM_ARCH=8` that `ring` needs.
+- Check `adb shell df -h /data` first. The stopped binary's space is only freed once
+  waved exits, which is why the swap happens with the watchdog and waved stopped.
+- `start-stop-daemon` needs `-m -p <pidfile>`; without it busybox matches any running
+  `/bin/sh` and refuses to start.
+- The framebuffer can be captured for checks with `adb shell 'cat /dev/fb0 | head -c 243200'`
+  (RGB565 big-endian, rotated 180°; `scripts/png-to-fb.py` is the inverse).

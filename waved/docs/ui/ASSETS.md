@@ -1,5 +1,12 @@
 # UI Assets Reference
 
+> **Stock firmware reference.** This describes the original Insta360 firmware
+> (decompiled `pspapp`). waved's own UI no longer uses these assets or this layout
+> since the milestone-2 runtime switch (2026-10-05): see
+> `crates/waved-ui/src/kit/README.md` and `../docs/mockups/`. The visible-area numbers
+> here (r≈190 at (200,152)) were also wrong; the measured area is in
+> `docs/DISPLAY_HARDWARE.md`.
+
 All assets live on the device at `/etc/pspapp/lvgl/`. Accessed via LVGL's POSIX FS driver with drive letter `A:` → device root, so paths are `A:/etc/pspapp/lvgl/...`.
 
 ## Main Screen (Home) Buttons — `/icon/msc/`

@@ -81,7 +81,7 @@ impl HidService {
                         let is_mute = matches!(btn, ButtonType::MuteToggle | ButtonType::MuteLongPress);
                         if is_mute {
                             let now = std::time::Instant::now();
-                            if last_mute_btn.map_or(false, |t| now.duration_since(t) < mute_debounce) {
+                            if last_mute_btn.is_some_and(|t| now.duration_since(t) < mute_debounce) {
                                 stats.glue_drops.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 continue;
                             }

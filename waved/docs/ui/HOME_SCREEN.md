@@ -1,5 +1,12 @@
 # Home Screen (MAIN, ID 10)
 
+> **Stock firmware reference.** This describes the original Insta360 firmware
+> (decompiled `pspapp`). waved's own UI no longer uses these assets or this layout
+> since the milestone-2 runtime switch (2026-10-05): see
+> `crates/waved-ui/src/kit/README.md` and `../docs/mockups/`. The visible-area numbers
+> here (r≈190 at (200,152)) were also wrong; the measured area is in
+> `docs/DISPLAY_HARDWARE.md`.
+
 ## Source
 
 Decompiled from `libui.so.c` → `ui_Main_screen_on_create()` at line 14310.

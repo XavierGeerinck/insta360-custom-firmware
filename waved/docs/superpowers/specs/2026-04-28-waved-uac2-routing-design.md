@@ -191,6 +191,15 @@ loop {
 
 ALSA playback opened with `Direction::Playback`, same format/rate/period/buffer as downstream. Period frames match `ProcessedAudioFrame` size (1024 by default). If they ever differ (e.g., capture period changes), the upstream sink reshape-pads on the fly — same defensive logic as `PlaybackService::run_playback_loop`.
 
+> **Updated 2026-10-06 (milestone 2).** The sink now writes
+> `ProcessedAudioFrame::uplink_interleaved_i16`: in Stereo mode the rebuilt pair
+> (L/R = processed mid ± the beam's side, ducked by the mid's suppression ratio,
+> `processed_frame::rebuild_stereo`), in every other mode the mono signal on both
+> channels. After each (re)start (`prepare`) it writes `cushion::PREFILL_PERIODS`
+> (2) periods of silence ahead of the first frame, so one late frame doesn't
+> underrun the host. Device measurements: `docs/AUDIO_HARDWARE.md` "Uplink Level
+> and CPU".
+
 Mic mute is already applied in the capture loop's `apply_mic_mute(&mut frame.data, muted)`. By the time `subscribe_processed` delivers the frame, mute has zeroed the data; upstream emits zeros; host hears silence. No mute-aware code in the upstream sink.
 
 ### 6.3 Volume + mute mirror (`uac/control.rs`)

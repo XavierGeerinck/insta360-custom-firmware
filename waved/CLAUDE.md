@@ -14,9 +14,9 @@ from on-device measurement and are hard to rederive.
 | Circular LCD      | [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md) |
 | 8-mic array, DOA  | [`docs/AUDIO_HARDWARE.md`](docs/AUDIO_HARDWARE.md)     |
 | Compute (NPU/DSP) | [`docs/COMPUTE_HARDWARE.md`](docs/COMPUTE_HARDWARE.md) |
-| UI assets         | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md)               |
+| UI kit (current)  | [`crates/waved-ui/src/kit/README.md`](crates/waved-ui/src/kit/README.md) |
 | UI coordinates    | [`docs/ui/COORDINATE_SYSTEM.md`](docs/ui/COORDINATE_SYSTEM.md) |
-| Home screen       | [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md)     |
+| Stock UI assets / home screen | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md), [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md) (reference only) |
 | Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
 | System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
 
@@ -30,7 +30,16 @@ relevant doc. Do not rely on commit messages — they rot.
 ```bash
 WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release --target aarch64-unknown-linux-gnu \
     --features "ui,capture-alsa" -p waved
-adb push target/aarch64-unknown-linux-gnu/release/waved /data/waved/waved
+```
+
+Then deploy through `/tmp` with the watchdog stopped: `/data` is nearly full and a
+direct `adb push` over the binary can leave the device with none. The full
+procedure (strip, md5 check, swap, watchdog restart) is in
+[`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md#deploy).
+
+For one-off runs with injected env vars, stop the watchdog first and start waved
+yourself:
+```bash
 adb shell "killall waved 2>/dev/null; sleep 2; \
            (setsid /data/waved/waved >/tmp/waved.log 2>&1 </dev/null &)"
 ```

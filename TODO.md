@@ -20,7 +20,7 @@ Sources:
 - **Phase 0** has to land first. It defines the shared contracts: commands, state, config,
   theme and components. After that, workstreams **A–L** can run in parallel. Items inside a
   workstream are in order.
-- Integration hotspots are `waved/crates/waved/src/main.rs`, `waved-ui/src/lib.rs` + `nav.rs`,
+- Integration hotspots are `waved/crates/waved/src/main.rs`, `waved-ui/src/lib.rs` + `runtime/`,
   `waved-state` and `waved-config`. Workstreams don't edit these directly: changes there go
   through Phase 0 or the integrator.
 
@@ -76,7 +76,7 @@ Rules for the parallel milestones:
     - `audio.aim_deg`, `tones.enabled`, `device.first_run_done`
   - Add a migration from the current version.
   - Add setup-portal form fields for the user-facing ones.
-- [ ] **P0.3 Theme, fonts, icons** (M) — `waved-ui/src/theme.rs`, `lv_conf.h`, `build.rs`
+- [ ] **P0.3 Theme, fonts, icons** (M) — `waved-ui/src/kit/tokens.rs` (was `theme.rs`), `lv_conf.h`, `build.rs`
   - Use the revision-2 tokens and `LV_THEME_DEFAULT_DARK`.
   - Build Barlow and Barlow Semi Condensed at 12/13/15/20/26/48 with `lv_font_conv`. Include
     the glyph range for `…`, `·`, curly quotes, `−` and Latin-1.

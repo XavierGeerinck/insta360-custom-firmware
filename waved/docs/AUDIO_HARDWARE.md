@@ -445,6 +445,22 @@ promotion to `AudioConfig` only if tuning evidence demands.
 **On-device test:** test 6 of `scripts/test-doa-improvements.sh`
 (subjective — operator listens to moving-source recording).
 
+### Milestone-2 changes (2026-10-05/06)
+
+- **Fixed aim.** Focused (Cardioid), Narrow (Supercardioid) and Two sides (Figure8)
+  steer to `audio.beam_aim_deg`, in device degrees (the DoA frame: 0° in front of the
+  screen, counter-clockwise, 90° on the listener's left). Stereo steers to (0°, 0°).
+  `SetDoaOverride` still overrides both. The UI converts to screen degrees in
+  `waved-ui/src/kit/direction.rs`.
+- **Whole room (Omni) aligns on the talker.** Summing the eight mics unaligned cancelled
+  the voice's 2–6 kHz range for any source off the vertical axis (simulated: −12 dB at
+  4 kHz from the side, −25 dB with the mouth 30° up), and callers heard a muffled,
+  distant voice. Omni now delay-and-sums on the talker tracked by `SteeredBeam`
+  (`Beamformer::align_delays`; flat within 1.5 dB to 8 kHz on axis) and fades to the
+  plain average (`omni_mix` 1) while no direction is confident.
+- **The directional modes lose bass** (first-order differential: −16 dB at 125 Hz,
+  −10 dB at 250 Hz, simulated). See TODO C18.
+
 ## Full-duplex AEC pipeline
 
 The conferencing uplink runs the following order for every microphone frame:
@@ -593,6 +609,11 @@ Switched at runtime via `Command::SetPlaybackPreset` or
   config, but `band_gain_linear` does a hard clamp instead of a soft-knee
   transition. Voice preset therefore diverges slightly from stock at the
   gain-curve knee. See `TODO.md` SP#5 follow-ups.
+
+**Local playback (milestone 2).** `play_local` input (Files playback) is mixed into the
+host stream with a saturating add *before* HPF/EQ/MBAGC/limiter, so the speaker volume,
+the limiter and the AEC reference all cover it. The saturating add can clip loud host
+audio before the volume stage.
 
 ## UAC2 Routing (SP#6)
 
@@ -874,6 +895,14 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
   (SP#5/SP#6) were taken with that filter in place.
 - Noise reduction is **Off** on the device for now: DeepFilterNet on the CPU
   can't keep up during speech. Running it on the NPU is deferred (TODO).
+
+## Microphone check (milestone 2)
+
+`waved-audio/src/mic_check.rs` watches raw, pre-mute frames in 3 s windows at start-up.
+A channel that is exactly zero counts as not responding; levels are judged against the
+median of all channels. The result is `AudioState.mic_health`, and the UI shows
+"Microphones not responding" for `NotResponding`. On the device it reports `Ok` about
+3 s after boot (2026-10-06).
 
 ## Mic Gain Pipeline
 
