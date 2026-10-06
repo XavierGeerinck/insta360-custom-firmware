@@ -183,7 +183,9 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   A screen's own Back button may send the same command too; a duplicate is accepted.
 - **Press cancel.** A press is cancelled (`lv_indev_wait_release`) when the screen changes
   under it, or when a swipe is taken (by the runtime, or by a screen's `on_swipe`), so it never
-  also taps. A press that only woke the screen is never delivered to LVGL.
+  also taps. When the screen is parked under a press, the pressed object also gets `LV_EVENT_PRESS_LOST`
+  at once (LVGL sends its own only on the release), so a hold-to-Stop in progress resets instead of
+  completing on the hidden screen. A press that only woke the screen is never delivered to LVGL.
 - **Wake on arrival.** A new pending decision (a recording stopped) or an incoming call
   (`audio.call_ringing`) wakes a resting or dark screen without delivering a press.
 

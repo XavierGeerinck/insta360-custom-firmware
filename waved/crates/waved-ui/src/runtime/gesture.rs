@@ -6,7 +6,10 @@
 //! swipes. The caller cancels the press (`lv_indev_wait_release`) whenever a
 //! swipe is taken, so a swipe never also fires a tap.
 
-use crate::bindings::{lv_indev_search_obj, lv_obj_get_screen, lv_obj_is_valid, lv_point_t};
+use crate::bindings::{
+    lv_event_code_t_LV_EVENT_PRESS_LOST, lv_indev_search_obj, lv_obj_get_screen, lv_obj_is_valid,
+    lv_obj_send_event, lv_point_t,
+};
 use crate::kit::dispatch::UiEvent;
 use crate::kit::event::{send_swipe, Swipe, SwipeTracker};
 use crate::kit::obj::Obj;
@@ -169,6 +172,29 @@ impl Gestures {
         }
         let target = press.target.filter(|&t| still_on(t, root)).unwrap_or(root);
         send_swipe(target, direction).then_some(SwipeTaken::Screen)
+    }
+
+    /// The press that is down now is being taken away from the object it
+    /// pressed on `root` (the screen is being parked, so the object stays
+    /// alive): tell that object `LV_EVENT_PRESS_LOST`, as LVGL does when a
+    /// press is lost, so what it started (Stop's hold ring) resets. LVGL's own
+    /// PRESS_LOST after `lv_indev_wait_release` comes only on the release.
+    pub fn press_lost(&self, root: Obj) {
+        let Some(target) = self
+            .press
+            .and_then(|press| press.target)
+            .filter(|&target| !root.is_null() && still_on(target, root))
+        else {
+            return;
+        };
+        // SAFETY: `still_on` checked that `target` is a live object.
+        unsafe {
+            lv_obj_send_event(
+                target.raw(),
+                lv_event_code_t_LV_EVENT_PRESS_LOST,
+                std::ptr::null_mut(),
+            );
+        }
     }
 
     /// The screen changed under the current press: it swipes nothing more,
