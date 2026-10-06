@@ -12,9 +12,13 @@
 //!
 //! ## Latency
 //!
-//! Steady-state added latency ≈ one ALSA period (≈ 21 ms) on top of
-//! DFN3's intrinsic ≈ 20 ms algorithmic delay → ≈ 40 ms total. Acceptable
-//! for conferencing (Teams/Zoom tolerate 150 ms easily).
+//! Measured through `AudioService::process_frame` on the host
+//! (`mid_latency_matches_an_impulse_through_the_service`): the model delays
+//! by `MODEL_DELAY_SAMPLES` (480, one hop = 10 ms), and the hop queue adds
+//! the zeros it inserted while filling — 448 samples at a 1024-sample
+//! period, none at 480. ≈ 19 ms in all at the device's 1024 period.
+//! `latency_samples()` reports the sum; Stereo mode delays its raw side by
+//! it.
 //!
 //! ## Failure handling
 //!
@@ -28,11 +32,17 @@ use std::collections::VecDeque;
 use super::NoiseSuppressor;
 use waved_npu::{Dfn3CpuInfer, NpuInfer};
 
+/// Delay of the DFN3 model itself (measured; one 480-sample hop).
+pub const MODEL_DELAY_SAMPLES: usize = 480;
+
 pub struct DeepFilterNs {
     infer: Dfn3CpuInfer,
     hop_size: usize,
     in_acc: Vec<f32>,
     out_acc: VecDeque<i16>,
+    /// Zeros handed out while the queue was short. Once it has filled they
+    /// stay in the stream as a fixed delay.
+    padded: usize,
 }
 
 impl DeepFilterNs {
@@ -52,6 +62,7 @@ impl DeepFilterNs {
             hop_size,
             in_acc: Vec::with_capacity(hop_size * 4),
             out_acc: VecDeque::with_capacity(hop_size * 4),
+            padded: 0,
         })
     }
 
@@ -96,8 +107,18 @@ impl NoiseSuppressor for DeepFilterNs {
         //    During warm-up the queue may be short; zero-pad the gap so
         //    output is always exactly samples.len().
         for slot in samples.iter_mut() {
-            *slot = self.out_acc.pop_front().unwrap_or(0);
+            *slot = match self.out_acc.pop_front() {
+                Some(sample) => sample,
+                None => {
+                    self.padded += 1;
+                    0
+                }
+            };
         }
+    }
+
+    fn latency_samples(&self) -> usize {
+        MODEL_DELAY_SAMPLES + self.padded
     }
 }
 

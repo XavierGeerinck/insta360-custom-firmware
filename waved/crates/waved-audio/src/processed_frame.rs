@@ -246,7 +246,8 @@ pub fn side_gain(raw_mid_rms: f32, processed_mid_rms: f32) -> f32 {
 }
 
 /// Rebuild the Stereo-mode pair around the processed mid (C4). The raw beam
-/// pair comes before AEC and NS, so it is not sent as is:
+/// pair comes before AEC and NS, so it is not sent as is (the caller delays
+/// it by the mid's DSP latency first, `crate::stereo_align`):
 /// `L = mid' + g·side`, `R = mid' − g·side`, with `side = (L − R)/2` from
 /// the beam and `g` the mid's suppression ratio, ramped linearly from
 /// `prev_side_gain` across the period so it never clicks. `makeup` is the

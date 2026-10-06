@@ -909,6 +909,18 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
   (SP#5/SP#6) were taken with that filter in place.
 - Noise reduction is **Off** on the device for now: DeepFilterNet on the CPU
   can't keep up during speech. Running it on the NPU is deferred (TODO).
+- **Stereo alignment (C15).** Stereo adds the raw beam side to the processed
+  mid, which lags the beam. Measured on the host through
+  `AudioService::process_frame` (`mid_latency_matches_an_impulse_through_the_service`):
+  the Speex residual stage shifts by one analysis frame (128 samples at the
+  1024 period, 240 at 480; the linear canceller adds none); DeepFilterNet adds
+  480 (its model) plus the zeros its hop queue inserted while filling (448 at
+  1024, none at 480), so 1056 samples (22 ms) with NR on at 1024. The fallback
+  standalone Speex denoiser shifts by a whole period. `stereo_align::SideDelay`
+  holds the raw pair back by `mid_latency_samples()`; side and mid now line up
+  within 4 samples with NR Off and Low (they were 128 / 1056 apart). The
+  recording limiter's 96-sample lookahead comes after the rebuild and delays
+  mono and pair alike.
 
 ## Mic Gain Pipeline
 

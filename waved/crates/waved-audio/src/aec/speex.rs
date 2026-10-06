@@ -471,6 +471,12 @@ impl NoiseSuppressor for SpeexNoiseSuppressor {
     fn process(&mut self, samples: &mut [i16]) {
         self.preprocessor.process(samples);
     }
+
+    /// The preprocessor shifts by one analysis frame (see
+    /// `residual_stage_delay_is_one_bounded_analysis_frame`).
+    fn latency_samples(&self) -> usize {
+        self.preprocessor.frame_size
+    }
 }
 
 #[cfg(test)]
@@ -720,6 +726,35 @@ mod tests {
                 && analysis_lag > one_frame_lag,
             "unexpected residual delay: zero={zero_lag:.3}, analysis={analysis_lag:.3}, capture={one_frame_lag:.3}"
         );
+    }
+
+    #[test]
+    fn standalone_suppressor_reports_its_shift() {
+        // The fallback denoiser (`speex_standalone`) runs on the whole period.
+        let frame = 480;
+        let mut ns = SpeexNoiseSuppressor::new(frame, 48_000, None);
+        let mut seed = 0x0bad_5eed_u32;
+        let input: Vec<i16> = (0..frame * 12)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (((seed >> 16) as i32 - 32_768) / 4) as i16
+            })
+            .collect();
+        let mut out = input.clone();
+        for chunk in out.chunks_mut(frame) {
+            ns.process(chunk);
+        }
+        let start = 4 * frame;
+        let score = |lag: usize| -> f64 {
+            input[start..start + 2 * frame]
+                .iter()
+                .zip(&out[start + lag..])
+                .map(|(&x, &y)| f64::from(x) * f64::from(y))
+                .sum::<f64>()
+                .abs()
+        };
+        let lag = (0..3 * frame).max_by(|&a, &b| score(a).total_cmp(&score(b))).unwrap();
+        assert_eq!(ns.latency_samples(), lag);
     }
 
     #[test]
