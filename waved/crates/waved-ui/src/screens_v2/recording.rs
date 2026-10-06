@@ -284,7 +284,7 @@ mod tests {
         snap.meeting.duration_secs = secs;
         snap.meeting.current_speaker = Some(2);
         snap.audio.doa_active = true;
-        snap.audio.doa_horizontal = 60.0;
+        snap.audio.doa_horizontal = 240.0; // screen 60°
         snap
     }
 
@@ -384,6 +384,7 @@ mod tests {
             let mut snap = recording(2_537);
             snap.clock = "14:40".into();
             snap.battery.level = 81;
+            snap.battery.voltage = 3_800;
             snap.meeting.paused = true;
             let mut screen = RecordingScreen::default();
             screen.build(root, &ctx, &snap);

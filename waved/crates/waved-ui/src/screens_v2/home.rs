@@ -185,7 +185,7 @@ mod tests {
         let mut snap = snap();
         snap.audio.call_off_hook = true;
         snap.audio.doa_active = true;
-        snap.audio.doa_horizontal = 307.0;
+        snap.audio.doa_horizontal = 127.0; // screen 307°
         snap.meeting.pre_recording_active = true;
         snap
     }

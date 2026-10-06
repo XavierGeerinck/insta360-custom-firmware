@@ -2,6 +2,7 @@
 //! these pieces instead of raw LVGL calls; see `src/kit/README.md`.
 
 pub mod components;
+pub mod direction;
 pub mod dispatch;
 pub mod event;
 pub mod fonts;

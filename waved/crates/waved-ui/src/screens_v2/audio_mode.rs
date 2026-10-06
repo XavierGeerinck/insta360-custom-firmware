@@ -6,6 +6,7 @@
 //! Applying the aim is C3/C10's job. Until the audio service reports it in
 //! `beam_aim_deg`, the screen keeps showing the aim the user chose.
 
+use crate::kit::direction::{device_from_screen, screen_from_device};
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::mode_picker::{AimEvent, Glyph, Lobe, ModePicker, Preview};
 use crate::kit::components::status::StatusArea;
@@ -113,11 +114,12 @@ impl ModeChoice {
         }
     }
 
-    /// What the preview shows at this aim and talker direction. Angles are
+    /// What the preview shows at this aim and talker direction, both in device
+    /// degrees; the preview is in screen degrees (`kit::direction`). Angles are
     /// rounded (1° aim, 5° talker), so equal frames compare equal and skip redraws.
     pub fn preview(self, aim_deg: f32, doa_deg: f32) -> Preview {
-        let aim = aim_deg.round().rem_euclid(360.0);
-        let doa = ((doa_deg / DOA_STEP).round() * DOA_STEP).rem_euclid(360.0);
+        let aim = screen_from_device(aim_deg).round().rem_euclid(360.0);
+        let doa = ((screen_from_device(doa_deg) / DOA_STEP).round() * DOA_STEP).rem_euclid(360.0);
         let aimed = |a: f32| Preview {
             lobes: vec![(a, aim)],
             handle: Some(aim),
@@ -188,8 +190,10 @@ impl Screen for AudioModeScreen {
             move |event| {
                 let mut aim = aim.borrow_mut();
                 match event {
-                    AimEvent::Moving(degrees) => aim.dragging = Some(degrees),
+                    // The picker reports screen degrees; aims are device degrees.
+                    AimEvent::Moving(degrees) => aim.dragging = Some(device_from_screen(degrees)),
                     AimEvent::Done(degrees) => {
+                        let degrees = device_from_screen(degrees);
                         aim.dragging = None;
                         aim.pending = Some(degrees);
                         aim_dispatch.command(Command::SetBeamAim(degrees));
@@ -264,7 +268,7 @@ mod tests {
     fn focused_snap() -> UiSnapshot {
         let mut snap = snap();
         snap.audio.mode = AudioMode::Cardioid;
-        snap.audio.beam_aim_deg = 300.0;
+        snap.audio.beam_aim_deg = 120.0; // screen 300°, as in the mockup
         snap
     }
 
@@ -292,7 +296,7 @@ mod tests {
                 initial_az_deg: 0.0,
             };
             snap.audio.doa_active = true;
-            snap.audio.doa_horizontal = 40.0;
+            snap.audio.doa_horizontal = 220.0; // screen 40°
             let mut screen = AudioModeScreen::default();
             screen.build(root, &f.ctx, &snap);
             assert_targets_ok(root);
@@ -301,7 +305,7 @@ mod tests {
             assert!(!screen.picker.as_ref().unwrap().aim_area().is_clickable());
             // Silence keeps the last direction; voice from 200° turns it.
             snap.audio.doa_active = false;
-            snap.audio.doa_horizontal = 200.0;
+            snap.audio.doa_horizontal = 20.0; // screen 200°
             screen.update(&snap);
             assert_eq!(first.pixel(219, 104), lv.render().pixel(219, 104));
             snap.audio.doa_active = true;
@@ -324,16 +328,17 @@ mod tests {
             picker.drag_to(250, 134, true);
             let commands = f.commands();
             assert!(
-                matches!(commands.as_slice(), [Command::SetBeamAim(d)] if (d - 90.0).abs() < 0.5),
+                // Screen 90° (right of the dial) is the listener's right: device 270°.
+                matches!(commands.as_slice(), [Command::SetBeamAim(d)] if (d - 270.0).abs() < 0.5),
                 "{commands:?}"
             );
-            // The service has not applied it yet: beam_aim_deg is still 300.
+            // The service has not applied it yet: beam_aim_deg is still 120.
             screen.update(&snap);
             let bright = |[r, g, b]: [u8; 3]| r > 200 && g > 200 && b > 200;
             assert!(bright(lv.render().pixel(250, 134)), "handle stays at 90°");
             // Once the snapshot agrees, the pending aim is dropped.
             let mut applied = snap.clone();
-            applied.audio.beam_aim_deg = 90.0;
+            applied.audio.beam_aim_deg = 270.0;
             screen.update(&applied);
             assert!(screen.aim.borrow().pending.is_none());
         });
@@ -400,10 +405,16 @@ mod tests {
         }
         assert!(ModeChoice::Focused.aimable() && ModeChoice::TwoSides.aimable());
         assert!(!ModeChoice::FollowTalker.aimable() && !ModeChoice::Stereo.aimable());
-        assert_eq!(ModeChoice::Focused.preview(300.4, 0.0).handle, Some(300.0));
+        // Device degrees in, screen degrees out (`kit::direction`).
+        assert_eq!(ModeChoice::Focused.preview(120.4, 0.0).handle, Some(300.0));
         assert_eq!(
-            ModeChoice::FollowTalker.preview(0.0, 43.0).lobes,
+            ModeChoice::FollowTalker.preview(0.0, 223.0).lobes,
             vec![(0.5, 45.0)]
+        );
+        // Talking front-left (device 45°) draws at the dial's lower left.
+        assert_eq!(
+            ModeChoice::FollowTalker.preview(0.0, 45.0).lobes,
+            vec![(0.5, 225.0)]
         );
     }
 }

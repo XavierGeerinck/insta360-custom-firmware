@@ -6,6 +6,7 @@
 
 use crate::kit::components::buttons::{Side, SideButton};
 use crate::kit::components::dial::{Dial, RingStyle};
+use crate::kit::direction::screen_from_device;
 use crate::kit::dispatch::Dispatcher;
 use crate::kit::fonts::Font;
 use crate::kit::icons;
@@ -28,7 +29,8 @@ pub const TIMER_HOURS_Y: i32 = 112;
 pub const RING_TEXT_W: i32 = 124;
 
 /// What the dial ring shows: a style and, while someone talks, the wedge's
-/// direction in whole device degrees (whole degrees keep redraws rare).
+/// direction in whole screen degrees (`kit::direction`; whole degrees keep
+/// redraws rare).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RingLook {
     pub style: RingStyle,
@@ -37,7 +39,8 @@ pub struct RingLook {
 
 /// The wedge, while voice is detected and the dial style follows talkers.
 fn talker_if(snap: &UiSnapshot, follows: bool) -> Option<i16> {
-    (follows && snap.audio.doa_active).then(|| snap.audio.doa_horizontal.round() as i16)
+    (follows && snap.audio.doa_active)
+        .then(|| screen_from_device(snap.audio.doa_horizontal).round() as i16)
 }
 
 /// Home's ring: red when muted, teal while a call or the computer uses the
@@ -374,6 +377,7 @@ pub mod fixtures {
         snap.wifi.connected = true;
         snap.clock = "14:32".into();
         snap.battery.level = 82;
+        snap.battery.voltage = 3_800;
         snap.battery.voltage = 3_900;
         snap.settings.first_run_done = true;
         snap.now_ms = 10_000;
@@ -485,7 +489,8 @@ mod tests {
             }
         );
         snap.audio.doa_active = true;
-        snap.audio.doa_horizontal = 306.6;
+        // Device 126.6° is screen 306.6°.
+        snap.audio.doa_horizontal = 126.6;
         assert_eq!(
             home_ring(&snap).talker,
             None,
@@ -514,7 +519,7 @@ mod tests {
         let mut rec = UiSnapshot::default();
         rec.meeting.recording = true;
         rec.audio.doa_active = true;
-        rec.audio.doa_horizontal = 60.0;
+        rec.audio.doa_horizontal = 240.0;
         assert_eq!(
             recording_ring(&rec),
             RingLook {
