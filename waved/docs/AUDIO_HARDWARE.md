@@ -445,6 +445,12 @@ promotion to `AudioConfig` only if tuning evidence demands.
 **On-device test:** test 6 of `scripts/test-doa-improvements.sh`
 (subjective — operator listens to moving-source recording).
 
+`/tmp/audio_stats.json` carries `beam: { az_deg, el_deg, omni_mix }` from
+the latest processed frame (C19): where the beam points and how far it leans
+on the plain average. In Whole room `omni_mix` 0 means the mics are lined up
+on the talker, 1 the plain average (−12 to −25 dB at 4 kHz off-axis); in
+Steered it is the omni blend above. The fixed modes report their aim and 0.
+
 ### Directional-mode bass (C18, simulated 2026-10-06)
 
 A first-order differential `front − back(t − τ)` responds like

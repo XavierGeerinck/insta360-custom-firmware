@@ -631,6 +631,8 @@ impl AudioService {
             residual_echo_suppress_active_db: config.residual_echo_suppress_active_db,
             uplink_makeup_gain_db: config.uplink_makeup_gain_db,
             noise_suppression_backend: self.dsp_chain.environmental_ns_backend.to_string(),
+            // Filled in by the beamforming path.
+            beam: None,
         };
         metrics.update_suppression();
         metrics
@@ -724,6 +726,12 @@ impl AudioService {
                 &self.ref_mono_scratch,
             );
             p.aec_metrics = metrics;
+            let (az_deg, el_deg) = self.beamformer.direction();
+            p.aec_metrics.beam = Some(crate::processed_frame::BeamMetrics {
+                az_deg,
+                el_deg,
+                omni_mix: self.beamformer.omni_mix(),
+            });
             if let Some((l, r)) = beam_out.stereo {
                 let (left, right, gain) = crate::processed_frame::rebuild_stereo(
                     &l,
@@ -2050,6 +2058,27 @@ mod tests {
         let frame = frame.unwrap();
         assert!(frame.confidence > 0.0, "a clean plane wave is not zero-confidence");
         assert_eq!(state.borrow().doa_confidence, frame.confidence);
+    }
+
+    #[test]
+    fn the_frame_carries_what_the_beam_is_doing() {
+        // Whole room tracking a talker at 90°: the frame reports the
+        // beamformer's own direction and blend, for /tmp/audio_stats.json.
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        let mut last = None;
+        for _ in 0..20 {
+            last = Some(svc.process_frame(&plane_wave_8ch(90.0, 480)));
+        }
+        let beam = last
+            .unwrap()
+            .aec_metrics
+            .beam
+            .expect("8-channel frames report the beam");
+        let (az, el) = svc.beamformer.direction();
+        assert_eq!(beam.az_deg, az);
+        assert_eq!(beam.el_deg, el);
+        assert_eq!(beam.omni_mix, svc.beamformer.omni_mix());
+        assert!(beam.omni_mix < 1.0, "a clear talker ramps off the plain average");
     }
 
     #[test]

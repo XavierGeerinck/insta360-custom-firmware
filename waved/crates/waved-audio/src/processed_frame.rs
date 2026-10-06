@@ -37,6 +37,22 @@ pub struct AecFrameMetrics {
     /// Fixed gain before noise suppression (`crate::makeup`), in dB.
     pub uplink_makeup_gain_db: u8,
     pub noise_suppression_backend: String,
+    /// What the beam did this frame; `None` off the 8-channel path. The
+    /// stats publish it at the top level (`AudioStats::beam`), not here.
+    #[serde(skip)]
+    pub beam: Option<BeamMetrics>,
+}
+
+/// Where the beam pointed and how far it leaned on the plain average for
+/// one frame (C19): shows whether Whole room's talker alignment and the
+/// steered tracker engage in a real room.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct BeamMetrics {
+    pub az_deg: f32,
+    pub el_deg: f32,
+    /// 0 = the pattern (Whole room: the sum aligned on the talker),
+    /// 1 = the plain 8-mic average.
+    pub omni_mix: f32,
 }
 
 impl Default for AecFrameMetrics {
@@ -55,6 +71,7 @@ impl Default for AecFrameMetrics {
             residual_echo_suppress_active_db: 0,
             uplink_makeup_gain_db: 0,
             noise_suppression_backend: "off".to_string(),
+            beam: None,
         }
     }
 }
