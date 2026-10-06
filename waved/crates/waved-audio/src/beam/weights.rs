@@ -105,6 +105,25 @@ pub fn hemispheric_weights(
     }
 }
 
+/// Delays (in samples, all ≥ 0) that align a plane wave from (azimuth,
+/// elevation) across the mics, indexed by ALSA channel. The mic the wave
+/// reaches first is delayed most; summing the delayed channels adds the
+/// talker in phase at every frequency.
+pub fn align_delays(
+    geom: &MicGeometry,
+    azimuth_deg: f32,
+    elevation_deg: f32,
+    sample_rate: u32,
+) -> [f32; 8] {
+    let d = direction_vector(azimuth_deg, elevation_deg);
+    let lead: [f32; 8] = std::array::from_fn(|ch| {
+        let p = geom.position_for_alsa(ch);
+        (p.x * d.x + p.y * d.y + p.z * d.z) * 1e-3 / SPEED_OF_SOUND_M_S * sample_rate as f32
+    });
+    let earliest = lead.iter().copied().fold(f32::INFINITY, f32::min);
+    lead.map(|l| l - earliest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -437,10 +437,15 @@ impl AudioService {
         let dsp_chain = build_dsp_chain(frame_size, sample_rate, initial_nr, aec_config.clone());
         let mut beamformer = Beamformer::new(geometry.clone(), sample_rate);
         beamformer.set_mode(initial_mode.clone());
+        if matches!(initial_mode, waved_state::AudioMode::Omni) {
+            beamformer.set_omni_mix(1.0);
+        }
         let steered = match &initial_mode {
             waved_state::AudioMode::Steered { initial_az_deg } => {
                 Some(SteeredBeam::new(*initial_az_deg))
             }
+            // Whole room lines the mics up on the talker (`Beamformer`).
+            waved_state::AudioMode::Omni => Some(SteeredBeam::unsteered()),
             _ => None,
         };
         let (doa, doa_backend, _fallback) =
@@ -888,10 +893,14 @@ impl AudioService {
                     waved_state::AudioMode::Steered { initial_az_deg } => {
                         Some(SteeredBeam::new(*initial_az_deg))
                     }
+                    waved_state::AudioMode::Omni => Some(SteeredBeam::unsteered()),
                     _ => None,
                 };
                 self.beamformer.set_mode(mode.clone());
-                self.beamformer.set_omni_mix(0.0); // reset crossfade for non-steered modes
+                // Whole room starts on the plain average until a talker is
+                // heard; the other non-steered modes don't blend.
+                let start_mix = if matches!(mode, waved_state::AudioMode::Omni) { 1.0 } else { 0.0 };
+                self.beamformer.set_omni_mix(start_mix);
                 self.mode = mode.clone();
                 self.stereo_side_gain = 0.0;
                 self.audio_tx.send_modify(|s| s.mode = mode);

@@ -40,8 +40,14 @@ pub struct Beamformer {
     back_delay_r: f32,
     is_stereo: bool,
     is_omni: bool,
+    /// Whole room (Omni): per-channel delays that line the eight mics up on
+    /// the tracked talker. Summing unaligned mics cancels the 2–6 kHz voice
+    /// range off the vertical (−12 dB at 4 kHz from the side, −25 dB with the
+    /// mouth 30° up), which made calls sound muffled and far away.
+    align_delays: [f32; 8],
     /// In [0, 1]. 0 = pure pattern (cardioid/super/fig8/stereo), 1 = pure
-    /// omni-mix output. Only used for Steered mode; other modes ignore.
+    /// omni-mix output. Steered mode blends towards the omni average; Whole
+    /// room blends its aligned sum towards the plain average.
     omni_mix: f32,
 }
 
@@ -68,7 +74,9 @@ impl Beamformer {
             back_delay_r: 0.0,
             is_stereo: false,
             is_omni: true,
-            omni_mix: 0.0,
+            align_delays: [0.0; 8],
+            // Starts in Whole room with no direction: the plain average.
+            omni_mix: 1.0,
         };
         s.recompute();
         s
@@ -76,6 +84,9 @@ impl Beamformer {
 
     pub fn set_mode(&mut self, mode: AudioMode) {
         if mode != self.mode {
+            // Whole room starts on the plain average until it has a talker;
+            // the patterns start unblended.
+            self.omni_mix = if matches!(mode, AudioMode::Omni) { 1.0 } else { 0.0 };
             self.mode = mode;
             self.recompute();
         }
@@ -102,6 +113,12 @@ impl Beamformer {
         self.is_omni = matches!(self.mode, AudioMode::Omni);
         self.is_stereo = matches!(self.mode, AudioMode::Stereo);
         if self.is_omni {
+            self.align_delays = weights::align_delays(
+                &self.geom,
+                self.doa_az_deg,
+                self.doa_el_deg,
+                self.sample_rate,
+            );
             return;
         }
 
@@ -141,11 +158,15 @@ impl Beamformer {
             }
 
             if self.is_omni {
-                let mut sum = 0.0f32;
+                // Delay-and-sum on the talker, faded towards the plain
+                // average while the direction is unknown (`omni_mix` 1).
+                let (mut aligned, mut plain) = (0.0f32, 0.0f32);
                 for alsa_ch in 0..8 {
-                    sum += self.delays[alsa_ch].read(0.0);
+                    aligned += self.delays[alsa_ch].read(self.align_delays[alsa_ch]);
+                    plain += self.delays[alsa_ch].read(0.0);
                 }
-                mono.push(sum / 8.0);
+                let mix = self.omni_mix;
+                mono.push(((1.0 - mix) * aligned + mix * plain) / 8.0);
                 continue;
             }
 
@@ -245,6 +266,68 @@ mod tests {
         }
         let sq: f32 = xs.iter().map(|x| x * x).sum();
         (sq / xs.len() as f32).sqrt()
+    }
+
+    /// Gain in dB of the beam's mono output for a sine from (az, el).
+    fn tone_gain_db(b: &mut Beamformer, az: f32, el: f32, freq: f32) -> f32 {
+        let geom = MicGeometry::default();
+        let d = weights::direction_vector(az, el);
+        let omega = 2.0 * std::f32::consts::PI * freq / 48_000.0;
+        let frames = 9_600;
+        let mut x = vec![0.0; frames * 8];
+        for ch in 0..8 {
+            let p = geom.position_for_alsa(ch);
+            let tau = (p.x * d.x + p.y * d.y + p.z * d.z) * 1e-3 / 343.0 * 48_000.0;
+            for i in 0..frames {
+                x[i * 8 + ch] = ((i as f32 + tau) * omega).sin();
+            }
+        }
+        let y = b.process(&x);
+        20.0 * (rms(&y.mono[2_400..]) / std::f32::consts::FRAC_1_SQRT_2).log10()
+    }
+
+    #[test]
+    fn whole_room_on_the_talker_keeps_the_voice_range() {
+        // Mouth 30° above the table, in front: the plain average lost 25 dB
+        // at 4 kHz there. Aligned on the talker it stays within ~1.5 dB
+        // (linear-interpolation delays cost a little at the top).
+        let mut b = Beamformer::new(MicGeometry::default(), 48_000);
+        b.set_mode(AudioMode::Omni);
+        b.set_doa(0.0, 30.0);
+        b.set_omni_mix(0.0);
+        for freq in [250.0, 1_000.0, 2_000.0, 3_000.0, 4_000.0, 6_000.0, 8_000.0] {
+            b.reset();
+            let db = tone_gain_db(&mut b, 0.0, 30.0, freq);
+            assert!(db.abs() < 1.5, "{freq} Hz: {db:.1} dB");
+        }
+    }
+
+    #[test]
+    fn whole_room_without_a_direction_is_the_plain_average() {
+        let mut b = Beamformer::new(MicGeometry::default(), 48_000);
+        b.set_mode(AudioMode::Omni);
+        b.set_doa(0.0, 30.0);
+        b.set_omni_mix(1.0);
+        let db = tone_gain_db(&mut b, 0.0, 30.0, 4_000.0);
+        assert!(db < -20.0, "the unaligned average cancels 4 kHz off-axis: {db:.1} dB");
+        assert!(tone_gain_db(&mut b, 0.0, 30.0, 250.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn align_delays_hold_back_the_mic_the_wave_reaches_first() {
+        let geom = MicGeometry::default();
+        let delays = weights::align_delays(&geom, 0.0, 0.0, 48_000);
+        assert!(delays.iter().all(|&d| d >= 0.0));
+        assert!(delays.contains(&0.0));
+        let front = (0..8).max_by(|&a, &b| {
+            geom.position_for_alsa(a).x.total_cmp(&geom.position_for_alsa(b).x)
+        });
+        let most = (0..8).max_by(|&a, &b| delays[a].total_cmp(&delays[b]));
+        assert_eq!(
+            geom.position_for_alsa(front.unwrap()).x,
+            geom.position_for_alsa(most.unwrap()).x,
+            "a front mic waits longest for a wave from the front"
+        );
     }
 
     #[test]

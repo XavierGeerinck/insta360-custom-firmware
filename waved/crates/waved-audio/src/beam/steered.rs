@@ -45,6 +45,15 @@ impl SteeredBeam {
         }
     }
 
+    /// For Whole room: no direction yet, so start fully on the plain average
+    /// (`omni_mix` 1) and ramp to the aligned sum once a talker is heard.
+    pub fn unsteered() -> Self {
+        Self {
+            omni_mix: 1.0,
+            ..Self::new(0.0)
+        }
+    }
+
     /// Feed one DoA frame. Returns the smoothed beam direction + omni_mix.
     pub fn on_doa_frame(&mut self, frame: &DoaFrame) -> SteeredDirection {
         if frame.vad
