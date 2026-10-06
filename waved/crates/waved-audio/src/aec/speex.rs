@@ -80,11 +80,27 @@ impl SpeexEchoCanceller {
         if state.is_null() {
             return Err(SpeexInitError::EchoAllocation);
         }
-        Ok(Self {
+        let this = Self {
             state,
             frame_size,
             ref_mono_buf: vec![0; frame_size],
-        })
+        };
+        // speexdsp assumes 8 kHz until told otherwise. At 8 kHz its DC notch
+        // radius is 0.9, which at 48 kHz high-passes near 760 Hz and took
+        // 11-17 dB off every voice (device pass, 2026-10-06).
+        let mut rate = sample_rate as c_int;
+        // SAFETY: live state; `rate` outlives the synchronous call.
+        let rc = unsafe {
+            sys::speex_echo_ctl(
+                this.state,
+                sys::SPEEX_ECHO_SET_SAMPLING_RATE,
+                &mut rate as *mut c_int as *mut c_void,
+            )
+        };
+        if rc != 0 {
+            return Err(SpeexInitError::Control("SPEEX_ECHO_SET_SAMPLING_RATE"));
+        }
+        Ok(this)
     }
 
     /// Exposed so `SpeexNoiseSuppressor` can link its preprocessor to the same
@@ -488,6 +504,36 @@ mod tests {
             mic[i] = echo.clamp(i16::MIN as f32, i16::MAX as f32) as i16;
         }
         mic
+    }
+
+    #[test]
+    fn linear_aec_passes_near_end_speech_with_a_silent_reference() {
+        // A voice fundamental (250 Hz) must come through when nothing plays.
+        // Without SPEEX_ECHO_SET_SAMPLING_RATE speexdsp assumes 8 kHz and its
+        // DC notch high-passes 48 kHz audio near 760 Hz: speech lost 11-17 dB
+        // on the device (2026-10-06).
+        let mut aec = SpeexEchoCanceller::try_new(1024, 48_000).unwrap();
+        let silent = vec![0i16; 1024];
+        let (mut input, mut output) = (Vec::new(), Vec::new());
+        for frame in 0..60 {
+            let mic: Vec<i16> = (0..1024)
+                .map(|i| {
+                    let t = (frame * 1024 + i) as f32 / 48_000.0;
+                    ((2.0 * std::f32::consts::PI * 250.0 * t).sin() * 2_000.0) as i16
+                })
+                .collect();
+            let mut out = vec![0i16; 1024];
+            aec.process(&mic, &silent, &mut out);
+            if frame >= 10 {
+                input.extend_from_slice(&mic);
+                output.extend_from_slice(&out);
+            }
+        }
+        let rms = |x: &[i16]| {
+            (x.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / x.len() as f64).sqrt()
+        };
+        let loss_db = 20.0 * (rms(&input) / rms(&output).max(0.01)).log10();
+        assert!(loss_db.abs() < 1.0, "250 Hz lost {loss_db:.1} dB with a silent reference");
     }
 
     #[test]
