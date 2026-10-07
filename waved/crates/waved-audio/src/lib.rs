@@ -4,6 +4,7 @@ pub mod beam;
 pub mod callbacks;
 pub mod capture;
 pub mod cushion;
+pub mod dereverb;
 pub mod doa;
 pub mod fixtures;
 pub mod integrity;
@@ -15,6 +16,7 @@ pub mod processed_frame;
 pub mod spectrum;
 pub mod stats_collector;
 pub mod stereo_align;
+pub mod uplink_voice;
 
 #[cfg(feature = "simulate")]
 pub mod simulate;
@@ -224,6 +226,11 @@ impl AecProcessor {
 
 struct DspChain {
     aec: AecProcessor,
+    /// Dereverb and voice EQ (`uplink_voice`), unless the config turns it off.
+    voice: Option<uplink_voice::UplinkVoice>,
+    /// The same EQ for the Stereo side pair (left, right), so the side does
+    /// not stay bassy around the shaped mid.
+    side_eq: Option<[uplink_voice::VoiceEq; 2]>,
     environmental_ns: Option<Box<dyn NoiseSuppressor>>,
     environmental_ns_backend: &'static str,
 }
@@ -232,6 +239,7 @@ impl DspChain {
     /// How far the processed mid lags the beam, in samples.
     fn latency_samples(&self) -> usize {
         self.aec.latency_samples()
+            + self.voice.as_ref().map_or(0, |voice| voice.latency_samples())
             + self
                 .environmental_ns
                 .as_ref()
@@ -255,6 +263,15 @@ fn build_dsp_chain(
     nr: NrLevel,
     aec_config: AecConfig,
 ) -> DspChain {
+    let voice = aec_config
+        .uplink_voice
+        .then(|| uplink_voice::UplinkVoice::new(frame_size, sample_rate));
+    let side_eq = aec_config.uplink_voice.then(|| {
+        [
+            uplink_voice::VoiceEq::new(sample_rate),
+            uplink_voice::VoiceEq::new(sample_rate),
+        ]
+    });
     let aec = match speex::SpeexAecStage::try_new(frame_size, sample_rate, aec_config.clone()) {
         Ok(stage) => {
             tracing::info!(
@@ -277,6 +294,8 @@ fn build_dsp_chain(
     };
     let mut chain = DspChain {
         aec,
+        voice,
+        side_eq,
         environmental_ns: None,
         environmental_ns_backend: "off",
     };
@@ -468,8 +487,9 @@ impl AudioService {
             waved_state::AudioMode::Steered { initial_az_deg } => {
                 Some(SteeredBeam::new(*initial_az_deg))
             }
-            // Whole room lines the mics up on the talker (`Beamformer`).
-            waved_state::AudioMode::Omni => Some(SteeredBeam::unsteered()),
+            // Whole room stays on the plain average: aligning on the talker
+            // lost treble in a real room (2026-10-07, see
+            // `whole_room_stays_on_the_plain_average_with_a_clear_talker`).
             _ => None,
         };
         let (doa, doa_backend, _fallback) =
@@ -639,6 +659,11 @@ impl AudioService {
             .process_residual(&mut self.aec_residual_scratch);
         let post_residual_rms = rms_i16(&self.aec_residual_scratch);
 
+        if let Some(voice) = self.dsp_chain.voice.as_mut() {
+            voice.process(&mut self.aec_residual_scratch);
+        }
+        let post_voice_rms = rms_i16(&self.aec_residual_scratch);
+
         // Raise the voice before noise suppression, which removes speech
         // that is still near the noise floor (`makeup`).
         let makeup_db = self.dsp_chain.aec.config().uplink_makeup_gain_db;
@@ -654,6 +679,7 @@ impl AudioService {
             mic_pre_aec_rms: rms_i16(&self.mic_mono_scratch),
             mic_post_linear_aec_rms: rms_i16(&self.aec_linear_scratch),
             mic_post_residual_echo_rms: post_residual_rms,
+            mic_post_voice_rms: post_voice_rms,
             mic_post_noise_suppression_rms: rms_i16(&self.aec_residual_scratch),
             mic_uplink_rms: 0.0,
             linear_erle_db: None,
@@ -765,7 +791,12 @@ impl AudioService {
                 omni_mix: self.beamformer.omni_mix(),
             });
             if let Some((l, r)) = beam_out.stereo {
-                let (l, r) = self.side_delay.process(&l, &r, self.dsp_chain.latency_samples());
+                let (mut l, mut r) =
+                    self.side_delay.process(&l, &r, self.dsp_chain.latency_samples());
+                if let Some([eq_l, eq_r]) = self.dsp_chain.side_eq.as_mut() {
+                    eq_l.process(&mut l);
+                    eq_r.process(&mut r);
+                }
                 let (left, right, gain) = crate::processed_frame::rebuild_stereo(
                     &l,
                     &r,
@@ -934,12 +965,11 @@ impl AudioService {
                     waved_state::AudioMode::Steered { initial_az_deg } => {
                         Some(SteeredBeam::new(*initial_az_deg))
                     }
-                    waved_state::AudioMode::Omni => Some(SteeredBeam::unsteered()),
                     _ => None,
                 };
                 self.beamformer.set_mode(mode.clone());
-                // Whole room starts on the plain average until a talker is
-                // heard; the other non-steered modes don't blend.
+                // Whole room is the plain average; the other non-steered
+                // modes don't blend.
                 let start_mix = if matches!(mode, waved_state::AudioMode::Omni) { 1.0 } else { 0.0 };
                 self.beamformer.set_omni_mix(start_mix);
                 // Entering Stereo, the side starts from silence and fades in.
@@ -948,6 +978,9 @@ impl AudioService {
                 if mode == waved_state::AudioMode::Stereo && self.mode != mode {
                     self.stereo_side_gain = 0.0;
                     self.side_delay.reset();
+                    if let Some(side_eq) = self.dsp_chain.side_eq.as_mut() {
+                        side_eq.iter_mut().for_each(uplink_voice::VoiceEq::reset);
+                    }
                 }
                 self.mode = mode.clone();
                 self.audio_tx.send_modify(|s| s.mode = mode);
@@ -1329,7 +1362,7 @@ mod tests {
         assert_eq!(metrics.noise_suppression_backend, "off");
         assert!((metrics.mic_pre_aec_rms - 353.2).abs() < 1.0);
         assert_eq!(metrics.uplink_makeup_gain_db, 18);
-        let makeup = metrics.mic_post_noise_suppression_rms / metrics.mic_post_residual_echo_rms;
+        let makeup = metrics.mic_post_noise_suppression_rms / metrics.mic_post_voice_rms;
         assert!(
             (makeup - crate::makeup::db_to_linear(18)).abs() < 0.05,
             "NR Off adds only the make-up gain before the (absent) denoiser; got {makeup:.3}"
@@ -1384,7 +1417,12 @@ mod tests {
         let frame = AudioFrame::mic_only(samples, mic_channels, sr, 0);
 
         svc.set_doa(0.0, 0.0);
-        let processed = svc.process_frame(&frame);
+        // 480 samples hold ten whole 1 kHz cycles, so the frame repeats
+        // seamlessly; the first periods only fill the uplink's delay.
+        let mut processed = svc.process_frame(&frame);
+        for _ in 0..5 {
+            processed = svc.process_frame(&frame);
+        }
         let rms_front: f32 = {
             let sq: f32 = processed.mic_mono_f32.iter().map(|x| x * x).sum();
             (sq / processed.mic_mono_f32.len() as f32).sqrt()
@@ -1579,12 +1617,24 @@ mod tests {
             )
         };
 
-        let raw = vec![1000i16; 256];
+        // 1.5 kHz: eight whole cycles per 256-sample period, so the frame
+        // repeats seamlessly. Several periods fill the uplink's delay. Quiet
+        // enough that twice the level stays under the recording limiter.
+        let raw: Vec<i16> = (0..256)
+            .map(|i| ((2.0 * std::f32::consts::PI * 1_500.0 * i as f32 / 48_000.0).sin() * 200.0) as i16)
+            .collect();
+        let run = |svc: &mut AudioService, frame: &AudioFrame| {
+            let mut out = svc.process_frame(frame);
+            for _ in 0..15 {
+                out = svc.process_frame(frame);
+            }
+            out
+        };
 
         // Unity (100) — reference level through the DSP chain.
         let mut svc_unity = make_svc(100);
         let frame_unity = AudioFrame::mic_only(raw.clone(), 1, 48_000, 0);
-        let out_unity = svc_unity.process_frame(&frame_unity);
+        let out_unity = run(&mut svc_unity, &frame_unity);
         let max_unity = out_unity
             .mic_mono_f32
             .iter()
@@ -1594,7 +1644,7 @@ mod tests {
         // Double gain (200) — same DSP chain, fresh service, identical input.
         let mut svc_double = make_svc(200);
         let frame_double = AudioFrame::mic_only(raw, 1, 48_000, 0);
-        let out_double = svc_double.process_frame(&frame_double);
+        let out_double = run(&mut svc_double, &frame_double);
         let max_double = out_double
             .mic_mono_f32
             .iter()
@@ -2075,17 +2125,19 @@ mod tests {
         // Measured: the Speex residual stage shifts by one analysis frame
         // (128 samples at a 1024 period, 240 at 480); DeepFilterNet adds its
         // 480-sample model delay plus the zeros its hop queue inserted while
-        // filling (448 at a 1024 period, none at 480). The recording limiter's
+        // filling (448 at a 1024 period, none at 480). The voice stage's
+        // dereverb lags by its window less one hop (768), plus one hop when
+        // the period is not whole hops (480). The recording limiter's
         // lookahead comes after the Stereo rebuild, so it is left out.
         // DeepFilterNet gates a lone impulse as silence (its 10 ms hop is
         // too quiet), so with NR on the probe is an 85 ms noise burst and
         // the lag is read off the cross-correlation.
         let lookahead = LimiterParams::DEFAULT.lookahead_samples;
         let cases = [
-            (1_024, NrLevel::Off, 128),
-            (480, NrLevel::Off, 240),
-            (1_024, NrLevel::Low, 128 + 448 + 480),
-            (480, NrLevel::Low, 240 + 480),
+            (1_024, NrLevel::Off, 128 + 768),
+            (480, NrLevel::Off, 240 + 1_024),
+            (1_024, NrLevel::Low, 128 + 768 + 448 + 480),
+            (480, NrLevel::Low, 240 + 1_024 + 480),
         ];
         for (frame_size, nr, expected) in cases {
             let (mut svc, _state) =
@@ -2268,9 +2320,10 @@ mod tests {
 
     #[test]
     fn the_frame_carries_what_the_beam_is_doing() {
-        // Whole room tracking a talker at 90°: the frame reports the
+        // Steered tracking a talker at 90°: the frame reports the
         // beamformer's own direction and blend, for /tmp/audio_stats.json.
-        let (mut svc, _state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        let (mut svc, _state) =
+            service_with(waved_state::AudioMode::Steered { initial_az_deg: 0.0 }, 0.0);
         let mut last = None;
         for _ in 0..20 {
             last = Some(svc.process_frame(&plane_wave_8ch(90.0, 480)));
@@ -2285,6 +2338,24 @@ mod tests {
         assert_eq!(beam.el_deg, el);
         assert_eq!(beam.omni_mix, svc.beamformer.omni_mix());
         assert!(beam.omni_mix < 1.0, "a clear talker ramps off the plain average");
+    }
+
+    #[test]
+    fn whole_room_stays_on_the_plain_average_with_a_clear_talker() {
+        // Aligning the mics on the talker cost 5-6 dB above 2.5 kHz on a
+        // room recording (2026-10-07): the measured inter-mic lags do not fit
+        // the geometry, so the plain average is the clearer Whole room.
+        let (mut svc, _state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        for _ in 0..40 {
+            svc.process_frame(&plane_wave_8ch(90.0, 480));
+        }
+        assert_eq!(svc.beamformer.omni_mix(), 1.0);
+        svc.handle_command(Command::SetAudioMode(waved_state::AudioMode::Cardioid));
+        svc.handle_command(Command::SetAudioMode(waved_state::AudioMode::Omni));
+        for _ in 0..40 {
+            svc.process_frame(&plane_wave_8ch(90.0, 480));
+        }
+        assert_eq!(svc.beamformer.omni_mix(), 1.0);
     }
 
     #[test]

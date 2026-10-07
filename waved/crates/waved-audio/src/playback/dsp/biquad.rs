@@ -60,7 +60,12 @@ impl Biquad {
 
 /// Butterworth 2nd-order high-pass — RBJ cookbook formulas with Q = 1/√2.
 pub fn design_butterworth_hpf(cutoff_hz: f32, sample_rate_hz: f32) -> BiquadCoeffs {
-    let q = std::f32::consts::FRAC_1_SQRT_2;
+    design_highpass(cutoff_hz, std::f32::consts::FRAC_1_SQRT_2, sample_rate_hz)
+}
+
+/// RBJ high-pass with an explicit Q; higher-order Butterworth filters
+/// cascade sections at the same cutoff with their own Qs.
+pub fn design_highpass(cutoff_hz: f32, q: f32, sample_rate_hz: f32) -> BiquadCoeffs {
     let w0 = 2.0 * std::f32::consts::PI * cutoff_hz / sample_rate_hz;
     let cos_w0 = w0.cos();
     let alpha = w0.sin() / (2.0 * q);

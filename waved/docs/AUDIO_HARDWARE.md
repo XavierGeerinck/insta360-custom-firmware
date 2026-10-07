@@ -965,6 +965,51 @@ from `/tmp/audio_stats.json` while speaking ~1 m away:
   recording limiter's 96-sample lookahead comes after the rebuild and delays
   mono and pair alike.
 
+## Uplink Voice Tone (device pass, 2026-10-07)
+
+After the level fix, calls sounded "roomy" and "very bassy, not clear on
+speech". Measured offline on a 32 s raw 8-channel recording of the user
+talking in their room (`arecord -D hw:0,2 -c 8 -r 48000 -f S32_LE`, waved
+stopped), replayed through `AudioService::process_frame`:
+
+- **The voice is bass-heavy at the mics.** The fundamental (105–117 Hz) sits
+  about 16 dB over 400–630 Hz. All 8 mics agree within ±2 dB, and the codec's
+  PDM filter modes 1–4 measure identical on a speaker white-noise stimulus
+  (mode 0 is worse at HF), so neither a dull mic nor the codec is the cause.
+- **Stock firmware EQs its mic path.** `/etc/dynamic_eq_config.json` (read by
+  libInstaAudio; `Insta360_SetUplinkEqEnable`): type 4 at 150 Hz Q 0.7
+  (high-pass), type 0 at 90 Hz −6 dB Q 2.0 (peaking), type 2 at 8 kHz +5 dB
+  Q 0.7 (high shelf); mbagc off. waved had no mic EQ.
+- **The Speex residual stage cuts treble with no far end.** Its MMSE gain
+  treats the quiet treble of distant speech as noise: −3 dB at 2.5–5 kHz,
+  −10 dB at 5–8 kHz, −7 dB at 8–12 kHz with a silent reference. The stage now
+  passes the linear output through (delayed by its analysis frame) unless the
+  far end played in the last 500 ms or Speex is the active denoiser.
+- **Whole room's talker alignment lost treble.** Aligning the eight mics on
+  the tracked talker came out 5–6 dB under the plain average above 2.5 kHz,
+  at every elevation tried (−40° to +40°). The inter-mic lags measured by
+  GCC-PHAT on the recording do not fit the geometry: the best plane-wave fit
+  (az 224°, el −58°) misses by 3.3 samples RMS, and ALSA ch2 → ch6 is
+  17 samples where no mic pair is more than 13 apart. Delay-and-sum on the
+  measured lags also loses to the plain average. Whole room now stays on the
+  plain average. **Open:** the mapping or per-channel timing needs a
+  calibration (tap test per mic, `waved-mic-map`) before any pattern that
+  relies on inter-mic delays can be trusted at HF.
+- **Picked by ear** from level-matched clips: dereverb + a voice EQ
+  (`crate::dereverb`, `crate::uplink_voice`) after echo control, before the
+  make-up gain. Dereverb: Lebart late-reverb suppression, T60 0.6 s, 50 ms
+  delay, −15 dB floor, 1024/256 STFT (768 samples, 16 ms; the 1536/384
+  prototype measured within 0.15 dB per octave band). EQ: 4th-order
+  Butterworth high-pass at 160 Hz, low shelf 300 Hz −5 dB, peak 3 kHz +5 dB
+  Q 1, high shelves 2 kHz +7 dB and 8 kHz +5 dB, then +5 dB to restore the
+  level the bass cut removes. The Stereo side pair gets the same EQ.
+  `aec.uplink_voice: false` turns the stage off.
+
+Effect on the recording (octave bands, firmware chain vs before, level
+matched): 80–160 Hz about −13 dB, 2.5–5 kHz +17 dB, 5–8 kHz +19 dB,
+8–12 kHz +27 dB. The replayed firmware chain matches the chosen prototype
+within 0.5 dB from 160 Hz to 12 kHz.
+
 ## Microphone check (milestone 2)
 
 `waved-audio/src/mic_check.rs` watches raw, pre-mute frames in 3 s windows at start-up.

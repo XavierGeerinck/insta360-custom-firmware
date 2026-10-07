@@ -25,6 +25,8 @@ pub struct AecFrameMetrics {
     pub mic_pre_aec_rms: f32,
     pub mic_post_linear_aec_rms: f32,
     pub mic_post_residual_echo_rms: f32,
+    /// After the dereverb and voice EQ (`crate::uplink_voice`).
+    pub mic_post_voice_rms: f32,
     pub mic_post_noise_suppression_rms: f32,
     pub mic_uplink_rms: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,6 +64,7 @@ impl Default for AecFrameMetrics {
             mic_pre_aec_rms: 0.0,
             mic_post_linear_aec_rms: 0.0,
             mic_post_residual_echo_rms: 0.0,
+            mic_post_voice_rms: 0.0,
             mic_post_noise_suppression_rms: 0.0,
             mic_uplink_rms: 0.0,
             linear_erle_db: None,

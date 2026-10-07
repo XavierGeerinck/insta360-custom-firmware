@@ -22,6 +22,9 @@ use crate::audio_config::AecConfig;
 use super::{sys, EchoCanceller, NoiseSuppressor, FILTER_TAIL_MS};
 
 const RESIDUAL_FILTER_TAIL_MS: usize = 128;
+/// How long the residual stage keeps running after the far end goes quiet,
+/// so it still catches the room's echo tail.
+const RESIDUAL_HOLD_MS: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeexInitError {
@@ -315,6 +318,14 @@ pub struct SpeexAecStage {
     shadow_out_scratch: Vec<i16>,
     reference_active: bool,
     echo_suppression_enabled: bool,
+    /// The linear output delayed by one analysis frame, to line up with the
+    /// preprocessor's output when the stage steps aside.
+    dry_delay: Vec<i16>,
+    dry_scratch: Vec<i16>,
+    /// 1 = the preprocessor's output, 0 = the delayed linear output.
+    processed_mix: f32,
+    hold_samples: usize,
+    hold_remaining: usize,
 }
 
 unsafe impl Send for SpeexAecStage {}
@@ -367,6 +378,11 @@ impl SpeexAecStage {
             shadow_out_scratch: vec![0; subframe_size],
             reference_active: false,
             echo_suppression_enabled: true,
+            dry_delay: vec![0; subframe_size],
+            dry_scratch: vec![0; frame_size],
+            processed_mix: 0.0,
+            hold_samples: sample_rate as usize * RESIDUAL_HOLD_MS / 1000,
+            hold_remaining: 0,
         })
     }
 
@@ -416,6 +432,14 @@ impl SpeexAecStage {
         }
     }
 
+    /// Residual echo suppression. With no far end for `RESIDUAL_HOLD_MS`
+    /// (and Speex not acting as the denoiser) there is no echo to remove,
+    /// but the preprocessor still treats the quiet treble of distant speech
+    /// as noise: it took 3 dB at 2.5-5 kHz and 10 dB at 5-8 kHz off a room
+    /// recording (device pass 2026-10-07). The stage then passes the linear
+    /// output through, delayed by the same analysis frame so nothing jumps.
+    /// The preprocessor keeps running so its estimates stay current, and
+    /// each period fades linearly between the two outputs.
     pub fn process_residual(&mut self, samples: &mut [i16]) {
         assert_eq!(samples.len(), self.frame_size, "samples length mismatch");
         if self.reference_active != self.echo_suppression_enabled {
@@ -424,8 +448,39 @@ impl SpeexAecStage {
                 .expect("validated Speex echo suppression control failed at runtime");
             self.echo_suppression_enabled = self.reference_active;
         }
+
+        let lag = self.dry_delay.len();
+        self.dry_scratch[..lag].copy_from_slice(&self.dry_delay);
+        self.dry_scratch[lag..].copy_from_slice(&samples[..samples.len() - lag]);
+        self.dry_delay.copy_from_slice(&samples[samples.len() - lag..]);
+
         for subframe in samples.chunks_exact_mut(self.subframe_size) {
             self.preprocessor.process(subframe);
+        }
+
+        if self.reference_active || self.denoise_enabled {
+            self.hold_remaining = self.hold_samples;
+        } else {
+            self.hold_remaining = self.hold_remaining.saturating_sub(samples.len());
+        }
+        let start = self.processed_mix;
+        let target = if self.reference_active || self.denoise_enabled || self.hold_remaining > 0 {
+            1.0
+        } else {
+            0.0
+        };
+        self.processed_mix = target;
+        if start == 0.0 && target == 0.0 {
+            samples.copy_from_slice(&self.dry_scratch);
+            return;
+        }
+        if start == 1.0 && target == 1.0 {
+            return;
+        }
+        let n = samples.len() as f32;
+        for (i, (out, &dry)) in samples.iter_mut().zip(&self.dry_scratch).enumerate() {
+            let mix = start + (target - start) * (i + 1) as f32 / n;
+            *out = (mix * f32::from(*out) + (1.0 - mix) * f32::from(dry)).round() as i16;
         }
     }
 
@@ -854,6 +909,83 @@ mod tests {
             loss_db <= 3.0,
             "double-talk near-end loss must stay <= 3 dB, got {loss_db:.2} dB"
         );
+    }
+
+    /// Quiet, wideband near-end speech stand-in: the residual stage's noise
+    /// estimator treats its treble as noise (device pass 2026-10-07).
+    fn quiet_noise(len: usize, seed: u32) -> Vec<i16> {
+        let mut seed = seed;
+        (0..len)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (((seed >> 16) as i32 - 32_768) / 256) as i16
+            })
+            .collect()
+    }
+
+    /// Run `frames` periods through the stage; `reference_on(index)` says
+    /// which periods carry a far-end signal. Returns (linear, residual out).
+    fn run_stage(
+        stage: &mut SpeexAecStage,
+        near: &[i16],
+        frame: usize,
+        reference_on: impl Fn(usize) -> bool,
+    ) -> (Vec<i16>, Vec<i16>) {
+        let far = sine(500.0, 48_000, frame, 0.3);
+        let silent = vec![0i16; frame];
+        let mut linear = vec![0i16; near.len()];
+        let mut out = vec![0i16; near.len()];
+        for index in 0..near.len() / frame {
+            let range = index * frame..(index + 1) * frame;
+            let reference = if reference_on(index) { &far } else { &silent };
+            stage.process_linear(&near[range.clone()], reference, &mut linear[range.clone()]);
+            out[range.clone()].copy_from_slice(&linear[range.clone()]);
+            stage.process_residual(&mut out[range]);
+        }
+        (linear, out)
+    }
+
+    #[test]
+    fn residual_stage_passes_the_linear_output_through_while_the_far_end_is_silent() {
+        let frame = 1024;
+        let near = quiet_noise(frame * 20, 0x5eed_0001);
+        let mut stage = SpeexAecStage::try_new(frame, 48_000, AecConfig::default()).unwrap();
+        let (linear, out) = run_stage(&mut stage, &near, frame, |_| false);
+        let lag = stage.analysis_frame_size();
+        assert_eq!(
+            &out[lag..],
+            &linear[..linear.len() - lag],
+            "with no far end the residual stage must only delay the signal"
+        );
+    }
+
+    #[test]
+    fn residual_stage_keeps_suppressing_through_the_echo_tail() {
+        let frame = 1024;
+        let near = quiet_noise(frame * 60, 0x5eed_0002);
+        let mut stage = SpeexAecStage::try_new(frame, 48_000, AecConfig::default()).unwrap();
+        // Far end plays for 20 periods, then stops.
+        let (linear, out) = run_stage(&mut stage, &near, frame, |index| index < 20);
+        let lag = stage.analysis_frame_size();
+        let bypassed = |index: usize| {
+            let range = index * frame..(index + 1) * frame;
+            out[range.start + lag..range.end] == linear[range.start..range.end - lag]
+        };
+        assert!(!bypassed(10), "the residual stage must run while the far end plays");
+        assert!(!bypassed(25), "the residual stage must hold through the echo tail");
+        assert!(bypassed(59), "the residual stage must step aside once the tail is over");
+    }
+
+    #[test]
+    fn residual_stage_never_steps_aside_while_it_is_the_denoiser() {
+        let frame = 1024;
+        let near = quiet_noise(frame * 20, 0x5eed_0003);
+        let mut stage = SpeexAecStage::try_new(frame, 48_000, AecConfig::default()).unwrap();
+        stage.set_denoise(true).unwrap();
+        let (linear, out) = run_stage(&mut stage, &near, frame, |_| false);
+        let lag = stage.analysis_frame_size();
+        let tail = 15 * frame;
+        assert_ne!(&out[tail + lag..], &linear[tail..linear.len() - lag]);
     }
 
     #[test]

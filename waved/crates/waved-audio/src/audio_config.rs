@@ -63,6 +63,10 @@ pub struct AecConfig {
     /// the neural denoiser, which would otherwise remove it. 0 disables it.
     #[serde(default = "default_uplink_makeup_gain_db")]
     pub uplink_makeup_gain_db: u8,
+    /// Dereverb and voice EQ on the uplink before the make-up gain
+    /// (`crate::uplink_voice`). `false` sends the mid unshaped.
+    #[serde(default = "default_uplink_voice")]
+    pub uplink_voice: bool,
 }
 
 fn default_residual_echo_suppress_db() -> u8 {
@@ -74,6 +78,9 @@ fn default_residual_echo_suppress_active_db() -> u8 {
 fn default_uplink_makeup_gain_db() -> u8 {
     18
 }
+fn default_uplink_voice() -> bool {
+    true
+}
 
 impl Default for AecConfig {
     fn default() -> Self {
@@ -81,6 +88,7 @@ impl Default for AecConfig {
             residual_echo_suppress_db: default_residual_echo_suppress_db(),
             residual_echo_suppress_active_db: default_residual_echo_suppress_active_db(),
             uplink_makeup_gain_db: default_uplink_makeup_gain_db(),
+            uplink_voice: default_uplink_voice(),
         }
     }
 }
