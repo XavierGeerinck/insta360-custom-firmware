@@ -994,7 +994,10 @@ stopped), replayed through `AudioService::process_frame`:
   measured lags also loses to the plain average. Whole room now stays on the
   plain average. **Open:** the mapping or per-channel timing needs a
   calibration (tap test per mic, `waved-mic-map`) before any pattern that
-  relies on inter-mic delays can be trusted at HF.
+  relies on inter-mic delays can be trusted at HF. The same calibration should
+  settle the start-up microphone check, which since 2026-10-06 flags the odd
+  ALSA channels (ch5 and ch7 most often, sometimes ch1 and ch3) as under half
+  the median level on most boots and "Ok" on the rest.
 - **Picked by ear** from level-matched clips: dereverb + a voice EQ
   (`crate::dereverb`, `crate::uplink_voice`) after echo control, before the
   make-up gain. Dereverb: Lebart late-reverb suppression, T60 0.6 s, 50 ms

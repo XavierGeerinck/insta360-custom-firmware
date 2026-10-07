@@ -108,7 +108,8 @@ WAVED_BUILD_ID=$(git rev-parse --short HEAD) \
 $(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy --strip-all \
   target/aarch64-unknown-linux-gnu/release/waved "$S/waved"
 adb push "$S/waved" /tmp/waved.new && adb shell md5sum /tmp/waved.new   # compare with md5 -q "$S/waved"
-adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; killall waved; sleep 3; \
+adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; killall waved; \
+  while pidof waved >/dev/null; do sleep 1; done; \
   rm /data/waved/waved && cp /tmp/waved.new /data/waved/waved && chmod 755 /data/waved/waved; \
   start-stop-daemon -S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start'
 ```
@@ -119,6 +120,11 @@ adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; k
   list and drops the `CFLAGS ... -D__ARM_ARCH=8` that `ring` needs.
 - Check `adb shell df -h /data` first. The stopped binary's space is only freed once
   waved exits, which is why the swap happens with the watchdog and waved stopped.
+  Shutdown takes ~2 s (the motor retracts first): if the `cp` starts before waved
+  has exited it fails with "No space left on device" over a partial file. The new
+  binary is still in `/tmp`, so wait for waved to exit and run the swap again.
+- The init script SIGTERMs the first waved 5 s after it starts (display
+  workaround) and rotates `waved.log` to `waved.log.1` past 2 MB at each launch.
 - `start-stop-daemon` needs `-m -p <pidfile>`; without it busybox matches any running
   `/bin/sh` and refuses to start.
 - The framebuffer can be captured for checks with `adb shell 'cat /dev/fb0 | head -c 243200'`

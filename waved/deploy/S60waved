@@ -19,6 +19,11 @@ case "$1" in
         # Start waved with watchdog respawn
         (
             while true; do
+                # /data is small (the binary alone is ~62 MB of it): keep
+                # one previous log past 2 MB instead of appending forever.
+                if [ "$(wc -c < /data/waved/waved.log 2>/dev/null || echo 0)" -gt 2097152 ]; then
+                    mv /data/waved/waved.log /data/waved/waved.log.1
+                fi
                 /data/waved/waved >>/data/waved/waved.log 2>&1
                 echo "waved exited ($?), restarting in 3s..." >>/data/waved/waved.log
                 sleep 3

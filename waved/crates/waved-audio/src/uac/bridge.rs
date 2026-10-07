@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use alsa::pcm::{Access, Format, HwParams, PCM};
 use alsa::{Direction, ValueOr};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::playback::PlaybackService;
 use super::UacStats;
@@ -63,19 +63,45 @@ fn run_downstream(
     stats: Arc<UacStats>,
 ) {
     info!("uac-downstream starting: {}", cfg.device);
+    let mut failures = RepeatFilter::default();
     loop {
-        match open_capture(&cfg) {
-            Ok(pcm) => {
-                if let Err(e) = drain_loop(&pcm, &cfg, &playback, &stats) {
-                    warn!("uac-downstream drain stopped: {e}");
-                }
-            }
-            Err(e) => {
-                warn!("uac-downstream open failed: {e}; retrying in 1 s");
-            }
+        let failure = match open_capture(&cfg) {
+            Ok(pcm) => match drain_loop(&pcm, &cfg, &playback, &stats, &mut failures) {
+                Err(e) => format!("drain stopped: {e}"),
+            },
+            Err(e) => format!("open failed: {e}"),
+        };
+        if failures.is_new(&failure) {
+            warn!("uac-downstream {failure}; retrying every second, quietly until it changes");
+        } else {
+            debug!("uac-downstream {failure}");
         }
         // Either ALSA closed or open failed — back off and retry.
         std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// Keeps a failure that repeats on every retry from filling the log. While
+/// the host is attached but not playing, `f_uac2` fails each read with EIO,
+/// so the loop retries every 3 s for as long as the device stays idle.
+#[derive(Default)]
+struct RepeatFilter {
+    last: Option<String>,
+}
+
+impl RepeatFilter {
+    /// Whether `failure` differs from the one before it.
+    fn is_new(&mut self, failure: &str) -> bool {
+        if self.last.as_deref() == Some(failure) {
+            return false;
+        }
+        self.last = Some(failure.to_owned());
+        true
+    }
+
+    /// Forget the last failure; true if there was one.
+    fn clear(&mut self) -> bool {
+        self.last.take().is_some()
     }
 }
 
@@ -101,7 +127,8 @@ fn drain_loop(
     cfg: &UacBridgeConfig,
     playback: &Arc<PlaybackService>,
     stats: &Arc<UacStats>,
-) -> Result<(), alsa::Error> {
+    failures: &mut RepeatFilter,
+) -> Result<std::convert::Infallible, alsa::Error> {
     let frame_samples = cfg.channels as usize;
     let period_samples = cfg.period_frames * frame_samples;
     let mut buf: Vec<i16> = vec![0; period_samples];
@@ -114,6 +141,9 @@ fn drain_loop(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Ok(frames) => {
+                if failures.clear() {
+                    info!("uac-downstream: the host is playing");
+                }
                 if playback.queue_depth() >= drop_threshold {
                     stats.downstream_drops.fetch_add(1, Ordering::Relaxed);
                     continue;
@@ -149,3 +179,20 @@ fn set_realtime_priority(prio: i32) {
 
 #[cfg(not(target_os = "linux"))]
 fn set_realtime_priority(_prio: i32) {}
+
+#[cfg(test)]
+mod tests {
+    use super::RepeatFilter;
+
+    #[test]
+    fn a_failure_that_repeats_is_reported_once_until_audio_flows_again() {
+        let mut failures = RepeatFilter::default();
+        assert!(failures.is_new("drain stopped: EIO"));
+        assert!(!failures.is_new("drain stopped: EIO"));
+        assert!(!failures.is_new("drain stopped: EIO"));
+        assert!(failures.is_new("open failed: ENODEV"));
+        assert!(failures.clear());
+        assert!(!failures.clear());
+        assert!(failures.is_new("drain stopped: EIO"));
+    }
+}
