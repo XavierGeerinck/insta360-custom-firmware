@@ -1824,6 +1824,9 @@ mod wiring_tests {
         let mut config = WavedConfig::default();
         config.storage.prune_uploaded_at_percent = 100;
         config.storage.minimum_free_mb = 0;
+        // The drain feeds the pre-roll buffer, which only fills with
+        // pre-recording on (off by default since 2026-10-06).
+        config.recording.pre_recording = true;
         let mut svc = MeetingService::new_with_integrity(
             config,
             db_path.to_str().unwrap(),

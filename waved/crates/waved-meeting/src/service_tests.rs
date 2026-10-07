@@ -12,12 +12,16 @@ pub(crate) fn quiet_config(upload_mode: UploadMode) -> WavedConfig {
     config.api.upload_mode = upload_mode;
     config.storage.prune_uploaded_at_percent = 100;
     config.storage.minimum_free_mb = 0;
+    // Pre-recording is off by default since 2026-10-06; these tests exercise
+    // the pre-roll, so they turn it on (tests that need it off say so).
+    config.recording.pre_recording = true;
     config
 }
 
 pub(crate) fn settings_for(upload_mode: UploadMode) -> SettingsState {
     SettingsState {
         upload_mode,
+        pre_recording: true,
         ..SettingsState::default()
     }
 }
@@ -264,7 +268,7 @@ async fn pre_roll_follows_the_setting() {
     )
     .await;
 
-    // On (the default): 50 idle frames (0.5 s) become the pre-roll.
+    // On (as the rig sets it): 50 idle frames (0.5 s) become the pre-roll.
     rig.feed(50, 0.5).await;
     let first = rig.start().await;
     rig.feed(20, 0.25).await;
