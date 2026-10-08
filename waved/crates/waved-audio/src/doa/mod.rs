@@ -11,11 +11,26 @@ pub use stream::{DoaBackend, DoaFrame, DoaPublisher};
 
 use crate::beam::MicGeometry;
 use gcc_phat::GccPhat;
-use vad::{EnergyVad, Vad};
+use rustfft::num_complex::Complex;
 
 /// Speed of sound in air (m/s). Used to compute expected per-pair τ for
 /// the diagnostic dump.
 const SPEED_OF_SOUND_M_S: f32 = 343.0;
+
+/// A frame counts as speech when the correlation band is this far above the
+/// tracked noise floor. The old fixed −70 dBFS threshold sat at this room's
+/// floor, so the gaps between words counted as speech and gave random
+/// directions.
+const VAD_MARGIN_DB: f32 = 9.0;
+/// The floor follows the band level down at once and up at this rate, so a
+/// steady source becomes "noise" in seconds while words, with their gaps,
+/// never lift it.
+const FLOOR_RISE_DB_PER_S: f32 = 2.3;
+/// The floor starts here and never drops below it (digital silence).
+const FLOOR_MIN_DB: f32 = -100.0;
+
+/// Physical mics the pairs use.
+const PAIR_MICS: [usize; 6] = [0, 1, 2, 3, 4, 6];
 
 /// Fixed set of pairs for the 8-mic array. Two top-ring horizontal
 /// diagonals give azimuth; two *pure-Z* vertical pairs (same-XY top/bot
@@ -50,8 +65,9 @@ pub struct DoaUpdate {
     pub vad_active: bool,
     /// False when solver couldn't recover a direction (degenerate input / no speech).
     pub fresh: bool,
-    /// Normalised peak-sharpness aggregate, [0.0, 1.0]. 0 when !vad_active or
-    /// solver returned None. Used by DoaPublisher to populate DoaFrame.confidence.
+    /// Mean coherence of the pairs, [0.0, 1.0]: how much of the band agrees
+    /// on one delay per pair. 0 when !vad_active or the solver returned None.
+    /// The UI's talker wedge and diarization trust a direction at ≥ 0.30.
     pub confidence: f32,
 }
 
@@ -60,7 +76,11 @@ pub struct DoaEstimator {
     sample_rate: u32,
     frame_size: usize,
     gcc: GccPhat,
-    vad: EnergyVad,
+    /// Zero-padded spectra of the physical mics, refilled every frame.
+    spectra: [Vec<Complex<f32>>; 8],
+    /// Tracked band level of the room without speech (dB).
+    noise_floor_db: f32,
+    floor_rise_db: f32,
     smoothed_az: f32,
     smoothed_el: f32,
     alpha: f32,
@@ -75,10 +95,6 @@ pub struct DoaEstimator {
     /// `WAVED_DOA_DEBUG=<N>` at startup (0/unset = off). See lib.rs wiring.
     debug_every_n: Option<u32>,
     debug_frame_counter: u32,
-    /// One-pole envelope follower over Σ pair sharpnesses. Tracks the max
-    /// observed level so confidence stays meaningful as noise floor drifts.
-    /// Time constant ~10 s at 21 ms period (alpha ≈ 0.998).
-    max_sharpness_envelope: f32,
 }
 
 impl DoaEstimator {
@@ -108,8 +124,10 @@ impl DoaEstimator {
             geom,
             sample_rate,
             frame_size,
-            gcc: GccPhat::new(frame_size),
-            vad: EnergyVad::default(),
+            gcc: GccPhat::new(frame_size, sample_rate, PAIR_INDICES.len()),
+            spectra: std::array::from_fn(|_| Vec::new()),
+            noise_floor_db: FLOOR_MIN_DB,
+            floor_rise_db: FLOOR_RISE_DB_PER_S * frame_size as f32 / sample_rate as f32,
             smoothed_az: 0.0,
             smoothed_el: 0.0,
             alpha: 0.9,
@@ -118,13 +136,13 @@ impl DoaEstimator {
             pair_deltas_m,
             debug_every_n,
             debug_frame_counter: 0,
-            max_sharpness_envelope: 1.0, // seed > 0 so first-frame division is sane
         }
     }
 
     /// Process an 8-channel f32 interleaved frame, return current smoothed DOA.
-    /// If VAD gates the frame (below threshold) or the solver fails, the
-    /// previous smoothed value is returned unchanged.
+    /// If VAD gates the frame or the solver fails, the previous smoothed value
+    /// is returned unchanged. The pairs' cross-spectra take in every frame, so
+    /// the first frames of a word already carry the ones before it.
     pub fn update(&mut self, interleaved: &[f32]) -> DoaUpdate {
         assert_eq!(interleaved.len(), self.frame_size * 8);
 
@@ -138,8 +156,38 @@ impl DoaEstimator {
             }
         }
 
-        // VAD on channel-0 physical (reasonable proxy for overall energy).
-        let vad_active = self.vad.is_speech(&per_ch[0]);
+        for &mic in &PAIR_MICS {
+            self.gcc.spectrum(&per_ch[mic], &mut self.spectra[mic]);
+        }
+
+        // Compute TDOAs, sharpness and coherence for each pair.
+        let mut obs = Vec::with_capacity(4);
+        let mut raw_tau_samples = [0.0f32; 4];
+        let mut sharpnesses = [0.0f32; 4];
+        let mut coherence_sum = 0.0f32;
+        for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
+            let d = self
+                .gcc
+                .estimate(k, &self.spectra[i], &self.spectra[j], self.max_lag_samples);
+            raw_tau_samples[k] = d.tau_samples;
+            sharpnesses[k] = d.sharpness;
+            coherence_sum += d.coherence;
+            let (dx, dy, dz) = self.pair_deltas_m[k];
+            obs.push(PairObservation {
+                delta_m: crate::beam::Position3D::new(dx, dy, dz),
+                tdoa_sec: d.tau_samples / self.sample_rate as f32,
+            });
+        }
+
+        // VAD on physical mic 0's band level against the tracked floor.
+        let level_db = self.gcc.band_level_db(&self.spectra[0], self.frame_size);
+        self.noise_floor_db = if level_db < self.noise_floor_db {
+            level_db
+        } else {
+            self.noise_floor_db + self.floor_rise_db
+        }
+        .max(FLOOR_MIN_DB);
+        let vad_active = level_db > self.noise_floor_db + VAD_MARGIN_DB;
         if !vad_active {
             return DoaUpdate {
                 azimuth_deg: self.smoothed_az,
@@ -148,23 +196,6 @@ impl DoaEstimator {
                 fresh: false,
                 confidence: 0.0,
             };
-        }
-
-        // Compute TDOAs + per-pair sharpness for each pair; build PairObservations.
-        let mut obs = Vec::with_capacity(4);
-        let mut raw_tau_samples = [0.0f32; 4];
-        let mut sharpnesses = [0.0f32; 4];
-        for (k, &(i, j)) in PAIR_INDICES.iter().enumerate() {
-            let (tau_samples, sharpness) = self
-                .gcc
-                .estimate_tdoa(&per_ch[i], &per_ch[j], self.max_lag_samples);
-            raw_tau_samples[k] = tau_samples;
-            sharpnesses[k] = sharpness.max(0.0);
-            let (dx, dy, dz) = self.pair_deltas_m[k];
-            obs.push(PairObservation {
-                delta_m: crate::beam::Position3D::new(dx, dy, dz),
-                tdoa_sec: tau_samples / self.sample_rate as f32,
-            });
         }
 
         // Optional diagnostic: one line every N frames with raw τ per pair,
@@ -217,20 +248,10 @@ impl DoaEstimator {
             }
         }
 
-        // Confidence envelope: track a slow-decay max so the [0, 1] ratio stays
-        // meaningful as room noise floor drifts. Decay-to-floor (10% of peak)
-        // prevents the envelope from sticking high on transient peaks.
-        let sum_sharp: f32 = sharpnesses.iter().sum();
-        const ENVELOPE_ALPHA: f32 = 0.998; // ~10s time constant at 21ms cadence
-        self.max_sharpness_envelope = ENVELOPE_ALPHA * self.max_sharpness_envelope
-            + (1.0 - ENVELOPE_ALPHA) * sum_sharp.max(self.max_sharpness_envelope * 0.1);
-        let confidence = (sum_sharp / self.max_sharpness_envelope.max(1e-9)).clamp(0.0, 1.0);
+        let confidence = (coherence_sum / PAIR_INDICES.len() as f32).clamp(0.0, 1.0);
 
-        // Pass raw sharpnesses unscaled. The LS solution in solve_direction_weighted
-        // is scale-invariant in `weights`, and raw values (~1e3 for clean broadband)
-        // avoid normal-matrix determinant collapse on near-singular pair geometries.
-        // MIN_SHARPNESS_THRESHOLD guard inside the solver still fires on Σ < 1e-4
-        // (essentially silence) → DoaUpdate { fresh: false } gets emitted in caller.
+        // The solver weights the pairs by sharpness (scale-free); its
+        // MIN_SHARPNESS_THRESHOLD guard still fires when no pair has a peak.
         match solve::solve_direction_weighted(&obs, &sharpnesses) {
             Some(ang) => {
                 if self.primed {
@@ -357,6 +378,71 @@ mod tests {
             (az_before - az_after).abs() < 0.01,
             "DOA drifted during silence: {az_before} -> {az_after}"
         );
+    }
+
+    /// A voiced source (150 Hz fundamental, harmonics falling 12 dB/octave)
+    /// arriving as a plane wave, about −50 dBFS at the mics, over
+    /// independent room noise per mic at about −80 dBFS. Frame `index` of a
+    /// continuous signal.
+    fn voiced_frame(az_deg: f32, index: usize, frame: usize, voiced: bool, geom: &MicGeometry) -> Vec<f32> {
+        let az = az_deg.to_radians();
+        let d = [az.cos(), az.sin(), 0.0];
+        let mut state = 0x2545_F491u32.wrapping_add(index as u32 * 7919);
+        let mut out = vec![0.0; frame * 8];
+        for alsa_ch in 0..8 {
+            let p = geom.position_for_alsa(alsa_ch);
+            let tau = -(p.x * d[0] + p.y * d[1] + p.z * d[2]) * 1e-3 / 343.0;
+            for i in 0..frame {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let noise = ((state as f32 / u32::MAX as f32) - 0.5) * 3e-4;
+                let t = (index * frame + i) as f32 / 48_000.0 - tau;
+                let voice: f32 = if voiced {
+                    (1..40)
+                        .map(|k| {
+                            let f = 150.0 * k as f32;
+                            (2.0 * std::f32::consts::PI * f * t + k as f32).sin() / (k * k) as f32
+                        })
+                        .sum::<f32>()
+                        * 3e-3
+                } else {
+                    0.0
+                };
+                out[i * 8 + alsa_ch] = voice + noise;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_quiet_voice_after_a_quiet_room_is_confident_and_points_the_right_way() {
+        // Regression (device pass 2026-10-08): speech at 1 m got a direction
+        // in 15 of 123 frames, so the talker wedge rarely showed.
+        let geom = MicGeometry::default();
+        let mut est = DoaEstimator::new(geom.clone(), 48_000, 1024);
+        let mut index = 0;
+        // The noise floor starts low and climbs to the room in a few
+        // seconds, so early room noise may pass the VAD; it must never look
+        // like a talker.
+        for _ in 0..150 {
+            let q = est.update(&voiced_frame(90.0, index, 1024, false, &geom));
+            assert!(q.confidence < 0.30, "room noise read as a talker at frame {index}: {}", q.confidence);
+            index += 1;
+        }
+        let mut confident = 0;
+        let mut last = None;
+        for _ in 0..30 {
+            let u = est.update(&voiced_frame(90.0, index, 1024, true, &geom));
+            index += 1;
+            if u.vad_active && u.fresh && u.confidence >= 0.30 {
+                confident += 1;
+            }
+            last = Some(u);
+        }
+        let last = last.unwrap();
+        assert!(confident >= 25, "only {confident} of 30 voiced frames were confident");
+        assert!((last.azimuth_deg - 90.0).abs() < 10.0, "az {}", last.azimuth_deg);
     }
 
     #[test]

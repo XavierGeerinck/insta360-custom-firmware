@@ -239,12 +239,17 @@ to ±0.5. Regression test: `gcc_phat::tests::noise_pair_is_bounded_not_hundreds_
 
 ### VAD Threshold
 
-`EnergyVad` default is **0.0003** (~−70 dBFS RMS). Raw Wave mic signals sit
-around −75 dBFS without preamp gain; the previous default of 0.003 (−50 dBFS)
-silently rejected every frame and froze the DOA.
+The GCC-PHAT estimator's VAD (2026-10-08) compares physical mic 0's level
+in the correlation band (300 Hz–6 kHz) with a tracked noise floor: the
+floor follows the level down at once and up at 2.3 dB/s, starts at
+−100 dB, and a frame is speech 9 dB above it. The fixed `EnergyVad`
+threshold it replaced, **0.0003** (~−70 dBFS RMS), sat at the device-pass
+room's floor, so the gaps between words counted as speech and gave random
+directions. A steady source (fan, hum, a tone) becomes floor within seconds.
 
-If you measure that room noise passes VAD in silence, raise the threshold —
-don't lower it below 0.0001.
+`EnergyVad` (0.0003) still gates the SRP-PHAT backend. Raw Wave mic
+signals sit around −75 dBFS without preamp gain; a default of 0.003
+(−50 dBFS) silently rejected every frame and froze the DOA.
 
 ### Maximum Lag
 
@@ -261,15 +266,15 @@ positive for concave (real) peaks, ~0 for flat/lumpy noise surfaces.
 
 Empirical signal/noise discrimination measured in
 `gcc_phat::tests::peak_sharpness_discriminates_broadband_signal_from_noise`:
-broadband signal sharpness ≈ 1900, broadband noise sharpness ≈ 185
-→ 10× ratio (well above the 5× gate for the weighting to be useful).
+~4× since the correlation was limited to 300 Hz–6 kHz (the test gates at
+3×); it was ~10× over the full band, where every peak is sharper.
 
-**Wiring in `DoaEstimator::update`:** raw sharpness values are passed
-to `solve_direction_weighted` unscaled. The LS solution is
-scale-invariant in weights, and raw values avoid normal-matrix
-determinant collapse on near-singular pair geometries — normalizing
-4 raw sharpnesses to Σ=1 shrinks the determinant by ~16-64× and
-risks tripping the 1e-9 singularity guard.
+**Singularity guard:** the solver rejects a normal matrix whose
+`|det| < 1e-3 · (trace/3)³`, which is independent of the weights' scale.
+Until 2026-10-08 it was an absolute `|det| < 1e-9`, which scales with the
+cube of the weights: speech peaks are ~100× flatter than broadband noise,
+so it rejected 108 of 123 speech frames from the front even when every
+pair agreed.
 
 `MIN_SHARPNESS_THRESHOLD = 1e-4` — when Σ pair sharpnesses falls
 below this (silence-on-VAD-edge), the solver returns `None` and the
@@ -312,6 +317,37 @@ noisier per-sample (spread ±10°, grid-limited) but far less biased.
 > **Always drive DoA acceptance with broadband noise or speech**, never
 > a tone. (The `scripts/test-doa-*.sh` prompts were corrected to say
 > "broadband" accordingly.)
+
+### Speech (device pass, 2026-10-08)
+
+Counted speech, seated ~1 m away, failed where broadband noise worked (see
+"Array calibration"). Besides the VAD and the singularity guard above,
+`gcc_phat.rs` now:
+
+- correlates only 300 Hz–6 kHz, instead of the bins within 20 dB of the
+  loudest one, which on speech meant a few low harmonics a 51 mm array can
+  barely resolve;
+- averages each pair's cross-spectrum over frames (0.7 per 1024 samples)
+  before the phase transform;
+- weights the bins by |cross|^−0.8 (PHAT-β) rather than |cross|^−1;
+- tapers each frame with a Tukey window (25 %). Without it, the bins between
+  a voice's harmonics hold frame-edge leakage that every channel cuts at the
+  same instant, which pulls the delay towards 0.
+
+`confidence` is now the mean pair coherence (the PHAT peak normalised to 1
+for a fully coherent pair), so the UI's and diarization's 0.30 means the
+same in every room; it used to be Σ sharpness over a ~10 s peak envelope.
+
+Replayed through `AudioService` with 10 s of room silence first:
+
+| Recording | Wedge visible, before → after | Median az error, before → after |
+|-----------|------------------------------|--------------------------------|
+| Speech, front | 3 % → 34 % (each word) | 57° → 5° |
+| Speech, left (talker moving) | 24 % → 61 % | 69° → follows the talker |
+| Noise, front/right/back/left | 86–92 % → 98 % | 1–15° → 5–8° |
+| Silence | 0 % → 0 % | — |
+
+The SRP-PHAT backend is unchanged.
 
 ### SRP-PHAT alternative backend (F2)
 
@@ -1034,14 +1070,14 @@ right 255° (errors −9/−2/−5/−15°, IQR ≤ 7°, confidence 1.0), and 34
 a source above and in front. On counted speech, seated at 1 m (−59/−54 dBFS
 at the mics), it produced a direction for only 15 of 123 VAD frames from the
 front and 100 of 201 from the left, with an 89° spread. This is why the wedge
-rarely shows: the estimator is accurate when it commits but rejects most
-speech frames. **Open.**
+rarely showed. Fixed the same day: see § "Speech (device pass, 2026-10-08)".
 
 **Whole room alignment.** On the noise, the delay-and-sum on the true
 direction beats the plain average by +3 dB at 2.5–8 kHz (measured delays add
 another 0.5–1.5 dB). On the seated speech the gain is 0 dB below 5 kHz and
-+2 dB at 5–8 kHz, while steering at a wrong direction costs 3–6 dB. With the
-estimate as unreliable as above on speech, Whole room stays on the plain
++2 dB at 5–8 kHz, while steering at a wrong direction costs 3–6 dB. Even
+with the speech fix below, that gain does not pay for the risk while the
+talker moves or a second person speaks: Whole room stays on the plain
 average.
 
 ## Microphone check (milestone 2)

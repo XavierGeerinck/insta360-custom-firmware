@@ -47,7 +47,7 @@ pub fn solve_direction(obs: &[PairObservation]) -> Option<DoaAngles> {
     }
 
     let det_a = det3(&a);
-    if det_a.abs() < 1e-9 {
+    if is_singular(&a, det_a) {
         return None;
     }
 
@@ -81,19 +81,14 @@ pub const MIN_SHARPNESS_THRESHOLD: f32 = 1e-4;
 /// to the normal equations weighted by `weights[k]`:
 ///   A += w_k · (Δ Δ^T),   b += w_k · (τ c) Δ
 ///
-/// Use this from the DoA pipeline with raw per-pair sharpness values
-/// (`weights[k] = sharpness_k`). The LS solution is scale-invariant in
-/// `weights`, so normalization is mathematically unnecessary AND
-/// numerically counterproductive — normalizing to Σ=1 with 4 pairs of
-/// large raw values shrinks the normal-matrix determinant by ~16-64×,
-/// risking collapse below the 1e-9 singularity guard on near-degenerate
-/// pair geometries. See `DoaEstimator::update` for the production
-/// callsite.
+/// Use this from the DoA pipeline with the per-pair sharpness values
+/// (`weights[k] = sharpness_k`). The solution and the singularity check are
+/// both scale-invariant in `weights`, so their units do not matter.
 ///
 /// Returns `None` if:
 /// - fewer than 3 observations
 /// - `Σ weights < MIN_SHARPNESS_THRESHOLD` (degenerate / no real peaks)
-/// - the weighted 3x3 normal matrix is singular (`|det| < 1e-9`)
+/// - the weighted 3x3 normal matrix is singular (see `is_singular`)
 pub fn solve_direction_weighted(
     obs: &[PairObservation],
     weights: &[f32],
@@ -124,7 +119,7 @@ pub fn solve_direction_weighted(
     }
 
     let det_a = det3(&a);
-    if det_a.abs() < 1e-9 {
+    if is_singular(&a, det_a) {
         return None;
     }
 
@@ -146,6 +141,20 @@ pub fn solve_direction_weighted(
         azimuth_deg: az,
         elevation_deg: el,
     })
+}
+
+/// Smallest `|det| / (trace / 3)³` a normal matrix may have: well-spread
+/// pairs sit near 1, collinear pairs at 0.
+const MIN_CONDITION: f32 = 1e-3;
+
+/// Whether the normal matrix is too close to singular to solve. Judged
+/// relative to the matrix's own scale: an absolute `|det| < 1e-9` scaled with
+/// the cube of the pair weights, so on speech (whose GCC peaks are ~100×
+/// flatter than broadband noise) it rejected nearly every frame even when
+/// every pair agreed.
+fn is_singular(a: &[[f32; 3]; 3], det: f32) -> bool {
+    let scale = (a[0][0] + a[1][1] + a[2][2]) / 3.0;
+    scale <= 0.0 || det.is_nan() || det.abs() < MIN_CONDITION * scale.powi(3)
 }
 
 fn det3(m: &[[f32; 3]; 3]) -> f32 {
@@ -289,6 +298,23 @@ mod tests {
         let weights = vec![1.0, 1.0, 1.0, 0.0]; // ignore the bad one
         let ang = solve_direction_weighted(&obs, &weights).unwrap();
         assert!((ang.azimuth_deg - 45.0).abs() < 2.0, "az {} not ≈45 with bad pair zeroed", ang.azimuth_deg);
+    }
+
+    #[test]
+    fn weighted_ls_solves_with_small_but_valid_weights() {
+        // Speech gives GCC peaks ~100× flatter than broadband noise. The
+        // weights only set the pairs' relative say, so a frame with every
+        // weight at 0.03 must solve as one with every weight at 3.
+        let g = crate::beam::MicGeometry::default();
+        let pairs: Vec<_> = [(0, 2), (1, 3), (0, 4), (2, 6)]
+            .iter()
+            .map(|&(i, j)| (g.positions_mm[i], g.positions_mm[j]))
+            .collect();
+        let obs = make_obs(&pairs, 90.0, 0.0);
+        let small = solve_direction_weighted(&obs, &vec![0.03; obs.len()]).expect("small weights solve");
+        let large = solve_direction_weighted(&obs, &vec![3.0; obs.len()]).expect("large weights solve");
+        assert!((small.azimuth_deg - large.azimuth_deg).abs() < 0.01);
+        assert!((small.azimuth_deg - 90.0).abs() < 1.0, "az {}", small.azimuth_deg);
     }
 
     #[test]
