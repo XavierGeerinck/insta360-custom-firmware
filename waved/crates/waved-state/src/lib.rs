@@ -386,7 +386,7 @@ pub enum RecordingStatus {
 }
 
 impl RecordingStatus {
-    /// Sorted to the top of Files and shown in amber.
+    /// Shown in amber in Files.
     pub fn needs_attention(&self) -> bool {
         matches!(self, Self::Failed | Self::Damaged)
     }

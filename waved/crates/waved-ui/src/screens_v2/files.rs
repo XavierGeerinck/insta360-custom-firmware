@@ -17,8 +17,8 @@ use crate::kit::tokens::{LIVE, SCREEN_W, SUBTITLE_Y, TEXT, TEXT_2, TEXT_3, TITLE
 use uuid::Uuid;
 use waved_state::{RecordingStatus, RecordingSummary, CLOCK_VALID_AFTER_UNIX_S};
 
-/// Cards built at most. Attention rows always come first, so a failed upload
-/// is never cut off; older delivered recordings are pruned by retention.
+/// Cards built at most, newest first; older delivered recordings are pruned
+/// by retention.
 pub const MAX_ROWS: usize = 50;
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -110,13 +110,12 @@ pub fn sentence(words: &str) -> String {
     }
 }
 
-/// Attention first, then the producer's newest-first order (a stable sort),
-/// at most `MAX_ROWS`.
+/// The producer's newest-first order, at most `MAX_ROWS`. Recordings that
+/// need attention stay in place, in amber: lifting them all to the top
+/// buried a new recording under 48 old damaged ones on the device pass
+/// (2026-10-08), and a fresh failure is newest anyway.
 pub fn ordered(recordings: &[RecordingSummary]) -> Vec<&RecordingSummary> {
-    let mut rows: Vec<&RecordingSummary> = recordings.iter().collect();
-    rows.sort_by_key(|rec| !rec.status.needs_attention());
-    rows.truncate(MAX_ROWS);
-    rows
+    recordings.iter().take(MAX_ROWS).collect()
 }
 
 /// The recording's when label in the device's zone and clock format. The
@@ -339,25 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn attention_first_then_newest_and_capped() {
+    fn newest_first_with_failures_in_place_and_capped() {
         use RecordingStatus::*;
         let ids: Vec<Uuid> = (0..60).map(|n| Uuid::from_u128(n + 1)).collect();
-        // Producer order is newest first; two failures sit further down.
+        // Producer order is newest first; the newest is waiting to upload,
+        // and many older ones need attention.
         let mut list: Vec<RecordingSummary> = ids
             .iter()
-            .map(|id| recording(*id, Uploaded, "2026-10-05T10:00:00Z", 60))
+            .map(|id| recording(*id, Damaged, "2026-10-05T10:00:00Z", 60))
             .collect();
-        list[3].status = Failed;
-        list[40].status = Damaged;
+        list[0].status = Waiting;
+        list[1].status = Uploaded;
         let rows = ordered(&list);
         assert_eq!(rows.len(), MAX_ROWS);
-        assert_eq!((rows[0].id, rows[1].id), (ids[3], ids[40]));
-        // The rest keep the producer's order.
-        assert_eq!(
-            (rows[2].id, rows[3].id, rows[4].id),
-            (ids[0], ids[1], ids[2])
-        );
-        assert_eq!(rows[5].id, ids[4]);
+        assert_eq!((rows[0].id, rows[1].id, rows[2].id), (ids[0], ids[1], ids[2]));
+        assert_eq!(rows[MAX_ROWS - 1].id, ids[MAX_ROWS - 1]);
     }
 
     fn fixture(rec: &RecordingSummary) -> UiSnapshot {
