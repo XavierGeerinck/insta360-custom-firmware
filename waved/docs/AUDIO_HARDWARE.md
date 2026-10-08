@@ -992,12 +992,9 @@ stopped), replayed through `AudioService::process_frame`:
   (az 224°, el −58°) misses by 3.3 samples RMS, and ALSA ch2 → ch6 is
   17 samples where no mic pair is more than 13 apart. Delay-and-sum on the
   measured lags also loses to the plain average. Whole room now stays on the
-  plain average. **Open:** the mapping or per-channel timing needs a
-  calibration (tap test per mic, `waved-mic-map`) before any pattern that
-  relies on inter-mic delays can be trusted at HF. The same calibration should
-  settle the start-up microphone check, which since 2026-10-06 flags the odd
-  ALSA channels (ch5 and ch7 most often, sometimes ch1 and ch3) as under half
-  the median level on most boots and "Ok" on the rest.
+  plain average. The calibration that followed (see "Array calibration"
+  below) found the hardware sound: the impossible lags came from GCC-PHAT on
+  a recording where the direction estimate itself had little to hold on to.
 - **Picked by ear** from level-matched clips: dereverb + a voice EQ
   (`crate::dereverb`, `crate::uplink_voice`) after echo control, before the
   make-up gain. Dereverb: Lebart late-reverb suppression, T60 0.6 s, 50 ms
@@ -1013,6 +1010,40 @@ matched): 80–160 Hz about −13 dB, 2.5–5 kHz +17 dB, 5–8 kHz +19 dB,
 8–12 kHz +27 dB. The replayed firmware chain matches the chosen prototype
 within 0.5 dB from 160 Hz to 12 kHz.
 
+## Array calibration (device pass, 2026-10-08)
+
+Raw `hw:0,2` captures with waved stopped; analysis scripts were scratch.
+
+**Hardware.** The top-ring holes face **up** (top surface); the bottom-ring
+holes face **out** (side wall). Ruler: 77 mm from a top hole to the hole below
+it (the table above uses 78.2 mm; 1.2 mm is 0.17 samples, not worth a change).
+
+| Test | Result |
+|------|--------|
+| Pen clicks 1 cm from each hole | Earliest channel per hole matches `alsa_to_physical` for all eight |
+| 10 s silence | Every channel within ±1.8 dB of the median in every band (20 Hz–16 kHz) |
+| 32 s room speech | Within ±2.5 dB in every band |
+| Broadband noise, 1 m, front/left/back/right | GCC-PHAT arrivals match the free-field model within ~1 sample, including ±2.5-sample in-ring delays; top and bottom ring arrive together for a level source (bottom − top +0.1 to +1.3 samples) |
+
+The near-field clicks fit a bottom-ring lag of +2.8 samples (90 % CI 2.0–3.8),
+but the far-field noise shows ≤ 1 sample, and the far field is what the beam
+and DoA see: **no per-channel timing correction is applied.**
+
+**Direction estimate.** On the noise, `doa` read front 351°, left 88°, back 175°,
+right 255° (errors −9/−2/−5/−15°, IQR ≤ 7°, confidence 1.0), and 346°/+49° for
+a source above and in front. On counted speech, seated at 1 m (−59/−54 dBFS
+at the mics), it produced a direction for only 15 of 123 VAD frames from the
+front and 100 of 201 from the left, with an 89° spread. This is why the wedge
+rarely shows: the estimator is accurate when it commits but rejects most
+speech frames. **Open.**
+
+**Whole room alignment.** On the noise, the delay-and-sum on the true
+direction beats the plain average by +3 dB at 2.5–8 kHz (measured delays add
+another 0.5–1.5 dB). On the seated speech the gain is 0 dB below 5 kHz and
++2 dB at 5–8 kHz, while steering at a wrong direction costs 3–6 dB. With the
+estimate as unreliable as above on speech, Whole room stays on the plain
+average.
+
 ## Microphone check (milestone 2)
 
 `waved-audio/src/mic_check.rs` watches raw, pre-mute frames in 3 s windows at start-up.
@@ -1020,6 +1051,11 @@ A channel that is exactly zero counts as not responding; levels are judged again
 median of all channels. The result is `AudioState.mic_health`, and the UI shows
 "Microphones not responding" for `NotResponding`. On the device it reports `Ok` about
 3 s after boot (2026-10-06).
+
+From 2026-10-06 most boots flagged a subset of the odd ALSA channels (ch1, 3, 5, 7) as
+"much quieter" and the rest read `Ok`. The calibration above shows the elements matched
+in silence and on speech, so the flag reflects what the array hears in its first seconds
+(motor, handling), not a weak mic. The 2026-10-08 boot read `Ok`.
 
 ## Mic Gain Pipeline
 

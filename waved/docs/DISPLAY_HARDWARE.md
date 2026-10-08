@@ -125,6 +125,14 @@ adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; k
   binary is still in `/tmp`, so wait for waved to exit and run the swap again.
 - The init script SIGTERMs the first waved 5 s after it starts (display
   workaround) and rotates `waved.log` to `waved.log.1` past 2 MB at each launch.
+- Stock `rsyslogd` logged everything to `/opt/logs/psp.log`, which is on `/data`
+  (overlay) and which nothing has rotated since the stock app stopped running. It
+  reached 273 MB, mostly Wi-Fi driver (`atbm_log`) scan lines, and on 2026-10-08 it
+  filled `/data`. Waved then exited at start-up without a word, because even its log
+  write failed. `deploy/rsyslog.conf` drops the `atbm_log` lines and logs to
+  `/tmp/psp.log`. Install it with `adb push deploy/rsyslog.conf /etc/rsyslog.conf`
+  (it lands in the overlay and survives reboots), then `/etc/init.d/S11rsyslogd restart`.
+  If waved won't start, check `df -h /data` first.
 - `start-stop-daemon` needs `-m -p <pidfile>`; without it busybox matches any running
   `/bin/sh` and refuses to start.
 - The framebuffer can be captured for checks with `adb shell 'cat /dev/fb0 | head -c 243200'`
