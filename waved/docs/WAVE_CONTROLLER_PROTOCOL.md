@@ -595,7 +595,7 @@ Two sides keep their current aim (`beam_aim_deg`); Follow talker starts from it.
 | Commands, ack sizes | `pclink/cmd.rs`, `pclink/handler.rs` |
 | Mic modes (J4) | `pclink/mode.rs` |
 | Engine | `pclink/link.rs` (pure; time passed in) |
-| Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0` |
+| Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0`. While the writer takes nothing (a write blocked on a host that stopped reading) the engine backs off from 1 ms to the tick. Open and write failures log the first, then a count at most once a minute, then one line when writes work again |
 
 Integration points left open on purpose:
 

@@ -108,9 +108,7 @@ pub fn run_engine(
     let mut last_poll = Duration::ZERO;
     let mut outbox = Outbox::default();
     loop {
-        // While reports wait for the writer, come back soon to hand them over.
-        let wait = if outbox.is_empty() { TICK } else { Duration::from_millis(1) };
-        let report = match vendor_rx.recv_timeout(wait) {
+        let report = match vendor_rx.recv_timeout(outbox.wait()) {
             Ok(report) => Some(report),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => {
@@ -174,14 +172,22 @@ fn deliver(out: Output, bus: &PcLinkBus, prompt: Option<&PinPrompt>, outbox: &mu
 struct Outbox {
     queue: std::collections::VecDeque<Report>,
     dropped: u64,
+    /// Flushes in a row that handed nothing over (the writer is stuck).
+    stalls: u32,
 }
 
 /// About 13 s of a full-speed interrupt endpoint (1 report/ms).
 pub const OUTBOX_MAX: usize = 8192;
 
 impl Outbox {
-    fn is_empty(&self) -> bool {
-        self.queue.is_empty()
+    /// How long the engine may sleep before handing reports over again:
+    /// 1 ms while the writer takes them, doubling up to the tick while it
+    /// takes none (a write blocked on a host that stopped reading).
+    fn wait(&self) -> Duration {
+        if self.queue.is_empty() {
+            return TICK;
+        }
+        Duration::from_millis(1 << self.stalls.min(5)).min(TICK)
     }
 
     fn extend(&mut self, reports: Vec<Report>) {
@@ -197,19 +203,71 @@ impl Outbox {
 
     /// Hand over as many reports as the writer takes now.
     fn flush(&mut self, write_tx: &SyncSender<Report>) {
+        let before = self.queue.len();
         while let Some(report) = self.queue.pop_front() {
             match write_tx.try_send(report) {
                 Ok(()) => {}
                 Err(TrySendError::Full(report)) => {
                     self.queue.push_front(report);
-                    return;
+                    break;
                 }
                 Err(TrySendError::Disconnected(_)) => {
                     self.queue.clear();
-                    return;
+                    break;
                 }
             }
         }
+        let stuck = !self.queue.is_empty() && self.queue.len() == before;
+        self.stalls = if stuck { self.stalls.saturating_add(1) } else { 0 };
+    }
+}
+
+/// A run of failures is summed up at most this often.
+pub const FAILURE_LOG_EVERY: Duration = Duration::from_secs(60);
+
+/// Open and write failures on the device, kept out of waved.log's way (it
+/// only rotates on restart and `/data` is small; a pulled cable fails a
+/// write about once a second): the first failure is logged, then a count at
+/// most every `FAILURE_LOG_EVERY`, then one line when a write works again.
+#[derive(Default)]
+struct FailureLog {
+    /// Failures since the last write that worked.
+    total: u64,
+    /// Failures not in a log line yet.
+    unlogged: u64,
+    last_line: Option<Instant>,
+}
+
+impl FailureLog {
+    /// One failure; the line to log, if any.
+    fn failed(&mut self, now: Instant, what: &str) -> Option<String> {
+        self.total += 1;
+        match self.last_line {
+            None => {
+                self.last_line = Some(now);
+                Some(format!("pclink: {what}"))
+            }
+            Some(t) if now.saturating_duration_since(t) >= FAILURE_LOG_EVERY => {
+                self.last_line = Some(now);
+                let count = std::mem::take(&mut self.unlogged) + 1;
+                let secs = now.saturating_duration_since(t).as_secs();
+                Some(format!("pclink: {count} more failures in {secs} s, latest: {what}"))
+            }
+            Some(_) => {
+                self.unlogged += 1;
+                None
+            }
+        }
+    }
+
+    /// A write went through; the line to log after a run of failures.
+    fn succeeded(&mut self) -> Option<String> {
+        if self.total == 0 {
+            return None;
+        }
+        let line = format!("pclink: writing again after {} failures", self.total);
+        *self = Self::default();
+        Some(line)
     }
 }
 
@@ -219,21 +277,33 @@ pub fn run_writer(device: String, rx: Receiver<Report>) {
     const RETRY: Duration = Duration::from_secs(1);
     let mut file: Option<std::fs::File> = None;
     let mut next_open = Instant::now();
+    let mut failures = FailureLog::default();
     for report in rx {
         if file.is_none() && Instant::now() >= next_open {
             match std::fs::OpenOptions::new().write(true).open(&device) {
                 Ok(f) => file = Some(f),
                 Err(e) => {
-                    warn!("pclink: cannot open {device}: {e}");
+                    if let Some(line) = failures.failed(Instant::now(), &format!("cannot open {device}: {e}")) {
+                        warn!("{line}");
+                    }
                     next_open = Instant::now() + RETRY;
                 }
             }
         }
         let Some(f) = file.as_mut() else { continue };
-        if let Err(e) = f.write_all(&report) {
-            warn!("pclink: write to {device} failed: {e}");
-            file = None;
-            next_open = Instant::now() + RETRY;
+        match f.write_all(&report) {
+            Ok(()) => {
+                if let Some(line) = failures.succeeded() {
+                    info!("{line}");
+                }
+            }
+            Err(e) => {
+                if let Some(line) = failures.failed(Instant::now(), &format!("write to {device} failed: {e}")) {
+                    warn!("{line}");
+                }
+                file = None;
+                next_open = Instant::now() + RETRY;
+            }
         }
     }
 }
@@ -423,6 +493,53 @@ mod tests {
             None,
         );
         std::thread::sleep(Duration::from_millis(50));
+    }
+
+    #[test]
+    fn a_writer_that_takes_nothing_backs_the_engine_off_to_the_tick() {
+        // A blocked write (the host stopped reading) fills the channel: the
+        // engine must not wake every millisecond to find it still full.
+        let (tx, rx) = mpsc::sync_channel(1);
+        let mut outbox = Outbox::default();
+        assert_eq!(outbox.wait(), TICK, "nothing to hand over");
+        outbox.extend(vec![[0u8; REPORT_LEN]; 3]);
+        outbox.flush(&tx);
+        assert_eq!(outbox.wait(), Duration::from_millis(1), "it took one: come back soon");
+        let waits: Vec<u64> = (0..7)
+            .map(|_| {
+                outbox.flush(&tx);
+                outbox.wait().as_millis() as u64
+            })
+            .collect();
+        assert_eq!(waits, vec![2, 4, 8, 16, 20, 20, 20]);
+        rx.recv().unwrap();
+        outbox.flush(&tx);
+        assert_eq!(outbox.wait(), Duration::from_millis(1), "it takes again");
+        rx.recv().unwrap();
+        outbox.flush(&tx);
+        assert_eq!(outbox.wait(), TICK, "all handed over");
+    }
+
+    #[test]
+    fn write_failures_are_logged_once_then_counted_once_a_minute() {
+        // waved.log only rotates on restart and /data is small: a pulled
+        // cable must not add a line every second.
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut log = FailureLog::default();
+        assert_eq!(log.succeeded(), None, "nothing to recover from");
+        assert_eq!(log.failed(at(0), "write to hidg0 failed: EIO").as_deref(), Some("pclink: write to hidg0 failed: EIO"));
+        for s in 1..60 {
+            assert_eq!(log.failed(at(s), "write to hidg0 failed: EIO"), None, "{s} s");
+        }
+        assert_eq!(
+            log.failed(at(60), "cannot open hidg0: ENOENT").as_deref(),
+            Some("pclink: 60 more failures in 60 s, latest: cannot open hidg0: ENOENT")
+        );
+        assert_eq!(log.failed(at(61), "write to hidg0 failed: EIO"), None);
+        assert_eq!(log.succeeded().as_deref(), Some("pclink: writing again after 62 failures"));
+        assert_eq!(log.succeeded(), None);
+        assert!(log.failed(at(62), "write to hidg0 failed: EIO").is_some(), "a new run of failures shows at once");
     }
 
     #[test]
