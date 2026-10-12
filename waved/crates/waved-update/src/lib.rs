@@ -11,4 +11,6 @@
 pub mod format;
 pub mod index;
 pub mod key;
+pub mod paths;
+pub mod trial;
 pub mod version;

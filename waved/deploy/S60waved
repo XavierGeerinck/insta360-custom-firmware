@@ -1,5 +1,31 @@
 #!/bin/sh
 
+WAVED_DIR="${WAVED_DIR:-/data/waved}"
+UPDATE_DIR="$WAVED_DIR/update"
+MAX_TRIAL_STARTS=3
+
+# Update fall-back (docs/UPDATES.md, "Trial starts"). While update/trial
+# exists, the version an update installed has not reported healthy yet.
+# Count every start; on the fourth, put each "restore" file back from its
+# .prev copy, delete each "remove" file, and leave update/rolled-back for the
+# old waved to report. Without a trial file this does nothing.
+update_guard() {
+    [ -f "$UPDATE_DIR/trial" ] || return 0
+    echo start >> "$UPDATE_DIR/starts"
+    starts=$(($(wc -l < "$UPDATE_DIR/starts")))
+    [ "$starts" -le "$MAX_TRIAL_STARTS" ] && return 0
+    echo "update not healthy after $MAX_TRIAL_STARTS starts, going back" >> "$WAVED_DIR/waved.log"
+    while read -r action path; do
+        case "$action" in
+            restore) if [ -f "$path.prev" ]; then mv -f "$path.prev" "$path"; fi ;;
+            remove) rm -f "$path" ;;
+        esac
+    done < "$UPDATE_DIR/trial"
+    mv -f "$UPDATE_DIR/trial" "$UPDATE_DIR/rolled-back"
+    rm -f "$UPDATE_DIR/starts"
+    sync
+}
+
 case "$1" in
     start)
         echo "Starting waved..."
@@ -24,6 +50,7 @@ case "$1" in
                 if [ "$(wc -c < /data/waved/waved.log 2>/dev/null || echo 0)" -gt 2097152 ]; then
                     mv /data/waved/waved.log /data/waved/waved.log.1
                 fi
+                update_guard
                 /data/waved/waved >>/data/waved/waved.log 2>&1
                 echo "waved exited ($?), restarting in 3s..." >>/data/waved/waved.log
                 sleep 3
@@ -39,8 +66,12 @@ case "$1" in
         echo "Stopping waved..."
         killall waved 2>/dev/null
         ;;
+    guard)
+        # One pass of the update fall-back, as the watchdog runs it (tests).
+        update_guard
+        ;;
     *)
-        echo "Usage: $0 {start|stop}"
+        echo "Usage: $0 {start|stop|guard}"
         exit 1
         ;;
 esac
