@@ -19,6 +19,7 @@ from on-device measurement and are hard to rederive.
 | Stock UI assets / home screen | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md), [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md) (reference only) |
 | Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
 | System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
+| MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, power off) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
