@@ -417,7 +417,7 @@ Request payload sizes are the minimum stock checks; "—" means none is read.
 | 0x4C | PUC_SET_MODE | ✓ | 1 | 1, result | camera module | unsupported |
 | 0x70 | OB_LAST_PKT_SEQ | compid 1 | — | 4, `last_seq i32` | file-transfer resume | `0` |
 | 0x71 | OB_BAKCUP_OFFSET | compid 1 | 8, `seq u32, offset u32` | 1, result | file-transfer resume | result 1 |
-| 0x80 | DEBUG | ✓ | 2, `cmd, param` | 2, `result, param` | `'G'` switches factory/user mode | unsupported (result 1, param 0) |
+| 0x80 | DEBUG | — | 2, `cmd, param` | (2, `result, param`) | a handler exists (`'G'` switches factory/user mode) but is **not in the table**, so no ack | no ack |
 | 0x90 | GET_SYSTEM_BASE_INFO | ✓ | — | 133, `code[4], country[64], tz[64], result` | | `"EN", "", <tz>, 0` |
 | 0x91 | GET_WIFI_BASE_INFO | ✓ | — | 129, `ssid[64], mac[32], ipv4[32], result` | | from Wi-Fi state |
 
