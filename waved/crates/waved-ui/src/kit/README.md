@@ -119,6 +119,7 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `AudioMode` | `audio_mode` | `AudioModeScreen::default()` |
 | `NoiseReduction` | `noise` | `NoiseScreen::default()` |
 | `Volume` / `MicLevel` | `volume` | `VolumeScreen::speaker()` / `VolumeScreen::mic()` |
+| `MicHeight` | `mic_height` | `MicHeightScreen::default()` |
 | `Files` | `files` | `FilesScreen::default()` |
 | `FileDetail(id)` | `file_detail` | `FileDetailScreen::new(id: Uuid)` |
 | `Wifi` | `wifi` | `WifiScreen::default()` |
@@ -134,9 +135,8 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
-`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Mic height,
-Bluetooth, PIN, USB storage, Update and Incoming call are milestone 3 and have no
-module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Bluetooth,
+PIN, USB storage, Update and Incoming call are milestone 3 and have no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
@@ -193,7 +193,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 
 | Component | Constructor | Used by |
 |---|---|---|
-| Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active` | every screen |
+| Status cluster / pill / messages | `StatusArea::plain(root)`, `StatusArea::pill(root, &dispatch)`, `.show(&message, now_ms)`; the pill leads with a teal dot while `snap.meeting.pre_recording_active`; the battery (from `snap.battery`, which waved-mcu fills from the MCU's heartbeats) is hidden until the first reading, teal with the charging glyph while charging, amber at 20 % or less and red at 10 % or less; `Message::with_icon(glyph)` replaces the severity's icon (the battery messages) | every screen |
 | Back | `back_button(root, &dispatch)` | every sub-screen |
 | Text button | `text_button(root, rect, "Cancel", on_tap)` | Wi-Fi setup, USB storage |
 | Round bottom buttons | `RoundButton::record(root, on_tap)`, `RoundButton::stop(root, on_tap, on_stop)` (holds for `HOLD_TO_STOP_MS`), `RoundButton::new(root, BottomSpot::Left, icons::MARK, "Mark", Tone::Neutral, on_tap)`; `.hold(ms, on_complete)`, `.icon_font(font)` to override the icon size; `set_icon` / `set_label` / `set_accent` / `set_enabled` | Home (Record), Recording (Mark / Stop / Pause), After stop (Keep / Send / Delete), First start, Call (Decline / Answer) |

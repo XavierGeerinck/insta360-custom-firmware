@@ -40,7 +40,7 @@ simulated MCU on the host, so the device pass only has to confirm the frames.
 | `crates/waved-state/src/lib.rs` (hotspot) | `LiftState`; `McuState::lift`; `SettingsState::mic_height`; serde on `MotorPosition` (`Moving` skipped) |
 | `crates/waved-config/src/lib.rs`, `config/default.toml` (hotspot) | `DeviceConfig::mic_height` (default medium) |
 | `crates/waved-settings/src/{lib,change}.rs` | `Change::MicHeight` from `SetMotorPosition`; seeded into `SettingsState` |
-| `crates/waved-mcu/src/protocol.rs` | `height_mm`, `motor_to_mm_at` (block speeds), `start_height`, `motor_position` (sub 1), `ack_cmd` |
+| `crates/waved-mcu/src/protocol.rs` | `height_mm`, `Speeds` and `motor_move` (block speeds), `start_height`, `lift_position` (sub 1) |
 | `crates/waved-mcu/src/lift.rs` (new) | Pure lift state machine: request, MCU reports, acks, polling, timeout |
 | `crates/waved-mcu/src/handler.rs` | Routes motor notifications and acks to the lift; `tick` |
 | `crates/waved-mcu/src/lib.rs` | `McuService<T: Transport>`; publishes `McuState::lift` / `motor_position` |
