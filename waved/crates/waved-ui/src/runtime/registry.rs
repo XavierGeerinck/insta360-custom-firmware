@@ -5,8 +5,8 @@ use crate::kit::route::Route;
 use crate::kit::screen::Screen;
 use crate::screens_v2::{
     about, ambient, audio_mode, boot, confirm, datetime, decision, display, file_detail, files,
-    first_run, home, menu, noise, recording, system, upload_mode, uploads, volume, wifi,
-    wifi_setup,
+    first_run, home, menu, noise, powering_off, recording, system, upload_mode, uploads, volume,
+    wifi, wifi_setup,
 };
 
 /// The screen for `route`, or `None` for a milestone 3 route, which the
@@ -14,6 +14,7 @@ use crate::screens_v2::{
 pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
     let screen: Box<dyn Screen> = match route {
         Route::Boot => Box::new(boot::BootScreen::default()),
+        Route::PoweringOff => Box::new(powering_off::PoweringOffScreen),
         Route::FirstRun => Box::new(first_run::FirstRunScreen::default()),
         Route::Home => Box::new(home::HomeScreen::default()),
         Route::Recording => Box::new(recording::RecordingScreen::default()),
@@ -69,6 +70,7 @@ mod tests {
     fn m2_routes() -> Vec<Route> {
         vec![
             Route::Boot,
+            Route::PoweringOff,
             Route::FirstRun,
             Route::Home,
             Route::Recording,
@@ -169,7 +171,7 @@ mod tests {
     /// "Pre-recording" line. Every other screen, `confirm.png` included, has
     /// the status bar row, and each is exercised.
     fn has_no_status_slot(route: &Route) -> bool {
-        matches!(route, Route::Boot | Route::Resting)
+        matches!(route, Route::Boot | Route::PoweringOff | Route::Resting)
     }
 
     #[test]

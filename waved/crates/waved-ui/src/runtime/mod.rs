@@ -938,7 +938,7 @@ mod tests {
             drain(&mut bus);
             rt.step(ready(4_000), &[DeviceEvent::PowerKey(PowerKeyPress::Long)]);
             assert_eq!(drain(&mut bus), [Command::PowerOff], "a 2 s hold powers off, no question");
-            assert_ne!(rt.shown_route(), Some(&Route::Confirm(ConfirmKind::PowerOff)));
+            assert_eq!(rt.shown_route(), Some(&Route::PoweringOff));
             rt.close();
         });
     }

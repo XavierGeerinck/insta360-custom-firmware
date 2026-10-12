@@ -88,10 +88,13 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
         message,
     };
     match kind {
-        ConfirmKind::PowerOff => done(
-            Some(Command::PowerOff),
-            Some(Message::new(Severity::Info, copy::POWERING_OFF)),
-        ),
+        // The Powering off screen says it, and stays until the power is cut.
+        ConfirmKind::PowerOff => Outcome {
+            command: Some(Command::PowerOff),
+            backs: 1,
+            then: Some(Route::PoweringOff),
+            message: None,
+        },
         ConfirmKind::FactoryReset => done(
             Some(Command::FactoryReset),
             Some(Message::new(Severity::Info, copy::RESETTING)),
@@ -229,10 +232,7 @@ mod tests {
             assert!(matches!(f.commands().as_slice(), [Command::PowerOff]));
             assert_eq!(
                 f.events(),
-                vec![
-                    UiEvent::Back,
-                    UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF))
-                ]
+                vec![UiEvent::Back, UiEvent::Navigate(Route::PoweringOff)]
             );
             assert_targets_ok(root);
         });
@@ -285,6 +285,14 @@ mod tests {
             );
             assert_targets_ok(root);
         });
+    }
+
+    #[test]
+    fn power_off_continues_to_the_powering_off_screen() {
+        let next = outcome(ConfirmKind::PowerOff);
+        assert_eq!(next.command, Some(Command::PowerOff));
+        assert_eq!((next.backs, next.then), (1, Some(Route::PoweringOff)));
+        assert!(next.message.is_none(), "the screen says it");
     }
 
     #[test]

@@ -16,6 +16,9 @@ pub enum ConfirmKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Boot,
+    /// The unit is powering off (a 2 s hold, or System → Power off). Final:
+    /// nothing navigates away while the MCU retracts the lift and cuts power.
+    PoweringOff,
     FirstRun,
     Home,
     Recording,

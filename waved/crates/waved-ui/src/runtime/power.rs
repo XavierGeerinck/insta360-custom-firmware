@@ -2,9 +2,9 @@
 //! `DisplayPower` controller and `Backlight` (E IR3). It turns their
 //! transitions into router events and acts as the wake gate for touches.
 
-use crate::kit::dispatch::{Message, Severity, UiEvent};
+use crate::kit::dispatch::UiEvent;
+use crate::kit::route::Route;
 use crate::kit::snapshot::UiSnapshot;
-use crate::screens_v2::messages::copy;
 use waved_state::PowerKeyPress;
 use waved_system::backlight::{Backlight, BACKLIGHT_DIR};
 use waved_system::display::{DisplayPower, TouchDisposition, Transition};
@@ -86,14 +86,14 @@ impl PowerDriver {
         event_for(self.power.on_activity(now_ms))
     }
 
-    /// Rest or Wake for the screen change; on a 2 s hold, "Powering off"
-    /// and `power_off` (the runtime sends `Command::PowerOff`, as the
+    /// Rest or Wake for the screen change; on a 2 s hold, the Powering off
+    /// screen and `power_off` (the runtime sends `Command::PowerOff`, as the
     /// confirmation in System → Power off does).
     pub fn on_power_key(&mut self, press: PowerKeyPress, snap: &UiSnapshot) -> KeyResponse {
         let out = self.power.on_power_key(press, snap.now_ms, keep_lit(snap));
         let mut events: Vec<UiEvent> = event_for(out.transition).into_iter().collect();
         if out.powering_off {
-            events.push(UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF)));
+            events.push(UiEvent::Navigate(Route::PoweringOff));
         }
         KeyResponse {
             events,
@@ -145,7 +145,7 @@ mod tests {
     }
 
     fn powering_off() -> UiEvent {
-        UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF))
+        UiEvent::Navigate(Route::PoweringOff)
     }
 
     #[test]

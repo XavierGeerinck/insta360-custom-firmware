@@ -7,6 +7,7 @@
 // Workstream A: main screens.
 pub mod ambient;
 pub mod boot;
+pub mod powering_off;
 pub mod decision;
 pub mod first_run;
 pub mod home;

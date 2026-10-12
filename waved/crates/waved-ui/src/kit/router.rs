@@ -48,6 +48,13 @@ impl Router {
     }
 
     pub fn handle(&mut self, event: &UiEvent, snap: &UiSnapshot) {
+        if self.stack == [Route::PoweringOff] {
+            return;
+        }
+        if *event == UiEvent::Navigate(Route::PoweringOff) {
+            self.stack = vec![Route::PoweringOff];
+            return;
+        }
         if self.stack == [Route::Boot] {
             if *event == UiEvent::BootDone {
                 self.stack[0] = if snap.settings.first_run_done {
@@ -133,7 +140,7 @@ impl Router {
     /// except a pending decision, which takes over the whole stack.
     pub fn sync(&mut self, snap: &UiSnapshot) {
         match self.stack[0] {
-            Route::Boot => return,
+            Route::Boot | Route::PoweringOff => return,
             Route::FirstRun if !snap.settings.first_run_done => return,
             _ => {}
         }
@@ -188,6 +195,24 @@ mod tests {
         snap.settings.first_run_done = true;
         router.sync(&snap);
         assert_eq!(router.current(), &Route::Home);
+    }
+
+    #[test]
+    fn powering_off_is_final() {
+        // The MCU is cutting power: nothing may navigate away (a swipe, the
+        // dim timer, a recording ending), or the unit dies on another screen.
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::PoweringOff), &snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
+        for event in [UiEvent::Back, UiEvent::ToBase, UiEvent::Rest, UiEvent::Navigate(Route::Menu), UiEvent::Navigate(Route::Home)] {
+            router.handle(&event, &snap);
+            assert_eq!(router.stack(), [Route::PoweringOff], "{event:?}");
+        }
+        snap.meeting.recording = true;
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
     }
 
     #[test]
