@@ -375,8 +375,12 @@ async fn run_async(
                         period_frames: self.0.period_frames(),
                     }
                 }
+                // Mixed over the host's audio, like Files playback. Through
+                // play_batch the chime took turns with a call's periods in
+                // one queue, so both crackled, and the far-end tap put the
+                // chime into the recording (device pass, 2026-10-12).
                 fn submit(&self, period: Vec<i16>) -> bool {
-                    self.0.play_batch(period).is_ok()
+                    self.0.play_local(period).is_ok()
                 }
             }
             tokio::spawn(waved_system::tones::run(
