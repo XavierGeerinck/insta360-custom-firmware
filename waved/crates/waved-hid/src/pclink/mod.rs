@@ -11,6 +11,7 @@
 //! - `handler`: one ack per command, bus commands out.
 
 pub mod cmd;
+pub mod handler;
 pub mod mode;
 pub mod packet;
 pub mod snapshot;

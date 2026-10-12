@@ -3720,6 +3720,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "waved-config",
+ "waved-mavlink",
  "waved-state",
 ]
 

@@ -8,6 +8,8 @@ simulate = []
 
 [dependencies]
 waved-state = { path = "../waved-state" }
+waved-config = { path = "../waved-config" }
+waved-mavlink = { path = "../waved-mavlink" }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing.workspace = true
