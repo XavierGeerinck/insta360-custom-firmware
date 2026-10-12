@@ -48,8 +48,9 @@ adb shell "killall waved 2>/dev/null; sleep 2; \
 session close.
 
 `WAVED_BUILD_ID` is the build id the About screen shows (`Cross.toml` passes it
-into the container). The power key is read only when waved starts with
-`WAVED_POWER_KEY=1` until the device pass confirms the `vad_keypad` node.
+into the container). The physical power key does not reach Linux (only
+the MCU sees it; `crates/waved-system/README.md`), so `WAVED_POWER_KEY=1` finds
+no key on the Wave; `vad_keypad` is the speech-wake detector and is never read.
 
 `/etc/init.d/S60waved` auto-respawns waved within ~3 s of any exit. When
 testing with injected env vars, kill the watchdog first (see

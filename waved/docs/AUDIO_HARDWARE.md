@@ -782,7 +782,9 @@ reader, correlated with `waved.log` and `uac::control`) disproved this:
   `0x49` corruptions) — i.e. physical buttons do **not** reach `waved` over
   `ttyS1` at all.
 - Neither input device advertises volume keys: `vad_keypad` (`event0`) reports
-  only `KEY_POWER`; `ILITEK_TDDI` (`event1`) reports only touch codes.
+  only `KEY_POWER`, and it is the SoC's speech-wake detector, not the power key
+  (`crates/waved-system/README.md`); `ILITEK_TDDI` (`event1`) reports only touch
+  codes.
 
 Because the button codes `0x48..=0x4A` sit one or two cleared bits away from the
 constant `0x4B` heartbeat, every corrupted heartbeat that landed on `0x49`/`0x4A`

@@ -18,11 +18,18 @@ sits behind a path or a trait so the crate tests on the host:
 
 ## Device facts
 
-- **Power key.** `vad_keypad` (`event0`) advertises only `KEY_POWER`
-  (`docs/AUDIO_HARDWARE.md`). The reader finds it by name, then by capability,
-  never by number. Record here whether the physical key really produces these
-  events (milestone 2 device pass). The stock firmware also receives button
-  timings from the MCU (`mcu_evt_handle`: `BTN_CLICK`, `BTN_LONG_PRESS_2s_5s_UP`).
+- **Power key: the physical key does not reach Linux** (device pass,
+  2026-10-12). Short presses moved nothing on `event0`, the eight SARADC
+  channels, the exported GPIOs, the interrupt counters or the MCU UART
+  (`/dev/ttyS1` carried only the `0x4B` heartbeat). The MCU alone acts on the
+  key: holding it about 3 s cuts power. `vad_keypad` (`event0`,
+  `fe330000.audiobus:vad`) is the SoC's voice-activity detector; its
+  `KEY_POWER` wakes the system on speech, so `power_key::find_power_key` never
+  takes it and finds no key on the Wave. Stock firmware gets presses from the
+  MCU (`mcu_evt_handle`: `BTN_CLICK`, `BTN_LONG_PRESS_2s_5s_UP`), presumably
+  after a handshake waved does not send; that MCU source for
+  `DeviceEvent::PowerKey` is milestone 3 (workstream F). Power off meanwhile is
+  System → Power off.
 - **RTC.** BCD at `0x68` on `/dev/i2c-3`, registers 0–6 = seconds, minutes,
   hours, weekday (0 = Sunday), day, month, year − 2000, in UTC. This is the stock
   `rtc_gettime` / `rtc_settime` layout. Decoding masks seconds and minutes with `0x7f` (bit 7 is the oscillator

@@ -281,6 +281,15 @@ Rules for the parallel milestones:
 - [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
+- [ ] **F7 Power key through the MCU** (M) — the physical key does not reach Linux
+  (device pass 2026-10-12, `waved/crates/waved-system/README.md`); only the MCU sees it
+  and cuts power after a ~3 s hold. Reverse engineer how stock `mcu_evt_handle` gets
+  `BTN_CLICK` / `BTN_LONG_PRESS_2s_*` (likely a handshake on `/dev/ttyS1`) and feed
+  `DeviceEvent::PowerKey` from waved-mcu. Power off meanwhile: System → Power off.
+- [ ] **F8 Boot screen** (S) — the Insta360 image is drawn by the signed, encrypted
+  bootloader (the `logo` partition is empty, the kernel has no logo), so it can't be
+  replaced safely. Cover it from userspace instead: an early init script writes our
+  splash to `/dev/fb0` (~2 s after power-on instead of ~10–15 s until waved draws).
 - [ ] **F6 Peripheral blobs** (S) — adopt the 1.2.2.6 `BT.bin` and `DONGLE.bin` (MCU is unchanged).
   Note that 1.2.2.6 also changed the root password hash.
 

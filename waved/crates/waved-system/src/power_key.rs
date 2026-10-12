@@ -1,6 +1,13 @@
 //! The power key (TODO E2): find its input node, read KEY_POWER edges and turn
 //! them into short and long presses. The UI runtime receives them as
 //! `DeviceEvent::PowerKey` and decides what they mean (`display::DisplayPower`).
+//!
+//! On the Wave the physical key does not reach Linux (device pass,
+//! 2026-10-12): pressing it moved no input event, ADC channel, GPIO,
+//! interrupt or MCU UART byte; only the MCU acts on it, powering off after a
+//! 3 s hold. Stock firmware gets presses through the MCU (`mcu_evt_handle`),
+//! which is not reverse engineered yet. This reader stays for hardware that
+//! exposes a real key, and never takes the speech-wake input.
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -15,18 +22,18 @@ use waved_state::{DeviceEvent, PowerKeyPress};
 pub const POWER_KEY_HOLD_MS: u64 = 2_000;
 pub const SYS_INPUT: &str = "/sys/class/input";
 pub const DEV_INPUT: &str = "/dev/input";
-/// The input device that advertises KEY_POWER (docs/AUDIO_HARDWARE.md).
-/// It may be the Amlogic VAD speech-wake input rather than the physical key:
-/// README device step 4 checks that speech alone produces no presses.
-pub const POWER_KEY_DEVICE: &str = "vad_keypad";
+/// The Amlogic voice-activity detector's input (`fe330000.audiobus:vad`). It
+/// advertises KEY_POWER to wake the system on speech, so reading it as the
+/// power key would turn talking into presses.
+pub const SPEECH_WAKE_DEVICE: &str = "vad_keypad";
 /// `struct input_event` on 64-bit Linux: timeval (16) + type (2) + code (2) + value (4).
 pub const INPUT_EVENT_SIZE: usize = 24;
 
 const EV_KEY: u16 = 0x01;
 const KEY_POWER: u16 = 116;
 
-/// The `/dev/input/eventN` node of the power key: by device name first, then
-/// by the KEY_POWER capability bit.
+/// The `/dev/input/eventN` node of the power key: the first device with the
+/// KEY_POWER capability bit, other than the speech-wake input.
 pub fn find_power_key(sys_input: &Path, dev_input: &Path) -> Option<PathBuf> {
     let mut nodes: Vec<String> = std::fs::read_dir(sys_input)
         .ok()?
@@ -36,15 +43,11 @@ pub fn find_power_key(sys_input: &Path, dev_input: &Path) -> Option<PathBuf> {
         .collect();
     nodes.sort_by_key(|name| name["event".len()..].parse::<u32>().unwrap_or(u32::MAX));
     let read = |node: &str, file: &str| std::fs::read_to_string(sys_input.join(node).join("device").join(file)).ok();
-    let by_name = nodes
+    nodes
         .iter()
-        .find(|node| read(node, "name").is_some_and(|name| name.trim() == POWER_KEY_DEVICE));
-    let by_capability = || {
-        nodes
-            .iter()
-            .find(|node| read(node, "capabilities/key").is_some_and(|keys| has_key(&keys, KEY_POWER)))
-    };
-    by_name.or_else(by_capability).map(|node| dev_input.join(node))
+        .filter(|node| read(node, "name").is_none_or(|name| name.trim() != SPEECH_WAKE_DEVICE))
+        .find(|node| read(node, "capabilities/key").is_some_and(|keys| has_key(&keys, KEY_POWER)))
+        .map(|node| dev_input.join(node))
 }
 
 /// A sysfs key bitmap: hex words, most significant first, 64 bits each (aarch64).
@@ -231,11 +234,23 @@ mod tests {
     const POWER_KEYS: &str = "10000000000000 0"; // KEY_POWER (116)
 
     #[test]
-    fn the_power_key_node_is_found_by_name_then_by_capability() {
+    fn the_speech_wake_input_is_never_the_power_key() {
+        // Device pass 2026-10-12: vad_keypad belongs to the SoC's voice
+        // activity detector (fe330000.audiobus:vad). Its KEY_POWER wakes the
+        // system on speech; the physical key does not reach Linux at all.
         let dev = Path::new("/dev/input");
         let wave = input_tree(&[("event1", "ILITEK_TDDI", TOUCH_KEYS), ("event0", "vad_keypad", POWER_KEYS)]);
-        assert_eq!(find_power_key(wave.path(), dev), Some(dev.join("event0")));
-        let renamed = input_tree(&[("event1", "ILITEK_TDDI", TOUCH_KEYS), ("event3", "gpio-keys", POWER_KEYS)]);
+        assert_eq!(find_power_key(wave.path(), dev), None);
+    }
+
+    #[test]
+    fn the_power_key_node_is_found_by_its_capability() {
+        let dev = Path::new("/dev/input");
+        let renamed = input_tree(&[
+            ("event0", "vad_keypad", POWER_KEYS),
+            ("event1", "ILITEK_TDDI", TOUCH_KEYS),
+            ("event3", "gpio-keys", POWER_KEYS),
+        ]);
         assert_eq!(find_power_key(renamed.path(), dev), Some(dev.join("event3")));
         let none = input_tree(&[("event1", "ILITEK_TDDI", TOUCH_KEYS)]);
         assert_eq!(find_power_key(none.path(), dev), None);
