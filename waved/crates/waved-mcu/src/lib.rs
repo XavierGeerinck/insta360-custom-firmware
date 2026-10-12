@@ -1,6 +1,7 @@
 pub mod battery;
 pub mod handler;
 pub mod mavlink;
+pub mod power_off;
 pub mod protocol;
 pub mod buttons;
 pub mod motor;
