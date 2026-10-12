@@ -3735,6 +3735,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "waved-mavlink"
+version = "0.1.0"
+
+[[package]]
 name = "waved-mcu"
 version = "0.1.0"
 dependencies = [
@@ -3743,6 +3747,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "waved-mavlink",
  "waved-state",
 ]
 
