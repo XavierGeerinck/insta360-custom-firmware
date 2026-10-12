@@ -232,7 +232,7 @@ pub enum UploadMode {
     LocalOnly,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BatteryState {
     pub level: u8,
     pub voltage: u16,
@@ -490,7 +490,7 @@ pub struct SystemState {
 
 // --- Discrete Event Types (broadcast channel) ---
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DeviceEvent {
     ButtonPress(ButtonType),
     UsbConnected,

@@ -1,4 +1,5 @@
 pub mod battery;
+pub mod handler;
 pub mod mavlink;
 pub mod protocol;
 pub mod buttons;
