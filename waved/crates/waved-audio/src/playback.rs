@@ -88,6 +88,7 @@ pub struct PlaybackService {
     local_tx: mpsc::Sender<Vec<i16>>,
     preset_tx: mpsc::Sender<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
+    far_tx: broadcast::Sender<Vec<i16>>,
     channels: u32,
     period_frames: usize,
     sample_rate: u32,
@@ -129,6 +130,13 @@ impl PlaybackService {
         self.ref_tx.subscribe()
     }
 
+    /// Subscribe to the far end: every period the host sent (silence when it
+    /// sent none), as sent, before local playback, the speaker DSP and the
+    /// volume. Recordings mix it in (`crate::recording_mix`).
+    pub fn subscribe_far_end(&self) -> broadcast::Receiver<Vec<i16>> {
+        self.far_tx.subscribe()
+    }
+
     pub fn stats(&self) -> Arc<PlaybackStats> {
         Arc::clone(&self.stats)
     }
@@ -158,6 +166,7 @@ pub fn run_playback_loop<S: PlaybackSink>(
     mut local_rx: mpsc::Receiver<Vec<i16>>,
     mut preset_rx: mpsc::Receiver<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
+    far_tx: broadcast::Sender<Vec<i16>>,
     stats: Arc<PlaybackStats>,
     period_samples: usize,
     sample_rate: u32,
@@ -214,6 +223,9 @@ pub fn run_playback_loop<S: PlaybackSink>(
             warn!("playback batch truncated: {} > {}", batch.len(), period_samples);
             batch.into_iter().take(period_samples).collect()
         };
+
+        // The far end as the host sent it, for recordings.
+        let _ = far_tx.send(normalized.clone());
 
         // Local playback rides on the same period, before the DSP chain, so
         // volume, limiting and the AEC reference cover it too.
@@ -395,6 +407,7 @@ mod alsa_impl {
         let (local_tx, local_rx) = mpsc::channel::<Vec<i16>>(8);
         let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(32);
+        let (far_tx, _) = broadcast::channel::<Vec<i16>>(32);
         let stats = Arc::new(PlaybackStats::default());
         let dsp_metrics = Arc::new(DspMetrics::default());
         let period_samples = cfg.period_frames * cfg.channels as usize;
@@ -402,6 +415,7 @@ mod alsa_impl {
         let initial_preset = cfg.initial_preset;
 
         let ref_tx_thread = ref_tx.clone();
+        let far_tx_thread = far_tx.clone();
         let stats_thread = Arc::clone(&stats);
         let dsp_metrics_thread = Arc::clone(&dsp_metrics);
         std::thread::Builder::new()
@@ -409,7 +423,7 @@ mod alsa_impl {
             .spawn(move || {
                 super::set_realtime_priority();
                 run_playback_loop(
-                    sink, cmd_rx, local_rx, preset_rx, ref_tx_thread, stats_thread,
+                    sink, cmd_rx, local_rx, preset_rx, ref_tx_thread, far_tx_thread, stats_thread,
                     period_samples, sample_rate, initial_preset, dsp_metrics_thread,
                     state_rx,
                 );
@@ -421,6 +435,7 @@ mod alsa_impl {
             local_tx,
             preset_tx,
             ref_tx,
+            far_tx,
             channels: cfg.channels,
             period_frames: cfg.period_frames,
             sample_rate: cfg.sample_rate,
@@ -485,6 +500,10 @@ mod tests {
         }
     }
 
+    /// What a mock run produced: written periods, stats, AEC reference and
+    /// far-end periods.
+    type MockRun = (Vec<Vec<i16>>, Arc<PlaybackStats>, Vec<Vec<i16>>, Vec<Vec<i16>>);
+
     fn run_with_mock(
         stop_after: usize,
         fail_once: bool,
@@ -492,7 +511,7 @@ mod tests {
         local_prefill: Vec<Vec<i16>>,
         period_samples: usize,
         channels: u32,
-    ) -> (Vec<Vec<i16>>, Arc<PlaybackStats>, Vec<Vec<i16>>) {
+    ) -> MockRun {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = MockSink {
             channels,
@@ -512,6 +531,7 @@ mod tests {
         // Drop preset_tx immediately so no preset switches happen during the test.
         drop(preset_tx);
         let (ref_tx, mut ref_rx) = broadcast::channel::<Vec<i16>>(64);
+        let (far_tx, mut far_rx) = broadcast::channel::<Vec<i16>>(64);
         let stats = Arc::new(PlaybackStats::default());
         let stats_thread = Arc::clone(&stats);
 
@@ -523,7 +543,7 @@ mod tests {
         });
         let handle = std::thread::spawn(move || {
             run_playback_loop(
-                sink, cmd_rx, local_rx, preset_rx, ref_tx, stats_thread,
+                sink, cmd_rx, local_rx, preset_rx, ref_tx, far_tx, stats_thread,
                 period_samples, 48_000, PlaybackPreset::Voice,
                 Arc::new(DspMetrics::default()),
                 state_rx,
@@ -539,13 +559,17 @@ mod tests {
         while let Ok(b) = ref_rx.try_recv() {
             ref_batches.push(b);
         }
+        let mut far_batches = Vec::new();
+        while let Ok(b) = far_rx.try_recv() {
+            far_batches.push(b);
+        }
         let final_written = written.lock().unwrap().clone();
-        (final_written, stats, ref_batches)
+        (final_written, stats, ref_batches, far_batches)
     }
 
     #[test]
     fn silence_when_queue_empty() {
-        let (batches, stats, ref_batches) = run_with_mock(3, false, vec![], vec![], 8, 2);
+        let (batches, stats, ref_batches, _) = run_with_mock(3, false, vec![], vec![], 8, 2);
         assert!(batches.len() >= 3);
         for b in &batches {
             assert_eq!(b.len(), 8);
@@ -560,7 +584,7 @@ mod tests {
     #[test]
     fn submitted_batch_is_played_and_referenced() {
         let payload = vec![1i16, 2, 3, 4, 5, 6, 7, 8];
-        let (batches, stats, ref_batches) =
+        let (batches, stats, ref_batches, _) =
             run_with_mock(2, false, vec![payload.clone()], vec![], 8, 2);
         // Post-SP#5: the limiter's 96-frame lookahead means the first batch
         // emerges as silence during warmup. We can't byte-compare. Instead,
@@ -578,7 +602,7 @@ mod tests {
 
     #[test]
     fn short_batch_is_padded_with_silence() {
-        let (batches, _, _) = run_with_mock(1, false, vec![vec![99, 99]], vec![], 8, 2);
+        let (batches, _, _, _) = run_with_mock(1, false, vec![vec![99, 99]], vec![], 8, 2);
         let first = &batches[0];
         assert_eq!(first.len(), 8, "short batch padded to period");
         // Don't assert specific sample values — DSP warmup obscures the first batch.
@@ -587,7 +611,7 @@ mod tests {
     #[test]
     fn underrun_increments_stat_and_continues() {
         // First write returns Underrun; loop recovers and writes on subsequent iterations.
-        let (batches, stats, _) = run_with_mock(3, true, vec![], vec![], 4, 1);
+        let (batches, stats, _, _) = run_with_mock(3, true, vec![], vec![], 4, 1);
         assert_eq!(stats.underruns.load(Ordering::Relaxed), 1);
         assert!(batches.len() >= 3);
     }
@@ -602,11 +626,13 @@ mod tests {
             mpsc::channel::<crate::playback::preset::PlaybackPreset>(2);
         let (local_tx, _local_rx) = mpsc::channel::<Vec<i16>>(4);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(2);
+        let (far_tx, _) = broadcast::channel::<Vec<i16>>(2);
         let svc = PlaybackService {
             cmd_tx: cmd_tx.clone(),
             local_tx: local_tx.clone(),
             preset_tx,
             ref_tx,
+            far_tx,
             channels: 2,
             period_frames: 1024,
             sample_rate: 48_000,
@@ -636,8 +662,19 @@ mod tests {
     }
 
     #[test]
+    fn the_far_end_is_what_the_host_sent_without_local_playback() {
+        // Recordings mix the far end in: it must be the host's samples as
+        // sent (before the speaker DSP, which delays and reshapes them), and
+        // a recording played from Files must not leak into a new one.
+        let host = vec![1_000i16, -1_000, 2_000, -2_000, 3_000, -3_000, 4_000, -4_000];
+        let (_, _, _, far) = run_with_mock(2, false, vec![host.clone()], vec![vec![500; 8]], 8, 2);
+        assert_eq!(far[0], host);
+        assert!(far[1].iter().all(|&s| s == 0), "the next period had no host audio");
+    }
+
+    #[test]
     fn local_batch_plays_without_host_audio() {
-        let (batches, stats, _ref_batches) =
+        let (batches, stats, _ref_batches, _) =
             run_with_mock(2, false, vec![], vec![vec![100; 8]], 8, 2);
         assert_eq!(batches.len(), 2);
         assert!(

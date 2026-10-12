@@ -1080,6 +1080,27 @@ with the speech fix below, that gain does not pay for the risk while the
 talker moves or a second person speaks: Whole room stays on the plain
 average.
 
+## The far end of a call (device pass, 2026-10-12)
+
+During a call the Wave's own speaker plays the remote side a few centimetres
+from the mics. Two consequences, both fixed on 2026-10-12:
+
+- **The wedge pointed at the speaker** ("constantly speech from the front").
+  The direction estimate runs on the raw mics, before echo cancellation, and
+  the speaker is the loudest coherent source. `AudioService` now skips the
+  estimator for a frame when, on the previous frame, the far end was playing
+  and the linear echo canceller removed ≥ 6 dB (`FAR_END_DOMINATES_DB`):
+  most of the mic was echo. Talking over the far end keeps that figure lower,
+  so the room's talker keeps a direction.
+- **Meeting recordings held only the room.** The recorder wrote the uplink,
+  which cancels the far end by ~20 dB. Recordings now write
+  `ProcessedAudioFrame::recording_f32`: the uplink plus the host's playback
+  as sent (before local playback, the speaker DSP and the volume, so the
+  remote side does not follow the volume knob), delayed by the uplink's
+  latency and limited at −1 dBFS (`crate::recording_mix`). The far end is
+  queued, not taken freshest-first like the AEC reference, so every sample
+  is written once. The call uplink is unchanged.
+
 ## Microphone check (milestone 2)
 
 `waved-audio/src/mic_check.rs` watches raw, pre-mute frames in 3 s windows at start-up.

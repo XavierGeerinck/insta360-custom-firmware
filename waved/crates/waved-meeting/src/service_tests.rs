@@ -30,6 +30,7 @@ pub(crate) fn settings_for(upload_mode: UploadMode) -> SettingsState {
 pub(crate) fn frame_of(value: f32) -> ProcessedAudioFrame {
     ProcessedAudioFrame {
         mic_mono_f32: vec![value; 480],
+        recording_f32: vec![value; 480],
         mic_stereo_f32: None,
         reference_f32: vec![0.0; 480],
         sample_rate: 48_000,

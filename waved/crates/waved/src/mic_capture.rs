@@ -110,6 +110,7 @@ mod tests {
     fn test_frame() -> ProcessedAudioFrame {
         ProcessedAudioFrame {
             mic_mono_f32: vec![0.25, -0.25],
+            recording_f32: vec![0.25, -0.25],
             mic_stereo_f32: None,
             reference_f32: vec![0.0; 2],
             sample_rate: 48_000,

@@ -107,6 +107,10 @@ pub struct ProcessedAudioFrame {
     /// Final uplink mono signal after all AEC, optional environmental NS,
     /// user gain, and limiting, in [-1.0, 1.0].
     pub mic_mono_f32: Vec<f32>,
+    /// What recordings store: the room (`mic_mono_f32`) plus the far end of
+    /// a call (`crate::recording_mix`), or the room alone when no far end is
+    /// wired. Same length as `mic_mono_f32` once the frame is processed.
+    pub recording_f32: Vec<f32>,
     /// Optional stereo pair produced by Stereo beam mode (L, R).
     /// Same length as `mic_mono_f32` when present.
     pub mic_stereo_f32: Option<(Vec<f32>, Vec<f32>)>,
@@ -134,6 +138,7 @@ impl ProcessedAudioFrame {
         i16_to_f32(reference_mono_i16, &mut reference_f32);
 
         Self {
+            recording_f32: mic_mono_f32.clone(),
             mic_mono_f32,
             mic_stereo_f32: None,
             reference_f32,

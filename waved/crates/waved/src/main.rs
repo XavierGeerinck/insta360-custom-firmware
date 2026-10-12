@@ -386,6 +386,8 @@ async fn run_async(
             ));
             dsp_metrics_handle = Some(playback.dsp_metrics());
             audio_svc.set_dsp_metrics(playback.dsp_metrics());
+            // Recordings carry the far end of a call too (recording_mix).
+            audio_svc.set_far_end(playback.subscribe_far_end(), playback.channels() as usize);
             // SP#5: forward preset commands from the bus to the playback loop.
             tokio::spawn({
                 let playback = Arc::clone(&playback);

@@ -516,7 +516,7 @@ impl MeetingService {
                 // a few hundred microseconds per ~21 ms ALSA period.
                 Some(frame) = self.audio_rx.recv() => {
                     if let Some(rec) = active.as_mut() {
-                        if let Err(error) = rec.append_samples(&frame.mic_mono_f32) {
+                        if let Err(error) = rec.append_samples(&frame.recording_f32) {
                             warn!("recording WAV write failed: {error}");
                             self.integrity
                                 .record_fault(RecordingIntegrityFault::WavWriteFailed);
@@ -532,7 +532,7 @@ impl MeetingService {
                         }
                     } else {
                         self.sync_pre_recording(&mut prebuffer);
-                        prebuffer.push(&frame.mic_mono_f32);
+                        prebuffer.push(&frame.recording_f32);
                     }
                 }
                 Some(signal) = self.integrity_rx.recv() => {
@@ -1007,7 +1007,7 @@ impl MeetingService {
                     // cannot overtake its own pre-roll.
                     while let Ok(frame) = self.audio_rx.try_recv() {
                         self.sync_pre_recording(prebuffer);
-                        prebuffer.push(&frame.mic_mono_f32);
+                        prebuffer.push(&frame.recording_f32);
                     }
                     break;
                 },
@@ -1015,7 +1015,7 @@ impl MeetingService {
                     match frame {
                         Some(frame) => {
                             self.sync_pre_recording(prebuffer);
-                            prebuffer.push(&frame.mic_mono_f32);
+                            prebuffer.push(&frame.recording_f32);
                         }
                         None => audio_closed = true,
                     }
@@ -1057,7 +1057,7 @@ impl MeetingService {
     ) -> Option<RecordingIntegrityFault> {
         loop {
             let fault = match self.audio_rx.try_recv() {
-                Ok(frame) => match rec.append_samples(&frame.mic_mono_f32) {
+                Ok(frame) => match rec.append_samples(&frame.recording_f32) {
                     Ok(_) => continue,
                     Err(_) => RecordingIntegrityFault::WavWriteFailed,
                 },
@@ -1572,6 +1572,7 @@ mod wiring_tests {
     fn processed_frame(timestamp_ms: u64) -> ProcessedAudioFrame {
         ProcessedAudioFrame {
             mic_mono_f32: vec![0.25; 480],
+            recording_f32: vec![0.25; 480],
             mic_stereo_f32: None,
             reference_f32: vec![0.0; 480],
             sample_rate: 48_000,

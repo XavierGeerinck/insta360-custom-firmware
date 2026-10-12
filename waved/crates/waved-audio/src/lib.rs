@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod mic_check;
 pub mod playback;
 pub mod processed_frame;
+pub mod recording_mix;
 pub mod spectrum;
 pub mod stats_collector;
 pub mod stereo_align;
@@ -450,6 +451,11 @@ pub struct AudioService {
     /// Reads whether the host has the USB microphone open (UAC "PCM Playback
     /// State"). main.rs installs it when UAC routing is on.
     host_listening_probe: Option<Box<dyn Fn() -> bool + Send>>,
+    /// Adds the far end of a call to recordings; `None` records the room only.
+    recording_mix: Option<recording_mix::RecordingMix>,
+    /// The last frame was mostly the Wave's own speaker (see
+    /// `FAR_END_DOMINATES_DB`); the next one gets no direction.
+    far_end_dominates: bool,
 }
 
 impl AudioService {
@@ -540,11 +546,23 @@ impl AudioService {
             mic_monitor: None,
             mic_check_done: false,
             host_listening_probe: None,
+            recording_mix: None,
+            far_end_dominates: false,
         }
     }
 
     /// Publish `AudioState.host_listening` from this probe on every frame
     /// ("Computer is listening" on Home).
+    /// Mix the far end of a call into recordings (`recording_mix`): `rx`
+    /// carries the host's playback periods, `channels` their interleaving.
+    /// The far end is held back by the uplink's latency at the time of the
+    /// call, so it lines up with the room (an NR change later shifts it by a
+    /// few tens of ms, which a conversation does not notice).
+    pub fn set_far_end(&mut self, rx: tokio::sync::broadcast::Receiver<Vec<i16>>, channels: usize) {
+        let feed = recording_mix::FarEndFeed::new(rx, channels, self.frame_size, self.mid_latency_samples());
+        self.recording_mix = Some(recording_mix::RecordingMix::new(feed, self.sample_rate));
+    }
+
     pub fn set_host_listening_probe(&mut self, probe: impl Fn() -> bool + Send + 'static) {
         self.host_listening_probe = Some(Box::new(probe));
     }
@@ -729,7 +747,22 @@ impl AudioService {
                 self.mic_8ch_f32_scratch[i] = (s as f32) / 32768.0;
             }
 
-            let doa = self.doa.update(&self.mic_8ch_f32_scratch);
+            // While the speaker plays the far end it is the loudest coherent
+            // sound the array hears, and the wedge would point at it. Skip
+            // the estimator for those frames, which also keeps them out of
+            // its averaged cross-spectra.
+            let doa = if self.far_end_dominates {
+                let state = self.audio_tx.borrow();
+                crate::doa::DoaUpdate {
+                    azimuth_deg: state.doa_horizontal,
+                    elevation_deg: state.doa_pitch,
+                    vad_active: false,
+                    fresh: false,
+                    confidence: 0.0,
+                }
+            } else {
+                self.doa.update(&self.mic_8ch_f32_scratch)
+            };
             self.audio_tx.send_modify(|s| {
                 s.doa_horizontal = doa.azimuth_deg;
                 s.doa_pitch = doa.elevation_deg;
@@ -1105,6 +1138,12 @@ fn build_doa_backend(
     }
 }
 
+/// The echo canceller took at least this much out of the mic while the
+/// speaker played: most of what the array heard was the far end, not a
+/// talker. Talking over the far end keeps the figure lower, so the room's
+/// talker still gets a direction then.
+const FAR_END_DOMINATES_DB: f32 = 6.0;
+
 fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> ProcessedAudioFrame {
     let mic_vol = svc.audio_tx.borrow().mic_volume;
     // Mono: gain → limiter.
@@ -1145,6 +1184,14 @@ fn apply_gain(svc: &mut AudioService, mut processed: ProcessedAudioFrame) -> Pro
     }
     processed.aec_metrics.mic_uplink_rms = rms_f32_i16_scale(&processed.mic_mono_f32);
     processed.aec_metrics.update_suppression();
+    svc.far_end_dominates = processed
+        .aec_metrics
+        .linear_erle_db
+        .is_some_and(|db| db >= FAR_END_DOMINATES_DB);
+    processed.recording_f32 = match svc.recording_mix.as_mut() {
+        Some(mix) => mix.mix(&processed.mic_mono_f32),
+        None => processed.mic_mono_f32.clone(),
+    };
     processed
 }
 
@@ -1314,6 +1361,102 @@ mod tests {
             attenuation_db >= 10.0,
             "process_frame attenuation {attenuation_db:.1} dB < 10 dB (raw rms {raw_rms:.1}, out rms {out_rms:.1})"
         );
+    }
+
+    /// A broadband source reaching each mic as a plane wave from `az_deg`
+    /// (integer delays), frame `f` of a continuous signal: `(mic 8-ch, mono)`.
+    fn plane_wave_noise(az_deg: f32, f: usize, frame: usize, gain: f32, seed: u32) -> (Vec<i16>, Vec<i16>) {
+        let geom = MicGeometry::default();
+        let az = az_deg.to_radians();
+        let source = |n: i64| -> f32 {
+            // Stateless noise so any sample index can be read.
+            let mut x = (n as u32).wrapping_mul(0x9E37_79B1) ^ seed;
+            x ^= x >> 15;
+            x = x.wrapping_mul(0x85EB_CA6B);
+            x ^= x >> 13;
+            (x as f32 / u32::MAX as f32) - 0.5
+        };
+        let delays: Vec<i64> = (0..8)
+            .map(|ch| {
+                let p = geom.position_for_alsa(ch);
+                (-(p.x * az.cos() + p.y * az.sin()) * 1e-3 / 343.0 * 48_000.0).round() as i64 + 8
+            })
+            .collect();
+        let base = (f * frame) as i64;
+        let mut mic = vec![0i16; frame * 8];
+        let mut mono = vec![0i16; frame];
+        for i in 0..frame {
+            let n = base + i as i64;
+            mono[i] = (source(n) * 0.5 * 32_767.0) as i16;
+            for ch in 0..8 {
+                mic[i * 8 + ch] = (source(n - delays[ch]) * gain * 32_767.0) as i16;
+            }
+        }
+        (mic, mono)
+    }
+
+    fn doa_service(frame: usize) -> (AudioService, tokio::sync::watch::Receiver<AudioState>) {
+        let state = AudioState { nr_level: NrLevel::Off, ..AudioState::default() };
+        let (audio_tx, audio_rx) = tokio::sync::watch::channel(state);
+        let (frame_tx, frame_rx) = tokio::sync::mpsc::channel::<AudioFrame>(4);
+        let (meeting_tx, _meeting_rx) = tokio::sync::mpsc::channel::<ProcessedAudioFrame>(4);
+        let svc = AudioService::new(Arc::new(audio_tx), frame_tx, frame_rx, meeting_tx, frame, 48_000, MicGeometry::default());
+        (svc, audio_rx)
+    }
+
+    #[test]
+    fn the_speakers_own_playback_is_not_a_talker() {
+        // Device pass 2026-10-12: in a call the wedge pointed at the Wave's
+        // own speaker, the loudest coherent sound the array hears.
+        let frame = 1024;
+        let (mut svc, audio_rx) = doa_service(frame);
+        let mut confident_late = 0;
+        for f in 0..140 {
+            let (mic, far) = plane_wave_noise(0.0, f, frame, 0.25, 7);
+            let stereo: Vec<i16> = far.iter().flat_map(|&s| [s, s]).collect();
+            svc.process_frame(&AudioFrame::paired(mic, 8, stereo, 2, 48_000, (f * frame * 1000 / 48_000) as u64));
+            if f >= 70 && audio_rx.borrow().doa_confidence >= 0.30 {
+                confident_late += 1;
+            }
+        }
+        assert_eq!(confident_late, 0, "echo read as a talker in {confident_late} of 70 frames");
+    }
+
+    #[test]
+    fn a_talker_over_the_far_end_keeps_the_direction() {
+        let frame = 1024;
+        let (mut svc, audio_rx) = doa_service(frame);
+        let (mut confident, mut near_90) = (0, 0);
+        for f in 0..140 {
+            let (echo, far) = plane_wave_noise(0.0, f, frame, 0.1, 7);
+            let (talker, _) = plane_wave_noise(90.0, f, frame, 0.2, 11);
+            let mic: Vec<i16> = echo.iter().zip(&talker).map(|(&e, &t)| e.saturating_add(t)).collect();
+            let stereo: Vec<i16> = far.iter().flat_map(|&s| [s, s]).collect();
+            svc.process_frame(&AudioFrame::paired(mic, 8, stereo, 2, 48_000, (f * frame * 1000 / 48_000) as u64));
+            let state = audio_rx.borrow();
+            if f >= 70 && state.doa_confidence >= 0.30 {
+                confident += 1;
+                let err = ((state.doa_horizontal - 90.0 + 540.0) % 360.0 - 180.0).abs();
+                near_90 += usize::from(err < 25.0);
+            }
+        }
+        assert!(confident >= 50, "only {confident} of 70 frames confident while talking over the far end");
+        assert!(near_90 * 10 >= confident * 9, "{near_90} of {confident} confident frames near the talker");
+    }
+
+    #[test]
+    fn a_talker_with_nothing_playing_still_has_a_direction() {
+        let frame = 1024;
+        let (mut svc, audio_rx) = doa_service(frame);
+        let mut confident = 0;
+        for f in 0..60 {
+            let (mic, _) = plane_wave_noise(90.0, f, frame, 0.1, 11);
+            svc.process_frame(&AudioFrame::paired(mic, 8, vec![0; frame * 2], 2, 48_000, (f * frame * 1000 / 48_000) as u64));
+            if f >= 20 && audio_rx.borrow().doa_confidence >= 0.30 {
+                confident += 1;
+            }
+        }
+        assert!(confident >= 35, "only {confident} of 40 frames confident");
     }
 
     #[test]

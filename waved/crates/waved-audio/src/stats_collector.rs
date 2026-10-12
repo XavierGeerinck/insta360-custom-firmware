@@ -414,6 +414,7 @@ mod tests {
         let step = 2.0 * std::f32::consts::PI * 1000.0 / 48000.0;
         let mic_mono_f32: Vec<f32> = (0..n).map(|i| (i as f32 * step).sin() * 0.5).collect();
         let p = ProcessedAudioFrame {
+            recording_f32: mic_mono_f32.clone(),
             mic_mono_f32,
             mic_stereo_f32: None,
             reference_f32: vec![],
