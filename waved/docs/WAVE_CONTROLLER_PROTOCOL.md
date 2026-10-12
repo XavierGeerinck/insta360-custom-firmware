@@ -601,12 +601,15 @@ Two sides keep their current aim (`beam_aim_deg`); Follow talker starts from it.
 | Engine | `pclink/link.rs` (pure; time passed in) |
 | Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0`. While the writer takes nothing (a write blocked on a host that stopped reading) the engine backs off from 1 ms to the tick. Open and write failures log the first, then a count at most once a minute, then one line when writes work again |
 
-Integration points left open on purpose:
+Integration points:
 
-- **PIN** — `pclink::handler::PinVerifier::check(candidate, now_ms)`; wrap K2's
-  `waved_config::PinAttempts::check(security, candidate, now_ms)` (Accepted →
-  `Accepted`, Wrong → `Wrong`, Locked → `Locked`). `main.rs` passes
-  `DenyAllPins` until then, so a PIN typed in the app is always refused.
+- **PIN** — `pclink::handler::PinVerifier::check(candidate, now_ms)`.
+  `main.rs` passes `pclink::handler::ConfigPins`: the device PIN from
+  `config.toml` (`[security]`), checked with K2's
+  `waved_config::PinAttempts::check` (Accepted → `Accepted`, Wrong → `Wrong`,
+  Locked → `Locked`). It keeps its own count of wrong tries and its own 60 s
+  wait after five, separate from the on-device keypad's. `DenyAllPins`
+  (refuses every PIN) is left for tests.
 - **On-device PIN prompt** — `pclink::service::PinPrompt`: a `()` on
   `requests` means "show K2's PIN screen", the screen answers `true`/`false`
   on `results`. `main.rs` passes `None`, so with a PIN set and no PIN in the
