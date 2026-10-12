@@ -1,0 +1,24 @@
+#!/bin/sh
+# Cover the bootloader's Insta360 screen with waved's start-up screen.
+#
+# The bootloader draws the Insta360 image and it stays on the panel until
+# something draws over it; waved's own start-up screen comes ~10-15 s after
+# power-on. The image cannot be changed at the source (the bootloader is
+# signed and encrypted; the logo partition is empty), so this writes
+# /data/waved/splash.fb (400x304 RGB565, big-endian, rotated 180 degrees;
+# scripts/make-splash.py) to the panel as early as it can: right after
+# S02overlayfs, because /etc/init.d and /data/waved both live on /data.
+
+case "$1" in
+    start)
+        if [ -f /data/waved/splash.fb ] && [ -w /dev/fb0 ]; then
+            cat /data/waved/splash.fb > /dev/fb0 2>/dev/null
+        fi
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac

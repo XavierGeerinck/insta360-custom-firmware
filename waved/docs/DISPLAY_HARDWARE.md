@@ -95,6 +95,26 @@ approved mockups (`../docs/mockups/`). Geometry tokens live in
 `kit/tokens.rs` and follow the measured visible area above. The stock
 firmware's own layout is kept for reference in `docs/ui/HOME_SCREEN.md`.
 
+## Boot screen
+
+The Insta360 image at power-on is drawn by the bootloader and stays on the
+panel until something draws over it (`fbtft` keeps the panel's contents; the
+kernel has no logo, `CONFIG_LOGO` is unset). It cannot be replaced at the
+source: the `logo` partition (`/dev/logo`, `mmcblk0p5`) is all zeros, the
+bootloader's `load_bmp_logo` reads a missing `odm_ext` partition or that empty
+one and `init_display` never calls it, and the image lives in the bootloader
+itself, which is encrypted (entropy 8.0 bits/byte over 0xC0000–0x180000) and
+verified at boot (`androidboot.verifiedbootstate=green`).
+
+`deploy/S03splash` covers it instead: right after `S02overlayfs` mounts the
+overlay (`/etc/init.d` and `/data/waved` both live on `/data`) it writes
+`/data/waved/splash.fb` (waved's start-up ring without the version line,
+built by `scripts/make-splash.py`) to `/dev/fb0`. `rcS` sets the backlight to
+255 before any script runs. Measured 2026-10-12: userspace starts at 0.97 s,
+the splash before `S50` at 2.24 s, waved's UI at ~10 s, so the Insta360 image
+now shows for the bootloader's time plus ~1.5 s. Install: push both files and
+`chmod 755 /etc/init.d/S03splash`.
+
 ## Deploy
 
 `/data` is ~440 MB and nearly full; the stripped binary is ~63 MB. `adb push`

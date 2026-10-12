@@ -286,7 +286,7 @@ Rules for the parallel milestones:
   and cuts power after a ~3 s hold. Reverse engineer how stock `mcu_evt_handle` gets
   `BTN_CLICK` / `BTN_LONG_PRESS_2s_*` (likely a handshake on `/dev/ttyS1`) and feed
   `DeviceEvent::PowerKey` from waved-mcu. Power off meanwhile: System → Power off.
-- [ ] **F8 Boot screen** (S) — the Insta360 image is drawn by the signed, encrypted
+- [x] **F8 Boot screen** (S) — the Insta360 image is drawn by the signed, encrypted
   bootloader (the `logo` partition is empty, the kernel has no logo), so it can't be
   replaced safely. Cover it from userspace instead: an early init script writes our
   splash to `/dev/fb0` (~2 s after power-on instead of ~10–15 s until waved draws).
