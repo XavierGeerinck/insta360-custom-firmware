@@ -21,6 +21,7 @@ from on-device measurement and are hard to rederive.
 | System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
 | MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, power off) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
 | Bluetooth module (`/dev/ttyS1` 921600, Telink; audio on TDM-A `hw:0,0`; `BT.bin`/`DONGLE.bin`) | [`docs/BLUETOOTH_PROTOCOL.md`](docs/BLUETOOTH_PROTOCOL.md) |
+| Updates (signed packages, server, fall-back in `S60waved`, back to stock) | [`docs/UPDATES.md`](docs/UPDATES.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
@@ -50,7 +51,9 @@ adb shell "killall waved 2>/dev/null; sleep 2; \
 session close.
 
 `WAVED_BUILD_ID` is the build id the About screen shows (`Cross.toml` passes it
-into the container). The power key, the battery, the lift and power off go
+into the container). `WAVED_UPDATE_PUBKEY` (also passed through) is the update
+signing key's public half; a build without it refuses every over-the-air update
+(`docs/UPDATES.md`). The power key, the battery, the lift and power off go
 through the MCU on `/dev/ttyS4` (`waved-mcu`, `docs/MCU_PROTOCOL.md`); waved
 owns that port, so stop it before using `mcutool`. `WAVED_POWER_KEY=1` finds no
 input-device key on the Wave (`vad_keypad` is the speech-wake detector).

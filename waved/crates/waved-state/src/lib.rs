@@ -525,6 +525,63 @@ pub struct SystemState {
     pub about: AboutInfo,
 }
 
+/// Firmware updates (workstream H, `docs/UPDATES.md`), published by waved-update.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OtaState {
+    pub phase: OtaPhase,
+    /// The running waved version, e.g. "0.10.0".
+    pub current_version: String,
+    /// The version on offer or being installed.
+    pub target_version: Option<String>,
+    /// Progress over download, check and install, 0..=100.
+    pub progress_pct: u8,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum OtaPhase {
+    /// No update server is set, or this build trusts no signing key.
+    #[default]
+    Off,
+    /// Set up; no check has finished yet.
+    Idle,
+    Checking,
+    UpToDate,
+    /// A newer version is on the server.
+    Available,
+    Downloading,
+    /// Checking the signature and unpacking.
+    Verifying,
+    /// Verified; waits until nothing is in use (recording, call, computer listening).
+    Waiting,
+    Installing,
+    /// Installed; Wave restarts by itself.
+    Restarting,
+    /// `reason` is plain, user-facing text.
+    Failed {
+        reason: String,
+    },
+}
+
+impl OtaPhase {
+    /// Past the point of no return: the update owns the screen until Wave restarts.
+    pub fn takes_over_screen(&self) -> bool {
+        matches!(self, Self::Installing | Self::Restarting)
+    }
+
+    /// Between "check" and "restart": a check, download or install is under way.
+    pub fn in_progress(&self) -> bool {
+        matches!(
+            self,
+            Self::Checking
+                | Self::Downloading
+                | Self::Verifying
+                | Self::Waiting
+                | Self::Installing
+                | Self::Restarting
+        )
+    }
+}
+
 // --- Discrete Event Types (broadcast channel) ---
 
 #[derive(Clone, Debug, PartialEq)]
@@ -654,6 +711,12 @@ pub enum Command {
     // --- System ---
     /// Erase config, recordings, Wi-Fi and Bluetooth pairings, then restart.
     FactoryReset,
+    // --- Updates (waved-update) ---
+    /// Ask the update server now instead of waiting for the next check.
+    CheckForUpdate,
+    /// Download (if needed) and install the newest version now. Also the
+    /// failure screen's Retry.
+    InstallUpdate,
 }
 
 // --- State Bus ---
@@ -673,6 +736,8 @@ pub struct StateBus {
     pub playback: Arc<watch::Sender<PlaybackState>>,
     /// Time zone offset and About values (waved-system).
     pub system: Arc<watch::Sender<SystemState>>,
+    /// Firmware updates (waved-update).
+    pub ota: Arc<watch::Sender<OtaState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
     /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
@@ -705,6 +770,7 @@ impl StateBus {
         let (files_tx, _) = watch::channel(FilesState::default());
         let (playback_tx, _) = watch::channel(PlaybackState::default());
         let (system_tx, _) = watch::channel(SystemState::default());
+        let (ota_tx, _) = watch::channel(OtaState::default());
         let (events_tx, _) = broadcast::channel(64);
         let (commands_tx, _) = broadcast::channel(64);
 
@@ -721,6 +787,7 @@ impl StateBus {
             files: Arc::new(files_tx),
             playback: Arc::new(playback_tx),
             system: Arc::new(system_tx),
+            ota: Arc::new(ota_tx),
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
@@ -1134,5 +1201,47 @@ mod tests {
         let cloned = commands.clone();
         assert_eq!(cloned.len(), 16);
         assert!(matches!(cloned[9], Command::DeleteRecording(x) if x == id));
+    }
+
+    #[test]
+    fn updates_start_off_and_travel_on_their_own_channel() {
+        let bus = StateBus::new();
+        assert_eq!(bus.ota.borrow().phase, OtaPhase::Off);
+        assert_eq!(bus.ota.borrow().progress_pct, 0);
+        let rx = bus.ota.subscribe();
+        bus.ota.send_modify(|ota| {
+            ota.phase = OtaPhase::Downloading;
+            ota.target_version = Some("0.10.0".into());
+            ota.progress_pct = 42;
+        });
+        assert_eq!(rx.borrow().target_version.as_deref(), Some("0.10.0"));
+        let commands = [Command::CheckForUpdate, Command::InstallUpdate];
+        assert_ne!(commands[0], commands[1]);
+    }
+
+    #[test]
+    fn only_installing_and_restarting_take_over_the_screen() {
+        let failed = OtaPhase::Failed {
+            reason: "The download stopped".into(),
+        };
+        for phase in [
+            OtaPhase::Off,
+            OtaPhase::Idle,
+            OtaPhase::Checking,
+            OtaPhase::UpToDate,
+            OtaPhase::Available,
+            OtaPhase::Downloading,
+            OtaPhase::Verifying,
+            OtaPhase::Waiting,
+            failed.clone(),
+        ] {
+            assert!(!phase.takes_over_screen(), "{phase:?}");
+        }
+        assert!(OtaPhase::Installing.takes_over_screen());
+        assert!(OtaPhase::Restarting.takes_over_screen());
+        assert!(OtaPhase::Downloading.in_progress());
+        assert!(OtaPhase::Waiting.in_progress());
+        assert!(!OtaPhase::UpToDate.in_progress());
+        assert!(!failed.in_progress());
     }
 }

@@ -55,6 +55,10 @@ impl Router {
             self.stack = vec![Route::PoweringOff];
             return;
         }
+        // An install owns the screen until Wave restarts (workstream H).
+        if self.stack == [Route::Update] && snap.ota.phase.takes_over_screen() {
+            return;
+        }
         if self.stack == [Route::Boot] {
             if *event == UiEvent::BootDone {
                 self.stack[0] = if snap.settings.first_run_done {
@@ -139,6 +143,23 @@ impl Router {
     /// Follow the meeting state: swap the base and keep sub-screens on top,
     /// except a pending decision, which takes over the whole stack.
     pub fn sync(&mut self, snap: &UiSnapshot) {
+        if self.stack[0] != Route::PoweringOff {
+            if snap.ota.phase.takes_over_screen() {
+                if self.stack != [Route::Update] {
+                    self.stack = vec![Route::Update];
+                }
+                return;
+            }
+            if self.stack == [Route::Update] {
+                // The install failed: keep its screen, with Back to the base.
+                let base = if snap.settings.first_run_done {
+                    Self::base_for(snap)
+                } else {
+                    Route::FirstRun
+                };
+                self.stack = vec![base, Route::Update];
+            }
+        }
         match self.stack[0] {
             Route::Boot | Route::PoweringOff => return,
             Route::FirstRun if !snap.settings.first_run_done => return,
@@ -211,6 +232,52 @@ mod tests {
             assert_eq!(router.stack(), [Route::PoweringOff], "{event:?}");
         }
         snap.meeting.recording = true;
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
+    }
+
+    #[test]
+    fn an_install_owns_the_screen_until_it_fails() {
+        // Workstream H: past the point of no return nothing navigates away.
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        snap.ota.phase = waved_state::OtaPhase::Installing;
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Update]);
+        for event in [
+            UiEvent::Back,
+            UiEvent::ToBase,
+            UiEvent::Rest,
+            UiEvent::Navigate(Route::Menu),
+        ] {
+            router.handle(&event, &snap);
+            assert_eq!(router.stack(), [Route::Update], "{event:?}");
+        }
+        snap.ota.phase = waved_state::OtaPhase::Restarting;
+        snap.meeting.recording = true;
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Update]);
+
+        // A failure stays on screen, with Back to the base.
+        snap.meeting.recording = false;
+        snap.ota.phase = waved_state::OtaPhase::Failed {
+            reason: "The update could not be installed".into(),
+        };
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Update]);
+        router.handle(&UiEvent::Back, &snap);
+        assert_eq!(router.stack(), [Route::Home]);
+    }
+
+    #[test]
+    fn power_off_still_wins_over_an_install() {
+        let mut snap = ready();
+        let mut router = started(&snap);
+        snap.ota.phase = waved_state::OtaPhase::Installing;
+        router.sync(&snap);
+        router.handle(&UiEvent::Navigate(Route::PoweringOff), &snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
         router.sync(&snap);
         assert_eq!(router.stack(), [Route::PoweringOff]);
     }

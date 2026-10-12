@@ -45,6 +45,7 @@ minimum_free_mb = 2048
 [security]
 device_password = ""
 ota_server = ""
+ota_allow_downgrade = false
 
 [ntp]
 servers = ["pool.ntp.org", "time.google.com"]

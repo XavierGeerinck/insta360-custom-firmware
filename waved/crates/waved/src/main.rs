@@ -187,6 +187,16 @@ async fn run_async(
         Arc::clone(&bus.mcu),
     ));
 
+    // Self-hosted, signed updates (H2, docs/UPDATES.md). Not in simulate
+    // builds: the installer writes /data and /etc and reboots.
+    #[cfg(not(feature = "simulate"))]
+    waved_update::device::spawn_device(
+        &bus,
+        &config.security.ota_server,
+        config.security.ota_allow_downgrade,
+        &waved_system::about::version(),
+    );
+
     // Power key (E2, RS7): opt-in until the device pass confirms that the
     // `vad_keypad` node is the physical key and not voice activity.
     #[cfg(not(feature = "simulate"))]
