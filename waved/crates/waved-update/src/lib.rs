@@ -7,7 +7,11 @@
 //! - `install`: the `Installer` trait, the file-system installer and a fake.
 //! - `gate`: when installing may start, and when a new version is healthy.
 //! - `fetch`, `service`: the HTTP fetcher and `UpdateService`, which publishes `OtaState`.
+//! - `device`: `spawn_device`, what `main.rs` calls.
+//! - `elf`, `release`: the checks `waved-pack` runs before it signs.
+//! - `paths`, `space`: where everything lives on the Wave, and the room it takes.
 
+pub mod device;
 pub mod elf;
 pub mod fetch;
 pub mod format;

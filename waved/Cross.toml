@@ -13,4 +13,6 @@ passthrough = [
     "PKG_CONFIG_LIBDIR=/opt/alsa/lib/pkgconfig",
     # About shows it; the container has no git (crates/waved-system/build.rs).
     "WAVED_BUILD_ID",
+    # The update signing key's public half (docs/UPDATES.md); unset = updates off.
+    "WAVED_UPDATE_PUBKEY",
 ]

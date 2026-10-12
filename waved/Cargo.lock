@@ -3670,6 +3670,7 @@ dependencies = [
  "waved-system",
  "waved-uart",
  "waved-ui",
+ "waved-update",
  "waved-wifi",
 ]
 
