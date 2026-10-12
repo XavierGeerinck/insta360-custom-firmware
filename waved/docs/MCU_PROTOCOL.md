@@ -198,7 +198,8 @@ adb shell 'stty -F /dev/ttyS4 115200 raw -echo; cat /dev/ttyS4 > /tmp/s4.bin & p
 
 ## In waved
 
-`crates/waved-mcu` (since 2026-10-12) runs this link: `mavlink.rs` (framing),
+`crates/waved-mcu` (since 2026-10-12) runs this link: `mavlink.rs` (framing, on top of
+the `waved-mavlink` codec it shares with the Wave Controller link),
 `protocol.rs` (decoding and the commands it sends), `handler.rs` (heartbeat
 replies, the battery with stock's glitch filter, the key as
 `DeviceEvent::PowerKey`: click = sleep / wake, `2s_DONE` = power off),

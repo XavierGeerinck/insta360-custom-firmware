@@ -68,7 +68,7 @@ measured against stock on the device.
 | UAC2 capture/playback | ✓ | Done | `waved-audio/src/uac/` |
 | HID consumer (vol, mute, media) | ✓ | Done | `waved-hid/src/report.rs` |
 | HID telephony | ✓ | Partial: PhoneMute only, no HookSwitch, no call UI | `waved-hid/src/events.rs` |
-| **Wave Controller "PC Link" (vendor HID 0x03, MAVLink, 62 commands)** | ✓ | **Missing**: report 0x03 is dropped | `waved-hid/src/reader.rs:26-36` |
+| **Wave Controller "PC Link" (vendor HID 0x03, MAVLink, 62 commands)** | ✓ | **Partial**: built from the stock 1.2.2.6 code (audio, meeting, system, Wi-Fi status; binding, cloud and OTA answered "unsupported"); not yet checked against the app (J5) | `waved-hid/src/pclink/`, `waved/docs/WAVE_CONTROLLER_PROTOCOL.md` |
 | Mobile app (MQTT binding) | new in 1.2.0.6 | Missing / mostly dropped | — |
 | OTA | 9 screens + PC Link | **Missing**: adb deploy only; `security.ota_server` is unused | — |
 

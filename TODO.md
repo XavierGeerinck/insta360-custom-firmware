@@ -325,19 +325,21 @@ Rules for the parallel milestones:
 
 ## J — Wave Controller
 
-- [ ] **J1 Protocol from the decompiled stock code** (M) (D9) — `g_pc_link_slave_cmd_handle_array`
+- [x] **J1 Protocol from the decompiled stock code** (M) (D9) — `g_pc_link_slave_cmd_handle_array`
   in `firmwares/fw_v1.2.2.6/decompiled/libins_entry.so.c`, plus the MAVLink message definitions.
-  Write it down as a protocol doc before coding.
-- [ ] **J2 PC Link transport** (L) — `waved-hid/src/reader.rs` drops report 0x03 today.
+  Write it down as a protocol doc before coding. Done: `waved/docs/WAVE_CONTROLLER_PROTOCOL.md`.
+- [x] **J2 PC Link transport** (L) — `waved-hid/src/reader.rs` drops report 0x03 today.
   - MAVLink over HID, heartbeat, retransmit.
   - The `auth_dev` session token.
-- [ ] **J3 Commands** (L)
+  - Done: `waved-hid/src/pclink/` on the shared `waved-mavlink` codec.
+- [x] **J3 Commands** (L) — done in `pclink/handler.rs`; K2's PIN check and a clock setter
+  still have to be plugged into `pclink::service::spawn` (it starts with `DenyAllPins`, `NoClock`).
   - Audio: volumes, mute, mode.
   - Meeting: start, stop, mark, status.
   - System: info, time, language.
   - Wi-Fi status.
   - Cloud and binding commands get a clean "unsupported" reply.
-- [ ] **J4 Mode mapping** (S) — stock modes 1–6 ↔ the six waved modes from D2.
+- [x] **J4 Mode mapping** (S) — stock modes 1–6 ↔ the six waved modes from D2 (`pclink/mode.rs`).
 - [ ] **J5 Verify against the official app** (M) — once a capture of Wave Controller 1.1.0
   against a stock 1.2.2.6 unit is possible (second unit, or a temporary restore via H4), diff it
   against our implementation and fix the gaps.

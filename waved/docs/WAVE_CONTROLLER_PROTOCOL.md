@@ -575,6 +575,39 @@ Reported back (`audio_mic_mode`), stock SK sends `beam mode + 2` **[code]**, so
 default meeting mode, the one that follows whoever speaks. Focused, Narrow and
 Two sides keep their current aim (`beam_aim_deg`); Follow talker starts from it.
 
+## In waved
+
+| Layer | Code |
+|-------|------|
+| Report routing | `crates/waved-hid/src/reader.rs`: `HidReader::spawn_with_vendor` hands report 0x03 to the PC link (LED reports 5–7 as before) |
+| Vendor report, short heartbeat | `crates/waved-hid/src/pclink/vendor.rs` |
+| Transport (ids, resend, sync, reset) | `pclink/transport.rs` |
+| MAVLink v2 | `crates/waved-mavlink` (shared with `waved-mcu`; the stock 24-message table) |
+| PC-link packet | `pclink/packet.rs` |
+| Status structs, CRC-8 | `pclink/status.rs`, read from `pclink/snapshot.rs` |
+| Commands, ack sizes | `pclink/cmd.rs`, `pclink/handler.rs` |
+| Mic modes (J4) | `pclink/mode.rs` |
+| Engine | `pclink/link.rs` (pure; time passed in) |
+| Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0` |
+
+Integration points left open on purpose:
+
+- **PIN** — `pclink::handler::PinVerifier::check(candidate, now_ms)`; wrap K2's
+  `waved_config::PinAttempts::check(security, candidate, now_ms)` (Accepted →
+  `Accepted`, Wrong → `Wrong`, Locked → `Locked`). `main.rs` passes
+  `DenyAllPins` until then, so a PIN typed in the app is always refused.
+- **On-device PIN prompt** — `pclink::service::PinPrompt`: a `()` on
+  `requests` means "show K2's PIN screen", the screen answers `true`/`false`
+  on `results`. `main.rs` passes `None`, so with a PIN set and no PIN in the
+  request the app reads "not verified".
+- **Clock** — `pclink::handler::PcLinkHost::set_time`; `NoClock` answers 1.
+
+Tests: every layer has byte-exact tests; `pclink/link.rs` checks a stock
+SET_AUDIO_MIC_MUTE request against the stock ack byte for byte. The fixtures
+come from a small reference model of the stock layers written from the
+decompiled code, independent of the Rust code; a real capture (J5) replaces
+them.
+
 ## Open questions (for J5)
 
 1. **Does the app work at all with an unbound unit?** GET_DEV_INFO reports
