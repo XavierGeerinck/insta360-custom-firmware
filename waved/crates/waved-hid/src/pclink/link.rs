@@ -374,6 +374,33 @@ mod tests {
     }
 
     #[test]
+    fn once_the_app_goes_quiet_the_link_soon_writes_nothing() {
+        // The app polled the heartbeat and sent a command, then closed: the
+        // ack is never confirmed and no heartbeat request comes again.
+        let mut rig = Rig::new();
+        let mut host = Host::new();
+        let mut req = [0u8; REPORT_LEN];
+        req[..2].copy_from_slice(&[0x03, 0xEC]);
+        rig.report(&req);
+        for r in host.command(cmd::GET_DEV_STATUS, &[], 0) {
+            rig.report(&r);
+        }
+        let quiet_from = rig.now;
+        let mut last_write = quiet_from;
+        while rig.now < quiet_from + 600_000 {
+            rig.now += 20;
+            if !rig.poll().reports.is_empty() {
+                last_write = rig.now;
+            }
+        }
+        assert!(
+            last_write - quiet_from <= HOST_SILENT_MS,
+            "still writing {} s after the app went quiet",
+            (last_write - quiet_from) / 1_000
+        );
+    }
+
+    #[test]
     fn no_heartbeat_is_pushed_before_the_app_asks() {
         let mut rig = Rig::new();
         rig.now += 5_000;

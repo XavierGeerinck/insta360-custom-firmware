@@ -124,7 +124,10 @@ Example frames (all 64 bytes, trailing zeros omitted):
   was sent or received for **≥ 300 ms**, and the last sent id differs from the
   last id the host confirmed with SYNC_RESP, the device puts SYNC(last sent id)
   at the front of the queue. It repeats every ≥ 300 ms of silence until the
-  matching SYNC_RESP arrives (`get_next_send_hid_message`).
+  matching SYNC_RESP arrives (`get_next_send_hid_message`), so with the app
+  gone stock syncs forever. **[waved]** stops after **10** SYNCs without
+  anything from the host (about 3 s) and starts counting again with the
+  host's next packet.
 - RESET_RESP, RESEND_RESP and SYNC_RESP jump the queue; MAVLINK chunks keep
   their order; the queue holds 400 entries and drops the oldest when full.
 

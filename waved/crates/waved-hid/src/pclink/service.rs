@@ -321,7 +321,7 @@ mod tests {
             vendor_tx.send(crate::pclink::vendor::Packet::mavlink(i as u64 + 1, chunk).encode().to_vec()).unwrap();
         }
         // Read slowly through a 4-report channel until the whole 25 606-byte
-        // ack has been reassembled (after it the link keeps sending SYNC).
+        // ack has been reassembled (after it the link sends a few SYNCs).
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut parser = waved_mavlink::Parser::new(waved_mavlink::PC_LINK);
         let mut reassembler = crate::pclink::packet::Reassembler::default();

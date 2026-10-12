@@ -25,6 +25,9 @@ pub const RESEND_RETRY_MS: u64 = 61;
 pub const RESEND_MAX_TRIES: u8 = 21;
 /// Silence before we SYNC our last sent id.
 pub const SYNC_IDLE_MS: u64 = 300;
+/// SYNCs sent without hearing from the host before we stop (waved; stock
+/// syncs until confirmed, which with the app gone is forever).
+pub const SYNC_MAX_TRIES: u8 = 10;
 /// A jump this far ahead restarts the receive side.
 pub const MAX_GAP: u64 = 400;
 /// The first chunk with an id in `2..FIRST_GAP_LIMIT` marks the ids before it missing.
@@ -52,6 +55,8 @@ pub struct Transport {
     pool: VecDeque<Packet>,
     resend_resp_at: HashMap<u64, u64>,
     last_synced_id: u64,
+    /// SYNCs sent since the host last sent anything.
+    sync_tries: u8,
     last_tx_ms: Option<u64>,
     last_rx_ms: Option<u64>,
 
@@ -82,6 +87,7 @@ impl Transport {
     /// Handle one received transport packet.
     pub fn receive(&mut self, packet: Packet, now_ms: u64) -> Received {
         self.last_rx_ms = Some(now_ms);
+        self.sync_tries = 0;
         let mut out = Received::default();
         match packet.kind {
             Kind::Mavlink | Kind::ResendResp => out.stream = self.accept(packet.send_id, packet.payload),
@@ -105,7 +111,8 @@ impl Transport {
     }
 
     /// Housekeeping: give up on ids asked for too often (their followers are
-    /// returned), ask for missing ids, and SYNC after silence.
+    /// returned), ask for missing ids, and SYNC after silence — at most
+    /// `SYNC_MAX_TRIES` times until the host sends something again.
     pub fn poll(&mut self, now_ms: u64) -> Vec<u8> {
         let mut delivered = Vec::new();
         if !self.queue.is_empty() {
@@ -117,9 +124,10 @@ impl Transport {
             self.last_round_ms = Some(now_ms);
             delivered = self.resend_round(now_ms);
         }
-        if self.queue.is_empty() && self.last_send_id != self.last_synced_id {
+        if self.queue.is_empty() && self.last_send_id != self.last_synced_id && self.sync_tries < SYNC_MAX_TRIES {
             let last_traffic = self.last_tx_ms.max(self.last_rx_ms);
             if last_traffic.is_some_and(|t| now_ms.saturating_sub(t) >= SYNC_IDLE_MS) {
+                self.sync_tries += 1;
                 self.queue.push_front(Packet::control(Kind::Sync, self.last_send_id));
             }
         }
@@ -428,6 +436,24 @@ mod tests {
         t.receive(Packet::control(Kind::SyncResp, 3), 610);
         t.poll(2_000);
         assert!(drain(&mut t, 2_000).is_empty(), "confirmed");
+    }
+
+    #[test]
+    fn syncing_stops_when_the_host_stays_silent_and_resumes_when_it_speaks() {
+        let mut t = Transport::new();
+        t.send(&ack_frame());
+        drain(&mut t, 0);
+        let syncs_until = |t: &mut Transport, from: u64, to: u64| {
+            (from..to).step_by(20).map(|now| {
+                t.poll(now);
+                drain(t, now).iter().filter(|p| p.kind == Kind::Sync).count()
+            }).sum::<usize>()
+        };
+        assert_eq!(syncs_until(&mut t, 20, 600_000), usize::from(SYNC_MAX_TRIES), "ten minutes of silence");
+        // The host is back: one chunk from it, and our sync starts over.
+        t.receive(chunk(1, b"a"), 600_000);
+        assert_eq!(syncs_until(&mut t, 600_020, 600_320), 1);
+        assert_eq!(syncs_until(&mut t, 600_320, 700_000), usize::from(SYNC_MAX_TRIES) - 1);
     }
 
     #[test]
