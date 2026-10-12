@@ -36,11 +36,41 @@ mod tests {
         let cmd_rx = bus.commands.subscribe();
         std::thread::spawn(move || sim_mcu.run(cmd_rx));
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-
-        let battery = bus.battery.subscribe();
-        assert_eq!(battery.borrow().level, 75);
+        // The simulated MCU sends heartbeats; waved-mcu trusts the level once
+        // two of them agree (about a second).
+        let mut battery = bus.battery.subscribe();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            battery.wait_for(|b| b.level == 75),
+        )
+        .await
+        .expect("the simulated heartbeats set the battery")
+        .unwrap();
         assert!(!battery.borrow().is_charging);
+    }
+
+    #[tokio::test]
+    async fn sim_mcu_moves_the_lift_for_mic_height() {
+        use waved_state::{Command, LiftState, MotorPosition};
+        let bus = Arc::new(StateBus::new());
+        let (sim_mcu, handle) = waved_mcu::simulate::SimMcuService::new(
+            Arc::clone(&bus.battery),
+            Arc::clone(&bus.mcu),
+            bus.events.clone(),
+        );
+        let cmd_rx = bus.commands.subscribe();
+        std::thread::spawn(move || sim_mcu.run(cmd_rx));
+
+        let mut mcu = bus.mcu.subscribe();
+        bus.commands.send(Command::SetMotorPosition(MotorPosition::High)).unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            mcu.wait_for(|s| s.lift == LiftState::Idle && s.motor_position == MotorPosition::High),
+        )
+        .await
+        .expect("the simulated lift reaches High")
+        .unwrap();
+        assert_eq!(handle.mcu().lift_mm(), 50);
     }
 
     #[tokio::test]

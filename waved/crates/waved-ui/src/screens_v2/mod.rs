@@ -22,6 +22,7 @@ pub mod confirm;
 pub mod datetime;
 pub mod display;
 pub mod menu;
+pub mod mic_height;
 pub mod noise;
 pub mod system;
 pub mod upload_mode;

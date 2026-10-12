@@ -353,6 +353,8 @@ pub struct SettingsState {
     pub first_run_done: bool,
     /// A device password is set, so Files, Wi-Fi, Bluetooth, Uploads and System ask for it (D10).
     pub pin_enabled: bool,
+    /// The chosen Mic height (B5); waved-mcu moves the lift on `SetMotorPosition`.
+    pub mic_height: MotorPosition,
 }
 
 impl Default for SettingsState {
@@ -369,6 +371,7 @@ impl Default for SettingsState {
             tones_enabled: true,
             first_run_done: false,
             pin_enabled: false,
+            mic_height: MotorPosition::Medium,
         }
     }
 }
@@ -430,10 +433,38 @@ pub struct PlaybackState {
 
 #[derive(Clone, Debug, Default)]
 pub struct McuState {
+    /// The height waved-mcu last moved the lift to (Mic height). Not known
+    /// at start-up: the MCU raises the lift to its own start height.
     pub motor_position: MotorPosition,
     pub usb_connected: bool,
     /// Where a `Command::PowerOff` is; `waved` waits for `Sent` or `Aborted`.
     pub power_off: PowerOffPhase,
+    /// What the mic lift is doing, from the MCU's motor reports (waved-mcu).
+    pub lift: LiftState,
+}
+
+/// The mic lift's motion, and how the last move ended. `Blocked` and
+/// `Obstructed` stay until the next move.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LiftState {
+    #[default]
+    Idle,
+    Moving,
+    /// The motor stalled (MCU motor state BLOCK).
+    Blocked,
+    /// The lift's sensor saw something in the way (SENSOR_TRIGGER).
+    Obstructed,
+}
+
+impl LiftState {
+    pub fn is_moving(self) -> bool {
+        self == LiftState::Moving
+    }
+
+    /// The last move ended before reaching its height.
+    pub fn is_stopped(self) -> bool {
+        matches!(self, LiftState::Blocked | LiftState::Obstructed)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -447,12 +478,18 @@ pub enum PowerOffPhase {
     Aborted,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A Mic height (B5): Low 30 mm, Medium 40 mm, High 50 mm (stock's stops).
+/// Stored in config.toml as "low", "medium" or "high".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MotorPosition {
     #[default]
     Low,
     Medium,
     High,
+    /// Not a height: waved-mcu ignores `SetMotorPosition(Moving)`; the
+    /// motion is `McuState::lift`.
+    #[serde(skip)]
     Moving,
 }
 
@@ -802,6 +839,30 @@ mod tests {
     #[test]
     fn motor_position_default_is_low() {
         assert_eq!(MotorPosition::default(), MotorPosition::Low);
+    }
+
+    #[test]
+    fn a_mic_height_is_stored_as_a_word_and_moving_is_never_one() {
+        for (height, word) in [
+            (MotorPosition::Low, "\"low\""),
+            (MotorPosition::Medium, "\"medium\""),
+            (MotorPosition::High, "\"high\""),
+        ] {
+            assert_eq!(serde_json::to_string(&height).unwrap(), word);
+            assert_eq!(serde_json::from_str::<MotorPosition>(word).unwrap(), height);
+        }
+        assert!(serde_json::from_str::<MotorPosition>("\"moving\"").is_err());
+        assert!(serde_json::to_string(&MotorPosition::Moving).is_err());
+    }
+
+    #[test]
+    fn the_lift_starts_idle_and_the_chosen_height_is_medium() {
+        // Stock's factory default start height is 40 mm (`mcu_factory_init`).
+        assert_eq!(McuState::default().lift, LiftState::Idle);
+        assert_eq!(SettingsState::default().mic_height, MotorPosition::Medium);
+        assert!(LiftState::Moving.is_moving());
+        assert!(LiftState::Blocked.is_stopped() && LiftState::Obstructed.is_stopped());
+        assert!(!LiftState::Idle.is_stopped() && !LiftState::Idle.is_moving());
     }
 
     #[test]

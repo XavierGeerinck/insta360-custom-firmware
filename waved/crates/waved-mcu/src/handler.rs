@@ -1,10 +1,12 @@
 //! What waved does with each message from the MCU, without any I/O: answer
 //! heartbeats, publish the battery, turn the key into `PowerKey` presses
-//! (click = sleep / wake, 2 s = "Power off?"; user decision 2026-10-12).
+//! (click = sleep / wake, 2 s = power off; user decisions 2026-10-12) and
+//! hand the motor's reports to the lift (`lift.rs`).
 
+use crate::lift::Lift;
 use crate::mavlink::Message;
 use crate::protocol::{self, Button, Outgoing};
-use waved_state::{BatteryState, DeviceEvent, PowerKeyPress};
+use waved_state::{BatteryState, DeviceEvent, LiftState, MotorPosition, PowerKeyPress};
 
 /// Stock reports the link lost after this long without a heartbeat.
 pub const LINK_LOST_MS: u64 = 5_000;
@@ -32,6 +34,10 @@ pub enum Action {
     Send(Outgoing),
     Battery(BatteryState),
     Event(DeviceEvent),
+    /// `McuState::lift`.
+    Lift(LiftState),
+    /// The lift reached this height (`McuState::motor_position`).
+    Height(MotorPosition),
 }
 
 #[derive(Default)]
@@ -43,6 +49,7 @@ pub struct Handler {
     low_streak: Option<(u16, u8)>,
     last_heartbeat_ms: Option<u64>,
     lost_reported: bool,
+    lift: Lift,
 }
 
 /// The battery level as stock trusts it: values of `LEVEL_INVALID` or more
@@ -86,12 +93,30 @@ impl Handler {
         if let Some(hb) = protocol::heartbeat(m) {
             return self.on_heartbeat(hb, now_ms);
         }
+        if let Some(actions) = self.lift.on_message(m, now_ms) {
+            return actions;
+        }
         let press = match protocol::button(m) {
             Some(Button::Clicked | Button::Released1To2s) => PowerKeyPress::Short,
             Some(Button::Held2s) => PowerKeyPress::Long,
             _ => return Vec::new(),
         };
         vec![Action::Event(DeviceEvent::PowerKey(press))]
+    }
+
+    /// The user chose a Mic height.
+    pub fn move_lift(&mut self, position: MotorPosition, now_ms: u64) -> Vec<Action> {
+        self.lift.request(position, now_ms)
+    }
+
+    /// Time-driven work: the lift's resends, polls and time limit.
+    pub fn tick(&mut self, now_ms: u64) -> Vec<Action> {
+        self.lift.tick(now_ms)
+    }
+
+    /// The power-off sequence used the link: end any move with `state`.
+    pub fn lift_after_power_off(&mut self, state: LiftState) -> Vec<Action> {
+        self.lift.force(state)
     }
 
     fn on_heartbeat(&mut self, hb: protocol::Heartbeat, now_ms: u64) -> Vec<Action> {
@@ -276,6 +301,26 @@ mod tests {
             assert!(events(&actions).is_empty(), "level {bad}");
             assert!(actions.iter().any(|a| matches!(a, Action::Battery(b) if b.level == 100)), "level {bad} kept 100");
         }
+    }
+
+    #[test]
+    fn motor_reports_drive_the_lift_while_heartbeats_are_still_answered() {
+        let mut handler = Handler::default();
+        let started = handler.move_lift(MotorPosition::High, 0);
+        assert!(started.contains(&Action::Send(crate::protocol::motor_move(50, crate::protocol::Speeds::RAISE))));
+        assert!(started.contains(&Action::Lift(LiftState::Moving)));
+        let state = |code: u8| {
+            let mut p = cmd::MOTOR_CHECK.to_le_bytes().to_vec();
+            p.extend([2, code]);
+            msg(NOTIFY, &p)
+        };
+        handler.on_message(&state(1), 200);
+        assert!(handler.on_message(&hb(80, 0), 1_000).contains(&Action::Send(crate::protocol::heartbeat_reply())));
+        let done = handler.on_message(&state(0), 1_500);
+        assert!(done.contains(&Action::Height(MotorPosition::High)));
+        assert!(done.contains(&Action::Lift(LiftState::Idle)));
+        // The power key still decodes.
+        assert_eq!(events(&handler.on_message(&key(1), 2_000)), [DeviceEvent::PowerKey(PowerKeyPress::Short)]);
     }
 
     #[test]

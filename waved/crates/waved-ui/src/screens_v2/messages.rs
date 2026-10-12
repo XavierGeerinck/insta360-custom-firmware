@@ -18,19 +18,21 @@
 //! | Mark | Info | Marked at 42:17 |
 //! | Short tap on Stop / pressing Stop | Info | Hold Stop to end the recording / Keep holding to stop |
 //! | After stop: Send / Keep / Delete | Info / Success / Success | Sending recording / Kept on Wave / Recording deleted |
-//! | Battery 10 % or less, not charging | Warning | Battery 10%, plug in Wave |
-//! | Battery 5 % or less, not charging | Error | Battery 5%, plug in Wave now |
+//! | Battery 10 % or less, not charging (battery icon) | Warning | Battery 10%, plug in Wave |
+//! | Battery 5 % or less, not charging (battery icon) | Error | Battery 5%, plug in Wave now |
+//! | A lift move ended blocked or obstructed (F3, B5) | Warning | Mic lift blocked |
 //! | Microphones not responding | Error | Microphones not responding |
 //! | Play while recording / during a call | Info | Can't play while recording / Can't play during a call |
 //! | Power off / Factory reset confirmed | Info | Powering off / Resetting Wave |
 //! | Delete confirmed | Success | Recording deleted |
 //! | Retry on Uploads | Info | Retrying 3 uploads |
 
+use crate::kit::components::status::battery_look;
 use crate::kit::dispatch::{Message, Severity};
 use crate::kit::snapshot::UiSnapshot;
 use std::collections::VecDeque;
 use uuid::Uuid;
-use waved_state::{Command, DeviceEvent, MicHealth};
+use waved_state::{Command, DeviceEvent, LiftState, MicHealth};
 
 /// The words, in one place, so every screen says the same thing.
 pub mod copy {
@@ -56,6 +58,8 @@ pub mod copy {
     pub const STORAGE_ALMOST_FULL: &str = "Storage almost full";
     pub const POWERING_OFF: &str = "Powering off";
     pub const RESETTING: &str = "Resetting Wave";
+    /// A Mic height move stalled or the lift's sensor saw something.
+    pub const LIFT_BLOCKED: &str = "Mic lift blocked";
 
     /// What Retry on the Uploads screen says: "Retrying 1 upload", "Retrying 3 uploads".
     pub fn retrying_uploads(count: u32) -> String {
@@ -121,6 +125,7 @@ pub struct MessageFeed {
     battery: BatteryStage,
     mics_dead: bool,
     low_space: bool,
+    lift: LiftState,
 }
 
 impl MessageFeed {
@@ -182,7 +187,7 @@ impl MessageFeed {
     }
 
     /// Messages for what changed since the previous snapshot: battery
-    /// thresholds, the microphone check and low storage.
+    /// thresholds, a blocked lift, the microphone check and low storage.
     pub fn on_snapshot(&mut self, snap: &UiSnapshot) -> Vec<Message> {
         let mut messages = Vec::new();
         let battery = &snap.battery;
@@ -200,19 +205,27 @@ impl MessageFeed {
             self.battery
         };
         if stage > self.battery {
+            // The glyph the status pill shows for this level (the mockup's message).
+            let glyph = battery_look(battery.level, false).0;
             match stage {
-                BatteryStage::Low => messages.push(Message::new(
-                    Severity::Warning,
-                    copy::battery_low(battery.level),
-                )),
-                BatteryStage::Critical => messages.push(Message::new(
-                    Severity::Error,
-                    copy::battery_critical(battery.level),
-                )),
+                BatteryStage::Low => messages.push(
+                    Message::new(Severity::Warning, copy::battery_low(battery.level))
+                        .with_icon(glyph),
+                ),
+                BatteryStage::Critical => messages.push(
+                    Message::new(Severity::Error, copy::battery_critical(battery.level))
+                        .with_icon(glyph),
+                ),
                 BatteryStage::Normal => {}
             }
         }
         self.battery = stage;
+
+        let lift = snap.mcu.lift;
+        if lift.is_stopped() && !self.lift.is_stopped() {
+            messages.push(Message::new(Severity::Warning, copy::LIFT_BLOCKED));
+        }
+        self.lift = lift;
 
         let mics_dead = matches!(snap.audio.mic_health, MicHealth::NotResponding { .. });
         if mics_dead && !self.mics_dead {
@@ -252,8 +265,9 @@ mod tests {
     use crate::kit::obj::text_width;
     use crate::kit::testkit::lvgl;
     use crate::kit::tokens::MESSAGE_MAX_W;
+    use crate::kit::icons;
     use crate::screens_v2::main_parts::fixtures;
-    use waved_state::{MicHealth, RecordingIntegrityFault, UploadMode};
+    use waved_state::{LiftState, MicHealth, RecordingIntegrityFault, UploadMode};
 
     fn message(severity: Severity, text: &str) -> Message {
         Message::new(severity, text)
@@ -282,6 +296,7 @@ mod tests {
             copy::STORAGE_ALMOST_FULL,
             copy::POWERING_OFF,
             copy::RESETTING,
+            copy::LIFT_BLOCKED,
         ]
         .map(String::from)
         .into();
@@ -474,7 +489,7 @@ mod tests {
         snap.battery.level = 10;
         assert_eq!(
             feed.on_snapshot(&snap),
-            [message(Severity::Warning, "Battery 10%, plug in Wave")]
+            [message(Severity::Warning, "Battery 10%, plug in Wave").with_icon(icons::BATTERY_0)]
         );
         snap.battery.level = 11;
         assert!(feed.on_snapshot(&snap).is_empty());
@@ -486,7 +501,7 @@ mod tests {
         snap.battery.level = 5;
         assert_eq!(
             feed.on_snapshot(&snap),
-            [message(Severity::Error, "Battery 5%, plug in Wave now")]
+            [message(Severity::Error, "Battery 5%, plug in Wave now").with_icon(icons::BATTERY_0)]
         );
         for level in [6, 5, 6, 5, 6, 5] {
             snap.battery.level = level;
@@ -507,7 +522,7 @@ mod tests {
         snap.battery.level = 5;
         assert_eq!(
             feed.on_snapshot(&snap),
-            [message(Severity::Error, "Battery 5%, plug in Wave now")],
+            [message(Severity::Error, "Battery 5%, plug in Wave now").with_icon(icons::BATTERY_0)],
             "re-armed at 15 %"
         );
         snap.battery.is_charging = true;
@@ -516,9 +531,34 @@ mod tests {
         snap.battery.level = 9;
         assert_eq!(
             feed.on_snapshot(&snap),
-            [message(Severity::Warning, "Battery 9%, plug in Wave")],
+            [message(Severity::Warning, "Battery 9%, plug in Wave").with_icon(icons::BATTERY_0)],
             "unplugging re-arms the warning"
         );
+    }
+
+    #[test]
+    fn a_blocked_lift_is_announced_once_per_move() {
+        let mut feed = MessageFeed::new();
+        let mut snap = UiSnapshot::default();
+        assert!(feed.on_snapshot(&snap).is_empty());
+        snap.mcu.lift = LiftState::Moving;
+        assert!(feed.on_snapshot(&snap).is_empty(), "moving says nothing");
+        snap.mcu.lift = LiftState::Blocked;
+        assert_eq!(
+            feed.on_snapshot(&snap),
+            [message(Severity::Warning, copy::LIFT_BLOCKED)]
+        );
+        assert!(feed.on_snapshot(&snap).is_empty(), "once");
+        snap.mcu.lift = LiftState::Moving; // the user tapped again
+        assert!(feed.on_snapshot(&snap).is_empty());
+        snap.mcu.lift = LiftState::Obstructed;
+        assert_eq!(
+            feed.on_snapshot(&snap),
+            [message(Severity::Warning, copy::LIFT_BLOCKED)],
+            "the retry ended blocked too"
+        );
+        snap.mcu.lift = LiftState::Idle;
+        assert!(feed.on_snapshot(&snap).is_empty());
     }
 
     #[test]

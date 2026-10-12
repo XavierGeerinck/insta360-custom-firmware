@@ -28,6 +28,9 @@ impl Severity {
 pub struct Message {
     pub text: String,
     pub severity: Severity,
+    /// A glyph in place of the severity's icon, in the severity's colour
+    /// (the battery messages show the battery, as in the mockup).
+    pub icon: Option<&'static str>,
 }
 
 impl Message {
@@ -35,7 +38,13 @@ impl Message {
         Self {
             text: text.into(),
             severity,
+            icon: None,
         }
+    }
+
+    pub fn with_icon(mut self, glyph: &'static str) -> Self {
+        self.icon = Some(glyph);
+        self
     }
 }
 

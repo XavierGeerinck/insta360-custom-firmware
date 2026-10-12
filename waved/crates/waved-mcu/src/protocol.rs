@@ -3,6 +3,7 @@
 //! are `u32 cmd` then `params[32]`, most with a sub-command in `params[0]`.
 
 use crate::mavlink::Message;
+use waved_state::MotorPosition;
 
 pub const HEARTBEAT: u32 = 0;
 pub const HEARTBEAT_REPLY: u32 = 1;
@@ -105,6 +106,51 @@ pub fn motor_state(m: &Message) -> Option<MotorState> {
     })
 }
 
+/// Where the lift is, in mm (`mcu_notify` cmd 4 sub 1, `params[1..2]` i16).
+/// Seen on 2026-10-12 while the MCU retracted the lift (40, 30, 0); that the
+/// field is an i16 is assumed (the values fit a byte).
+pub fn lift_position(m: &Message) -> Option<i16> {
+    if notify_cmd(m)? != cmd::MOTOR_CHECK || m.payload[4] != 1 {
+        return None;
+    }
+    Some(i16::from_le_bytes([m.payload[5], m.payload[6]]))
+}
+
+/// The lift's height for a Mic height: stock's three stops
+/// (`mcu_server_request_motor_ctrl_pos`). 0 mm is only for power off.
+pub fn height_mm(position: MotorPosition) -> Option<i16> {
+    match position {
+        MotorPosition::Low => Some(30),
+        MotorPosition::Medium => Some(40),
+        MotorPosition::High => Some(50),
+        MotorPosition::Moving => None,
+    }
+}
+
+/// The motor's high and low speeds for a move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Speeds {
+    pub high: i8,
+    pub low: i8,
+}
+
+impl Speeds {
+    /// To a height.
+    pub const RAISE: Speeds = Speeds { high: 50, low: 25 };
+    /// To 0 mm.
+    pub const RETRACT: Speeds = Speeds { high: 40, low: 20 };
+    /// Stock's retry after a stall (`mcu_motor_block_pos_control`).
+    pub const BLOCKED: Speeds = Speeds { high: 80, low: 45 };
+
+    pub fn for_target(mm: i16) -> Speeds {
+        if mm == 0 {
+            Speeds::RETRACT
+        } else {
+            Speeds::RAISE
+        }
+    }
+}
+
 /// A message for the MCU, before framing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outgoing {
@@ -126,14 +172,30 @@ pub fn heartbeat_reply() -> Outgoing {
 
 /// Move the lift to `mm` (0, 30, 40 or 50) with stock's limits and speeds.
 pub fn motor_to_mm(mm: i16) -> Outgoing {
-    let (high, low): (i8, i8) = if mm == 0 { (40, 20) } else { (50, 25) };
+    motor_move(mm, Speeds::for_target(mm))
+}
+
+/// Move the lift to `mm` at `speeds`, with stock's current limits.
+pub fn motor_move(mm: i16, speeds: Speeds) -> Outgoing {
     let mut params = vec![0u8]; // sub 0: move
     params.extend(2u32.to_le_bytes()); // mode POS
     params.extend(mm.to_le_bytes());
     params.extend(4000i16.to_le_bytes()); // up current limit
     params.extend(3000i16.to_le_bytes()); // down current limit
-    params.extend([high as u8, low as u8]);
+    params.extend([speeds.high as u8, speeds.low as u8]);
     control(cmd::MOTOR_CTRL, &params)
+}
+
+/// The height the MCU raises the lift to at power-on (MOTOR_CTRL sub 4,
+/// `mcu_init_pos_ctrl`: 0 = 50, 1 = 40, 2 = 30 mm). `None` for other heights.
+pub fn start_height(mm: i16) -> Option<Outgoing> {
+    let code = match mm {
+        50 => 0u8,
+        40 => 1,
+        30 => 2,
+        _ => return None,
+    };
+    Some(control(cmd::MOTOR_CTRL, &[4, code]))
 }
 
 pub fn motor_state_query() -> Outgoing {
@@ -218,6 +280,48 @@ mod tests {
         assert_eq!(&wire(&all_shutdown())[10..16], &hex("05 00 00 00 00 04")[..]);
         assert_eq!(&wire(&charging_on())[10..16], &hex("07 00 00 00 02 01")[..]);
         assert_eq!(&wire(&motor_state_query())[10..15], &hex("04 00 00 00 02")[..]);
+    }
+
+    #[test]
+    fn heights_are_stocks_three_stops() {
+        // libui `mcu_server_request_motor_ctrl_pos`: lvl 0/1/2 -> 30/40/50 mm.
+        assert_eq!(height_mm(MotorPosition::Low), Some(30));
+        assert_eq!(height_mm(MotorPosition::Medium), Some(40));
+        assert_eq!(height_mm(MotorPosition::High), Some(50));
+        assert_eq!(height_mm(MotorPosition::Moving), None);
+    }
+
+    #[test]
+    fn a_retry_after_a_stall_uses_stocks_block_speeds() {
+        // `mcu_motor_block_pos_control`: high 0x50, low 0x2D, same limits.
+        assert_eq!(&wire(&motor_move(40, Speeds::BLOCKED))[19..25], &hex("28 00 A0 0F B8 0B")[..]);
+        assert_eq!(&wire(&motor_move(40, Speeds::BLOCKED))[25..27], &hex("50 2D")[..]);
+        assert_eq!(motor_move(50, Speeds::for_target(50)), motor_to_mm(50));
+        assert_eq!(Speeds::for_target(0), Speeds::RETRACT);
+    }
+
+    #[test]
+    fn the_start_height_is_motor_ctrl_sub_4() {
+        // `mcu_init_pos_ctrl`: cmd 3 sub 4, data 0 = 50, 1 = 40, 2 = 30 mm.
+        assert_eq!(&wire(&start_height(50).unwrap())[10..15], &hex("03 00 00 00 04")[..]);
+        assert_eq!(start_height(50).unwrap().payload[5], 0);
+        assert_eq!(start_height(40).unwrap().payload[5], 1);
+        assert_eq!(start_height(30).unwrap().payload[5], 2);
+        assert_eq!(start_height(0), None, "0 mm is not a start height");
+    }
+
+    #[test]
+    fn position_reports_decode() {
+        // Captured 2026-10-12 while the MCU retracted the lift: cmd 4 sub 1, 40 / 30 / 0 mm.
+        for mm in [40i16, 30, 0] {
+            let mut payload = cmd::MOTOR_CHECK.to_le_bytes().to_vec();
+            payload.push(1);
+            payload.extend(mm.to_le_bytes());
+            let mut parser = Parser::default();
+            let m = encode(4, NOTIFY, &payload).into_iter().find_map(|b| parser.feed(b)).unwrap();
+            assert_eq!(lift_position(&m), Some(mm));
+            assert_eq!(motor_state(&m), None);
+        }
     }
 
     #[test]

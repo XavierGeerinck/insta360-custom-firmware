@@ -4,7 +4,7 @@ use waved_config::{
     clamp_brightness, clamp_dim_after, clamp_mic_volume, clamp_off_after, clamp_speaker_volume,
     wrap_beam_aim, WavedConfig,
 };
-use waved_state::{AudioMode, Command, NrLevel, SettingsState, UploadMode};
+use waved_state::{AudioMode, Command, MotorPosition, NrLevel, SettingsState, UploadMode};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
@@ -21,6 +21,8 @@ pub enum Change {
     SpeakerVolume(u16),
     MicVolume(u16),
     BeamAim(f32),
+    /// The chosen Mic height; waved-mcu moves the lift for the same command.
+    MicHeight(MotorPosition),
 }
 
 impl Change {
@@ -43,6 +45,8 @@ impl Change {
             Command::SetSpeakerVolume(value) => Change::SpeakerVolume(clamp_speaker_volume(*value)),
             Command::SetMicVolume(value) => Change::MicVolume(clamp_mic_volume(*value)),
             Command::SetBeamAim(degrees) => Change::BeamAim(wrap_beam_aim(*degrees)?),
+            Command::SetMotorPosition(MotorPosition::Moving) => return None,
+            Command::SetMotorPosition(height) => Change::MicHeight(*height),
             _ => return None,
         })
     }
@@ -66,6 +70,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::SpeakerVolume(value) => config.audio.speaker_volume = *value,
         Change::MicVolume(value) => config.audio.mic_volume = *value,
         Change::BeamAim(degrees) => config.audio.beam_aim_deg = *degrees,
+        Change::MicHeight(height) => config.device.mic_height = *height,
     }
 }
 
@@ -83,6 +88,7 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         Change::UploadMode(mode) => settings.upload_mode = *mode,
         Change::Tones(value) => settings.tones_enabled = *value,
         Change::FirstRunDone => settings.first_run_done = true,
+        Change::MicHeight(height) => settings.mic_height = *height,
         Change::AudioMode(_)
         | Change::NrLevel(_)
         | Change::SpeakerVolume(_)
@@ -135,6 +141,26 @@ mod tests {
             None
         );
         assert_eq!(Change::from_command(&Command::ToggleMicMute), None);
+    }
+
+    #[test]
+    fn a_chosen_mic_height_is_kept_in_config_and_settings() {
+        use waved_state::MotorPosition;
+        let change = Change::from_command(&Command::SetMotorPosition(MotorPosition::Low));
+        assert_eq!(change, Some(Change::MicHeight(MotorPosition::Low)));
+        assert_eq!(
+            Change::from_command(&Command::SetMotorPosition(MotorPosition::Moving)),
+            None,
+            "moving is not a height"
+        );
+        let mut config = WavedConfig::default();
+        let mut settings = SettingsState::default();
+        let change = change.unwrap();
+        apply_to_config(&mut config, &change);
+        apply_to_settings(&mut settings, &change);
+        assert_eq!(config.device.mic_height, MotorPosition::Low);
+        assert_eq!(settings.mic_height, MotorPosition::Low);
+        assert!(waved_config::validate_config(&config).is_ok());
     }
 
     #[test]

@@ -150,7 +150,11 @@ Rules for the parallel milestones:
   - `lv_arc` with −/+.
   - Speaker mute in the centre.
   - Swipe to the microphone level.
-- [ ] **B5 Mic height** (S) — `screens/mic_height.rs`, needs F3
+- [ ] **B5 Mic height** (S) — `screens_v2/mic_height.rs`, needs F3
+  - Built on the host 2026-10-12: High / Medium / Low are stock's 50 / 40 / 30 mm, kept in
+    config.toml (`[device] mic_height`, default medium) and in the MCU as the power-on
+    height; "Moving" while the lift moves, a warning when it is blocked; Menu row.
+  - Ships after the F3 device pass.
 - [ ] **B6 System** (M) — `screens/system.rs` + new `display.rs`, `datetime.rs`, `dialog.rs`
   - Rotary list: Display, Date and time, Alert tones, Pre-recording, USB storage, PIN, About,
     Firmware update, Factory reset, Power off.
@@ -271,14 +275,18 @@ Rules for the parallel milestones:
   - Find the real input path. It isn't `ttyS1`, `event0` or `event1`, see
     `waved/docs/AUDIO_HARDWARE.md:648`.
   - Wire the buttons to the speaker volume.
-- [ ] **F2 Battery** (S)
+- [ ] **F2 Battery** (S) — host side done 2026-10-12; left: the device checks in
+  `waved/docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md` ("Device-pass checklist").
   - Level, voltage, temperature and charging now come from the MCU's heartbeats on
     `/dev/ttyS4` (`waved-mcu`, 2026-10-12); check the status pill against them on battery.
-  - Status pill variants for charging and low battery.
-  - Messages at 10 % and 5 %.
-  - At 3 %, finalize any recording, then shut down.
+  - [x] Status pill variants for charging and low battery (goldens).
+  - [x] Messages at 10 % and 5 %, with the battery icon.
+  - [x] At 3 %, finalize any recording, then shut down.
 - [ ] **F3 Motor** (S) — verify the `MotorPosition` frames and the obstruction event on
   the device before Mic height ships.
+  - Host side done 2026-10-12: `waved-mcu/src/lift.rs` (move, start height, motor reports,
+    polling, blocked / obstructed) and a frame-level MCU simulator (`simulate.rs`) that the
+    tests and the `simulate` build run against. Device checks: the plan above, "F3 Motor".
 - [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.

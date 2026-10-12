@@ -156,11 +156,26 @@ After POWER_CTRL sub 0 with data other than 2 or 3, stock suspends the SoC
 
 `mcutool pos` uses a different, older layout; don't copy it.
 
+Stock's Mic height (`ui:` `mcu_server_request_motor_ctrl_pos`) has three stops,
+**Low 30 mm, Medium 40 mm, High 50 mm**; 0 mm is the retracted lift (power
+off, and stock's power-key click). Choosing one sends the move and then
+**MOTOR_CTRL sub 4** with the start height (`params[1]`: 0 = 50, 1 = 40,
+2 = 30 mm, `mcu_init_pos_ctrl`), which the MCU keeps and raises the lift to at
+power-on; stock also saves it in its config. The factory default is 40 mm
+(`mcu_factory_init`). After a stall (BLOCK) stock re-sends the move by itself
+at speeds 80 / 45 (`mcu_motor_block_pos_control`, not for 0 mm, at most once per
+10 s); a stop is a PWM move with speed 0 (`mcu_server_request_height_stop`).
+
 ### Motor notifications (`mcu_notify` cmd 4)
 
 - sub 2: `params[1]` motor state: 0 IDLE, 1 WORK, 2 BLOCK, 3 WAIT_DATA,
   4 SENSOR_TRIGGER (obstructed: aborts a power off). On BLOCK stock re-sends
-  the move (speeds 80 / 45, at most once per 10 s, 80911).
+  the move (speeds 80 / 45, at most once per 10 s, 80911). On SENSOR_TRIGGER
+  stock's UI shows its "anti-hand" (pinch) reminder (`ui:`
+  `process_ntf_mcu_height_block`).
+- sub 1: the lift's position in mm, sent while it moves (captured 2026-10-12
+  during a power-key retract: 40, 30, 0). waved reads `params[1..2]` as an
+  i16; that it is two bytes is assumed.
 - No params (motor info): i16 `[1..2]` current, `[3..4]` force3,
   `[5..6]` position, `[7..12]` hall A/B/C, `[13..16]` force1/force2.
 
@@ -210,9 +225,33 @@ reaches the MCU. Verified on the device 2026-10-12: heartbeats answered,
 click sleeps and wakes, a 2 s hold and System → Power off both power the
 unit off, `killall waved` does not.
 
+### The lift in waved (Mic height, unverified on the device)
+
+`crates/waved-mcu/src/lift.rs` (2026-10-12): `SetMotorPosition` sends the move
+(sub 0, stock's limits and speeds), then the start height (sub 4), each resent
+up to 3 times without a cmd 3 `mcu_notify` (a motor report also counts as the
+move's acknowledgement, so a stalled move is never resent). While it moves,
+waved polls MOTOR_CHECK sub 2 every 500 ms; WORK or a position report means
+motion, IDLE ends the move (an IDLE in the first second before any motion is
+ignored), BLOCK ends it as Blocked, SENSOR_TRIGGER as Obstructed with
+`DeviceEvent::MotorObstruction`; after 20 s without IDLE it gives up.
+`McuState::lift` carries the result; WORK without a move of waved's (the
+power key's hold) shows as moving too. Nothing retries by itself: the user's
+next tap on a stalled height uses the block speeds 80 / 45. waved never moves
+the lift at start-up (the MCU raised it to the start height).
+`crates/waved-mcu/src/simulate.rs` (`SimMcu`) answers like this description;
+the device pass checks it (`docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md`,
+"Device-pass checklist").
+
 ## Open
 
 - LED field meanings; the unit of charge time; the sign of the battery current.
 - Whether the MCU reports keys when nobody answers heartbeats (all captures
   with key presses had replies running).
 - What the MCU does on its own after the power-off timer START.
+- Whether the MCU acknowledges MOTOR_CTRL moves and the start height with a
+  cmd 3 `mcu_notify`, reports WORK and IDLE on its own during a move, and
+  whether sub 4 moves the lift (all assumed by `lift.rs`).
+- BLOCK versus SENSOR_TRIGGER when a hand holds the lift, and whether the MCU
+  stops the motor by itself on either.
+- That cmd 4 sub 1 positions are i16 mm.

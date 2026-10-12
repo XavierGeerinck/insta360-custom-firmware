@@ -201,6 +201,7 @@ impl StatusArea {
             Severity::Warning => (icons::ALERT, WARN),
             Severity::Error => (icons::ALERT, REC),
         };
+        let glyph = message.icon.unwrap_or(glyph);
         self.message_icon.text_color(color).set_text(glyph);
         // One spare pixel, so text that fits exactly is never cut to "...".
         let text_w = (text_width(&message.text, Font::Small) + 1).min(MESSAGE_MAX_W - 44);
@@ -477,6 +478,91 @@ mod tests {
             assert!(!status.battery.is_hidden());
             assert_eq!(status.battery_text.text(), "64%");
             let _ = lv;
+        });
+    }
+
+    #[test]
+    fn the_pill_shows_charging_in_teal() {
+        // The Messages strip in docs/mockups/index.html: USB, Wi-Fi, 14:32, 64 % charging.
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut status = StatusArea::pill(root, &dispatch);
+            let mut snap = snap();
+            snap.battery.level = 64;
+            snap.battery.is_charging = true;
+            status.update(&snap);
+            assert_eq!(status.battery_icon.text(), icons::BATTERY_CHARGING);
+            assert_eq!(status.battery_text.text(), "64%");
+            assert_golden("status_pill_charging", &lv.render());
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn the_pill_shows_a_low_battery_in_red() {
+        // The Messages strip: on battery (no USB), Wi-Fi, 14:32, 8 % in red.
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (dispatch, _bus, _ui) = Dispatcher::test();
+            let mut status = StatusArea::pill(root, &dispatch);
+            let mut snap = snap();
+            snap.mcu.usb_connected = false;
+            snap.battery.level = 8;
+            status.update(&snap);
+            assert_eq!(status.battery_icon.text(), icons::BATTERY_0);
+            assert_eq!(status.battery_text.text(), "8%");
+            let frame = lv.render();
+            assert_golden("status_pill_low_battery", &frame);
+            assert_targets_ok(root);
+            // The level is drawn in red.
+            let text = status.battery_text.coords();
+            let red = (text.x1..=text.x2)
+                .flat_map(|x| (text.y1..=text.y2).map(move |y| (x, y)))
+                .any(|(x, y)| matches!(frame.pixel(x, y), [r, g, _] if r > 200 && g < 120));
+            assert!(red, "8 % is red");
+        });
+    }
+
+    #[test]
+    fn the_status_reads_the_battery_the_mcu_publishes() {
+        // waved-mcu writes BatteryState into bus.battery from the heartbeats;
+        // the snapshot copies it and the status shows it.
+        lvgl(|lv| {
+            let bus = waved_state::StateBus::new();
+            let mut status = StatusArea::plain(lv.screen());
+            status.update(&UiSnapshot::capture(&bus, 0, 0));
+            assert!(status.battery.is_hidden(), "nothing before the first heartbeat");
+            bus.battery.send_replace(waved_state::BatteryState {
+                level: 9,
+                voltage: 3_550,
+                temperature: 31,
+                is_charging: false,
+            });
+            status.update(&UiSnapshot::capture(&bus, 0, 0));
+            assert!(!status.battery.is_hidden());
+            assert_eq!(status.battery_text.text(), "9%");
+            assert_eq!(status.battery_icon.text(), icons::BATTERY_0);
+            bus.battery.send_modify(|b| b.is_charging = true);
+            status.update(&UiSnapshot::capture(&bus, 0, 0));
+            assert_eq!(status.battery_icon.text(), icons::BATTERY_CHARGING);
+        });
+    }
+
+    #[test]
+    fn a_message_can_carry_its_own_icon() {
+        // Messages strip: "Battery 10%, plug in Wave" with the battery, in amber.
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut status = StatusArea::plain(root);
+            status.update(&snap());
+            let message = Message::new(Severity::Warning, "Battery 10%, plug in Wave")
+                .with_icon(icons::BATTERY_0);
+            status.show(&message, 0);
+            assert_eq!(status.message_icon.text(), icons::BATTERY_0);
+            assert_golden("status_message_battery_low", &lv.render());
+            status.show(&Message::new(Severity::Warning, "Storage almost full"), 0);
+            assert_eq!(status.message_icon.text(), icons::ALERT, "the severity's icon otherwise");
         });
     }
 

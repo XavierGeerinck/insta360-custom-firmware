@@ -5,8 +5,8 @@ use crate::kit::route::Route;
 use crate::kit::screen::Screen;
 use crate::screens_v2::{
     about, ambient, audio_mode, boot, confirm, datetime, decision, display, file_detail, files,
-    first_run, home, menu, noise, powering_off, recording, system, upload_mode, uploads, volume,
-    wifi, wifi_setup,
+    first_run, home, menu, mic_height, noise, powering_off, recording, system, upload_mode,
+    uploads, volume, wifi, wifi_setup,
 };
 
 /// The screen for `route`, or `None` for a milestone 3 route, which the
@@ -25,6 +25,7 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::NoiseReduction => Box::new(noise::NoiseScreen::default()),
         Route::Volume => Box::new(volume::VolumeScreen::speaker()),
         Route::MicLevel => Box::new(volume::VolumeScreen::mic()),
+        Route::MicHeight => Box::new(mic_height::MicHeightScreen::default()),
         Route::Files => Box::new(files::FilesScreen::default()),
         Route::FileDetail(id) => Box::new(file_detail::FileDetailScreen::new(*id)),
         Route::Wifi => Box::new(wifi::WifiScreen::default()),
@@ -38,10 +39,9 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::TimeZone => Box::new(datetime::TimeZoneScreen::default()),
         Route::About => Box::new(about::AboutScreen::default()),
         Route::Confirm(kind) => Box::new(confirm::ConfirmScreen::new(*kind)),
-        // Milestone 3: Mic height, Bluetooth, PIN, USB storage, firmware
-        // update and incoming call have no screen yet.
-        Route::MicHeight
-        | Route::Bluetooth
+        // Milestone 3: Bluetooth, PIN, USB storage, firmware update and
+        // incoming call have no screen yet.
+        Route::Bluetooth
         | Route::Pin(_)
         | Route::UsbStorage
         | Route::Update
@@ -98,6 +98,8 @@ mod tests {
             Route::Confirm(ConfirmKind::DeleteRecording(FILE)),
             Route::Confirm(ConfirmKind::StopUsbStorage),
             Route::Confirm(ConfirmKind::ChangeNetwork),
+            // Milestone 3, workstream F.
+            Route::MicHeight,
         ]
     }
 
@@ -195,7 +197,6 @@ mod tests {
     #[test]
     fn milestone_3_routes_have_no_screen_yet() {
         for route in [
-            Route::MicHeight,
             Route::Bluetooth,
             Route::Pin(Box::new(Route::Files)),
             Route::UsbStorage,
