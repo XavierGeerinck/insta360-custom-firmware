@@ -302,7 +302,7 @@ mod tests {
             acks.push(run.written.recv_timeout(Duration::from_secs(2)).unwrap());
         }
         assert_eq!(acks[0][1], 0x00, "MAVLINK chunks");
-        assert_eq!(run.commands.try_recv().unwrap(), Command::ToggleMicMute);
+        assert_eq!(run.commands.try_recv().unwrap(), Command::SetMicMute(true));
     }
 
     #[test]

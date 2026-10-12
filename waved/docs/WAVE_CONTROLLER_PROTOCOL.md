@@ -477,8 +477,12 @@ active while idle).
   Speaker: `SetSpeakerVolume(v)`, then mute if `v == 0` else unmute. Mic: waved
   maps the byte 1:1 onto its mic gain percent (100 = unity) and reports
   `min(mic_volume, 100)` **[inferred]**; mute follows the same 0 rule.
-- Mute bytes: non-zero = muted. waved only has toggle commands, so it toggles
-  when the requested state differs from the current one.
+- Mute bytes: non-zero = muted. waved sends the state asked for
+  (`SetMicMute(m)` / `SetSpeakerMute(m)`; a volume sends `m = (v == 0)`),
+  never a toggle worked out from the current state: several requests can
+  arrive in one batch (a resent chunk filling a gap), all read against the
+  same state, and two toggles would leave the mic live. Asking for the state
+  the unit already has changes nothing.
 - Every audio ack is result 0 in stock (it never validates); waved answers 1
   only for a mic mode outside 1–6.
 
