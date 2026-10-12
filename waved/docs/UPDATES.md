@@ -284,8 +284,11 @@ Back (`update_restart_needed` golden).
 
 Not verified on a Wave. Before trusting this, a device pass should check:
 
-1. `update_guard` under busybox `sh` (`read -r`, `$((…))`, `mv -f`): run
-   `WAVED_DIR=/tmp/g sh /etc/init.d/S60waved guard` against a fake trial in `/tmp/g`.
+1. `update_guard` under busybox `sh` (`read -r`, `$((…))`, `mv -f`, `${path%/*}`,
+   `${path##*/}`): run `WAVED_DIR=/tmp/g sh /etc/init.d/S60waved guard` against a fake
+   trial in `/tmp/g`. Done on the host with the `busybox:1.36` image (four passes: dot-named
+   copies of `S60waved`, `S03splash`, `waved` and `config.toml` restored, a `remove` file
+   deleted, `S??*` lists only the scripts); the Wave's own busybox build is still to check.
 2. Hard links and renames through the `/etc` overlay: `ln /etc/init.d/S60waved
    /etc/init.d/.S60waved.prev`, then a `.S60waved.new` + rename, then a reboot to see both
    persist in `/data/overlay/upper/etc/init.d` and that rcS starts one waved, not two
