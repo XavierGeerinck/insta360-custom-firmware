@@ -30,6 +30,9 @@ pub const SYNC_IDLE_MS: u64 = 300;
 pub const SYNC_MAX_TRIES: u8 = 10;
 /// A jump this far ahead restarts the receive side.
 pub const MAX_GAP: u64 = 400;
+/// Most ids we wait for at once (a host's full send queue; waved, stock has
+/// no limit). A chunk or SYNC that would mark more missing is dropped.
+pub const MISSING_MAX: usize = 400;
 /// The first chunk with an id in `2..FIRST_GAP_LIMIT` marks the ids before it missing.
 const FIRST_GAP_LIMIT: u64 = 20;
 
@@ -66,6 +69,8 @@ pub struct Transport {
     missing: BTreeMap<u64, Retry>,
     given_up: BTreeSet<u64>,
     last_round_ms: Option<u64>,
+    /// The missing list overflowed and that was logged; cleared once it empties.
+    missing_full: bool,
 }
 
 impl Transport {
@@ -100,8 +105,9 @@ impl Transport {
                 out.reset = true;
             }
             Kind::Sync => {
-                self.expect_up_to(packet.send_id);
-                self.queue.push_front(Packet::control(Kind::SyncResp, packet.send_id));
+                if self.expect_up_to(packet.send_id, false) {
+                    self.queue.push_front(Packet::control(Kind::SyncResp, packet.send_id));
+                }
             }
             Kind::SyncResp => self.last_synced_id = packet.send_id,
             // Only the host sends RESET; a stray RESET_RESP means nothing to us.
@@ -175,11 +181,13 @@ impl Transport {
         self.missing.clear();
         self.given_up.clear();
         self.last_round_ms = None;
+        self.missing_full = false;
     }
 
-    /// Make sure every id up to `id` is either held, delivered or missing;
-    /// returns the next id to deliver.
-    fn expect_up_to(&mut self, id: u64) -> u64 {
+    /// Make sure every id up to `id` is either held, delivered or missing
+    /// (`holding`: `id` itself is about to be held). `false`, with nothing
+    /// changed, when that would take the missing list past `MISSING_MAX`.
+    fn expect_up_to(&mut self, id: u64, holding: bool) -> bool {
         let next = match self.rx_next {
             Some(next) => {
                 if id > self.rx_highest.saturating_add(MAX_GAP) {
@@ -188,6 +196,17 @@ impl Transport {
                     self.rx_highest = id.saturating_sub(1);
                     id
                 } else {
+                    // Everything above rx_highest is new to the list.
+                    let new = id.saturating_sub(self.rx_highest).saturating_sub(u64::from(holding));
+                    if self.missing.len() as u64 + new > MISSING_MAX as u64 {
+                        if !self.missing_full {
+                            self.missing_full = true;
+                            tracing::warn!(
+                                "pclink: over {MISSING_MAX} chunks missing, dropping what would add more (first: {id})"
+                            );
+                        }
+                        return false;
+                    }
                     next
                 }
             }
@@ -204,14 +223,16 @@ impl Transport {
             }
         }
         self.rx_highest = self.rx_highest.max(id);
-        next
+        true
     }
 
     fn accept(&mut self, id: u64, data: Vec<u8>) -> Vec<u8> {
         if self.rx_next.is_some_and(|next| id < next) || self.rx_buffer.contains_key(&id) {
             return Vec::new();
         }
-        self.expect_up_to(id);
+        if !self.expect_up_to(id, true) {
+            return Vec::new();
+        }
         self.missing.remove(&id);
         self.given_up.remove(&id);
         self.rx_buffer.insert(id, data);
@@ -229,6 +250,9 @@ impl Transport {
                 break;
             }
             self.rx_next = Some(next + 1);
+        }
+        if self.missing.is_empty() {
+            self.missing_full = false;
         }
         out
     }
@@ -404,6 +428,33 @@ mod tests {
         assert_eq!(t.receive(chunk(500, b"x"), 0).stream, b"x");
         t.poll(0);
         assert!(drain(&mut t, 0).is_empty(), "nothing in between is asked for");
+    }
+
+    #[test]
+    fn the_missing_list_is_bounded_and_what_would_overflow_it_is_dropped() {
+        let mut t = Transport::new();
+        t.receive(chunk(1, b"a"), 0);
+        t.receive(chunk(1 + MAX_GAP, b"z"), 0);
+        assert_eq!(t.missing.len(), 399, "a jump of exactly MAX_GAP is allowed");
+        // Another would make it 798: the chunk is dropped, not held.
+        t.receive(chunk(1 + 2 * MAX_GAP, b"z"), 0);
+        assert_eq!((t.missing.len(), t.rx_highest), (399, 1 + MAX_GAP));
+        assert!(!t.rx_buffer.contains_key(&(1 + 2 * MAX_GAP)));
+        t.receive(Packet::control(Kind::Sync, 1 + 2 * MAX_GAP), 0);
+        assert!(drain(&mut t, 0).iter().all(|p| p.kind != Kind::SyncResp), "a SYNC that would overflow is dropped too");
+        assert_eq!(t.missing.len(), 399);
+        // What adds nothing to the list still gets in.
+        t.receive(chunk(2 + MAX_GAP, b"y"), 0);
+        assert_eq!(t.rx_highest, 2 + MAX_GAP, "the next chunk in order");
+        assert_eq!(t.receive(chunk(2, b"b"), 0).stream, b"b", "a gap filled");
+
+        // However a host jumps around, the list stays bounded.
+        let mut t = Transport::new();
+        t.receive(chunk(1, b"a"), 0);
+        for k in 1..=100 {
+            t.receive(chunk(1 + k * (MAX_GAP - 50), b"z"), 0);
+            assert!(t.missing.len() <= MISSING_MAX, "{} missing after jump {k}", t.missing.len());
+        }
     }
 
     #[test]

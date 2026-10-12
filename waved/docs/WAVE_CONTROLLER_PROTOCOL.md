@@ -140,7 +140,11 @@ Example frames (all 64 bytes, trailing zeros omitted):
 - The first chunk after an empty state with **1 < id < 20** marks ids
   `1..id-1` as missing; any later jump marks the ids in between as missing
   (`append_hid_vendor_package_to_recv_list`). A jump of more than **400** ids
-  drops everything and restarts from the new chunk.
+  drops everything and restarts from the new chunk. Stock's missing list has
+  no limit, so a host jumping just under 400 again and again grows it without
+  end. **[waved]** waits for at most **400** missing ids: a chunk or SYNC
+  that would mark more is dropped (one log line until the list empties; the
+  host's resend or next SYNC brings it again).
 - Missing ids are requested with RESEND, only when the send queue is empty, at
   most every **100 ms**, at most **10** ids per round: the first request at
   once, later ones **≥ 61 ms** apart, **21** requests per id at most, then the id
