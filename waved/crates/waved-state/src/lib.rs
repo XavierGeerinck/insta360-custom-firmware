@@ -432,6 +432,19 @@ pub struct PlaybackState {
 pub struct McuState {
     pub motor_position: MotorPosition,
     pub usb_connected: bool,
+    /// Where a `Command::PowerOff` is; `waved` waits for `Sent` or `Aborted`.
+    pub power_off: PowerOffPhase,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PowerOffPhase {
+    #[default]
+    Idle,
+    InProgress,
+    /// The MCU was told to cut power.
+    Sent,
+    /// The lift was obstructed; the device stays on.
+    Aborted,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -538,6 +551,10 @@ pub enum Command {
     RetryFailedUploads,
     SetMotorPosition(MotorPosition),
     Shutdown,
+    /// Switch the device off (the user confirmed, or the battery is empty):
+    /// waved-mcu retracts the lift and has the MCU cut power. Unlike
+    /// `Shutdown`, which every exit sends to stop the services.
+    PowerOff,
     /// Test hook: force the beamformer to steer at a fixed (azimuth_deg, elevation_deg)
     /// instead of tracking the live DOA estimate. `None` clears the override.
     /// Used by `scripts/test-beamforming.sh` Test 1 to measure front-to-back ratio
@@ -930,6 +947,12 @@ mod tests {
             DeviceEvent::PowerKey(PowerKeyPress::Long)
         ));
         assert_ne!(PowerKeyPress::Short, PowerKeyPress::Long);
+    }
+
+    #[test]
+    fn power_off_is_its_own_command_and_starts_idle() {
+        assert_ne!(Command::PowerOff, Command::Shutdown);
+        assert_eq!(McuState::default().power_off, PowerOffPhase::Idle);
     }
 
     #[test]

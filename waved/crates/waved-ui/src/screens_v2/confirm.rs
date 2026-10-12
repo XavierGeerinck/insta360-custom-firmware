@@ -89,7 +89,7 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
     };
     match kind {
         ConfirmKind::PowerOff => done(
-            Some(Command::Shutdown),
+            Some(Command::PowerOff),
             Some(Message::new(Severity::Info, copy::POWERING_OFF)),
         ),
         ConfirmKind::FactoryReset => done(
@@ -226,7 +226,7 @@ mod tests {
             assert!(f.commands().is_empty());
             assert_eq!(f.events(), vec![UiEvent::Back]);
             lv.click(screen.row.as_ref().unwrap().obj(1)); // Power off
-            assert!(matches!(f.commands().as_slice(), [Command::Shutdown]));
+            assert!(matches!(f.commands().as_slice(), [Command::PowerOff]));
             assert_eq!(
                 f.events(),
                 vec![
