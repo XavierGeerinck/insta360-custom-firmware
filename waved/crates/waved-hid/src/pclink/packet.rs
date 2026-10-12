@@ -75,7 +75,11 @@ fn segment(token: u32, ack: bool, cmd: u16, message: &[u8], mut seq: Option<&mut
     (0..count)
         .map(|i| {
             let last = i == count - 1;
-            let len = if last && message.len() % PAYLOAD_MAX != 0 { message.len() % PAYLOAD_MAX } else { PAYLOAD_MAX };
+            let len = if last && !message.len().is_multiple_of(PAYLOAD_MAX) {
+                message.len() % PAYLOAD_MAX
+            } else {
+                PAYLOAD_MAX
+            };
             let end = if last { END_LAST } else if i == 0 { END_FIRST } else { 0 };
             let mut p = [0xFFu8; PACKET_LEN];
             p[0..4].copy_from_slice(&token.to_le_bytes());

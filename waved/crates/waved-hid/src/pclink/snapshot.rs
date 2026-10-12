@@ -105,15 +105,15 @@ mod tests {
     use waved_state::AudioMode;
 
     fn states() -> (AudioState, MeetingState, BatteryState, WifiState, SettingsState, SystemState) {
-        let mut audio = AudioState::default();
-        audio.speaker_volume = 40;
-        audio.mic_volume = 250;
-        audio.mode = AudioMode::Cardioid;
-        audio.beam_aim_deg = 120.0;
-        audio.host_listening = true;
-        let mut meeting = MeetingState::default();
-        meeting.recording = true;
-        meeting.duration_secs = 75;
+        let audio = AudioState {
+            speaker_volume: 40,
+            mic_volume: 250,
+            mode: AudioMode::Cardioid,
+            beam_aim_deg: 120.0,
+            host_listening: true,
+            ..AudioState::default()
+        };
+        let meeting = MeetingState { recording: true, duration_secs: 75, ..MeetingState::default() };
         let battery = BatteryState { level: 64, voltage: 3900, temperature: 25, is_charging: true };
         let wifi = WifiState {
             connected: true,
@@ -122,10 +122,12 @@ mod tests {
             signal_strength: -55,
             clock_synchronized: true,
         };
-        let mut settings = SettingsState::default();
-        settings.time_zone = "Europe/Brussels".into();
-        settings.pin_enabled = true;
-        settings.first_run_done = true;
+        let settings = SettingsState {
+            time_zone: "Europe/Brussels".into(),
+            pin_enabled: true,
+            first_run_done: true,
+            ..SettingsState::default()
+        };
         let mut system = SystemState::default();
         system.about.version = "0.1.0 (abc1234)".into();
         system.about.storage_total_bytes = 8 << 30;

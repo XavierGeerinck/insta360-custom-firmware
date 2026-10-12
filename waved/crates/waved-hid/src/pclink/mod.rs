@@ -15,6 +15,7 @@ pub mod handler;
 pub mod link;
 pub mod mode;
 pub mod packet;
+pub mod service;
 pub mod snapshot;
 pub mod status;
 pub mod transport;
