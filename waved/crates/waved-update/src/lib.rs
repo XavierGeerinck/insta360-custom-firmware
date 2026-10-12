@@ -8,6 +8,7 @@
 //! - `gate`: when installing may start, and when a new version is healthy.
 //! - `fetch`, `service`: the HTTP fetcher and `UpdateService`, which publishes `OtaState`.
 
+pub mod elf;
 pub mod fetch;
 pub mod format;
 pub mod gate;
@@ -15,6 +16,7 @@ pub mod index;
 pub mod install;
 pub mod key;
 pub mod paths;
+pub mod release;
 pub mod service;
 pub mod space;
 pub mod trial;
