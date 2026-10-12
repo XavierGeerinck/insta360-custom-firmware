@@ -313,6 +313,32 @@ mod tests {
         assert_eq!(results, vec![0, 1], "accepted, then verified");
     }
 
+    /// The exact calls `crates/waved/src/main.rs` makes (the binary can't be
+    /// built on macOS); with no device both threads wind down on their own.
+    #[test]
+    fn the_main_rs_wiring_type_checks_and_stops_without_a_device() {
+        use crate::reader::{HidReader, HidReaderConfig};
+        let bus = std::sync::Arc::new(StateBus::new());
+        let hid_stats = crate::stats::HidStats::new();
+        let device = "/nonexistent/hidg0".to_string();
+        let (pclink_tx, pclink_rx) = std::sync::mpsc::channel();
+        HidReader::spawn_with_vendor(
+            HidReaderConfig { device: device.clone() },
+            std::sync::Arc::clone(&bus.audio),
+            std::sync::Arc::clone(&hid_stats),
+            Some(pclink_tx),
+        );
+        spawn(
+            PcLinkConfig { device },
+            pclink_rx,
+            PcLinkBus::from_bus(&bus),
+            Box::new(DenyAllPins),
+            Box::new(NoClock),
+            None,
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
     #[test]
     fn the_writer_writes_whole_reports_and_survives_a_missing_device() {
         let dir = std::env::temp_dir().join(format!("pclink-writer-{}", std::process::id()));
