@@ -43,6 +43,8 @@ pub enum InstallError {
 
 pub trait Installer: Send + Sync {
     /// Put `staged` in place and start its trial. `running` is this version.
+    /// An error means the waved binary was not replaced (deploy files may
+    /// have been; `trial::check_at_start` puts them back).
     fn install(&self, staged: &Staged, running: Version) -> Result<(), InstallError>;
     /// Restart Wave into the installed version. Returns only on failure
     /// (or right away on the fake).
@@ -85,12 +87,15 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 
 /// Copy `from` next to `to` and rename it over `to`, so readers see the old
 /// file or the new one.
+/// The directory sync after the rename is best effort: once the rename is
+/// done the file is in place, and `install` must not report an error then.
 fn replace_by_copy(from: &Path, to: &Path) -> io::Result<()> {
     let new = with_suffix(to, ".new");
     fs::copy(from, &new)?;
     fs::File::open(&new)?.sync_all()?;
     fs::rename(&new, to)?;
-    sync_dir(to)
+    let _ = sync_dir(to);
+    Ok(())
 }
 
 fn syntax_ok(script: &Path) -> io::Result<bool> {
@@ -137,8 +142,10 @@ impl Installer for FsInstaller {
                 fs::create_dir_all(dir)?;
             }
             let from = staged.path(*target);
+            // The binary is last: once it is renamed into place nothing may
+            // fail, because the caller takes an error to mean it was not.
             if *target == Target::Waved && fs::rename(&from, &dest).is_ok() {
-                sync_dir(&dest)?;
+                let _ = sync_dir(&dest);
                 continue;
             }
             replace_by_copy(&from, &dest)?;

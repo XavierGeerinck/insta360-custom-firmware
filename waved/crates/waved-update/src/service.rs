@@ -399,6 +399,12 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
         };
         let header = match format::read_header_at(&download, &key) {
             Ok(header) => header,
+            // A local read error says nothing about the package: no skip.
+            Err(FormatError::Io(e)) => {
+                warn!("could not read the downloaded update: {e}");
+                remove_download(&self.paths);
+                return Err(Failure::Shown(copy::DAMAGED));
+            }
             Err(e) => return Err(reject(&self.paths, rejection(&e))),
         };
         if header.version != offered || header.manifest.build != index.build {
