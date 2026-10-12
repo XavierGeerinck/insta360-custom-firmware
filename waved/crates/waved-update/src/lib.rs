@@ -8,6 +8,7 @@
 //! - `gate`: when installing may start, and when a new version is healthy.
 //! - `fetch`, `service`: the HTTP fetcher and `UpdateService`, which publishes `OtaState`.
 
+pub mod fetch;
 pub mod format;
 pub mod gate;
 pub mod index;
