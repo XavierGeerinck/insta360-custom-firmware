@@ -148,7 +148,7 @@ restarting 100.
 to RAM. Staging needs the unpacked size plus 16 MiB on `/data`. If that is short, the
 `.prev` copies of the last committed update are deleted first (`space.rs`; never during a
 trial, and a `.prev` that is a hard link of a live file frees nothing and is not counted).
-After an install `/data` holds the new binary and `waved.prev`, which is the old binary's
+After an install `/data` holds the new binary and `.waved.prev`, which is the old binary's
 own inode (a hard link, no copy).
 
 ## Install and fall-back ("trial starts")
@@ -157,11 +157,20 @@ own inode (a hard link, no copy).
 starts:
 
 1. `sh -n` on every staged init script; a syntax error installs nothing.
-2. Hard-link every file about to be replaced to `<file>.prev` (copy if linking fails).
+2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
+   fails).
 3. Write `/data/waved/update/trial` (tmp file, fsync, rename) and clear `update/starts`.
-4. Replace the deploy files: copy to `<file>.new` in the same directory, fsync, rename.
+4. Replace the deploy files: copy to `.<name>.new` in the same directory, fsync, rename.
 5. Rename the staged binary over `/data/waved/waved`.
 6. `sync`. The service then reboots.
+
+Every copy beside a file has a **dot name** (`/etc/init.d/.S60waved.prev`,
+`/etc/init.d/.S60waved.new`, `/data/waved/.waved.prev`; `Paths::prev`, `Paths::new_copy`).
+Stock `/etc/init.d/rcS` runs every `/etc/init.d/S??*` with `start` at boot and `rcK` runs
+them with `stop`: an `S60waved.prev` would start a second watchdog loop (two waveds
+fighting over the devices, each start counted twice), and a half-written `S60waved.new`
+left by a power cut would be run. When the service starts it deletes any `.<name>.new` a
+cut install left.
 
 `update/trial` is plain lines so busybox `sh` can read it:
 
@@ -176,7 +185,8 @@ remove /data/waved/splash.fb
 
 While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) appends a line to
 `update/starts` before every start. On the **fourth** start it moves each `restore` file
-back from `<file>.prev`, deletes each `remove` file, moves `trial` to
+back from its `.<name>.prev` (`${path%/*}/.${path##*/}.prev`), deletes each `remove` file,
+moves `trial` to
 `update/rolled-back` and starts the old waved. Three starts, because `S60waved` SIGTERMs
 the first waved after every boot at 5 s (display workaround): one start always "fails".
 
@@ -241,8 +251,9 @@ Not verified on a Wave. Before trusting this, a device pass should check:
 1. `update_guard` under busybox `sh` (`read -r`, `$((…))`, `mv -f`): run
    `WAVED_DIR=/tmp/g sh /etc/init.d/S60waved guard` against a fake trial in `/tmp/g`.
 2. Hard links and renames through the `/etc` overlay: `ln /etc/init.d/S60waved
-   /etc/init.d/S60waved.prev`, then a `.new` + rename, then a reboot to see both persist in
-   `/data/overlay/upper/etc/init.d`.
+   /etc/init.d/.S60waved.prev`, then a `.S60waved.new` + rename, then a reboot to see both
+   persist in `/data/overlay/upper/etc/init.d` and that rcS starts one waved, not two
+   (`ps | grep -c '[w]aved$'`).
 3. `/sbin/reboot` from waved runs the rcK stop scripts and the unit comes back.
 4. Free space on `/data` and `/tmp` (`df -h`) against a real package; `statvfs` figures.
 5. The whole cycle against a LAN server (`python3 -m http.server`), including Range resume

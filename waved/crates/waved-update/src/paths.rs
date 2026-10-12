@@ -72,12 +72,28 @@ impl Paths {
         self.download_dir().join("package.wup")
     }
 
-    /// The previous copy of a file, kept for the fall-back.
+    /// The previous copy of a file, kept for the fall-back:
+    /// `/etc/init.d/S60waved` gives `/etc/init.d/.S60waved.prev`.
     pub fn prev(path: &Path) -> PathBuf {
-        let mut name = path.as_os_str().to_os_string();
-        name.push(".prev");
-        PathBuf::from(name)
+        beside(path, ".prev")
     }
+
+    /// A new copy of a file while it is written, before it is renamed over
+    /// the file: `/etc/init.d/.S60waved.new`.
+    pub fn new_copy(path: &Path) -> PathBuf {
+        beside(path, ".new")
+    }
+}
+
+/// `.<name><suffix>` in the same directory as `path`. The leading dot keeps
+/// every copy out of rcS's `/etc/init.d/S??*` glob, which runs whatever
+/// matches at boot (and rcK at shutdown). `deploy/S60waved` builds the same
+/// name: `${path%/*}/.${path##*/}.prev`.
+fn beside(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = std::ffi::OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(suffix);
+    path.with_file_name(name)
 }
 
 #[cfg(test)]
@@ -100,7 +116,27 @@ mod tests {
         );
         assert_eq!(
             Paths::prev(&test.target(Target::Waved)),
-            Path::new("/tmp/x/data/waved/waved.prev")
+            Path::new("/tmp/x/data/waved/.waved.prev")
+        );
+    }
+
+    /// rcS runs every `/etc/init.d/S??*` at boot (and rcK at shutdown), so a
+    /// copy of an init script must never match that: a leading dot.
+    #[test]
+    fn copies_beside_a_file_are_hidden_from_the_boot_glob() {
+        let device = Paths::device();
+        let init = device.target(Target::S60waved);
+        assert_eq!(
+            Paths::prev(&init),
+            Path::new("/etc/init.d/.S60waved.prev")
+        );
+        assert_eq!(
+            Paths::new_copy(&init),
+            Path::new("/etc/init.d/.S60waved.new")
+        );
+        assert_eq!(
+            Paths::prev(&device.target(Target::RsyslogConf)),
+            Path::new("/etc/.rsyslog.conf.prev")
         );
     }
 }

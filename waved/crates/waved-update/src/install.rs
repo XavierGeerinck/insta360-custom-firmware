@@ -8,11 +8,15 @@
 //!
 //! Order, so a power cut at any point leaves a Wave that starts:
 //! 1. syntax-check the staged init scripts (`sh -n`);
-//! 2. hard-link every file about to be replaced to `<file>.prev`;
+//! 2. hard-link every file about to be replaced to `.<name>.prev` beside it;
 //! 3. write `update/trial` (from here `S60waved` counts starts);
-//! 4. replace the deploy files (copy to `<file>.new`, rename);
+//! 4. replace the deploy files (copy to `.<name>.new`, rename);
 //! 5. rename the staged binary over `/data/waved/waved`;
 //! 6. sync. The service then reboots.
+//!
+//! Every copy has a dot name (`Paths::prev`, `Paths::new_copy`): rcS runs
+//! every `/etc/init.d/S??*` at boot, and an `S60waved.prev` would start a
+//! second watchdog loop.
 //!
 //! Cut before 3: nothing changed that matters. Cut between 3 and 5: the old
 //! binary starts, finds the trial is not its own and puts the deploy files
@@ -20,7 +24,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -72,12 +76,6 @@ fn link_or_copy(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(suffix);
-    PathBuf::from(name)
-}
-
 fn sync_dir(path: &Path) -> io::Result<()> {
     match path.parent() {
         Some(dir) => fs::File::open(dir)?.sync_all(),
@@ -90,12 +88,26 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 /// The directory sync after the rename is best effort: once the rename is
 /// done the file is in place, and `install` must not report an error then.
 fn replace_by_copy(from: &Path, to: &Path) -> io::Result<()> {
-    let new = with_suffix(to, ".new");
+    let new = Paths::new_copy(to);
     fs::copy(from, &new)?;
     fs::File::open(&new)?.sync_all()?;
     fs::rename(&new, to)?;
     let _ = sync_dir(to);
     Ok(())
+}
+
+/// Delete what an install cut short by a power cut leaves behind: half
+/// written `.new` copies. Nothing needs them after a restart; the service
+/// calls this when it starts.
+pub fn clear_leftovers(paths: &Paths) {
+    for target in Target::ALL {
+        let new = Paths::new_copy(&paths.target(target));
+        match fs::remove_file(&new) {
+            Ok(()) => tracing::info!("removed {} left by an earlier install", new.display()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("could not remove {}: {e}", new.display()),
+        }
+    }
 }
 
 fn syntax_ok(script: &Path) -> io::Result<bool> {
@@ -307,6 +319,42 @@ mod tests {
             trial::check_at_start(&device.paths, Version::new(0, 10, 0)).unwrap(),
             StartCheck::OnTrial(_)
         ));
+    }
+
+    /// What rcS would run at boot: every `S??*` in `dir`, by the shell's glob.
+    fn boot_glob(dir: &Path) -> Vec<String> {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(r#"cd "$1" && for f in S??*; do [ -f "$f" ] && echo "$f"; done; true"#)
+            .arg("sh")
+            .arg(dir)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_boot_glob_finds_only_the_init_scripts_after_an_install() {
+        let device = Device::new();
+        device.put(Target::S03splash, "#!/bin/sh\necho old splash\n");
+        let staged = device.stage(&[
+            (Target::Waved, "new waved"),
+            (Target::S60waved, "#!/bin/sh\necho new\n"),
+            (Target::S03splash, "#!/bin/sh\necho new splash\n"),
+        ]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let init_d = device.paths.target(Target::S60waved);
+        let init_d = init_d.parent().unwrap();
+        assert_eq!(boot_glob(init_d), ["S03splash", "S60waved"]);
+        // The old copies are there, out of the glob's way.
+        assert!(init_d.join(".S60waved.prev").exists());
+        assert!(init_d.join(".S03splash.prev").exists());
     }
 
     #[test]

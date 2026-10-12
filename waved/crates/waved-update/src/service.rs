@@ -203,6 +203,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
 
         // The trial bookkeeping runs even with updates off: a version on
         // trial must commit, or S60waved takes it back.
+        crate::install::clear_leftovers(&self.paths);
         let mut health_at = None;
         match trial::check_at_start(&self.paths, running) {
             Ok(StartCheck::Normal) => {}
@@ -995,6 +996,26 @@ mod tests {
         let state = h.until("failed", failed).await;
         assert_eq!(reason(&state), "The update stopped before it finished");
         assert!(trial::pending(&h.paths).is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_start_deletes_half_written_copies_a_power_cut_left() {
+        let h = Harness::new();
+        let init = h.paths.target(Target::S60waved);
+        fs::create_dir_all(init.parent().unwrap()).unwrap();
+        fs::write(&init, "#!/bin/sh\n").unwrap();
+        fs::write(Paths::prev(&init), "#!/bin/sh\nold\n").unwrap();
+        for target in Target::ALL {
+            fs::write(Paths::new_copy(&h.paths.target(target)), "half").unwrap();
+        }
+        h.spawn(h.settings("0.9.3"));
+        h.until("started", |s| s.phase == OtaPhase::Idle).await;
+        for target in Target::ALL {
+            let new = Paths::new_copy(&h.paths.target(target));
+            assert!(!new.exists(), "{}", new.display());
+        }
+        assert!(Paths::prev(&init).exists(), "the old copy stays");
+        assert!(init.exists());
     }
 
     #[tokio::test(start_paused = true)]
