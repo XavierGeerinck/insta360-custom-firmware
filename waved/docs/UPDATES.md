@@ -162,7 +162,8 @@ starts:
 
 1. `sh -n` on every staged init script; a syntax error installs nothing.
 2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
-   fails).
+   fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
+   a save during the trial cannot reach it).
 3. Write `/data/waved/update/trial` (tmp file, fsync, rename) and clear `update/starts`.
 4. Replace the deploy files: copy to `.<name>.new` in the same directory, fsync, rename.
 5. Rename the staged binary over `/data/waved/waved`.
@@ -184,23 +185,30 @@ build 374015f
 previous 0.9.3
 restore /etc/init.d/S60waved
 restore /data/waved/waved
+restore /data/waved/config.toml
 remove /data/waved/splash.fb
 ```
+
+`config.toml` is listed like the files the update replaces (`remove` when there was none),
+because every config section denies unknown fields: an older waved rejects a file a newer
+one saved, and its `.bak` too, and runs on defaults (first-run screen, PIN off, API token
+and uploads gone). **Settings changed during a trial are lost on a rollback**: the old
+waved gets the settings it had when the update was installed.
 
 While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) appends a line to
 `update/starts` before every start. On the **fourth** start it moves each `restore` file
 back from its `.<name>.prev` (`${path%/*}/.${path##*/}.prev`), deletes each `remove` file,
-moves `trial` to
-`update/rolled-back` and starts the old waved. Three starts, because `S60waved` SIGTERMs
-the first waved after every boot at 5 s (display workaround): one start always "fails".
+moves `trial` to `update/rolled-back` and starts the old waved. Three starts, because
+`S60waved` SIGTERMs the first waved after every boot at 5 s (display workaround): one start
+always "fails".
 
-The new waved **commits** (deletes `trial` and `starts`) once it has run 60 s with
-`AudioState::capture_healthy` true; until then it starts no other update. The old waved
-finds `rolled-back` at its start, reports "Version 0.10.0 didn't start, so Wave went back"
-and adds the version to `update/skip`, which automatic checks pass over; a tapped Retry
-or Install clears it. If waved finds a `trial` that is not its own version, the install was
-cut between steps 3 and 5: it puts the deploy files back and reports "The update stopped
-before it finished".
+The new waved **commits** (deletes `trial`, `starts` and `.config.toml.prev`) once it has
+run 60 s with `AudioState::capture_healthy` true; until then it starts no other update.
+The old waved finds `rolled-back` at its start, reports "Version 0.10.0 didn't start, so
+Wave went back" and adds the version to `update/skip`, which automatic checks pass over; a
+tapped Retry or Install clears it. If waved finds a `trial` that is not its own version,
+the install was cut between steps 3 and 5: it puts the deploy files and the settings back
+and reports "The update stopped before it finished".
 
 `.prev` files stay after a commit as the last known good version, until the next install
 replaces them with the version it replaces.

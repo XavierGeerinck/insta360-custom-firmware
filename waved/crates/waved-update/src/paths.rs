@@ -31,6 +31,13 @@ impl Paths {
         self.at("/data/waved")
     }
 
+    /// waved's settings (`CONFIG_PATH` in `crates/waved/src/main.rs`). An
+    /// install keeps a copy for a rollback: every config section denies
+    /// unknown fields, so an older binary rejects a file a newer one saved.
+    pub fn config(&self) -> PathBuf {
+        self.at("/data/waved/config.toml")
+    }
+
     /// Bookkeeping that must survive a reboot. On `/data`, next to waved.
     pub fn update_dir(&self) -> PathBuf {
         self.at("/data/waved/update")

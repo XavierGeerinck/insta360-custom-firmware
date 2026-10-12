@@ -8,7 +8,8 @@
 //!
 //! Order, so a power cut at any point leaves a Wave that starts:
 //! 1. syntax-check the staged init scripts (`sh -n`);
-//! 2. hard-link every file about to be replaced to `.<name>.prev` beside it;
+//! 2. hard-link every file about to be replaced to `.<name>.prev` beside it,
+//!    and copy `config.toml` to `.config.toml.prev`;
 //! 3. write `update/trial` (from here `S60waved` counts starts);
 //! 4. replace the deploy files (copy to `.<name>.new`, rename);
 //! 5. rename the staged binary over `/data/waved/waved`;
@@ -74,6 +75,25 @@ fn link_or_copy(from: &Path, to: &Path) -> io::Result<()> {
         fs::copy(from, to)?;
     }
     Ok(())
+}
+
+/// Copy `from` to a fresh `to`, readable by its owner only (config.toml
+/// holds the PIN record and the API token), and flush it. A copy, not a hard
+/// link, so nothing written to `from` afterwards can reach it.
+fn copy_aside(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match fs::remove_file(to) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut source = fs::File::open(from)?;
+    let mut copy = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(to)?;
+    io::copy(&mut source, &mut copy)?;
+    copy.sync_all()
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
@@ -150,6 +170,16 @@ impl Installer for FsInstaller {
             } else {
                 remove.push(dest);
             }
+        }
+        // The settings go back with the binary: every config section denies
+        // unknown fields, so an older waved rejects a config.toml a newer
+        // one saved (and its .bak) and would run on defaults.
+        let config = self.paths.config();
+        if config.exists() {
+            copy_aside(&config, &Paths::prev(&config))?;
+            restore.push(config);
+        } else {
+            remove.push(config);
         }
         trial::begin(
             &self.paths,
@@ -292,6 +322,7 @@ mod tests {
     #[test]
     fn files_land_with_old_copies_kept_and_the_trial_started() {
         let device = Device::new();
+        fs::write(device.paths.config(), "[audio]\n").unwrap();
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
             (Target::S60waved, "#!/bin/sh\necho new\n"),
@@ -320,7 +351,10 @@ mod tests {
         let trial = trial::pending(&device.paths).unwrap();
         assert_eq!(trial.version, Version::new(0, 10, 0));
         assert_eq!(trial.previous, OLD);
-        assert_eq!(trial.restore, vec![init, waved.clone()]);
+        assert_eq!(
+            trial.restore,
+            vec![init, waved.clone(), device.paths.config()]
+        );
         assert_eq!(trial.remove, vec![splash]);
         #[cfg(unix)]
         {
@@ -368,6 +402,49 @@ mod tests {
         // The old copies are there, out of the glob's way.
         assert!(init_d.join(".S60waved.prev").exists());
         assert!(init_d.join(".S03splash.prev").exists());
+    }
+
+    #[test]
+    fn the_settings_are_copied_aside_for_a_rollback_and_dropped_on_commit() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let device = Device::new();
+        let config = device.paths.config();
+        fs::write(&config, "[audio]\nold = true\n").unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+
+        let backup = device.paths.waved_dir().join(".config.toml.prev");
+        assert_eq!(Paths::prev(&config), backup);
+        assert_eq!(
+            device.read(&backup).as_deref(),
+            Some("[audio]\nold = true\n")
+        );
+        let meta = fs::metadata(&backup).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600, "it holds secrets");
+        assert_ne!(
+            meta.ino(),
+            fs::metadata(&config).unwrap().ino(),
+            "a copy: a save during the trial must not reach it"
+        );
+        let trial = trial::pending(&device.paths).unwrap();
+        assert!(trial.restore.contains(&config), "{trial:?}");
+
+        trial::commit(&device.paths).unwrap();
+        assert!(!backup.exists(), "a committed version keeps its settings");
+    }
+
+    #[test]
+    fn without_settings_a_rollback_deletes_the_ones_the_trial_wrote() {
+        let device = Device::new();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let trial = trial::pending(&device.paths).unwrap();
+        assert!(trial.remove.contains(&device.paths.config()), "{trial:?}");
     }
 
     #[test]

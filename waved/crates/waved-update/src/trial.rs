@@ -107,10 +107,13 @@ pub fn begin(paths: &Paths, trial: &Trial) -> io::Result<()> {
 }
 
 /// The new version is healthy: stop counting. The `.prev` copies stay as the
-/// last known good version until the next install replaces them.
+/// last known good version until the next install replaces them; the copy of
+/// the settings goes, because putting it back later would lose every setting
+/// changed since.
 pub fn commit(paths: &Paths) -> io::Result<()> {
     remove_if_present(&paths.trial())?;
-    remove_if_present(&paths.starts())
+    remove_if_present(&paths.starts())?;
+    remove_if_present(&Paths::prev(&paths.config()))
 }
 
 /// Starts counted so far for the version on trial.
@@ -257,11 +260,13 @@ mod tests {
             let waved = paths.target(Target::Waved);
             let init = paths.target(Target::S60waved);
             let boot_splash = paths.target(Target::S03splash);
+            let config = paths.config();
             let splash = paths.target(Target::SplashFb);
             for (path, new, old) in [
                 (&waved, "new waved", "old waved"),
                 (&init, "new init", "old init"),
                 (&boot_splash, "new boot splash", "old boot splash"),
+                (&config, "new settings", "old settings"),
             ] {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, new).unwrap();
@@ -272,7 +277,7 @@ mod tests {
                 version: NEW,
                 build: "abc1234".into(),
                 previous: OLD,
-                restore: vec![waved, init, boot_splash],
+                restore: vec![waved, init, boot_splash, config],
                 remove: vec![splash],
             };
             begin(&paths, &trial).unwrap();
@@ -281,6 +286,10 @@ mod tests {
 
         fn read(&self, target: Target) -> Option<String> {
             fs::read_to_string(self.paths.target(target)).ok()
+        }
+
+        fn settings(&self) -> Option<String> {
+            fs::read_to_string(self.paths.config()).ok()
         }
 
         /// One pass of the guard in `deploy/S60waved`, as the watchdog runs it.
@@ -327,6 +336,11 @@ mod tests {
             Paths::prev(&device.paths.target(Target::Waved)).exists(),
             "last known good stays"
         );
+        assert_eq!(device.settings().as_deref(), Some("new settings"));
+        assert!(
+            !Paths::prev(&device.paths.config()).exists(),
+            "the settings backup goes: restoring it later would lose settings"
+        );
     }
 
     #[test]
@@ -342,6 +356,7 @@ mod tests {
         assert_eq!(device.read(Target::Waved).as_deref(), Some("old waved"));
         assert_eq!(device.read(Target::S60waved).as_deref(), Some("old init"));
         assert_eq!(device.read(Target::SplashFb), None);
+        assert_eq!(device.settings().as_deref(), Some("old settings"));
         assert!(pending(&device.paths).is_none());
     }
 
@@ -381,6 +396,10 @@ mod tests {
         );
         assert_eq!(names(&init_d), ["S03splash", "S60waved"]);
         assert!(!device.paths.waved_dir().join(".waved.prev").exists());
+        // The settings go back with the binary: the old one rejects keys it
+        // does not know and would run on defaults.
+        assert_eq!(device.settings().as_deref(), Some("old settings"));
+        assert!(!device.paths.waved_dir().join(".config.toml.prev").exists());
         assert_eq!(
             device.read(Target::SplashFb),
             None,
