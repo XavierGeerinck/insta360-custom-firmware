@@ -17,6 +17,15 @@ pub trait Transport {
     fn recv(&self, timeout: Duration) -> Option<Message>;
 }
 
+impl<T: Transport + ?Sized> Transport for std::sync::Arc<T> {
+    fn send(&self, out: &Outgoing) {
+        (**self).send(out);
+    }
+    fn recv(&self, timeout: Duration) -> Option<Message> {
+        (**self).recv(timeout)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// The MCU was told to cut power.
