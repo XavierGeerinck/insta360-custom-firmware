@@ -5,10 +5,11 @@
 //! - `version`, `key`: version ordering and the compiled-in signing key.
 //! - `trial`: the first starts of a new version and the fall-back to the old one.
 //! - `install`: the `Installer` trait, the file-system installer and a fake.
-//! - `gate`, `health`: when installing may start, when a new version is healthy.
+//! - `gate`: when installing may start, and when a new version is healthy.
 //! - `fetch`, `service`: the HTTP fetcher and `UpdateService`, which publishes `OtaState`.
 
 pub mod format;
+pub mod gate;
 pub mod index;
 pub mod install;
 pub mod key;
