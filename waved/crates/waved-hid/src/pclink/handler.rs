@@ -24,18 +24,40 @@ pub enum PinOutcome {
     Locked,
 }
 
-/// The device PIN check (D10). Integration wraps K2's
-/// `waved_config::PinAttempts::check(security, candidate, now_ms)`.
+/// The device PIN check (D10); on the device, [`ConfigPins`].
 pub trait PinVerifier: Send {
     fn check(&mut self, candidate: &str, now_ms: u64) -> PinOutcome;
 }
 
-/// Refuses every PIN; the default until K2's check is wired in.
+/// Refuses every PIN (tests, or a build without a config).
 pub struct DenyAllPins;
 
 impl PinVerifier for DenyAllPins {
     fn check(&mut self, _candidate: &str, _now_ms: u64) -> PinOutcome {
         PinOutcome::Wrong
+    }
+}
+
+/// The device PIN from config.toml (K2), with its own five-tries wait. The
+/// on-device keypad keeps a separate count.
+pub struct ConfigPins {
+    security: waved_config::SecurityConfig,
+    attempts: waved_config::PinAttempts,
+}
+
+impl ConfigPins {
+    pub fn new(security: waved_config::SecurityConfig) -> Self {
+        Self { security, attempts: waved_config::PinAttempts::new() }
+    }
+}
+
+impl PinVerifier for ConfigPins {
+    fn check(&mut self, candidate: &str, now_ms: u64) -> PinOutcome {
+        match self.attempts.check(&self.security, candidate, now_ms) {
+            waved_config::PinCheck::Accepted => PinOutcome::Accepted,
+            waved_config::PinCheck::Wrong { .. } => PinOutcome::Wrong,
+            waved_config::PinCheck::Locked { .. } => PinOutcome::Locked,
+        }
     }
 }
 
@@ -465,6 +487,21 @@ mod tests {
     use waved_state::AudioMode;
 
     struct Pins(Vec<(String, u64)>, PinOutcome);
+
+    #[test]
+    fn config_pins_use_the_device_pin_and_its_wait() {
+        let security = waved_config::SecurityConfig {
+            device_password: waved_config::hash_pin("4821"),
+            ..Default::default()
+        };
+        let mut pins = ConfigPins::new(security);
+        assert_eq!(pins.check("4821", 0), PinOutcome::Accepted);
+        for _ in 0..5 {
+            assert_eq!(pins.check("0000", 10), PinOutcome::Wrong);
+        }
+        assert_eq!(pins.check("4821", 20), PinOutcome::Locked, "five wrong tries start the wait");
+        assert_eq!(pins.check("4821", 20 + waved_config::PIN_LOCKOUT_MS), PinOutcome::Accepted);
+    }
 
     impl PinVerifier for Pins {
         fn check(&mut self, candidate: &str, now_ms: u64) -> PinOutcome {

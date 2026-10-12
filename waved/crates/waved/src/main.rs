@@ -546,8 +546,9 @@ async fn run_async(
                 waved_hid::pclink::service::PcLinkConfig { device: hid_cfg.device.clone() },
                 pclink_rx,
                 waved_hid::pclink::service::PcLinkBus::from_bus(&bus),
-                // TODO(integration): K2's PIN check (waved_config::PinAttempts) and PIN screen.
-                Box::new(waved_hid::pclink::handler::DenyAllPins),
+                // The app's PIN goes through the same check as the keypad. No
+                // on-device prompt yet: an empty PIN reads "not verified".
+                Box::new(waved_hid::pclink::handler::ConfigPins::new(config.security.clone())),
                 Box::new(waved_hid::pclink::handler::NoClock),
                 None,
             );
