@@ -1,12 +1,15 @@
 //! System (B6, system.png): the same rotary list as the menu. Rows that
-//! aren't built yet (USB storage, PIN, Firmware update) stay hidden until
-//! milestone 3. Power off and Factory reset go through the confirmation.
+//! aren't built yet (USB storage, PIN) stay hidden until their milestone 3
+//! workstream lands. Power off and Factory reset go through the confirmation.
 //! The two switch rows are optimistic: a tap shows the new value at once and
-//! a stale snapshot does not revert it (see `menu::Pending`).
+//! a stale snapshot does not revert it (see `menu::Pending`). Firmware
+//! update (H3) checks, or opens the update screen when there is something
+//! to install or watch.
 
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::list::{ListItem, RotaryList};
 use crate::kit::components::status::StatusArea;
+use crate::kit::dispatch::Dispatcher;
 use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::route::{ConfirmKind, Route};
@@ -15,7 +18,7 @@ use crate::kit::snapshot::UiSnapshot;
 use crate::screens_v2::menu::Pending;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use waved_state::Command;
+use waved_state::{Command, OtaPhase, OtaState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemRow {
@@ -24,25 +27,55 @@ pub enum SystemRow {
     AlertTones,
     PreRecording,
     About,
+    FirmwareUpdate,
     FactoryReset,
     PowerOff,
 }
 
-pub const ROWS: [SystemRow; 7] = [
+pub const ROWS: [SystemRow; 8] = [
     SystemRow::Display,
     SystemRow::DateTime,
     SystemRow::AlertTones,
     SystemRow::PreRecording,
     SystemRow::About,
+    SystemRow::FirmwareUpdate,
     SystemRow::FactoryReset,
     SystemRow::PowerOff,
 ];
 
-/// About is centred when System opens, as in system.png.
-pub const START_ROW: usize = 4;
+/// Firmware update is centred when System opens, as in system.png.
+pub const START_ROW: usize = 5;
 
 fn on_off(on: bool) -> String {
     if on { "On" } else { "Off" }.into()
+}
+
+/// The Firmware update row's value (system.png: "Up to date").
+pub fn update_value(ota: &OtaState) -> String {
+    match &ota.phase {
+        OtaPhase::Off => "Off".into(),
+        OtaPhase::Idle => "Check now".into(),
+        OtaPhase::Checking => "Checking".into(),
+        OtaPhase::UpToDate => "Up to date".into(),
+        OtaPhase::Available => "Available".into(),
+        OtaPhase::Downloading | OtaPhase::Verifying => format!("{}%", ota.progress_pct.min(100)),
+        OtaPhase::Waiting => "Ready".into(),
+        OtaPhase::Installing | OtaPhase::Restarting => "Installing".into(),
+        OtaPhase::Failed { .. } => "Failed".into(),
+    }
+}
+
+/// A Firmware update tap: check from the row when there is nothing to
+/// install; otherwise open the update screen (and install what is there).
+fn tap_update(phase: &OtaPhase, dispatch: &Dispatcher) {
+    match phase {
+        OtaPhase::Idle | OtaPhase::UpToDate => dispatch.command(Command::CheckForUpdate),
+        OtaPhase::Available | OtaPhase::Failed { .. } => {
+            dispatch.navigate(Route::Update);
+            dispatch.command(Command::InstallUpdate);
+        }
+        _ => dispatch.navigate(Route::Update),
+    }
 }
 
 impl SystemRow {
@@ -53,6 +86,7 @@ impl SystemRow {
             SystemRow::AlertTones => "Alert tones",
             SystemRow::PreRecording => "Pre-recording",
             SystemRow::About => "About",
+            SystemRow::FirmwareUpdate => "Firmware update",
             SystemRow::FactoryReset => "Factory reset",
             SystemRow::PowerOff => "Power off",
         }
@@ -65,6 +99,7 @@ impl SystemRow {
             SystemRow::AlertTones => icons::BELL,
             SystemRow::PreRecording => icons::CLOCK,
             SystemRow::About => icons::INFO,
+            SystemRow::FirmwareUpdate => icons::REFRESH,
             SystemRow::FactoryReset => icons::TRASH,
             SystemRow::PowerOff => icons::POWER,
         }
@@ -81,6 +116,7 @@ impl SystemRow {
             SystemRow::AlertTones => Some(on_off(snap.settings.tones_enabled)),
             SystemRow::PreRecording => Some(on_off(snap.settings.pre_recording)),
             SystemRow::About => Some(super::about::version_line(snap)),
+            SystemRow::FirmwareUpdate => Some(update_value(&snap.ota)),
             SystemRow::FactoryReset | SystemRow::PowerOff => None,
         }
     }
@@ -99,6 +135,8 @@ fn flip(switch: &Pending<bool>) -> bool {
 struct State {
     tones: Pending<bool>,
     pre_recording: Pending<bool>,
+    /// The update phase as of the last snapshot, for the row's tap.
+    ota: OtaPhase,
     /// What each row shows now.
     shown: Vec<Option<String>>,
     list: Weak<RotaryList>,
@@ -108,6 +146,7 @@ impl State {
     fn follow(&mut self, snap: &UiSnapshot) {
         self.tones.follow(snap.settings.tones_enabled);
         self.pre_recording.follow(snap.settings.pre_recording);
+        self.ota = snap.ota.phase.clone();
     }
 
     fn value(&self, row: SystemRow, snap: &UiSnapshot) -> Option<String> {
@@ -144,6 +183,7 @@ impl Screen for SystemScreen {
             let mut state = self.state.borrow_mut();
             state.tones = Pending::new(snap.settings.tones_enabled);
             state.pre_recording = Pending::new(snap.settings.pre_recording);
+            state.ota = snap.ota.phase.clone();
             state.shown = ROWS.iter().map(|row| state.value(*row, snap)).collect();
         }
         let items = ROWS
@@ -180,6 +220,10 @@ impl Screen for SystemScreen {
                     dispatch.command(Command::SetPreRecording(on));
                 }
                 SystemRow::About => dispatch.navigate(Route::About),
+                SystemRow::FirmwareUpdate => {
+                    let phase = state.borrow().ota.clone();
+                    tap_update(&phase, &dispatch);
+                }
                 SystemRow::FactoryReset => {
                     dispatch.navigate(Route::Confirm(ConfirmKind::FactoryReset))
                 }
@@ -234,9 +278,11 @@ mod tests {
             let mut snap = snap();
             snap.clock = "14:37".into();
             snap.settings.pre_recording = true; // as in system.png
+            snap.ota.phase = OtaPhase::UpToDate;
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap);
-            // system.png: Pre-recording, About (focus), ..., Power off in red.
+            // system.png: Pre-recording, About, Firmware update (focus, "Up to
+            // date"), Factory reset, Power off in red.
             assert_golden("screen_system", &lv.render());
             assert_targets_ok(root);
         });
@@ -252,6 +298,7 @@ mod tests {
                 "Alert tones",
                 "Pre-recording",
                 "About",
+                "Firmware update",
                 "Factory reset",
                 "Power off"
             ]
@@ -367,8 +414,8 @@ mod tests {
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap());
             let list = screen.list.as_ref().unwrap();
-            lv.click(list.row(5));
             lv.click(list.row(6));
+            lv.click(list.row(7));
             assert!(f.commands().is_empty(), "nothing happens before confirming");
             assert_eq!(
                 f.events(),
@@ -435,6 +482,62 @@ mod tests {
             snap.system.about.version = "0.2.0 (abc1234)".into();
             screen.update(&snap);
             assert_eq!(value(&screen, 4), "0.2.0 (abc1234)");
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn system_opens_on_firmware_update() {
+        assert_eq!(ROWS[START_ROW], SystemRow::FirmwareUpdate);
+    }
+
+    #[test]
+    fn the_update_row_follows_the_update() {
+        let mut ota = OtaState::default();
+        let cases = [
+            (OtaPhase::Off, "Off"),
+            (OtaPhase::Idle, "Check now"),
+            (OtaPhase::Checking, "Checking"),
+            (OtaPhase::UpToDate, "Up to date"),
+            (OtaPhase::Available, "Available"),
+            (OtaPhase::Downloading, "42%"),
+            (OtaPhase::Waiting, "Ready"),
+            (OtaPhase::Installing, "Installing"),
+            (OtaPhase::Failed { reason: "x".into() }, "Failed"),
+        ];
+        ota.progress_pct = 42;
+        for (phase, expected) in cases {
+            ota.phase = phase;
+            assert_eq!(update_value(&ota), expected);
+        }
+    }
+
+    #[test]
+    fn the_update_row_checks_or_opens_the_update_screen() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.ota.phase = OtaPhase::UpToDate;
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            let row = screen.list.as_ref().unwrap().row(START_ROW);
+            lv.click(row);
+            assert!(matches!(f.commands().as_slice(), [Command::CheckForUpdate]));
+            assert!(f.events().is_empty(), "a check stays on System");
+
+            snap.ota.phase = OtaPhase::Available;
+            screen.update(&snap);
+            assert_eq!(value(&screen, START_ROW), "Available");
+            lv.click(row);
+            assert!(matches!(f.commands().as_slice(), [Command::InstallUpdate]));
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Update)]);
+
+            snap.ota.phase = OtaPhase::Downloading;
+            screen.update(&snap);
+            lv.click(row);
+            assert!(f.commands().is_empty(), "watching sends nothing");
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Update)]);
             assert_targets_ok(root);
         });
     }
