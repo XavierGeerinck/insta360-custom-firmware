@@ -224,6 +224,8 @@ impl ProgressParts {
 struct MessageParts {
     layer: Obj,
     shown: MessageLook,
+    /// The action button, for tests to tap.
+    #[cfg_attr(not(test), allow(dead_code))]
     action: Option<Obj>,
 }
 
