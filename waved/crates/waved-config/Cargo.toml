@@ -10,6 +10,9 @@ tracing.workspace = true
 thiserror.workspace = true
 waved-state = { path = "../waved-state" }
 url = "2"
+# The device PIN record (pin.rs), as waved-wifi hashes the Wi-Fi PSK.
+hmac = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

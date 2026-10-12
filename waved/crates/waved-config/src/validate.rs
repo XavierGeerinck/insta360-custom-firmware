@@ -105,12 +105,13 @@ pub fn validate_config(config: &WavedConfig) -> Result<(), Vec<FieldError>> {
         );
     }
 
-    bounded_secret(
-        &mut errors,
-        "security.device_password",
-        &config.security.device_password,
-        256,
-    );
+    if !crate::pin::stored_value_ok(&config.security.device_password) {
+        push(
+            &mut errors,
+            "security.device_password",
+            "must be empty or a hashed PIN of 4 to 6 digits",
+        );
+    }
     if !config.security.ota_server.is_empty() {
         validate_absolute_url(
             &mut errors,
@@ -325,6 +326,18 @@ mod tests {
         let mut c = WavedConfig::default();
         c.audio.beam_aim_deg = 360.0;
         assert!(rejects(&c, "audio.beam_aim_deg"));
+    }
+
+    #[test]
+    fn the_device_password_is_empty_or_a_pin_record() {
+        let mut c = WavedConfig::default();
+        assert!(validate_config(&c).is_ok());
+        c.security.device_password = crate::hash_pin("4821");
+        assert!(validate_config(&c).is_ok());
+        for stored in ["4821", "hunter2", "pin1$4$x"] {
+            c.security.device_password = stored.into();
+            assert!(rejects(&c, "security.device_password"), "{stored}");
+        }
     }
 
     #[test]

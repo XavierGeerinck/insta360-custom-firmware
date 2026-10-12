@@ -1,5 +1,8 @@
 use crate::http::{html_escape, response};
-use waved_config::{field_specs, FieldError, FieldKind, Section, UploadMode, WavedConfig};
+use waved_config::{
+    field_specs, FieldError, FieldKind, Section, UploadMode, WavedConfig, PIN_MAX_DIGITS,
+    PIN_MIN_DIGITS,
+};
 use waved_state::{AudioMode, NrLevel};
 
 const OTHER_NETWORK_VALUE: &str = "__other_network__";
@@ -139,16 +142,16 @@ fn render_field(
             html_escape(&value)
         ),
         FieldKind::Secret { max_len } => {
-            let configured = if secret_configured(config, spec.path) {
-                "<p class=\"configured\">A value is saved. Leave blank to keep it.</p>"
-            } else {
-                ""
-            };
-            format!(
-                "<div class=\"password\"><input id=\"{id}\" name=\"{}\" type=\"password\" value=\"\" maxlength=\"{max_len}\" autocomplete=\"new-password\"><button type=\"button\" data-secret-toggle=\"{id}\">Show</button></div>{configured}<div class=\"check\"><input id=\"clear_{id}\" name=\"clear.{}\" type=\"checkbox\" value=\"true\"><label for=\"clear_{id}\">Clear saved value</label></div>",
-                spec.path, spec.path
-            )
+            secret_control(config, spec.path, &id, &format!("maxlength=\"{max_len}\""))
         }
+        FieldKind::Pin => secret_control(
+            config,
+            spec.path,
+            &id,
+            &format!(
+                "inputmode=\"numeric\" pattern=\"[0-9]{{{PIN_MIN_DIGITS},{PIN_MAX_DIGITS}}}\" minlength=\"{PIN_MIN_DIGITS}\" maxlength=\"{PIN_MAX_DIGITS}\""
+            ),
+        ),
         FieldKind::Url => format!(
             "<input id=\"{id}\" name=\"{}\" type=\"url\" value=\"{}\"{required}>",
             spec.path,
@@ -201,6 +204,19 @@ fn render_field(
         "<div class=\"field\"><label for=\"{id}\">{}</label>{control}<p class=\"help\">{}</p>{error}</div>",
         html_escape(spec.label),
         html_escape(spec.help)
+    )
+}
+
+/// A write-only input with Show and "Clear saved value"; `limits` are the
+/// input's length (and pattern) attributes.
+fn secret_control(config: &WavedConfig, path: &str, id: &str, limits: &str) -> String {
+    let configured = if secret_configured(config, path) {
+        "<p class=\"configured\">A value is saved. Leave blank to keep it.</p>"
+    } else {
+        ""
+    };
+    format!(
+        "<div class=\"password\"><input id=\"{id}\" name=\"{path}\" type=\"password\" value=\"\" {limits} autocomplete=\"new-password\"><button type=\"button\" data-secret-toggle=\"{id}\">Show</button></div>{configured}<div class=\"check\"><input id=\"clear_{id}\" name=\"clear.{path}\" type=\"checkbox\" value=\"true\"><label for=\"clear_{id}\">Clear saved value</label></div>"
     )
 }
 
@@ -343,6 +359,37 @@ mod tests {
     }
 
     #[test]
+    fn the_pin_field_takes_digits_and_never_shows_the_saved_pin() {
+        let mut config = WavedConfig::default();
+        let page = render_page(&config, &[], "csrf", &[], None);
+        let field = page
+            .split("<div class=\"field\">")
+            .find(|field| field.contains("name=\"security.device_password\""))
+            .expect("the PIN field");
+        for attribute in [
+            "type=\"password\"",
+            "inputmode=\"numeric\"",
+            "pattern=\"[0-9]{4,6}\"",
+            "minlength=\"4\"",
+            "maxlength=\"6\"",
+            "value=\"\"",
+            "name=\"clear.security.device_password\"",
+        ] {
+            assert!(field.contains(attribute), "{attribute} in {field}");
+        }
+        assert!(!field.contains("A value is saved"));
+
+        config.security.device_password = waved_config::hash_pin("4821");
+        let page = render_page(&config, &[], "csrf", &[], None);
+        assert!(!page.contains("pin1$"), "the record stays on the Wave");
+        let field = page
+            .split("<div class=\"field\">")
+            .find(|field| field.contains("name=\"security.device_password\""))
+            .unwrap();
+        assert!(field.contains("A value is saved"));
+    }
+
+    #[test]
     fn renders_field_and_global_errors_safely() {
         let errors = vec![FieldError {
             path: "api.endpoint",
@@ -364,7 +411,7 @@ mod tests {
     fn every_registry_field_renders_its_saved_value() {
         let config = WavedConfig::default();
         for spec in field_specs() {
-            let may_be_blank = matches!(spec.kind, FieldKind::Secret { .. })
+            let may_be_blank = matches!(spec.kind, FieldKind::Secret { .. } | FieldKind::Pin)
                 || matches!(
                     spec.path,
                     "audio.mode" | "api.endpoint" | "security.ota_server"
