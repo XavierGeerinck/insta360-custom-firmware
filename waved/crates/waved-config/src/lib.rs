@@ -130,7 +130,12 @@ pub struct StorageConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityConfig {
     pub device_password: String,
+    /// Base URL of the owner's update server; empty turns updates off
+    /// (`docs/UPDATES.md`).
     pub ota_server: String,
+    /// Let a signed package install an older (or the same) version. Set by
+    /// hand in config.toml only: the setup page does not offer it.
+    pub ota_allow_downgrade: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -579,5 +584,17 @@ device_password = "4821"
         std::fs::write(&path, "bad {{{").unwrap();
 
         assert_eq!(WavedConfig::load_or_default(&path).device.name, "Backup");
+    }
+
+    #[test]
+    fn update_downgrades_stay_refused_unless_the_owner_allows_them() {
+        assert!(!WavedConfig::default().security.ota_allow_downgrade);
+        let allowed = legacy(true, "omni").replace(
+            "ota_server = \"\"",
+            "ota_server = \"http://updates.lan/wave\"\nota_allow_downgrade = true",
+        );
+        let config = WavedConfig::parse(&allowed).unwrap();
+        assert!(config.security.ota_allow_downgrade);
+        assert_eq!(config.security.ota_server, "http://updates.lan/wave");
     }
 }
