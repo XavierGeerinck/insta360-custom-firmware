@@ -4,6 +4,7 @@ config_version = 2
 name = "Wave Open"
 language = "en"
 first_run_done = false
+mic_height = "medium"
 
 [audio]
 mode = "omni"

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 pub use waved_state::UploadMode;
-use waved_state::{AudioMode, NrLevel};
+use waved_state::{AudioMode, MotorPosition, NrLevel};
 
 pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
@@ -58,6 +58,9 @@ pub struct DeviceConfig {
     pub language: String,
     /// The first-start screen has been finished or skipped.
     pub first_run_done: bool,
+    /// The chosen Mic height. waved-mcu also stores it in the MCU as the
+    /// height the lift rises to at power-on.
+    pub mic_height: MotorPosition,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -247,6 +250,7 @@ impl Default for DeviceConfig {
             name: "Wave Open".into(),
             language: "en".into(),
             first_run_done: false,
+            mic_height: MotorPosition::Medium,
         }
     }
 }
@@ -513,6 +517,33 @@ device_password = "4821"
         ] {
             assert!(WavedConfig::parse(&source).is_err(), "{source}");
         }
+    }
+
+    #[test]
+    fn the_mic_height_is_kept_and_defaults_to_medium() {
+        // Older files have no mic_height: stock's factory start height, 40 mm.
+        let older = WavedConfig::parse(&v2_with("tones", "enabled = true")).unwrap();
+        assert_eq!(older.device.mic_height, MotorPosition::Medium);
+        assert_eq!(
+            WavedConfig::default().device.mic_height,
+            MotorPosition::Medium
+        );
+        let low = WavedConfig::parse(&v2_with("device", "mic_height = \"low\"").replacen(
+            "[device]\nname = \"Board room\"\n",
+            "",
+            1,
+        ))
+        .unwrap();
+        assert_eq!(low.device.mic_height, MotorPosition::Low);
+        let moving = v2_with("device", "mic_height = \"moving\"").replacen(
+            "[device]\nname = \"Board room\"\n",
+            "",
+            1,
+        );
+        assert!(
+            WavedConfig::parse(&moving).is_err(),
+            "moving is not a height"
+        );
     }
 
     #[test]
