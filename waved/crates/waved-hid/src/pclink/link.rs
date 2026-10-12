@@ -163,6 +163,9 @@ impl PcLink {
             if let Some(ack) = reply.ack {
                 for p in packet::segment_ack(reply.token, header.cmd, &ack) {
                     self.send_frame(0, &p);
+                    // Hand over frame by frame: a large ack must not overflow
+                    // the transport's 400-entry queue.
+                    self.drain(ctx.now_ms, out);
                 }
             }
         }
@@ -361,6 +364,22 @@ mod tests {
         assert_eq!((*compid, *id, data.len()), (0, cmd::GET_SYS_COUNTRY_TIMEZONE_LIST, 0x1E02));
         assert_eq!(&data[..2], &[1, 0]);
         assert_eq!(&data[2..17], b"Europe/Brussels");
+    }
+
+    #[test]
+    fn the_largest_ack_arrives_whole() {
+        // GET_SYS_ALL_SETTING_LIST: 25 606 bytes, 229 packets, ~690 chunks,
+        // more than the transport's 400-entry queue.
+        let mut rig = Rig::new();
+        let mut host = Host::new();
+        let mut out = Vec::new();
+        for r in host.command(cmd::GET_SYS_ALL_SETTING_LIST, &[], 0) {
+            out.extend(rig.report(&r).reports);
+        }
+        let acks = host.acks(&out);
+        assert_eq!(acks.len(), 1, "one complete ack");
+        assert_eq!(acks[0].2.len(), 0x6406);
+        assert_eq!(&acks[0].2[0x4605..0x4605 + 15], b"Europe/Brussels");
     }
 
     #[test]

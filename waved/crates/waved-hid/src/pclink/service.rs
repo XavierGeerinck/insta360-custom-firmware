@@ -106,9 +106,11 @@ pub fn run_engine(
     let start = Instant::now();
     let mut link = PcLink::new();
     let mut last_poll = Duration::ZERO;
-    let mut dropped = 0u64;
+    let mut outbox = Outbox::default();
     loop {
-        let report = match vendor_rx.recv_timeout(TICK) {
+        // While reports wait for the writer, come back soon to hand them over.
+        let wait = if outbox.is_empty() { TICK } else { Duration::from_millis(1) };
+        let report = match vendor_rx.recv_timeout(wait) {
             Ok(report) => Some(report),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => {
@@ -140,12 +142,13 @@ pub fn run_engine(
             outputs.push(link.poll(&mut ctx));
         }
         for out in outputs {
-            deliver(out, &bus, prompt.as_ref(), &write_tx, &mut dropped);
+            deliver(out, &bus, prompt.as_ref(), &mut outbox);
         }
+        outbox.flush(&write_tx);
     }
 }
 
-fn deliver(out: Output, bus: &PcLinkBus, prompt: Option<&PinPrompt>, write_tx: &SyncSender<Report>, dropped: &mut u64) {
+fn deliver(out: Output, bus: &PcLinkBus, prompt: Option<&PinPrompt>, outbox: &mut Outbox) {
     // Act first, then ack: whoever sees the ack can rely on the command.
     for command in out.commands {
         info!("pclink: app sent {command:?}");
@@ -156,16 +159,51 @@ fn deliver(out: Output, bus: &PcLinkBus, prompt: Option<&PinPrompt>, write_tx: &
             let _ = prompt.requests.send(());
         }
     }
-    for report in out.reports {
-        match write_tx.try_send(report) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                *dropped += 1;
-                if dropped.is_power_of_two() {
-                    warn!("pclink: writer behind, {dropped} reports dropped");
+    outbox.extend(out.reports);
+}
+
+/// Reports waiting for the writer, so a host that reads slower than we
+/// answer loses nothing. Bounded: past `OUTBOX_MAX` the oldest go (the app
+/// has not read for seconds; the transport's resend covers what it missed).
+#[derive(Default)]
+struct Outbox {
+    queue: std::collections::VecDeque<Report>,
+    dropped: u64,
+}
+
+/// About 13 s of a full-speed interrupt endpoint (1 report/ms).
+pub const OUTBOX_MAX: usize = 8192;
+
+impl Outbox {
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn extend(&mut self, reports: Vec<Report>) {
+        self.queue.extend(reports);
+        while self.queue.len() > OUTBOX_MAX {
+            self.queue.pop_front();
+            self.dropped += 1;
+            if self.dropped.is_power_of_two() {
+                warn!("pclink: the app is not reading, {} reports dropped", self.dropped);
+            }
+        }
+    }
+
+    /// Hand over as many reports as the writer takes now.
+    fn flush(&mut self, write_tx: &SyncSender<Report>) {
+        while let Some(report) = self.queue.pop_front() {
+            match write_tx.try_send(report) {
+                Ok(()) => {}
+                Err(TrySendError::Full(report)) => {
+                    self.queue.push_front(report);
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.queue.clear();
+                    return;
                 }
             }
-            Err(TrySendError::Disconnected(_)) => {}
         }
     }
 }
@@ -260,6 +298,49 @@ mod tests {
         }
         assert_eq!(acks[0][1], 0x00, "MAVLINK chunks");
         assert_eq!(run.commands.try_recv().unwrap(), Command::ToggleMicMute);
+    }
+
+    #[test]
+    fn a_slow_writer_loses_nothing_of_a_large_ack() {
+        let bus = StateBus::new();
+        let (vendor_tx, vendor_rx) = mpsc::channel();
+        let (write_tx, written) = mpsc::sync_channel(4);
+        let link_bus = PcLinkBus::from_bus(&bus);
+        let engine = std::thread::spawn(move || {
+            run_engine(vendor_rx, link_bus, Box::new(DenyAllPins), Box::new(NoClock), None, write_tx)
+        });
+        let mut seq = 0;
+        let p = crate::pclink::packet::segment_command(crate::pclink::packet::DEFAULT_TOKEN, 0x33, &[], &mut seq)[0];
+        let frame = waved_mavlink::encode(waved_mavlink::PC_LINK, waved_mavlink::Header::default(), 1000, &p).unwrap();
+        for (i, chunk) in frame.chunks(52).enumerate() {
+            vendor_tx.send(crate::pclink::vendor::Packet::mavlink(i as u64 + 1, chunk).encode().to_vec()).unwrap();
+        }
+        // Read slowly through a 4-report channel until the whole 25 606-byte
+        // ack has been reassembled (after it the link keeps sending SYNC).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut parser = waved_mavlink::Parser::new(waved_mavlink::PC_LINK);
+        let mut reassembler = crate::pclink::packet::Reassembler::default();
+        let mut next_id = 1;
+        let mut ack = None;
+        while ack.is_none() && Instant::now() < deadline {
+            let Ok(r) = written.recv_timeout(Duration::from_millis(100)) else { continue };
+            std::thread::sleep(Duration::from_micros(200));
+            let Some(crate::pclink::vendor::Incoming::Transport(p)) = crate::pclink::vendor::decode(&r) else { continue };
+            if p.kind != crate::pclink::vendor::Kind::Mavlink {
+                continue;
+            }
+            assert_eq!(p.send_id, next_id, "no chunk lost");
+            next_id += 1;
+            for b in p.payload {
+                if let Some(m) = parser.feed(b) {
+                    let (h, payload) = crate::pclink::packet::parse(&m.payload).unwrap();
+                    ack = ack.or(reassembler.push(h, payload));
+                }
+            }
+        }
+        assert_eq!(ack.expect("the whole ack").data.len(), 0x6406);
+        drop(vendor_tx);
+        engine.join().unwrap();
     }
 
     #[test]
