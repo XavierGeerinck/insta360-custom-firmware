@@ -2,8 +2,9 @@
 //! way the dial is a progress ring, with nothing to tap: interrupting would
 //! leave Wave unusable. Otherwise one message and at most one action: Retry
 //! after a failure ("Update failed. Wave is still on 0.9.3."), Install when a
-//! version is available, Check now when up to date. The phase comes from
-//! `snap.ota` (waved-update, docs/UPDATES.md).
+//! version is available, Check now when up to date, nothing when the update
+//! is installed but Wave did not restart ("Restart Wave"). The phase comes
+//! from `snap.ota` (waved-update, docs/UPDATES.md).
 
 use crate::kit::components::buttons::{back_button, text_button};
 use crate::kit::components::dial::Dial;
@@ -37,6 +38,7 @@ const TEXT_W: i32 = 300;
 
 pub const KEEP_PLUGGED_IN: &str = "Keep Wave plugged in";
 pub const RESTARTS_BY_ITSELF: &str = "It restarts by itself when done";
+pub const RESTART_TO_FINISH: &str = "Turn Wave off and on to finish";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -130,6 +132,19 @@ pub fn look(ota: &OtaState) -> Look {
         OtaPhase::Restarting => {
             progress("Restarting", KEEP_PLUGGED_IN, "This takes about a minute")
         }
+        // The reboot failed. Installing again would undo the armed trial,
+        // so there is no Retry: the user restarts Wave.
+        OtaPhase::RestartNeeded => message(
+            true,
+            "Restart Wave",
+            if target.is_empty() {
+                "The update is installed".into()
+            } else {
+                format!("{target} is installed")
+            },
+            RESTART_TO_FINISH.into(),
+            None,
+        ),
         OtaPhase::Failed { reason } => message(
             true,
             "Update failed",
@@ -407,6 +422,31 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_restart_asks_for_one_and_offers_no_retry() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let (ctx, _bus, _ui) = ctx();
+            let mut snap = charging();
+            snap.ota = ota(OtaPhase::RestartNeeded, 100);
+            let mut screen = UpdateScreen::default();
+            screen.build(root, &ctx, &snap);
+            assert_golden("update_restart_needed", &lv.render());
+            for text in [
+                "Restart Wave",
+                "waved 0.10.0 is installed",
+                RESTART_TO_FINISH,
+                "Back",
+            ] {
+                assert!(shows_text(root, text), "{text}");
+            }
+            // Installing again would undo the armed trial's fall-back.
+            assert!(screen.action().is_none());
+            assert!(!shows_text(root, "Retry"));
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
     fn the_screen_follows_the_update_through_its_phases() {
         lvgl(|lv| {
             let root = lv.screen();
@@ -473,6 +513,7 @@ mod tests {
             OtaPhase::Waiting,
             OtaPhase::Installing,
             OtaPhase::Restarting,
+            OtaPhase::RestartNeeded,
             failed,
         ] {
             let in_progress = phase.in_progress();

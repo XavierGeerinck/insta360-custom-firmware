@@ -266,6 +266,7 @@ pub enum Installed {
 pub struct RecordingInstaller {
     log: Arc<Mutex<Vec<Installed>>>,
     fail: Arc<Mutex<Option<MakeError>>>,
+    fail_reboot: Arc<Mutex<bool>>,
 }
 
 /// The error the fake's next install returns.
@@ -283,6 +284,10 @@ impl RecordingInstaller {
     pub fn fail_next_install_with(&self, error: MakeError) {
         *self.fail.lock().unwrap() = Some(error);
     }
+
+    pub fn fail_next_reboot(&self) {
+        *self.fail_reboot.lock().unwrap() = true;
+    }
 }
 
 impl Installer for RecordingInstaller {
@@ -298,6 +303,9 @@ impl Installer for RecordingInstaller {
     }
 
     fn reboot(&self) -> Result<(), InstallError> {
+        if std::mem::take(&mut *self.fail_reboot.lock().unwrap()) {
+            return Err(InstallError::Reboot("fake failure".into()));
+        }
         self.log.lock().unwrap().push(Installed::Reboot);
         Ok(())
     }

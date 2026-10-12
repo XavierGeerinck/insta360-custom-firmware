@@ -42,7 +42,6 @@ pub mod copy {
     pub const INSTALL_FAILED: &str = "The update could not be installed";
     /// Neither the package nor Wave has an `S60waved` with `update_guard`.
     pub const NO_FALLBACK: &str = "Wave can't go back if this update fails";
-    pub const RESTART_FAILED: &str = "Restart Wave to finish the update";
     pub const INTERRUPTED: &str = "The update stopped before it finished";
 
     pub fn rolled_back(version: &str) -> String {
@@ -119,6 +118,9 @@ pub struct UpdateService<F, I> {
     installer: Arc<I>,
     state: Arc<watch::Sender<OtaState>>,
     free_space: fn(&Path) -> io::Result<u64>,
+    /// This process installed a version (or found one installed) that has
+    /// not started yet.
+    awaiting_restart: bool,
 }
 
 impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
@@ -138,6 +140,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             installer: Arc::new(installer),
             state,
             free_space: crate::space::free_bytes,
+            awaiting_restart: false,
         }
     }
 
@@ -238,8 +241,9 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
                     None => std::future::pending().await,
                 }
             };
-            // No new install while this version is on trial.
-            let free = enabled && health_at.is_none();
+            // No check or install while this version is on trial, or while
+            // an installed one waits for a restart (a failed reboot).
+            let free = enabled && health_at.is_none() && !self.awaiting_restart();
             tokio::select! {
                 _ = health => {
                     let capture = inputs.audio.borrow().capture_healthy;
@@ -290,6 +294,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             }
         };
 
+        let shown = self.state.borrow().clone();
         self.publish(OtaPhase::Checking, 0);
         let index_url = index::index_url(&self.settings.server)
             .map_err(|e| quiet_or(copy::CANT_REACH, e.to_string()))?;
@@ -313,8 +318,18 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             self.publish(OtaPhase::UpToDate, 0);
             return Ok(());
         }
-        self.set_target(Some(offered.to_string()));
         let skipped = trial::is_skipped(&self.paths, offered, &index.build);
+        let fails_on_show = matches!(shown.phase, OtaPhase::Failed { .. })
+            && shown.target_version == Some(offered.to_string());
+        if mode == Mode::Auto && skipped && fails_on_show {
+            // Leave the reason up ("Version 0.10.0 didn't start, so Wave
+            // went back"): "Available" would invite a tap that reinstalls
+            // the version without saying why it is skipped.
+            return Err(Failure::Quiet(format!(
+                "{offered} is skipped; its failure stays on show"
+            )));
+        }
+        self.set_target(Some(offered.to_string()));
         if mode == Mode::Check || (mode == Mode::Auto && skipped) {
             self.publish(OtaPhase::Available, 0);
             return Ok(());
@@ -493,7 +508,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
         }
     }
 
-    async fn install(&self, staged: Staged) -> Result<(), Failure> {
+    async fn install(&mut self, staged: Staged) -> Result<(), Failure> {
         let running = self.settings.running;
         self.publish(OtaPhase::Installing, 99);
         info!("installing waved {} over {running}", staged.version);
@@ -502,31 +517,78 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
         let (version, build) = (staged.version, staged.manifest.build.clone());
         let installed =
             tokio::task::spawn_blocking(move || installer.install(&staged, running)).await;
-        if let Ok(Err(InstallError::NoFallBack)) = installed {
-            // Nothing was changed. The same package is refused until the
-            // init script changes, so automatic checks pass over it.
-            warn!("install refused: /etc/init.d/S60waved has no update_guard");
-            let _ = fs::remove_dir_all(&staging);
-            let _ = trial::skip(&self.paths, version, &build);
-            return Err(Failure::Shown(copy::NO_FALLBACK));
-        }
-        if !matches!(installed, Ok(Ok(()))) {
-            if let Ok(Err(e)) = &installed {
-                warn!("install failed: {e}");
+        match installed {
+            Ok(Ok(())) => {}
+            Ok(Err(InstallError::NoFallBack)) => {
+                // Nothing was changed. The same package is refused until the
+                // init script changes, so automatic checks pass over it.
+                warn!("install refused: /etc/init.d/S60waved has no update_guard");
+                let _ = fs::remove_dir_all(&staging);
+                let _ = trial::skip(&self.paths, version, &build);
+                return Err(Failure::Shown(copy::NO_FALLBACK));
             }
-            // The installer never leaves the binary swapped on an error, so
-            // this puts any replaced deploy files back.
-            let _ = trial::check_at_start(&self.paths, running);
-            let _ = fs::remove_dir_all(&staging);
-            return Err(Failure::Shown(copy::INSTALL_FAILED));
+            Ok(Err(InstallError::TrialPending)) => {
+                // An earlier install armed its trial and Wave has not
+                // restarted since. Undoing it here would delete its
+                // fall-back and leave the new binary with no trial.
+                warn!("install refused: an installed update waits for a restart");
+                let _ = fs::remove_dir_all(&staging);
+                let pending = trial::pending(&self.paths).map(|t| t.version.to_string());
+                self.set_target(pending);
+                self.restart_needed();
+                return Ok(());
+            }
+            other => {
+                if let Ok(Err(e)) = &other {
+                    warn!("install failed: {e}");
+                }
+                // The installer never leaves the binary swapped on an error;
+                // put back the deploy files of this install's own trial.
+                let own = trial::pending(&self.paths)
+                    .filter(|t| t.version == version && t.build == build);
+                if let Some(own) = own {
+                    if let Err(e) = trial::restore_files(&self.paths, &own, true)
+                        .and_then(|()| trial::commit(&self.paths))
+                    {
+                        warn!("could not undo the install: {e}");
+                    }
+                }
+                let _ = fs::remove_dir_all(&staging);
+                return Err(Failure::Shown(copy::INSTALL_FAILED));
+            }
         }
+        self.awaiting_restart = true;
         self.publish(OtaPhase::Restarting, 100);
         sleep(RESTART_PAUSE).await;
         let installer = Arc::clone(&self.installer);
         match tokio::task::spawn_blocking(move || installer.reboot()).await {
-            Ok(Ok(())) => Ok(()),
-            _ => Err(Failure::Shown(copy::RESTART_FAILED)),
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!("{e}");
+                self.restart_needed();
+            }
+            Err(e) => {
+                warn!("reboot failed: {e}");
+                self.restart_needed();
+            }
         }
+        Ok(())
+    }
+
+    /// The new version is in place and its trial armed, but Wave did not
+    /// restart: the user has to. Nothing else installs until then
+    /// (`awaiting_restart`), so there is nothing to retry.
+    fn restart_needed(&mut self) {
+        self.awaiting_restart = true;
+        warn!("the update is installed; it runs once Wave restarts");
+        self.publish(OtaPhase::RestartNeeded, 100);
+    }
+
+    /// An installed version waits for its first start: installing on top
+    /// would replace its fall-back (`.waved.prev` would become the new
+    /// binary) and `check_at_start` would undo its trial.
+    fn awaiting_restart(&self) -> bool {
+        self.awaiting_restart || trial::pending(&self.paths).is_some()
     }
 }
 
@@ -863,7 +925,11 @@ mod tests {
             1,
             "skipped by later automatic checks"
         );
-        assert_eq!(h.ota().phase, OtaPhase::Available);
+        assert_eq!(
+            reason(&h.ota()),
+            "The update isn't signed for this Wave",
+            "the reason stays up while the same version is offered"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -937,12 +1003,14 @@ mod tests {
         settings.first_check_after = Duration::from_secs(60);
         h.spawn(settings);
         let state = h.until("failed", failed).await;
-        assert_eq!(
-            reason(&state),
-            "Version 0.10.0 didn't start, so Wave went back"
-        );
-        h.until("available", |s| s.phase == OtaPhase::Available)
-            .await;
+        let went_back = "Version 0.10.0 didn't start, so Wave went back";
+        assert_eq!(reason(&state), went_back);
+        // The automatic check finds the same version and leaves the report
+        // up: "Available" would let a tap reinstall it without saying why
+        // it is not installed.
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        assert_eq!(h.fetcher.gets().len(), 1, "the check ran");
+        assert_eq!(reason(&h.ota()), went_back);
         assert!(h.fetcher.downloads().is_empty(), "no automatic retry");
 
         h.send(Command::InstallUpdate);
@@ -1110,6 +1178,116 @@ mod tests {
         h.send(Command::CheckForUpdate);
         let state = h.until("failed", failed).await;
         assert_eq!(reason(&state), "Can't reach the update server");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_restart_asks_for_one_and_installs_nothing_more() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.installer.fail_next_reboot();
+        let mut settings = h.settings("0.9.3");
+        settings.first_check_after = Duration::from_secs(30 * 60);
+        settings.check_every = Duration::from_secs(10 * 60);
+        h.spawn(settings);
+        h.send(Command::InstallUpdate);
+        let state = h
+            .until("restart needed", |s| s.phase == OtaPhase::RestartNeeded)
+            .await;
+        assert_eq!(state.target_version.as_deref(), Some("0.10.0"));
+
+        // Neither a tap nor the timer installs on top of the armed trial.
+        h.send(Command::InstallUpdate);
+        h.send(Command::CheckForUpdate);
+        tokio::time::sleep(Duration::from_secs(2 * 60 * 60)).await;
+        assert_eq!(h.installs().len(), 1, "{:?}", h.installs());
+        assert_eq!(h.fetcher.gets().len(), 1, "no check either");
+        assert_eq!(h.ota().phase, OtaPhase::RestartNeeded);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn while_a_trial_is_pending_nothing_is_installed() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.spawn(h.settings("0.9.3"));
+        h.until("idle", |s| s.phase == OtaPhase::Idle).await;
+        let pending = Trial {
+            version: v("0.10.0"),
+            build: "b2".into(),
+            previous: v("0.9.3"),
+            restore: vec![],
+            remove: vec![],
+        };
+        trial::begin(&h.paths, &pending).unwrap();
+        h.send(Command::CheckForUpdate);
+        h.until("available", |s| s.phase == OtaPhase::Available)
+            .await;
+        h.send(Command::InstallUpdate);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert!(h.installs().is_empty());
+        assert!(h.fetcher.downloads().is_empty());
+        assert_eq!(trial::pending(&h.paths), Some(pending));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_install_that_finds_a_trial_pending_leaves_it_alone() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.bus.meeting.send_modify(|m| m.recording = true);
+        h.spawn(h.settings("0.9.3"));
+        h.send(Command::InstallUpdate);
+        h.until("waiting", |s| s.phase == OtaPhase::Waiting).await;
+        // Meanwhile an install went through and armed its trial.
+        let waved = h.paths.target(Target::Waved);
+        fs::write(&waved, "new waved").unwrap();
+        fs::write(Paths::prev(&waved), "old waved").unwrap();
+        let pending = Trial {
+            version: v("0.10.1"),
+            build: String::new(),
+            previous: v("0.9.3"),
+            restore: vec![waved.clone()],
+            remove: vec![],
+        };
+        trial::begin(&h.paths, &pending).unwrap();
+        h.installer
+            .fail_next_install_with(|| crate::install::InstallError::TrialPending);
+        h.bus.meeting.send_modify(|m| m.recording = false);
+        let state = h
+            .until("restart needed", |s| s.phase == OtaPhase::RestartNeeded)
+            .await;
+        assert_eq!(state.target_version.as_deref(), Some("0.10.1"));
+        assert_eq!(trial::pending(&h.paths), Some(pending), "not restored");
+        assert_eq!(fs::read_to_string(&waved).unwrap(), "new waved");
+        assert!(Paths::prev(&waved).exists(), "the fall-back stays");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_install_that_fails_after_arming_its_trial_undoes_it() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.bus.meeting.send_modify(|m| m.recording = true);
+        h.spawn(h.settings("0.9.3"));
+        h.send(Command::InstallUpdate);
+        h.until("waiting", |s| s.phase == OtaPhase::Waiting).await;
+        // What the installer did before it failed: this package's trial, a
+        // replaced init script and the old one beside it.
+        let init = h.paths.target(Target::S60waved);
+        fs::create_dir_all(init.parent().unwrap()).unwrap();
+        fs::write(&init, "new init").unwrap();
+        fs::write(Paths::prev(&init), "old init").unwrap();
+        let own = Trial {
+            version: v("0.10.0"),
+            build: "b2".into(),
+            previous: v("0.9.3"),
+            restore: vec![init.clone()],
+            remove: vec![],
+        };
+        trial::begin(&h.paths, &own).unwrap();
+        h.installer.fail_next_install();
+        h.bus.meeting.send_modify(|m| m.recording = false);
+        let state = h.until("failed", failed).await;
+        assert_eq!(reason(&state), "The update could not be installed");
+        assert!(trial::pending(&h.paths).is_none());
+        assert_eq!(fs::read_to_string(&init).unwrap(), "old init");
     }
 
     #[tokio::test(start_paused = true)]

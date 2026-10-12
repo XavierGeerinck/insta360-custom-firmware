@@ -61,16 +61,19 @@ pub fn update_value(ota: &OtaState) -> String {
         OtaPhase::Downloading | OtaPhase::Verifying => format!("{}%", ota.progress_pct.min(100)),
         OtaPhase::Waiting => "Ready".into(),
         OtaPhase::Installing | OtaPhase::Restarting => "Installing".into(),
+        OtaPhase::RestartNeeded => "Restart".into(),
         OtaPhase::Failed { .. } => "Failed".into(),
     }
 }
 
 /// A Firmware update tap: check from the row when there is nothing to
-/// install; otherwise open the update screen (and install what is there).
+/// install; install and watch when a version is available; otherwise open
+/// the update screen. After a failure that screen says why (a version that
+/// rolled back, say) and offers Retry; a row tap never reinstalls unseen.
 fn tap_update(phase: &OtaPhase, dispatch: &Dispatcher) {
     match phase {
         OtaPhase::Idle | OtaPhase::UpToDate => dispatch.command(Command::CheckForUpdate),
-        OtaPhase::Available | OtaPhase::Failed { .. } => {
+        OtaPhase::Available => {
             dispatch.navigate(Route::Update);
             dispatch.command(Command::InstallUpdate);
         }
@@ -503,6 +506,7 @@ mod tests {
             (OtaPhase::Downloading, "42%"),
             (OtaPhase::Waiting, "Ready"),
             (OtaPhase::Installing, "Installing"),
+            (OtaPhase::RestartNeeded, "Restart"),
             (OtaPhase::Failed { reason: "x".into() }, "Failed"),
         ];
         ota.progress_pct = 42;
@@ -537,6 +541,33 @@ mod tests {
             screen.update(&snap);
             lv.click(row);
             assert!(f.commands().is_empty(), "watching sends nothing");
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Update)]);
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn after_a_failure_the_row_shows_why_before_anything_installs() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            // A version that rolled back: a tap must not reinstall it unseen.
+            snap.ota.phase = OtaPhase::Failed {
+                reason: "Version 0.10.0 didn't start, so Wave went back".into(),
+            };
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            let row = screen.list.as_ref().unwrap().row(START_ROW);
+            lv.click(row);
+            assert!(f.commands().is_empty(), "the update screen has Retry");
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Update)]);
+
+            snap.ota.phase = OtaPhase::RestartNeeded;
+            screen.update(&snap);
+            assert_eq!(value(&screen, START_ROW), "Restart");
+            lv.click(row);
+            assert!(f.commands().is_empty(), "installed; only a restart is left");
             assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Update)]);
             assert_targets_ok(root);
         });

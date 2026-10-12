@@ -132,7 +132,12 @@ setup page.
    failure. This runs even with updates off.
 2. **Checks** 2 min after start, then every 6 h; System → Firmware update checks at once.
    An automatic check that cannot reach the server stays quiet; a tapped one fails
-   visibly.
+   visibly. No check or install, tapped or automatic, runs while `update/trial` exists:
+   while this version is on trial, or after an install whose restart failed (step 6).
+   Installing on top of an armed trial would make `.waved.prev` the new binary, and
+   undoing it as an "interrupted install" would leave the new binary with no trial and no
+   fall-back. An automatic check that finds a skipped version while a failure about that
+   same version is on show leaves the failure up instead of showing Available.
 3. **Downloads** to `/tmp/waved-update/` (tmpfs, RAM; `/data` is small). An interrupted
    download resumes with an HTTP `Range` request; `package.sha256` next to it keeps a part
    of one package from being continued with another. A server that ignores ranges starts
@@ -146,7 +151,12 @@ setup page.
    connected. An automatic install also waits while the computer has the microphone open; a
    tapped one does not (some apps keep it open all day).
 6. **Installs** (`install.rs`, below), shows "Restarting" for a second, then runs
-   `/sbin/reboot`.
+   `/sbin/reboot`. If the reboot fails the update is installed and its trial armed, so
+   the phase becomes `RestartNeeded` ("Restart Wave"), not a failure with Retry: the new
+   version starts when the user turns Wave off and on, or when waved next exits (the
+   watchdog runs the guard, then the new binary). If the installer itself finds a trial
+   pending (`TrialPending`), it changes nothing and the service shows the same state; it
+   never undoes that trial.
 
 `OtaState.progress_pct`: download 0–90, verify and unpack 90–98, waiting 98, installing 99,
 restarting 100.
@@ -226,15 +236,19 @@ replaces them with the version it replaces.
 ## What the user sees
 
 System → Firmware update (system.png, centred when System opens) shows Off, Check now,
-Checking, Up to date, Available, 42 %, Ready, Installing or Failed. A tap checks when
-there is nothing to install; otherwise it opens the update screen, and installs when a
-version is available or the last attempt failed.
+Checking, Up to date, Available, 42 %, Ready, Installing, Restart or Failed. A tap checks
+when there is nothing to install, installs and opens the update screen when a version is
+Available, and otherwise only opens the update screen. After a failure that screen says
+why before anything installs again: a row tap must not quietly reinstall a version that
+rolled back.
 
 The update screen (ota.png) is the dial as a progress ring with "Installing update", the
 percentage, "waved 0.10.0", "Keep Wave plugged in" and "It restarts by itself when done", and
 nothing to tap. Installing and Restarting take over the screen from anywhere
 (`kit/router.rs`); only power off overrides it. A failure stays on screen as "Update
-failed", "Wave is still on 0.9.3", the reason, Retry and Back.
+failed", "Wave is still on 0.9.3", the reason, Retry and Back. A failed reboot shows
+"Restart Wave", "waved 0.10.0 is installed", "Turn Wave off and on to finish" and only
+Back (`update_restart_needed` golden).
 
 | Failure | Shown reason |
 |---|---|
@@ -249,7 +263,6 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | no room | Not enough space on Wave |
 | no `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
 | installer error | The update could not be installed |
-| reboot failed | Restart Wave to finish the update |
 | cut between trial and swap | The update stopped before it finished |
 | new version never committed | Version X didn't start, so Wave went back |
 
@@ -264,7 +277,7 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
 | U6 | File-level fall-back in `S60waved`, 3 starts, commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after three power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back after three reboots. |
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
-| U8 | `/sbin/reboot` after install | Unverified; a failure says "Restart Wave to finish the update" and the trial is already armed. |
+| U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |
 
 ## Device checks
