@@ -44,20 +44,39 @@ pub struct Limits {
     pub ack_ms: u64,
     /// Pause after the lift stopped, before cutting power.
     pub settle_ms: u64,
+    /// An IDLE this soon after the retract was sent, before the motor has
+    /// reported WORK, is the motor not having started yet (`lift::SETTLE_MS`).
+    pub start_ms: u64,
 }
 
 impl Limits {
-    pub const STOCK: Limits = Limits { motor_ms: 20_000, poll_ms: 200, ack_ms: 500, settle_ms: 1_000 };
+    pub const STOCK: Limits = Limits {
+        motor_ms: 20_000,
+        poll_ms: 200,
+        ack_ms: 500,
+        settle_ms: 1_000,
+        start_ms: crate::lift::SETTLE_MS,
+    };
 }
 
 pub fn run(t: &dyn Transport, limits: Limits) -> Outcome {
     send_acked(t, &power_off_timer(true), limits);
     send_acked(t, &motor_to_mm(0), limits);
-    let deadline = Instant::now() + Duration::from_millis(limits.motor_ms);
+    let sent = Instant::now();
+    let deadline = sent + Duration::from_millis(limits.motor_ms);
+    let mut seen_motion = false;
     while Instant::now() < deadline {
         t.send(&motor_state_query());
         match wait_motor_state(t, Duration::from_millis(limits.poll_ms.max(1))) {
-            Some(MotorState::Idle) => break,
+            Some(MotorState::Idle)
+                if seen_motion || sent.elapsed() >= Duration::from_millis(limits.start_ms) =>
+            {
+                break
+            }
+            Some(MotorState::Working) => {
+                seen_motion = true;
+                std::thread::sleep(Duration::from_millis(limits.poll_ms));
+            }
             Some(MotorState::Obstructed) => {
                 send_acked(t, &power_off_timer(false), limits);
                 return Outcome::Obstructed;
@@ -149,7 +168,7 @@ mod tests {
         }
     }
 
-    const FAST: Limits = Limits { motor_ms: 50, poll_ms: 1, ack_ms: 1, settle_ms: 0 };
+    const FAST: Limits = Limits { motor_ms: 50, poll_ms: 1, ack_ms: 1, settle_ms: 0, start_ms: 0 };
 
     #[test]
     fn the_stock_sequence_ends_in_all_shutdown() {
@@ -160,6 +179,24 @@ mod tests {
         assert_eq!(first, [power_off_timer(true), motor_to_mm(0)]);
         assert_eq!(&sent[sent.len() - 2..], [charging_on(), all_shutdown()]);
         assert!(sent.iter().filter(|o| **o == motor_state_query()).count() >= 3);
+    }
+
+    #[test]
+    fn an_idle_before_the_motor_started_does_not_cut_the_power() {
+        // idle, idle (the retract hasn't started), working, working, idle
+        let mcu = fake(&[0, 0, 1, 1, 0], false);
+        let limits = Limits { motor_ms: 5_000, start_ms: 2_000, ..FAST };
+        assert_eq!(run(&mcu, limits), Outcome::Sent);
+        let queries = mcu.sent.borrow().iter().filter(|o| **o == motor_state_query()).count();
+        assert_eq!(queries, 5, "the early idles were taken as the lift being down");
+    }
+
+    #[test]
+    fn a_lift_that_is_already_down_powers_off_after_the_start_wait() {
+        let mcu = fake(&[], false); // idle on every query
+        let limits = Limits { motor_ms: 5_000, start_ms: 20, ..FAST };
+        assert_eq!(run(&mcu, limits), Outcome::Sent);
+        assert_eq!(mcu.sent.borrow().last(), Some(&all_shutdown()));
     }
 
     #[test]
