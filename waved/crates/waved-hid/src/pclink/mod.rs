@@ -10,6 +10,8 @@
 //! - `packet`: the 16-byte PC-link header, segmentation and reassembly.
 //! - `handler`: one ack per command, bus commands out.
 
+pub mod mode;
 pub mod packet;
+pub mod snapshot;
 pub mod transport;
 pub mod vendor;
