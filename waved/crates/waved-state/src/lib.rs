@@ -635,6 +635,13 @@ pub enum Command {
     SetPlaybackPreset(PlaybackPreset),
     ToggleMicMute,
     ToggleSpeakerMute,
+    /// Mute (`true`) or unmute the mic; already in that state = no change.
+    /// For requests that name the state (the Wave Controller app): repeating
+    /// one can't flip the mic back the way a repeated toggle would.
+    SetMicMute(bool),
+    /// Mute or unmute the speaker, like `SetMicMute`. Unmuting below 10 %
+    /// raises the volume to 10 %, as `ToggleSpeakerMute` does.
+    SetSpeakerMute(bool),
     SetSpeakerVolume(u16),
     SetMicVolume(u16),
     StartRecording,

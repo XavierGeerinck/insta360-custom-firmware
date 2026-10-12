@@ -144,6 +144,20 @@ mod tests {
     }
 
     #[test]
+    fn mutes_are_not_settings_whichever_way_they_are_sent() {
+        for command in [
+            Command::ToggleMicMute,
+            Command::ToggleSpeakerMute,
+            Command::SetMicMute(true),
+            Command::SetMicMute(false),
+            Command::SetSpeakerMute(true),
+            Command::SetSpeakerMute(false),
+        ] {
+            assert_eq!(Change::from_command(&command), None, "{command:?}");
+        }
+    }
+
+    #[test]
     fn a_chosen_mic_height_is_kept_in_config_and_settings() {
         use waved_state::MotorPosition;
         let change = Change::from_command(&Command::SetMotorPosition(MotorPosition::Low));

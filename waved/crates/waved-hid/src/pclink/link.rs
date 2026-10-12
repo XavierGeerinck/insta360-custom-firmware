@@ -308,9 +308,39 @@ mod tests {
             reports.extend(out.reports);
             commands.extend(out.commands);
         }
-        assert_eq!(commands, vec![Command::ToggleMicMute]);
+        assert_eq!(commands, vec![Command::SetMicMute(true)]);
         let expected: Vec<Vec<u8>> = DEVICE_ACK.iter().map(|r| hex(r)).collect();
         assert_eq!(reports.iter().map(|r| r.to_vec()).collect::<Vec<_>>(), expected);
+    }
+
+    /// The mic mute once `commands` have been applied to `muted`.
+    fn mic_muted_after(commands: &[Command], mut muted: bool) -> bool {
+        for c in commands {
+            match c {
+                Command::ToggleMicMute => muted = !muted,
+                Command::SetMicMute(m) => muted = *m,
+                _ => {}
+            }
+        }
+        muted
+    }
+
+    #[test]
+    fn two_mute_requests_in_one_batch_leave_the_mic_muted() {
+        // The first chunk is late; the rest wait behind it, and its resend
+        // delivers both requests at once, read against one snapshot.
+        let mut rig = Rig::new();
+        let mut host = Host::new();
+        let mut reports = host.command(cmd::SET_AUDIO_MIC_MUTE, &[1], 0);
+        reports.extend(host.command(cmd::SET_AUDIO_MIC_MUTE, &[1], 0));
+        for r in &reports[1..] {
+            assert!(rig.report(r).commands.is_empty(), "waits for chunk 1");
+        }
+        let Some(Incoming::Transport(mut late)) = vendor::decode(&reports[0]) else { panic!() };
+        late.kind = Kind::ResendResp;
+        let commands = rig.report(&late.encode()).commands;
+        assert_eq!(commands.len(), 2, "both requests in one batch: {commands:?}");
+        assert!(mic_muted_after(&commands, rig.snap.mic_muted), "{commands:?} leaves the room live");
     }
 
     #[test]
@@ -341,6 +371,33 @@ mod tests {
         rig.now += HOST_SILENT_MS;
         assert!(rig.poll().reports.is_empty(), "the app stopped asking");
         assert!(!rig.link.host_present(rig.now));
+    }
+
+    #[test]
+    fn once_the_app_goes_quiet_the_link_soon_writes_nothing() {
+        // The app polled the heartbeat and sent a command, then closed: the
+        // ack is never confirmed and no heartbeat request comes again.
+        let mut rig = Rig::new();
+        let mut host = Host::new();
+        let mut req = [0u8; REPORT_LEN];
+        req[..2].copy_from_slice(&[0x03, 0xEC]);
+        rig.report(&req);
+        for r in host.command(cmd::GET_DEV_STATUS, &[], 0) {
+            rig.report(&r);
+        }
+        let quiet_from = rig.now;
+        let mut last_write = quiet_from;
+        while rig.now < quiet_from + 600_000 {
+            rig.now += 20;
+            if !rig.poll().reports.is_empty() {
+                last_write = rig.now;
+            }
+        }
+        assert!(
+            last_write - quiet_from <= HOST_SILENT_MS,
+            "still writing {} s after the app went quiet",
+            (last_write - quiet_from) / 1_000
+        );
     }
 
     #[test]

@@ -124,7 +124,10 @@ Example frames (all 64 bytes, trailing zeros omitted):
   was sent or received for **≥ 300 ms**, and the last sent id differs from the
   last id the host confirmed with SYNC_RESP, the device puts SYNC(last sent id)
   at the front of the queue. It repeats every ≥ 300 ms of silence until the
-  matching SYNC_RESP arrives (`get_next_send_hid_message`).
+  matching SYNC_RESP arrives (`get_next_send_hid_message`), so with the app
+  gone stock syncs forever. **[waved]** stops after **10** SYNCs without
+  anything from the host (about 3 s) and starts counting again with the
+  host's next packet.
 - RESET_RESP, RESEND_RESP and SYNC_RESP jump the queue; MAVLINK chunks keep
   their order; the queue holds 400 entries and drops the oldest when full.
 
@@ -137,7 +140,11 @@ Example frames (all 64 bytes, trailing zeros omitted):
 - The first chunk after an empty state with **1 < id < 20** marks ids
   `1..id-1` as missing; any later jump marks the ids in between as missing
   (`append_hid_vendor_package_to_recv_list`). A jump of more than **400** ids
-  drops everything and restarts from the new chunk.
+  drops everything and restarts from the new chunk. Stock's missing list has
+  no limit, so a host jumping just under 400 again and again grows it without
+  end. **[waved]** waits for at most **400** missing ids: a chunk or SYNC
+  that would mark more is dropped (one log line until the list empties; the
+  host's resend or next SYNC brings it again).
 - Missing ids are requested with RESEND, only when the send queue is empty, at
   most every **100 ms**, at most **10** ids per round: the first request at
   once, later ones **≥ 61 ms** apart, **21** requests per id at most, then the id
@@ -477,8 +484,12 @@ active while idle).
   Speaker: `SetSpeakerVolume(v)`, then mute if `v == 0` else unmute. Mic: waved
   maps the byte 1:1 onto its mic gain percent (100 = unity) and reports
   `min(mic_volume, 100)` **[inferred]**; mute follows the same 0 rule.
-- Mute bytes: non-zero = muted. waved only has toggle commands, so it toggles
-  when the requested state differs from the current one.
+- Mute bytes: non-zero = muted. waved sends the state asked for
+  (`SetMicMute(m)` / `SetSpeakerMute(m)`; a volume sends `m = (v == 0)`),
+  never a toggle worked out from the current state: several requests can
+  arrive in one batch (a resent chunk filling a gap), all read against the
+  same state, and two toggles would leave the mic live. Asking for the state
+  the unit already has changes nothing.
 - Every audio ack is result 0 in stock (it never validates); waved answers 1
   only for a mic mode outside 1–6.
 
@@ -588,14 +599,17 @@ Two sides keep their current aim (`beam_aim_deg`); Follow talker starts from it.
 | Commands, ack sizes | `pclink/cmd.rs`, `pclink/handler.rs` |
 | Mic modes (J4) | `pclink/mode.rs` |
 | Engine | `pclink/link.rs` (pure; time passed in) |
-| Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0` |
+| Threads | `pclink/service.rs`: engine on a 20 ms tick, own writer handle on `/dev/hidg0`. While the writer takes nothing (a write blocked on a host that stopped reading) the engine backs off from 1 ms to the tick. Open and write failures log the first, then a count at most once a minute, then one line when writes work again |
 
-Integration points left open on purpose:
+Integration points:
 
-- **PIN** — `pclink::handler::PinVerifier::check(candidate, now_ms)`; wrap K2's
-  `waved_config::PinAttempts::check(security, candidate, now_ms)` (Accepted →
-  `Accepted`, Wrong → `Wrong`, Locked → `Locked`). `main.rs` passes
-  `DenyAllPins` until then, so a PIN typed in the app is always refused.
+- **PIN** — `pclink::handler::PinVerifier::check(candidate, now_ms)`.
+  `main.rs` passes `pclink::handler::ConfigPins`: the device PIN from
+  `config.toml` (`[security]`), checked with K2's
+  `waved_config::PinAttempts::check` (Accepted → `Accepted`, Wrong → `Wrong`,
+  Locked → `Locked`). It keeps its own count of wrong tries and its own 60 s
+  wait after five, separate from the on-device keypad's. `DenyAllPins`
+  (refuses every PIN) is left for tests.
 - **On-device PIN prompt** — `pclink::service::PinPrompt`: a `()` on
   `requests` means "show K2's PIN screen", the screen answers `true`/`false`
   on `results`. `main.rs` passes `None`, so with a PIN set and no PIN in the

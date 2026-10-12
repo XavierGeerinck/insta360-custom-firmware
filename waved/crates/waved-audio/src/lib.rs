@@ -1044,19 +1044,15 @@ impl AudioService {
                 self.audio_tx.send_modify(|s| s.playback_preset = p);
             }
             Command::ToggleMicMute => {
-                self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted);
+                let muted = !self.audio_tx.borrow().mic_muted;
+                self.set_mic_muted(muted);
             }
+            Command::SetMicMute(muted) => self.set_mic_muted(muted),
             Command::ToggleSpeakerMute => {
-                let new_muted = !self.audio_tx.borrow().speaker_muted;
-                self.audio_tx.send_modify(|s| {
-                    s.speaker_muted = new_muted;
-                    if !new_muted && s.speaker_volume < 10 {
-                        s.speaker_volume = 10;
-                    }
-                });
-                // SP#6: UacControl mirrors the new state to hw:1
-                // PCM Playback Switch on the next state-watch tick.
+                let muted = !self.audio_tx.borrow().speaker_muted;
+                self.set_speaker_muted(muted);
             }
+            Command::SetSpeakerMute(muted) => self.set_speaker_muted(muted),
             Command::SetSpeakerVolume(v) => {
                 self.audio_tx.send_modify(|s| s.speaker_volume = v);
                 // SP#6: UacControl mirrors to hw:1 PCM Playback Volume.
@@ -1079,6 +1075,31 @@ impl AudioService {
             _ => {}
         }
         None
+    }
+
+    /// Mute or unmute the mic; the state it already has wakes no watcher.
+    fn set_mic_muted(&self, muted: bool) {
+        self.audio_tx.send_if_modified(|s| {
+            let changed = s.mic_muted != muted;
+            s.mic_muted = muted;
+            changed
+        });
+    }
+
+    /// Mute or unmute the speaker. Unmuting below 10 % sets 10 %, so it is
+    /// audible. SP#6: UacControl mirrors the new state to hw:1 PCM Playback
+    /// Switch on the next state-watch tick.
+    fn set_speaker_muted(&self, muted: bool) {
+        self.audio_tx.send_if_modified(|s| {
+            if s.speaker_muted == muted {
+                return false;
+            }
+            s.speaker_muted = muted;
+            if !muted && s.speaker_volume < 10 {
+                s.speaker_volume = 10;
+            }
+            true
+        });
     }
 
     fn publish_integrity_fault(&self, fault: waved_state::RecordingIntegrityFault) {
@@ -2510,6 +2531,44 @@ mod tests {
         assert_eq!(state.borrow().mic_volume, 0);
         svc.handle_command(Command::SetMicVolume(250));
         assert_eq!(state.borrow().mic_volume, 250);
+    }
+
+    #[test]
+    fn set_mic_mute_twice_leaves_the_mic_muted() {
+        // The Wave Controller app can deliver the same "mute" twice in one
+        // batch: a repeat must not flip the mic back on like a toggle.
+        let (mut svc, state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        svc.handle_command(Command::SetMicMute(true));
+        svc.handle_command(Command::SetMicMute(true));
+        assert!(state.borrow().mic_muted);
+        svc.handle_command(Command::SetMicMute(false));
+        svc.handle_command(Command::SetMicMute(false));
+        assert!(!state.borrow().mic_muted);
+    }
+
+    #[test]
+    fn set_speaker_mute_is_absolute_and_unmutes_like_the_toggle() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        svc.handle_command(Command::SetSpeakerVolume(0));
+        svc.handle_command(Command::SetSpeakerMute(true));
+        svc.handle_command(Command::SetSpeakerMute(true));
+        assert!(state.borrow().speaker_muted);
+        assert_eq!(state.borrow().speaker_volume, 0);
+        svc.handle_command(Command::SetSpeakerMute(false));
+        assert!(!state.borrow().speaker_muted);
+        assert_eq!(state.borrow().speaker_volume, 10, "unmuting is audible, as with the toggle");
+    }
+
+    #[test]
+    fn setting_the_mute_it_already_has_changes_nothing() {
+        let (mut svc, state) = service_with(waved_state::AudioMode::Omni, 0.0);
+        let mut seen = state.subscribe();
+        seen.mark_unchanged();
+        svc.handle_command(Command::SetMicMute(false));
+        svc.handle_command(Command::SetSpeakerMute(false));
+        assert!(!seen.has_changed().unwrap(), "no state change, no wake-up for the watchers");
+        svc.handle_command(Command::SetMicMute(true));
+        assert!(seen.has_changed().unwrap());
     }
 
     #[tokio::test]

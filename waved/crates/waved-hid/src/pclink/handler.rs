@@ -277,32 +277,27 @@ impl Handler {
                 });
                 vec![0]
             }
+            // Mutes go out as the state asked for, never as a toggle worked
+            // out from the snapshot: several requests in one batch all read
+            // the same snapshot, and two toggles would undo each other.
             cmd::SET_AUDIO_SPEAKER_VOLUME => {
                 let v = byte.min(100);
                 commands.push(Command::SetSpeakerVolume(u16::from(v)));
-                if (v == 0) != s.speaker_muted {
-                    commands.push(Command::ToggleSpeakerMute);
-                }
+                commands.push(Command::SetSpeakerMute(v == 0));
                 vec![0]
             }
             cmd::SET_AUDIO_MIC_VOLUME => {
                 let v = byte.min(100);
                 commands.push(Command::SetMicVolume(waved_config::clamp_mic_volume(u16::from(v))));
-                if (v == 0) != s.mic_muted {
-                    commands.push(Command::ToggleMicMute);
-                }
+                commands.push(Command::SetMicMute(v == 0));
                 vec![0]
             }
             cmd::SET_AUDIO_SPEAKER_MUTE => {
-                if (byte != 0) != s.speaker_muted {
-                    commands.push(Command::ToggleSpeakerMute);
-                }
+                commands.push(Command::SetSpeakerMute(byte != 0));
                 vec![0]
             }
             cmd::SET_AUDIO_MIC_MUTE => {
-                if (byte != 0) != s.mic_muted {
-                    commands.push(Command::ToggleMicMute);
-                }
+                commands.push(Command::SetMicMute(byte != 0));
                 vec![0]
             }
             cmd::SET_AUDIO_MIC_MODE => match mode::to_audio_mode(byte, s.beam_aim_deg) {
@@ -863,36 +858,44 @@ mod tests {
     #[test]
     fn speaker_volume_sets_and_follows_the_zero_means_mute_rule() {
         let mut rig = Rig::new();
-        assert_eq!(rig.commands(cmd::SET_AUDIO_SPEAKER_VOLUME, &[55]), (vec![0], vec![Command::SetSpeakerVolume(55)]));
+        assert_eq!(
+            rig.commands(cmd::SET_AUDIO_SPEAKER_VOLUME, &[55]),
+            (vec![0], vec![Command::SetSpeakerVolume(55), Command::SetSpeakerMute(false)])
+        );
         assert_eq!(
             rig.commands(cmd::SET_AUDIO_SPEAKER_VOLUME, &[0]),
-            (vec![0], vec![Command::SetSpeakerVolume(0), Command::ToggleSpeakerMute])
+            (vec![0], vec![Command::SetSpeakerVolume(0), Command::SetSpeakerMute(true)])
         );
         rig.snap.speaker_muted = true;
         assert_eq!(
             rig.commands(cmd::SET_AUDIO_SPEAKER_VOLUME, &[200]),
-            (vec![0], vec![Command::SetSpeakerVolume(100), Command::ToggleSpeakerMute])
+            (vec![0], vec![Command::SetSpeakerVolume(100), Command::SetSpeakerMute(false)])
         );
     }
 
     #[test]
     fn mic_volume_maps_one_to_one_and_mutes_at_zero() {
         let mut rig = Rig::new();
-        assert_eq!(rig.commands(cmd::SET_AUDIO_MIC_VOLUME, &[70]), (vec![0], vec![Command::SetMicVolume(70)]));
+        assert_eq!(
+            rig.commands(cmd::SET_AUDIO_MIC_VOLUME, &[70]),
+            (vec![0], vec![Command::SetMicVolume(70), Command::SetMicMute(false)])
+        );
         assert_eq!(
             rig.commands(cmd::SET_AUDIO_MIC_VOLUME, &[0]),
-            (vec![0], vec![Command::SetMicVolume(0), Command::ToggleMicMute])
+            (vec![0], vec![Command::SetMicVolume(0), Command::SetMicMute(true)])
         );
     }
 
     #[test]
-    fn mutes_toggle_only_when_the_state_differs() {
+    fn mutes_name_the_state_asked_for_whatever_the_snapshot_says() {
         let mut rig = Rig::new();
-        assert_eq!(rig.commands(cmd::SET_AUDIO_MIC_MUTE, &[1]), (vec![0], vec![Command::ToggleMicMute]));
-        assert_eq!(rig.commands(cmd::SET_AUDIO_MIC_MUTE, &[0]), (vec![0], vec![]));
-        assert_eq!(rig.commands(cmd::SET_AUDIO_SPEAKER_MUTE, &[1]), (vec![0], vec![Command::ToggleSpeakerMute]));
+        for _ in 0..2 {
+            assert_eq!(rig.commands(cmd::SET_AUDIO_MIC_MUTE, &[1]), (vec![0], vec![Command::SetMicMute(true)]));
+        }
+        assert_eq!(rig.commands(cmd::SET_AUDIO_MIC_MUTE, &[0]), (vec![0], vec![Command::SetMicMute(false)]));
+        assert_eq!(rig.commands(cmd::SET_AUDIO_SPEAKER_MUTE, &[1]), (vec![0], vec![Command::SetSpeakerMute(true)]));
         rig.snap.speaker_muted = true;
-        assert_eq!(rig.commands(cmd::SET_AUDIO_SPEAKER_MUTE, &[1]), (vec![0], vec![]));
+        assert_eq!(rig.commands(cmd::SET_AUDIO_SPEAKER_MUTE, &[2]), (vec![0], vec![Command::SetSpeakerMute(true)]));
         assert_eq!(rig.send(msg(cmd::SET_AUDIO_MIC_MUTE, &[])).ack, None);
     }
 

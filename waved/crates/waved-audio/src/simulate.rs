@@ -55,6 +55,8 @@ impl SimAudioService {
                         }
                         Ok(Command::ToggleMicMute) => { self.audio_tx.send_modify(|s| s.mic_muted = !s.mic_muted); }
                         Ok(Command::ToggleSpeakerMute) => { self.audio_tx.send_modify(|s| s.speaker_muted = !s.speaker_muted); }
+                        Ok(Command::SetMicMute(m)) => { self.audio_tx.send_if_modified(|s| std::mem::replace(&mut s.mic_muted, m) != m); }
+                        Ok(Command::SetSpeakerMute(m)) => { self.audio_tx.send_if_modified(|s| std::mem::replace(&mut s.speaker_muted, m) != m); }
                         Ok(Command::SetSpeakerVolume(v)) => { self.audio_tx.send_modify(|s| s.speaker_volume = v); }
                         Ok(Command::SetMicVolume(v)) => { self.audio_tx.send_modify(|s| s.mic_volume = v); }
                         Ok(Command::Shutdown) => return,
