@@ -25,6 +25,9 @@ pub enum FrameError {
 
 impl Frame {
     /// Build a frame ready to send (with checksum appended).
+    ///
+    /// The checksum sums `len` and `data` only, not the two header bytes
+    /// (stock `bt_ctrl_cmd_send` / `bt_cmd_parser`, docs/BLUETOOTH_PROTOCOL.md).
     pub fn build(header: [u8; 2], data: &[u8]) -> Result<Vec<u8>, FrameError> {
         let target = Self::classify_header(header)?;
         let _ = target; // validate header
@@ -33,7 +36,7 @@ impl Frame {
         buf.extend_from_slice(&header);
         buf.push(len);
         buf.extend_from_slice(data);
-        let checksum = buf.iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+        let checksum = buf[2..].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
         buf.push(checksum);
         Ok(buf)
     }
@@ -82,7 +85,6 @@ impl FrameParser {
             ParseState::Header0 => {
                 if byte == 0x75 || byte == 0xDC {
                     self.header[0] = byte;
-                    self.checksum_accum = byte;
                     self.state = ParseState::Header1;
                 }
                 None
@@ -95,7 +97,6 @@ impl FrameParser {
                 };
                 if valid {
                     self.header[1] = byte;
-                    self.checksum_accum = self.checksum_accum.wrapping_add(byte);
                     self.state = ParseState::Length;
                     None
                 } else {
@@ -104,8 +105,9 @@ impl FrameParser {
                 }
             }
             ParseState::Length => {
+                // The checksum starts here: the header is not summed.
                 self.length = byte;
-                self.checksum_accum = self.checksum_accum.wrapping_add(byte);
+                self.checksum_accum = byte;
                 self.data.clear();
                 if byte == 0 {
                     self.state = ParseState::Checksum;
@@ -164,12 +166,26 @@ mod tests {
         assert_eq!(raw[0..2], [0x75, 0x46]);
         assert_eq!(raw[2], 2); // length
         assert_eq!(raw[3..5], [0x01, 0x02]);
-        let expected_checksum = 0x75u8
-            .wrapping_add(0x46)
-            .wrapping_add(2)
-            .wrapping_add(0x01)
-            .wrapping_add(0x02);
-        assert_eq!(raw[5], expected_checksum);
+        // len + data, header not summed.
+        assert_eq!(raw[5], 2 + 0x01 + 0x02);
+    }
+
+    #[test]
+    fn matches_stock_bluetooth_frames() {
+        // GET_BT_STATUS and an acknowledgement, as stock sends them
+        // (docs/BLUETOOTH_PROTOCOL.md, "Example frames").
+        assert_eq!(Frame::build([0x75, 0x45], &[0xA9]).unwrap(), [0x75, 0x45, 0x01, 0xA9, 0xAA]);
+        assert_eq!(
+            Frame::build([0x75, 0x46], &[0xB2, 0x00]).unwrap(),
+            [0x75, 0x46, 0x02, 0xB2, 0x00, 0xB4]
+        );
+        let mut parser = FrameParser::new();
+        let frames: Vec<_> = [0x75, 0x45, 0x02, 0xAA, 0x01, 0xAD]
+            .iter()
+            .filter_map(|&b| parser.feed(b))
+            .collect();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].as_ref().unwrap().data, vec![0xAA, 0x01]);
     }
 
     #[test]
