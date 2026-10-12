@@ -1,4 +1,5 @@
 pub mod battery;
+pub mod mavlink;
 pub mod buttons;
 pub mod motor;
 
