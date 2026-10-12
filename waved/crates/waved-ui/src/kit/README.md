@@ -132,11 +132,11 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `TimeZone` | `datetime` | `TimeZoneScreen::default()` |
 | `About` | `about` | `AboutScreen::default()` |
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
+| `Update` | `ota` | `UpdateScreen::default()` (H3; installing and restarting take over the router) |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
 `main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Mic height,
-Bluetooth, PIN, USB storage, Update and Incoming call are milestone 3 and have no
-module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+Bluetooth, PIN, USB storage and Incoming call are milestone 3 and have no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
