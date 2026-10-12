@@ -12,6 +12,7 @@
 
 pub mod cmd;
 pub mod handler;
+pub mod link;
 pub mod mode;
 pub mod packet;
 pub mod snapshot;
