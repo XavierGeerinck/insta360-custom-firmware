@@ -256,3 +256,9 @@ the device pass checks it (`docs/superpowers/plans/2026-10-12-m3-f-battery-mic-h
 - BLOCK versus SENSOR_TRIGGER when a hand holds the lift, and whether the MCU
   stops the motor by itself on either.
 - That cmd 4 sub 1 positions are i16 mm.
+- Whether a BLOCK during the power-off retract means the bottom stop or a
+  real stall. waved's power off (`power_off.rs`) keeps polling on BLOCK and
+  cuts power on IDLE, or after 20 s without one; it never checks that the
+  position reached 0 mm. Stock doesn't re-drive a 0 mm move at block speeds
+  (`mcu_motor_block_pos_control` sets them only for `pos != 0`), so waved
+  doesn't either. The device pass captures the retract to settle this.
