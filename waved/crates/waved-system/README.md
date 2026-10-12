@@ -25,11 +25,9 @@ sits behind a path or a trait so the crate tests on the host:
   key: holding it about 3 s cuts power. `vad_keypad` (`event0`,
   `fe330000.audiobus:vad`) is the SoC's voice-activity detector; its
   `KEY_POWER` wakes the system on speech, so `power_key::find_power_key` never
-  takes it and finds no key on the Wave. Stock firmware gets presses from the
-  MCU over `/dev/ttyS4` (MAVLink, `mcu_notify` cmd 0x0E; verified on the
-  device the same day, `docs/MCU_PROTOCOL.md`); waved only ever opened
-  `/dev/ttyS1`, the Bluetooth module. Reading it is the `waved-mcu` rework
-  (TODO F7).
+  takes it and finds no key on the Wave. The key arrives from the MCU over
+  `/dev/ttyS4` (MAVLink, `mcu_notify` cmd 0x0E, `docs/MCU_PROTOCOL.md`), and
+  `waved-mcu` turns it into `DeviceEvent::PowerKey` (verified 2026-10-12).
 - **RTC.** BCD at `0x68` on `/dev/i2c-3`, registers 0–6 = seconds, minutes,
   hours, weekday (0 = Sunday), day, month, year − 2000, in UTC. This is the stock
   `rtc_gettime` / `rtc_settime` layout. Decoding masks seconds and minutes with `0x7f` (bit 7 is the oscillator

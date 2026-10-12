@@ -272,7 +272,8 @@ Rules for the parallel milestones:
     `waved/docs/AUDIO_HARDWARE.md:648`.
   - Wire the buttons to the speaker volume.
 - [ ] **F2 Battery** (S)
-  - Verify the MCU battery frames on the device: level, charging, temperature.
+  - Level, voltage, temperature and charging now come from the MCU's heartbeats on
+    `/dev/ttyS4` (`waved-mcu`, 2026-10-12); check the status pill against them on battery.
   - Status pill variants for charging and low battery.
   - Messages at 10 % and 5 %.
   - At 3 %, finalize any recording, then shut down.
@@ -281,11 +282,10 @@ Rules for the parallel milestones:
 - [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
-- [ ] **F7 Power key through the MCU** (M) — the physical key does not reach Linux
-  (device pass 2026-10-12, `waved/crates/waved-system/README.md`); only the MCU sees it
-  and cuts power after a ~3 s hold. Reverse engineer how stock `mcu_evt_handle` gets
-  `BTN_CLICK` / `BTN_LONG_PRESS_2s_*` (likely a handshake on `/dev/ttyS1`) and feed
-  `DeviceEvent::PowerKey` from waved-mcu. Power off meanwhile: System → Power off.
+- [x] **F7 Power key through the MCU** (M) — done 2026-10-12: the key arrives on the
+  MCU link (`/dev/ttyS4`, MAVLink, `waved/docs/MCU_PROTOCOL.md`); click = sleep / wake,
+  2 s hold = power off (the MCU powers off by itself on a hold). Follow-up: the Bluetooth
+  UART (`/dev/ttyS1`) runs at 115200 in waved but is 921600 in stock.
 - [x] **F8 Boot screen** (S) — the Insta360 image is drawn by the signed, encrypted
   bootloader (the `logo` partition is empty, the kernel has no logo), so it can't be
   replaced safely. Cover it from userspace instead: an early init script writes our

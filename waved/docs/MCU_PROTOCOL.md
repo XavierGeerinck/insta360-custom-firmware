@@ -186,14 +186,29 @@ libui first asks MISC_CHECK sub 1 and does not power off if the status is 0
 
 `mcutool` (stock, on the device) uses `ttyS4`: `vers`, `watch 1` (polls power
 status), `pwr`, `usb`, `puc`, `led`, `motor`, `pos`, `motor-burn`, `reboot`,
-`reboot_all`, `upgrade`. It has no raw send. To watch the link with waved
-running (waved does not open `ttyS4` yet):
+`reboot_all`, `upgrade`. It has no raw send. waved owns `ttyS4`: stop it first
+(`docs/DISPLAY_HARDWARE.md#deploy`) before using `mcutool` or watching the
+link by hand:
 
 ```bash
 adb shell 'stty -F /dev/ttyS4 115200 raw -echo; cat /dev/ttyS4 > /tmp/s4.bin & p=$!;
   i=0; while [ $i -lt 20 ]; do printf "\375\001\000\000\000\000\000\001\000\000\000\374\217" > /dev/ttyS4;
   sleep 1; i=$((i+1)); done; kill $p'
 ```
+
+## In waved
+
+`crates/waved-mcu` (since 2026-10-12) runs this link: `mavlink.rs` (framing),
+`protocol.rs` (decoding and the commands it sends), `handler.rs` (heartbeat
+replies, the battery with stock's glitch filter, the key as
+`DeviceEvent::PowerKey`: click = sleep / wake, `2s_DONE` = power off),
+`power_off.rs` (stock's sequence: timer start, lift to 0 mm, wait idle,
+charging on, all shutdown; an obstructed lift aborts) and `link.rs` (the
+serial port). `Command::PowerOff` (System → Power off, a 2 s hold, an empty
+battery) runs the sequence; `Command::Shutdown`, sent on every exit, never
+reaches the MCU. Verified on the device 2026-10-12: heartbeats answered,
+click sleeps and wakes, a 2 s hold and System → Power off both power the
+unit off, `killall waved` does not.
 
 ## Open
 
