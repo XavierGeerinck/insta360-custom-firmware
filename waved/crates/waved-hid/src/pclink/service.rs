@@ -124,6 +124,11 @@ pub fn run_engine(
             }
         }
         let elapsed = start.elapsed();
+        let poll_due = elapsed.saturating_sub(last_poll) >= TICK;
+        if report.is_none() && !poll_due {
+            outbox.flush(&write_tx);
+            continue;
+        }
         let now_ms = elapsed.as_millis() as u64;
         let snapshot = bus.snapshot();
         let mut ctx = Context {
@@ -137,7 +142,7 @@ pub fn run_engine(
         if let Some(report) = report {
             outputs.push(link.on_report(&report, &mut ctx));
         }
-        if elapsed.saturating_sub(last_poll) >= TICK {
+        if poll_due {
             last_poll = elapsed;
             outputs.push(link.poll(&mut ctx));
         }
