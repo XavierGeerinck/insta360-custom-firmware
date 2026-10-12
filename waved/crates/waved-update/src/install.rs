@@ -7,12 +7,19 @@
 //! busybox `reboot`) are listed in `docs/UPDATES.md`, "Device checks".
 //!
 //! Order, so a power cut at any point leaves a Wave that starts:
-//! 1. syntax-check the staged init scripts (`sh -n`);
-//! 2. hard-link every file about to be replaced to `<file>.prev`;
+//! 1. syntax-check the staged init scripts (`sh -n`), and refuse unless the
+//!    `S60waved` the trial boots with (the package's, else the live one)
+//!    has the fall-back (`update_guard`);
+//! 2. hard-link every file about to be replaced to `.<name>.prev` beside it,
+//!    and copy `config.toml` to `.config.toml.prev`;
 //! 3. write `update/trial` (from here `S60waved` counts starts);
-//! 4. replace the deploy files (copy to `<file>.new`, rename);
+//! 4. replace the deploy files (copy to `.<name>.new`, rename);
 //! 5. rename the staged binary over `/data/waved/waved`;
 //! 6. sync. The service then reboots.
+//!
+//! Every copy has a dot name (`Paths::prev`, `Paths::new_copy`): rcS runs
+//! every `/etc/init.d/S??*` at boot, and an `S60waved.prev` would start a
+//! second watchdog loop.
 //!
 //! Cut before 3: nothing changed that matters. Cut between 3 and 5: the old
 //! binary starts, finds the trial is not its own and puts the deploy files
@@ -20,7 +27,7 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
@@ -37,6 +44,10 @@ pub enum InstallError {
     BadScript(Target),
     #[error("a trial of another version is still running")]
     TrialPending,
+    /// The `S60waved` that would run at the trial's boots has no
+    /// `update_guard`, so nothing would go back if the new version failed.
+    #[error("the init script has no update fall-back (update_guard)")]
+    NoFallBack,
     #[error("reboot failed: {0}")]
     Reboot(String),
 }
@@ -72,10 +83,23 @@ fn link_or_copy(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(suffix);
-    PathBuf::from(name)
+/// Copy `from` to a fresh `to`, readable by its owner only (config.toml
+/// holds the PIN record and the API token), and flush it. A copy, not a hard
+/// link, so nothing written to `from` afterwards can reach it.
+fn copy_aside(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    match fs::remove_file(to) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut source = fs::File::open(from)?;
+    let mut copy = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(to)?;
+    io::copy(&mut source, &mut copy)?;
+    copy.sync_all()
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
@@ -90,13 +114,53 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 /// The directory sync after the rename is best effort: once the rename is
 /// done the file is in place, and `install` must not report an error then.
 fn replace_by_copy(from: &Path, to: &Path) -> io::Result<()> {
-    let new = with_suffix(to, ".new");
+    let new = Paths::new_copy(to);
     fs::copy(from, &new)?;
     fs::File::open(&new)?.sync_all()?;
     fs::rename(&new, to)?;
     let _ = sync_dir(to);
     Ok(())
 }
+
+/// Delete what an update cut short leaves behind: the staging directory (a
+/// restart while Waiting leaves the whole unpacked package, ~63 MB, on
+/// `/data`) and half-written `.new` copies. A `Staged` lives only in memory,
+/// so nothing needs them after a restart; the service calls this when it
+/// starts.
+pub fn clear_leftovers(paths: &Paths) {
+    clear_staging(paths);
+    for target in Target::ALL {
+        let new = Paths::new_copy(&paths.target(target));
+        match fs::remove_file(&new) {
+            Ok(()) => tracing::info!("removed {} left by an earlier install", new.display()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!("could not remove {}: {e}", new.display()),
+        }
+    }
+}
+
+/// Delete the staging directory, if there is one.
+pub fn clear_staging(paths: &Paths) {
+    let staging = paths.staging();
+    match fs::remove_dir_all(&staging) {
+        Ok(()) => tracing::info!("removed {} left by an earlier update", staging.display()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!("could not remove {}: {e}", staging.display()),
+    }
+}
+
+/// Whether the init script at `script` runs the update fall-back. A missing
+/// script has none.
+pub fn has_fall_back(script: &Path) -> io::Result<bool> {
+    match fs::read(script) {
+        Ok(text) => Ok(text.windows(GUARD.len()).any(|w| w == GUARD)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// The function in `deploy/S60waved` that counts trial starts and goes back.
+const GUARD: &[u8] = b"update_guard";
 
 fn syntax_ok(script: &Path) -> io::Result<bool> {
     Ok(Command::new("sh").arg("-n").arg(script).status()?.success())
@@ -112,6 +176,17 @@ impl Installer for FsInstaller {
                 return Err(InstallError::BadScript(target));
             }
         }
+        // The S60waved that runs at the trial's boots must go back if the new
+        // version fails: the package's when it carries one, else the live one
+        // (a Wave set up from `main` has none).
+        let init = if staged.targets().any(|t| t == Target::S60waved) {
+            staged.path(Target::S60waved)
+        } else {
+            self.paths.target(Target::S60waved)
+        };
+        if !has_fall_back(&init)? {
+            return Err(InstallError::NoFallBack);
+        }
         // Binary last, so it is the final step.
         let mut targets: Vec<Target> = staged.targets().filter(|t| *t != Target::Waved).collect();
         targets.push(Target::Waved);
@@ -125,6 +200,16 @@ impl Installer for FsInstaller {
             } else {
                 remove.push(dest);
             }
+        }
+        // The settings go back with the binary: every config section denies
+        // unknown fields, so an older waved rejects a config.toml a newer
+        // one saved (and its .bak) and would run on defaults.
+        let config = self.paths.config();
+        if config.exists() {
+            copy_aside(&config, &Paths::prev(&config))?;
+            restore.push(config);
+        } else {
+            remove.push(config);
         }
         trial::begin(
             &self.paths,
@@ -180,8 +265,12 @@ pub enum Installed {
 #[derive(Clone, Default)]
 pub struct RecordingInstaller {
     log: Arc<Mutex<Vec<Installed>>>,
-    fail: Arc<Mutex<bool>>,
+    fail: Arc<Mutex<Option<MakeError>>>,
+    fail_reboot: Arc<Mutex<bool>>,
 }
+
+/// The error the fake's next install returns.
+type MakeError = fn() -> InstallError;
 
 impl RecordingInstaller {
     pub fn calls(&self) -> Vec<Installed> {
@@ -189,14 +278,22 @@ impl RecordingInstaller {
     }
 
     pub fn fail_next_install(&self) {
-        *self.fail.lock().unwrap() = true;
+        self.fail_next_install_with(|| InstallError::Io(io::Error::other("fake failure")));
+    }
+
+    pub fn fail_next_install_with(&self, error: MakeError) {
+        *self.fail.lock().unwrap() = Some(error);
+    }
+
+    pub fn fail_next_reboot(&self) {
+        *self.fail_reboot.lock().unwrap() = true;
     }
 }
 
 impl Installer for RecordingInstaller {
     fn install(&self, staged: &Staged, running: Version) -> Result<(), InstallError> {
-        if std::mem::take(&mut *self.fail.lock().unwrap()) {
-            return Err(InstallError::Io(io::Error::other("fake failure")));
+        if let Some(error) = self.fail.lock().unwrap().take() {
+            return Err(error());
         }
         self.log.lock().unwrap().push(Installed::Install {
             version: staged.version,
@@ -206,6 +303,9 @@ impl Installer for RecordingInstaller {
     }
 
     fn reboot(&self) -> Result<(), InstallError> {
+        if std::mem::take(&mut *self.fail_reboot.lock().unwrap()) {
+            return Err(InstallError::Reboot("fake failure".into()));
+        }
         self.log.lock().unwrap().push(Installed::Reboot);
         Ok(())
     }
@@ -219,6 +319,11 @@ mod tests {
     use crate::trial::StartCheck;
 
     const OLD: Version = Version::new(0, 9, 3);
+    /// Init scripts with the fall-back (`update_guard`), as `deploy/S60waved`.
+    const OLD_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho old\n";
+    const NEW_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho new\n";
+    /// An init script from before the fall-back (`main` today).
+    const UNGUARDED_INIT: &str = "#!/bin/sh\necho waved\n";
 
     struct Device {
         _dir: tempfile::TempDir,
@@ -231,7 +336,7 @@ mod tests {
             let paths = Paths::under(dir.path());
             let device = Self { _dir: dir, paths };
             device.put(Target::Waved, "old waved");
-            device.put(Target::S60waved, "#!/bin/sh\necho old\n");
+            device.put(Target::S60waved, OLD_INIT);
             device
         }
 
@@ -267,9 +372,10 @@ mod tests {
     #[test]
     fn files_land_with_old_copies_kept_and_the_trial_started() {
         let device = Device::new();
+        fs::write(device.paths.config(), "[audio]\n").unwrap();
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
-            (Target::S60waved, "#!/bin/sh\necho new\n"),
+            (Target::S60waved, NEW_INIT),
             (Target::SplashFb, "splash"),
         ]);
         FsInstaller::new(device.paths.clone())
@@ -284,10 +390,10 @@ mod tests {
             device.read(&Paths::prev(&waved)).as_deref(),
             Some("old waved")
         );
-        assert_eq!(device.read(&init).as_deref(), Some("#!/bin/sh\necho new\n"));
+        assert_eq!(device.read(&init).as_deref(), Some(NEW_INIT));
         assert_eq!(
             device.read(&Paths::prev(&init)).as_deref(),
-            Some("#!/bin/sh\necho old\n")
+            Some(OLD_INIT)
         );
         assert_eq!(device.read(&splash).as_deref(), Some("splash"));
         assert!(!device.paths.staging().exists(), "staging is cleaned up");
@@ -295,7 +401,10 @@ mod tests {
         let trial = trial::pending(&device.paths).unwrap();
         assert_eq!(trial.version, Version::new(0, 10, 0));
         assert_eq!(trial.previous, OLD);
-        assert_eq!(trial.restore, vec![init, waved.clone()]);
+        assert_eq!(
+            trial.restore,
+            vec![init, waved.clone(), device.paths.config()]
+        );
         assert_eq!(trial.remove, vec![splash]);
         #[cfg(unix)]
         {
@@ -309,12 +418,160 @@ mod tests {
         ));
     }
 
+    /// What rcS would run at boot: every `S??*` in `dir`, by the shell's glob.
+    fn boot_glob(dir: &Path) -> Vec<String> {
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(r#"cd "$1" && for f in S??*; do [ -f "$f" ] && echo "$f"; done; true"#)
+            .arg("sh")
+            .arg(dir)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_boot_glob_finds_only_the_init_scripts_after_an_install() {
+        let device = Device::new();
+        device.put(Target::S03splash, "#!/bin/sh\necho old splash\n");
+        let staged = device.stage(&[
+            (Target::Waved, "new waved"),
+            (Target::S60waved, NEW_INIT),
+            (Target::S03splash, "#!/bin/sh\necho new splash\n"),
+        ]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let init_d = device.paths.target(Target::S60waved);
+        let init_d = init_d.parent().unwrap();
+        assert_eq!(boot_glob(init_d), ["S03splash", "S60waved"]);
+        // The old copies are there, out of the glob's way.
+        assert!(init_d.join(".S60waved.prev").exists());
+        assert!(init_d.join(".S03splash.prev").exists());
+    }
+
+    #[test]
+    fn the_settings_are_copied_aside_for_a_rollback_and_dropped_on_commit() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let device = Device::new();
+        let config = device.paths.config();
+        fs::write(&config, "[audio]\nold = true\n").unwrap();
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).unwrap();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+
+        let backup = device.paths.waved_dir().join(".config.toml.prev");
+        assert_eq!(Paths::prev(&config), backup);
+        assert_eq!(
+            device.read(&backup).as_deref(),
+            Some("[audio]\nold = true\n")
+        );
+        let meta = fs::metadata(&backup).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600, "it holds secrets");
+        assert_ne!(
+            meta.ino(),
+            fs::metadata(&config).unwrap().ino(),
+            "a copy: a save during the trial must not reach it"
+        );
+        let trial = trial::pending(&device.paths).unwrap();
+        assert!(trial.restore.contains(&config), "{trial:?}");
+
+        trial::commit(&device.paths).unwrap();
+        assert!(!backup.exists(), "a committed version keeps its settings");
+    }
+
+    #[test]
+    fn without_settings_a_rollback_deletes_the_ones_the_trial_wrote() {
+        let device = Device::new();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let trial = trial::pending(&device.paths).unwrap();
+        assert!(trial.remove.contains(&device.paths.config()), "{trial:?}");
+    }
+
+    fn assert_nothing_changed(device: &Device) {
+        let waved = device.paths.target(Target::Waved);
+        assert_eq!(device.read(&waved).as_deref(), Some("old waved"));
+        assert!(trial::pending(&device.paths).is_none());
+        assert!(!Paths::prev(&waved).exists());
+        assert!(!Paths::prev(&device.paths.target(Target::S60waved)).exists());
+    }
+
+    #[test]
+    fn without_the_fall_back_in_the_live_init_script_nothing_is_installed() {
+        let device = Device::new();
+        device.put(Target::S60waved, UNGUARDED_INIT);
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+        assert_nothing_changed(&device);
+    }
+
+    #[test]
+    fn without_any_init_script_nothing_is_installed() {
+        let device = Device::new();
+        fs::remove_file(device.paths.target(Target::S60waved)).unwrap();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+    }
+
+    #[test]
+    fn a_package_that_brings_the_fall_back_installs_on_a_device_without_it() {
+        let device = Device::new();
+        device.put(Target::S60waved, UNGUARDED_INIT);
+        let staged = device.stage(&[(Target::Waved, "new waved"), (Target::S60waved, NEW_INIT)]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let init = device.paths.target(Target::S60waved);
+        assert_eq!(device.read(&init).as_deref(), Some(NEW_INIT));
+        assert!(trial::pending(&device.paths).is_some());
+    }
+
+    #[test]
+    fn a_package_init_script_without_the_fall_back_is_refused() {
+        // It would replace the guarded script before the trial's first boot.
+        let device = Device::new();
+        let staged = device.stage(&[
+            (Target::Waved, "new waved"),
+            (Target::S60waved, UNGUARDED_INIT),
+        ]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+        assert_nothing_changed(&device);
+        assert_eq!(
+            device.read(&device.paths.target(Target::S60waved)).as_deref(),
+            Some(OLD_INIT)
+        );
+    }
+
+    #[test]
+    fn the_init_script_in_deploy_has_the_fall_back() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/S60waved");
+        assert!(has_fall_back(&script).unwrap());
+    }
+
     #[test]
     fn a_broken_init_script_installs_nothing() {
         let device = Device::new();
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
-            (Target::S60waved, "#!/bin/sh\nif then fi (\n"),
+            (Target::S60waved, "#!/bin/sh\nupdate_guard\nif then fi (\n"),
         ]);
         let err = FsInstaller::new(device.paths.clone())
             .install(&staged, OLD)

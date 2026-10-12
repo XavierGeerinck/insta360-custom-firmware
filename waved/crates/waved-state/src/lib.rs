@@ -556,6 +556,10 @@ pub enum OtaPhase {
     Installing,
     /// Installed; Wave restarts by itself.
     Restarting,
+    /// Installed, but the restart failed: the new version runs after the
+    /// user restarts Wave. Its trial is armed, so nothing else installs and
+    /// there is nothing to retry.
+    RestartNeeded,
     /// `reason` is plain, user-facing text.
     Failed {
         reason: String,
@@ -1240,6 +1244,7 @@ mod tests {
             OtaPhase::Downloading,
             OtaPhase::Verifying,
             OtaPhase::Waiting,
+            OtaPhase::RestartNeeded,
             failed.clone(),
         ] {
             assert!(!phase.takes_over_screen(), "{phase:?}");
@@ -1250,5 +1255,7 @@ mod tests {
         assert!(OtaPhase::Waiting.in_progress());
         assert!(!OtaPhase::UpToDate.in_progress());
         assert!(!failed.in_progress());
+        // Installed, waiting for the user: nothing runs, nothing to watch.
+        assert!(!OtaPhase::RestartNeeded.in_progress());
     }
 }

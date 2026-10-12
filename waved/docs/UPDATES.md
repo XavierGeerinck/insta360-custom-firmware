@@ -25,7 +25,7 @@ WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release \
 $(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy --strip-all \
   target/aarch64-unknown-linux-gnu/release/waved /tmp/waved
 
-# 3. Pack and sign. --include adds deploy files (optional).
+# 3. Pack and sign. --include adds deploy files; keep deploy/S60waved (see below).
 cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.key \
   --waved /tmp/waved --include deploy/S60waved --out /srv/wave-updates
 #    -> waved-<version>.wup and latest.json
@@ -37,6 +37,13 @@ cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.
 `waved-pack inspect <file.wup> --pubkey <hex>` shows a package's manifest and checks
 its signature. The first build that carries the key has to reach the Wave the old way
 (adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
+
+Wave installs a package only if the `S60waved` that will run at the new version's first
+boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-starts)):
+the package's own when it carries one, otherwise the one on the Wave. A Wave whose
+`/etc/init.d/S60waved` came from `main`, or that got only the binary over adb, has none and
+refuses with "Wave can't go back if this update fails". Pack with
+`--include deploy/S60waved` (or push it with `deploy/install.sh`) and that Wave updates.
 
 `Cross.toml` passes `WAVED_UPDATE_PUBKEY` into the build container. A build without it
 trusts no key: its System row reads "Off" and it can only be replaced over adb.
@@ -119,24 +126,37 @@ setup page.
 `UpdateService` (`crates/waved-update/src/service.rs`), started by `main.rs` through
 `device::spawn_device`:
 
-1. **At start:** reads the trial bookkeeping (below) and reports a rollback or an
-   interrupted install as a failure. This runs even with updates off.
+1. **At start:** deletes what an earlier update left behind (the staging directory, which
+   a restart while Waiting leaves full, and half-written `.<name>.new` copies), reads the
+   trial bookkeeping (below) and reports a rollback or an interrupted install as a
+   failure. This runs even with updates off.
 2. **Checks** 2 min after start, then every 6 h; System → Firmware update checks at once.
    An automatic check that cannot reach the server stays quiet; a tapped one fails
-   visibly.
+   visibly. No check or install, tapped or automatic, runs while `update/trial` exists:
+   while this version is on trial, or after an install whose restart failed (step 6).
+   Installing on top of an armed trial would make `.waved.prev` the new binary, and
+   undoing it as an "interrupted install" would leave the new binary with no trial and no
+   fall-back. An automatic check that finds a skipped version while a failure about that
+   same version is on show leaves the failure up instead of showing Available.
 3. **Downloads** to `/tmp/waved-update/` (tmpfs, RAM; `/data` is small). An interrupted
    download resumes with an HTTP `Range` request; `package.sha256` next to it keeps a part
    of one package from being continued with another. A server that ignores ranges starts
    the file over.
 4. **Verifies:** whole-file SHA-256 against the index, then the signature, then the signed
-   version against the index and the version rule, then room on `/data`, then unpacks to
-   `/data/waved/update/staged/` (same filesystem as the binary).
+   version against the index and the version rule, then (with any old staging deleted
+   first) room on `/data`, then unpacks to `/data/waved/update/staged/` (same filesystem as
+   the binary).
 5. **Waits** until Wave is free (`gate.rs`): no recording or pause, no "Send this
    recording?", no call or ringing, no playback, no Wi-Fi setup, battery ≥ 30 % or USB
    connected. An automatic install also waits while the computer has the microphone open; a
    tapped one does not (some apps keep it open all day).
 6. **Installs** (`install.rs`, below), shows "Restarting" for a second, then runs
-   `/sbin/reboot`.
+   `/sbin/reboot`. If the reboot fails the update is installed and its trial armed, so
+   the phase becomes `RestartNeeded` ("Restart Wave"), not a failure with Retry: the new
+   version starts when the user turns Wave off and on, or when waved next exits (the
+   watchdog runs the guard, then the new binary). If the installer itself finds a trial
+   pending (`TrialPending`), it changes nothing and the service shows the same state; it
+   never undoes that trial.
 
 `OtaState.progress_pct`: download 0–90, verify and unpack 90–98, waiting 98, installing 99,
 restarting 100.
@@ -145,23 +165,37 @@ restarting 100.
 
 `/data` is 512 MiB with ~440 MB usable and nearly full; the stripped binary is ~63 MB
 (`docs/DISPLAY_HARDWARE.md`, "Deploy"). The download (gzip, smaller than the binary) goes
-to RAM. Staging needs the unpacked size plus 16 MiB on `/data`. If that is short, the
-`.prev` copies of the last committed update are deleted first (`space.rs`; never during a
-trial, and a `.prev` that is a hard link of a live file frees nothing and is not counted).
-After an install `/data` holds the new binary and `waved.prev`, which is the old binary's
-own inode (a hard link, no copy).
+to RAM. Staging needs the unpacked size plus 16 MiB on `/data`, measured after any old
+staging is deleted; if that is short the update fails with "Not enough space on Wave"
+(`space.rs`). Nothing is deleted to make room: the `.prev` copies are the last known good
+version, and the next install replaces them anyway (step 2 below). After an install `/data`
+holds the new binary and `.waved.prev`, which is the old binary's own inode (a hard link,
+no copy), so the peak is three binaries: the live one, `.waved.prev` and the staged one.
 
 ## Install and fall-back ("trial starts")
 
 `FsInstaller` (`install.rs`), in this order so a power cut at any point leaves a Wave that
 starts:
 
-1. `sh -n` on every staged init script; a syntax error installs nothing.
-2. Hard-link every file about to be replaced to `<file>.prev` (copy if linking fails).
+1. `sh -n` on every staged init script; a syntax error installs nothing. Then the fall-back
+   check: the package's `S60waved` if it carries one, else `/etc/init.d/S60waved`, must
+   contain `update_guard`, or nothing is installed (`NoFallBack`; automatic checks then
+   pass over that version, a tapped Retry tries again).
+2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
+   fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
+   a save during the trial cannot reach it).
 3. Write `/data/waved/update/trial` (tmp file, fsync, rename) and clear `update/starts`.
-4. Replace the deploy files: copy to `<file>.new` in the same directory, fsync, rename.
+4. Replace the deploy files: copy to `.<name>.new` in the same directory, fsync, rename.
 5. Rename the staged binary over `/data/waved/waved`.
 6. `sync`. The service then reboots.
+
+Every copy beside a file has a **dot name** (`/etc/init.d/.S60waved.prev`,
+`/etc/init.d/.S60waved.new`, `/data/waved/.waved.prev`; `Paths::prev`, `Paths::new_copy`).
+Stock `/etc/init.d/rcS` runs every `/etc/init.d/S??*` with `start` at boot and `rcK` runs
+them with `stop`: an `S60waved.prev` would start a second watchdog loop (two waveds
+fighting over the devices, each start counted twice), and a half-written `S60waved.new`
+left by a power cut would be run. When the service starts it deletes any `.<name>.new` a
+cut install left.
 
 `update/trial` is plain lines so busybox `sh` can read it:
 
@@ -171,38 +205,50 @@ build 374015f
 previous 0.9.3
 restore /etc/init.d/S60waved
 restore /data/waved/waved
+restore /data/waved/config.toml
 remove /data/waved/splash.fb
 ```
 
+`config.toml` is listed like the files the update replaces (`remove` when there was none),
+because every config section denies unknown fields: an older waved rejects a file a newer
+one saved, and its `.bak` too, and runs on defaults (first-run screen, PIN off, API token
+and uploads gone). **Settings changed during a trial are lost on a rollback**: the old
+waved gets the settings it had when the update was installed.
+
 While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) appends a line to
 `update/starts` before every start. On the **fourth** start it moves each `restore` file
-back from `<file>.prev`, deletes each `remove` file, moves `trial` to
-`update/rolled-back` and starts the old waved. Three starts, because `S60waved` SIGTERMs
-the first waved after every boot at 5 s (display workaround): one start always "fails".
+back from its `.<name>.prev` (`${path%/*}/.${path##*/}.prev`), deletes each `remove` file,
+moves `trial` to `update/rolled-back` and starts the old waved. Three starts, because
+`S60waved` SIGTERMs the first waved after every boot at 5 s (display workaround): one start
+always "fails".
 
-The new waved **commits** (deletes `trial` and `starts`) once it has run 60 s with
-`AudioState::capture_healthy` true; until then it starts no other update. The old waved
-finds `rolled-back` at its start, reports "Version 0.10.0 didn't start, so Wave went back"
-and adds the version to `update/skip`, which automatic checks pass over; a tapped Retry
-or Install clears it. If waved finds a `trial` that is not its own version, the install was
-cut between steps 3 and 5: it puts the deploy files back and reports "The update stopped
-before it finished".
+The new waved **commits** (deletes `trial`, `starts` and `.config.toml.prev`) once it has
+run 60 s with `AudioState::capture_healthy` true; until then it starts no other update.
+The old waved finds `rolled-back` at its start, reports "Version 0.10.0 didn't start, so
+Wave went back" and adds the version to `update/skip`, which automatic checks pass over; a
+tapped Retry or Install clears it. If waved finds a `trial` that is not its own version,
+the install was cut between steps 3 and 5: it puts the deploy files and the settings back
+and reports "The update stopped before it finished".
 
-`.prev` files stay after a commit as the last known good version, until the next update
-needs their space.
+`.prev` files stay after a commit as the last known good version, until the next install
+replaces them with the version it replaces.
 
 ## What the user sees
 
 System → Firmware update (system.png, centred when System opens) shows Off, Check now,
-Checking, Up to date, Available, 42 %, Ready, Installing or Failed. A tap checks when
-there is nothing to install; otherwise it opens the update screen, and installs when a
-version is available or the last attempt failed.
+Checking, Up to date, Available, 42 %, Ready, Installing, Restart or Failed. A tap checks
+when there is nothing to install, installs and opens the update screen when a version is
+Available, and otherwise only opens the update screen. After a failure that screen says
+why before anything installs again: a row tap must not quietly reinstall a version that
+rolled back.
 
 The update screen (ota.png) is the dial as a progress ring with "Installing update", the
 percentage, "waved 0.10.0", "Keep Wave plugged in" and "It restarts by itself when done", and
 nothing to tap. Installing and Restarting take over the screen from anywhere
 (`kit/router.rs`); only power off overrides it. A failure stays on screen as "Update
-failed", "Wave is still on 0.9.3", the reason, Retry and Back.
+failed", "Wave is still on 0.9.3", the reason, Retry and Back. A failed reboot shows
+"Restart Wave", "waved 0.10.0 is installed", "Turn Wave off and on to finish" and only
+Back (`update_restart_needed` golden).
 
 | Failure | Shown reason |
 |---|---|
@@ -215,8 +261,8 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | signed version or build differs from the index | The update doesn't match the server's list |
 | signed version not allowed | The update is older than this version |
 | no room | Not enough space on Wave |
+| no `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
 | installer error | The update could not be installed |
-| reboot failed | Restart Wave to finish the update |
 | cut between trial and swap | The update stopped before it finished |
 | new version never committed | Version X didn't start, so Wave went back |
 
@@ -225,24 +271,28 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | # | Decision | Cost if wrong |
 |---|---|---|
 | U1 | Own `.wup` format (signed JSON header, gzip files) instead of tar or swupdate's CPIO | Needs `waved-pack inspect` to look inside. |
-| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only. |
+| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the `update_guard` check only that the word is there. |
 | U3 | Unsigned index, signed package | A hostile server can waste a download. |
 | U4 | Version from the binary; downgrades only by the device's own switch | Every release must bump the workspace version. |
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
 | U6 | File-level fall-back in `S60waved`, 3 starts, commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after three power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back after three reboots. |
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
-| U8 | `/sbin/reboot` after install | Unverified; a failure says "Restart Wave to finish the update" and the trial is already armed. |
+| U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |
 
 ## Device checks
 
 Not verified on a Wave. Before trusting this, a device pass should check:
 
-1. `update_guard` under busybox `sh` (`read -r`, `$((…))`, `mv -f`): run
-   `WAVED_DIR=/tmp/g sh /etc/init.d/S60waved guard` against a fake trial in `/tmp/g`.
+1. `update_guard` under busybox `sh` (`read -r`, `$((…))`, `mv -f`, `${path%/*}`,
+   `${path##*/}`): run `WAVED_DIR=/tmp/g sh /etc/init.d/S60waved guard` against a fake
+   trial in `/tmp/g`. Done on the host with the `busybox:1.36` image (four passes: dot-named
+   copies of `S60waved`, `S03splash`, `waved` and `config.toml` restored, a `remove` file
+   deleted, `S??*` lists only the scripts); the Wave's own busybox build is still to check.
 2. Hard links and renames through the `/etc` overlay: `ln /etc/init.d/S60waved
-   /etc/init.d/S60waved.prev`, then a `.new` + rename, then a reboot to see both persist in
-   `/data/overlay/upper/etc/init.d`.
+   /etc/init.d/.S60waved.prev`, then a `.S60waved.new` + rename, then a reboot to see both
+   persist in `/data/overlay/upper/etc/init.d` and that rcS starts one waved, not two
+   (`ps | grep -c '[w]aved$'`).
 3. `/sbin/reboot` from waved runs the rcK stop scripts and the unit comes back.
 4. Free space on `/data` and `/tmp` (`df -h`) against a real package; `statvfs` figures.
 5. The whole cycle against a LAN server (`python3 -m http.server`), including Range resume
