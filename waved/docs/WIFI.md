@@ -175,6 +175,14 @@ ATBM6031 driver only. `waved` therefore owns the userspace station processes.
 - **PSK hashed at rest** via native PBKDF2 (no submitted plaintext passphrase
   written to `wpa_supplicant.conf`).
 - The persisted station configuration is mode `0600` after credential updates.
+- **Device PIN** (`security.device_password`, D10): the form takes 4 to 6 digits
+  only, and config.toml keeps a salted PBKDF2-HMAC-SHA256 record
+  (`pin1$<digits>$<iterations>$<salt>$<hash>`), never the digits. A plain 4–6
+  digit value from a hand edit is hashed when the file loads; anything else is
+  dropped with a warning (the keypad can't type it). With at most 10^6 PINs the
+  hash only keeps the digits out of the file and its copies; the file's `0600`
+  mode is what protects it. `waved_config::verify_device_pin` is the one check
+  (PIN screen and Wave Controller).
 
 ## Measured prerequisite probe (2026-07-16)
 
