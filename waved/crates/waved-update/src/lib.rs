@@ -9,5 +9,6 @@
 //! - `fetch`, `service`: the HTTP fetcher and `UpdateService`, which publishes `OtaState`.
 
 pub mod format;
+pub mod index;
 pub mod key;
 pub mod version;
