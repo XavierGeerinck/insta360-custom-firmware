@@ -161,7 +161,13 @@ mod tests {
             index_url("https://example.com").unwrap().as_str(),
             "https://example.com/latest.json"
         );
-        for bad in ["", "updates.lan", "ftp://updates.lan/", "file:///tmp/x", "http://h/?q=1"] {
+        for bad in [
+            "",
+            "updates.lan",
+            "ftp://updates.lan/",
+            "file:///tmp/x",
+            "http://h/?q=1",
+        ] {
             assert_eq!(index_url(bad), Err(IndexError::BadServer), "{bad}");
         }
     }

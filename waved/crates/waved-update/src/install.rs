@@ -265,15 +265,23 @@ mod tests {
             (Target::S60waved, "#!/bin/sh\necho new\n"),
             (Target::SplashFb, "splash"),
         ]);
-        FsInstaller::new(device.paths.clone()).install(&staged, OLD).unwrap();
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
 
         let waved = device.paths.target(Target::Waved);
         let init = device.paths.target(Target::S60waved);
         let splash = device.paths.target(Target::SplashFb);
         assert_eq!(device.read(&waved).as_deref(), Some("new waved"));
-        assert_eq!(device.read(&Paths::prev(&waved)).as_deref(), Some("old waved"));
+        assert_eq!(
+            device.read(&Paths::prev(&waved)).as_deref(),
+            Some("old waved")
+        );
         assert_eq!(device.read(&init).as_deref(), Some("#!/bin/sh\necho new\n"));
-        assert_eq!(device.read(&Paths::prev(&init)).as_deref(), Some("#!/bin/sh\necho old\n"));
+        assert_eq!(
+            device.read(&Paths::prev(&init)).as_deref(),
+            Some("#!/bin/sh\necho old\n")
+        );
         assert_eq!(device.read(&splash).as_deref(), Some("splash"));
         assert!(!device.paths.staging().exists(), "staging is cleaned up");
 
@@ -304,7 +312,10 @@ mod tests {
         let err = FsInstaller::new(device.paths.clone())
             .install(&staged, OLD)
             .unwrap_err();
-        assert!(matches!(err, InstallError::BadScript(Target::S60waved)), "{err}");
+        assert!(
+            matches!(err, InstallError::BadScript(Target::S60waved)),
+            "{err}"
+        );
         assert_eq!(
             device.read(&device.paths.target(Target::Waved)).as_deref(),
             Some("old waved")

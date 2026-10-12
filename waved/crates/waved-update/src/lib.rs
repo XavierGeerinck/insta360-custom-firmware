@@ -15,6 +15,7 @@ pub mod index;
 pub mod install;
 pub mod key;
 pub mod paths;
+pub mod service;
 pub mod space;
 pub mod trial;
 pub mod version;

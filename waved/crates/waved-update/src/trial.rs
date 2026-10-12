@@ -256,7 +256,10 @@ mod tests {
             let waved = paths.target(Target::Waved);
             let init = paths.target(Target::S60waved);
             let splash = paths.target(Target::SplashFb);
-            for (path, new, old) in [(&waved, "new waved", "old waved"), (&init, "new init", "old init")] {
+            for (path, new, old) in [
+                (&waved, "new waved", "old waved"),
+                (&init, "new init", "old init"),
+            ] {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, new).unwrap();
                 fs::write(Paths::prev(path), old).unwrap();
@@ -298,7 +301,9 @@ mod tests {
     fn the_trial_file_round_trips() {
         let (_device, trial) = Device::mid_trial();
         assert_eq!(Trial::parse(&trial.to_text()), Some(trial.clone()));
-        assert!(trial.to_text().starts_with("version 0.10.0\nbuild abc1234\nprevious 0.9.3\n"));
+        assert!(trial
+            .to_text()
+            .starts_with("version 0.10.0\nbuild abc1234\nprevious 0.9.3\n"));
         assert_eq!(Trial::parse("version 0.10.0\n"), None);
     }
 
@@ -310,9 +315,15 @@ mod tests {
             StartCheck::OnTrial(trial)
         );
         commit(&device.paths).unwrap();
-        assert_eq!(check_at_start(&device.paths, NEW).unwrap(), StartCheck::Normal);
+        assert_eq!(
+            check_at_start(&device.paths, NEW).unwrap(),
+            StartCheck::Normal
+        );
         assert_eq!(device.read(Target::Waved).as_deref(), Some("new waved"));
-        assert!(Paths::prev(&device.paths.target(Target::Waved)).exists(), "last known good stays");
+        assert!(
+            Paths::prev(&device.paths.target(Target::Waved)).exists(),
+            "last known good stays"
+        );
     }
 
     #[test]
@@ -342,7 +353,11 @@ mod tests {
         device.guard();
         assert_eq!(device.read(Target::Waved).as_deref(), Some("old waved"));
         assert_eq!(device.read(Target::S60waved).as_deref(), Some("old init"));
-        assert_eq!(device.read(Target::SplashFb), None, "the added file is gone");
+        assert_eq!(
+            device.read(Target::SplashFb),
+            None,
+            "the added file is gone"
+        );
         assert!(pending(&device.paths).is_none());
         assert_eq!(starts(&device.paths), 0);
 
@@ -351,7 +366,10 @@ mod tests {
             StartCheck::RolledBack(trial) => assert_eq!(trial.version, NEW),
             other => panic!("{other:?}"),
         }
-        assert_eq!(check_at_start(&device.paths, OLD).unwrap(), StartCheck::Normal);
+        assert_eq!(
+            check_at_start(&device.paths, OLD).unwrap(),
+            StartCheck::Normal
+        );
     }
 
     #[test]
@@ -383,7 +401,11 @@ mod tests {
     fn the_init_script_is_valid_sh() {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/S60waved");
         let out = Command::new("sh").arg("-n").arg(&script).output().unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

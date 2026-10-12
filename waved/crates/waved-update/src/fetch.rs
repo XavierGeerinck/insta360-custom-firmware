@@ -32,7 +32,11 @@ pub enum FetchError {
 
 pub trait Fetcher: Send + Sync + 'static {
     /// GET `url` into memory, at most `max` bytes.
-    fn get(&self, url: &Url, max: usize) -> impl Future<Output = Result<Vec<u8>, FetchError>> + Send;
+    fn get(
+        &self,
+        url: &Url,
+        max: usize,
+    ) -> impl Future<Output = Result<Vec<u8>, FetchError>> + Send;
 
     /// Download `url` into `dest`, keeping what is already there. Fails with
     /// `TooLarge` past `expected` bytes and `Interrupted` short of them.
@@ -95,7 +99,10 @@ impl Fetcher for HttpFetcher {
         expected: u64,
         progress: &mut (dyn FnMut(u64) + Send),
     ) -> Result<(), FetchError> {
-        let mut have = tokio::fs::metadata(dest).await.map(|m| m.len()).unwrap_or(0);
+        let mut have = tokio::fs::metadata(dest)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
         if have > expected {
             tokio::fs::remove_file(dest).await?;
             have = 0;
@@ -121,7 +128,9 @@ impl Fetcher for HttpFetcher {
             }
             StatusCode::RANGE_NOT_SATISFIABLE => {
                 tokio::fs::remove_file(dest).await?;
-                return Err(FetchError::Interrupted("the server refused to resume".into()));
+                return Err(FetchError::Interrupted(
+                    "the server refused to resume".into(),
+                ));
             }
             status => return Err(FetchError::Status(status.as_u16())),
         }
@@ -200,7 +209,11 @@ impl Fetcher for FakeFetcher {
         if inner.unreachable {
             return Err(FetchError::Unreachable("fake".into()));
         }
-        let body = inner.files.get(url.as_str()).cloned().ok_or(FetchError::Status(404))?;
+        let body = inner
+            .files
+            .get(url.as_str())
+            .cloned()
+            .ok_or(FetchError::Status(404))?;
         if body.len() > max {
             return Err(FetchError::TooLarge);
         }
@@ -219,7 +232,11 @@ impl Fetcher for FakeFetcher {
             if inner.unreachable {
                 return Err(FetchError::Unreachable("fake".into()));
             }
-            let body = inner.files.get(url.as_str()).cloned().ok_or(FetchError::Status(404))?;
+            let body = inner
+                .files
+                .get(url.as_str())
+                .cloned()
+                .ok_or(FetchError::Status(404))?;
             let have = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
             inner.downloads.push((url.to_string(), have));
             (body, inner.cut_after.take())

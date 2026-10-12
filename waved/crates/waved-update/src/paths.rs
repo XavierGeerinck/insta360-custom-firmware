@@ -89,7 +89,10 @@ mod tests {
         let device = Paths::device();
         assert_eq!(device.target(Target::Waved), Path::new("/data/waved/waved"));
         assert_eq!(device.trial(), Path::new("/data/waved/update/trial"));
-        assert_eq!(device.download(), Path::new("/tmp/waved-update/package.wup"));
+        assert_eq!(
+            device.download(),
+            Path::new("/tmp/waved-update/package.wup")
+        );
         let test = Paths::under("/tmp/x");
         assert_eq!(
             test.target(Target::S60waved),

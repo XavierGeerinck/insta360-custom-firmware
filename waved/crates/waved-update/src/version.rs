@@ -173,8 +173,17 @@ mod tests {
     #[test]
     fn only_three_plain_numbers_parse() {
         for bad in [
-            "", "1", "1.2", "1.2.3.4", "1.2.x", "v1.2.3", "1.2.3-rc1", " 1.2.3", "01.2.3",
-            "1..3", "1.2.99999999999",
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "1.2.x",
+            "v1.2.3",
+            "1.2.3-rc1",
+            " 1.2.3",
+            "01.2.3",
+            "1..3",
+            "1.2.99999999999",
         ] {
             assert!(bad.parse::<Version>().is_err(), "{bad:?}");
         }
@@ -183,9 +192,18 @@ mod tests {
 
     #[test]
     fn newer_installs_and_the_same_is_up_to_date() {
-        assert_eq!(judge(v("0.9.3"), "a", v("0.10.0"), "b", false), Verdict::Newer);
-        assert_eq!(judge(v("0.9.3"), "a", v("0.9.3"), "b", false), Verdict::UpToDate);
-        assert_eq!(judge(v("0.9.3"), "a", v("0.9.3"), "a", true), Verdict::UpToDate);
+        assert_eq!(
+            judge(v("0.9.3"), "a", v("0.10.0"), "b", false),
+            Verdict::Newer
+        );
+        assert_eq!(
+            judge(v("0.9.3"), "a", v("0.9.3"), "b", false),
+            Verdict::UpToDate
+        );
+        assert_eq!(
+            judge(v("0.9.3"), "a", v("0.9.3"), "a", true),
+            Verdict::UpToDate
+        );
     }
 
     #[test]
@@ -195,15 +213,27 @@ mod tests {
             Verdict::RefusedDowngrade
         );
         assert!(!Verdict::RefusedDowngrade.installs());
-        assert_eq!(judge(v("0.10.0"), "a", v("0.9.3"), "b", true), Verdict::Downgrade);
+        assert_eq!(
+            judge(v("0.10.0"), "a", v("0.9.3"), "b", true),
+            Verdict::Downgrade
+        );
         assert!(Verdict::Downgrade.installs());
     }
 
     #[test]
     fn a_sideways_reinstall_needs_the_allowance_and_two_known_builds() {
-        assert_eq!(judge(v("0.9.3"), "a", v("0.9.3"), "b", true), Verdict::Reinstall);
-        assert_eq!(judge(v("0.9.3"), "", v("0.9.3"), "b", true), Verdict::UpToDate);
-        assert_eq!(judge(v("0.9.3"), "a", v("0.9.3"), "", true), Verdict::UpToDate);
+        assert_eq!(
+            judge(v("0.9.3"), "a", v("0.9.3"), "b", true),
+            Verdict::Reinstall
+        );
+        assert_eq!(
+            judge(v("0.9.3"), "", v("0.9.3"), "b", true),
+            Verdict::UpToDate
+        );
+        assert_eq!(
+            judge(v("0.9.3"), "a", v("0.9.3"), "", true),
+            Verdict::UpToDate
+        );
     }
 
     #[test]

@@ -149,7 +149,10 @@ impl Manifest {
             return bad("no waved binary");
         }
         for (i, file) in self.files.iter().enumerate() {
-            if self.files[..i].iter().any(|seen| seen.target == file.target) {
+            if self.files[..i]
+                .iter()
+                .any(|seen| seen.target == file.target)
+            {
                 return bad("a target appears twice");
             }
             if file.size > MAX_FILE || file.stored_size > MAX_FILE {
@@ -164,7 +167,10 @@ impl Manifest {
 }
 
 pub fn is_sha256_hex(text: &str) -> bool {
-    text.len() == 64 && text.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    text.len() == 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -213,7 +219,8 @@ fn read_exact_or_truncated<R: Read>(reader: &mut R, buf: &mut [u8]) -> Result<()
 /// tests can sign manifests `pack` would never write.
 pub fn assemble(manifest: &Manifest, stored: &[Vec<u8>], key: &SigningKey) -> Vec<u8> {
     let header = serde_json::to_vec(manifest).expect("a manifest serializes");
-    let mut out = Vec::with_capacity(header.len() + 76 + stored.iter().map(Vec::len).sum::<usize>());
+    let mut out =
+        Vec::with_capacity(header.len() + 76 + stored.iter().map(Vec::len).sum::<usize>());
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&(header.len() as u32).to_le_bytes());
     out.extend_from_slice(&header);
@@ -461,9 +468,15 @@ pub(crate) mod tests {
             (Target::Waved, binary()),
             (Target::S60waved, b"#!/bin/sh\necho hi\n".to_vec()),
         ];
-        pack(&files, Version::new(0, 10, 0), "abc1234", 1_760_000_000, key)
-            .unwrap()
-            .1
+        pack(
+            &files,
+            Version::new(0, 10, 0),
+            "abc1234",
+            1_760_000_000,
+            key,
+        )
+        .unwrap()
+        .1
     }
 
     struct Fixture {
@@ -534,7 +547,8 @@ pub(crate) mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = |t: Target| fs::metadata(staged.path(t)).unwrap().permissions().mode() & 0o777;
+            let mode =
+                |t: Target| fs::metadata(staged.path(t)).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode(Target::Waved), 0o755);
         }
     }
@@ -543,7 +557,9 @@ pub(crate) mod tests {
     fn a_package_signed_by_another_key_is_rejected() {
         let f = Fixture::new();
         let other = key::generate().unwrap();
-        let err = f.stage_with(&sample(&other), &f.key.verifying_key()).unwrap_err();
+        let err = f
+            .stage_with(&sample(&other), &f.key.verifying_key())
+            .unwrap_err();
         assert!(matches!(err, FormatError::BadSignature), "{err}");
         assert!(f.staged_names().is_empty());
     }
@@ -559,10 +575,16 @@ pub(crate) mod tests {
             .position(|w| w == b"0.10.0")
             .unwrap();
         header[12 + at..12 + at + 6].copy_from_slice(b"9.10.0");
-        assert!(matches!(f.stage(&header).unwrap_err(), FormatError::BadSignature));
+        assert!(matches!(
+            f.stage(&header).unwrap_err(),
+            FormatError::BadSignature
+        ));
         let mut signature = package.clone();
         signature[header_end + 5] ^= 1;
-        assert!(matches!(f.stage(&signature).unwrap_err(), FormatError::BadSignature));
+        assert!(matches!(
+            f.stage(&signature).unwrap_err(),
+            FormatError::BadSignature
+        ));
     }
 
     #[test]
@@ -584,11 +606,20 @@ pub(crate) mod tests {
         let f = Fixture::new();
         let package = sample(&f.key);
         let short = &package[..package.len() - 10];
-        assert!(matches!(f.stage(short).unwrap_err(), FormatError::Truncated));
+        assert!(matches!(
+            f.stage(short).unwrap_err(),
+            FormatError::Truncated
+        ));
         let mut long = package.clone();
         long.push(0);
-        assert!(matches!(f.stage(&long).unwrap_err(), FormatError::TrailingBytes));
-        assert!(matches!(f.stage(&package[..20]).unwrap_err(), FormatError::Truncated));
+        assert!(matches!(
+            f.stage(&long).unwrap_err(),
+            FormatError::TrailingBytes
+        ));
+        assert!(matches!(
+            f.stage(&package[..20]).unwrap_err(),
+            FormatError::Truncated
+        ));
     }
 
     #[test]
@@ -600,10 +631,16 @@ pub(crate) mod tests {
         ));
         let mut huge = MAGIC.to_vec();
         huge.extend_from_slice(&(MAX_HEADER + 1).to_le_bytes());
-        assert!(matches!(f.stage(&huge).unwrap_err(), FormatError::HeaderSize(_)));
+        assert!(matches!(
+            f.stage(&huge).unwrap_err(),
+            FormatError::HeaderSize(_)
+        ));
         let mut empty = MAGIC.to_vec();
         empty.extend_from_slice(&0u32.to_le_bytes());
-        assert!(matches!(f.stage(&empty).unwrap_err(), FormatError::HeaderSize(0)));
+        assert!(matches!(
+            f.stage(&empty).unwrap_err(),
+            FormatError::HeaderSize(0)
+        ));
     }
 
     fn gz(bytes: &[u8]) -> Vec<u8> {
@@ -639,7 +676,7 @@ pub(crate) mod tests {
         let stored = gz(&bytes);
         let mut lie = entry(Target::Waved, &bytes, &stored);
         lie.size -= 1;
-        let package = assemble(&manifest(vec![lie]), &[stored.clone()], &f.key);
+        let package = assemble(&manifest(vec![lie]), std::slice::from_ref(&stored), &f.key);
         assert!(matches!(
             f.stage(&package).unwrap_err(),
             FormatError::SizeMismatch(Target::Waved)
@@ -660,18 +697,24 @@ pub(crate) mod tests {
         let bytes = b"x".to_vec();
         let stored = gz(&bytes);
         let only_script = manifest(vec![entry(Target::S60waved, &bytes, &stored)]);
-        let package = assemble(&only_script, &[stored.clone()], &f.key);
-        assert!(matches!(f.stage(&package).unwrap_err(), FormatError::BadManifest(_)));
+        let package = assemble(&only_script, std::slice::from_ref(&stored), &f.key);
+        assert!(matches!(
+            f.stage(&package).unwrap_err(),
+            FormatError::BadManifest(_)
+        ));
         let twice = manifest(vec![
             entry(Target::Waved, &bytes, &stored),
             entry(Target::Waved, &bytes, &stored),
         ]);
         let package = assemble(&twice, &[stored.clone(), stored.clone()], &f.key);
-        assert!(matches!(f.stage(&package).unwrap_err(), FormatError::BadManifest(_)));
+        assert!(matches!(
+            f.stage(&package).unwrap_err(),
+            FormatError::BadManifest(_)
+        ));
 
         // A target outside the closed list does not even parse.
-        let mut json = serde_json::to_string(&manifest(vec![entry(Target::Waved, &bytes, &stored)]))
-            .unwrap();
+        let mut json =
+            serde_json::to_string(&manifest(vec![entry(Target::Waved, &bytes, &stored)])).unwrap();
         json = json.replace("\"waved\"", "\"../../etc/passwd\"");
         let mut raw = MAGIC.to_vec();
         raw.extend_from_slice(&(json.len() as u32).to_le_bytes());
@@ -679,7 +722,10 @@ pub(crate) mod tests {
         let signature = f.key.sign(&raw);
         raw.extend_from_slice(&signature.to_bytes());
         raw.extend_from_slice(&stored);
-        assert!(matches!(f.stage(&raw).unwrap_err(), FormatError::BadManifest(_)));
+        assert!(matches!(
+            f.stage(&raw).unwrap_err(),
+            FormatError::BadManifest(_)
+        ));
     }
 
     #[test]

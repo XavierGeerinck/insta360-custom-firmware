@@ -520,7 +520,9 @@ pub enum OtaPhase {
     /// Installed; Wave restarts by itself.
     Restarting,
     /// `reason` is plain, user-facing text.
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
 }
 
 impl OtaPhase {

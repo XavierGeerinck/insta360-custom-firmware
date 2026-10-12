@@ -96,8 +96,18 @@ mod tests {
 
     #[test]
     fn malformed_keys_are_refused() {
-        for bad in ["", "abc", &"zz".repeat(32), &"00".repeat(31), &"00".repeat(33)] {
-            assert_eq!(parse_public_key(bad).unwrap_err(), KeyError::Malformed, "{bad}");
+        for bad in [
+            "",
+            "abc",
+            &"zz".repeat(32),
+            &"00".repeat(31),
+            &"00".repeat(33),
+        ] {
+            assert_eq!(
+                parse_public_key(bad).unwrap_err(),
+                KeyError::Malformed,
+                "{bad}"
+            );
             assert!(parse_signing_key(bad).is_err(), "{bad}");
         }
     }

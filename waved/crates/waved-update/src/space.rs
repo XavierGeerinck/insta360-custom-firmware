@@ -23,7 +23,10 @@ pub enum SpacePlan {
     Fits,
     /// Fits once these files are deleted.
     FitsAfterDeleting(Vec<PathBuf>),
-    TooBig { need: u64, free: u64 },
+    TooBig {
+        need: u64,
+        free: u64,
+    },
 }
 
 /// `need` bytes plus `MARGIN`, out of `free`, deleting `reclaimable` files

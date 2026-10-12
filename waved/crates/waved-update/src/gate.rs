@@ -81,7 +81,9 @@ pub fn blocker(activity: &Activity, manual: bool) -> Option<Blocker> {
     } else if activity.provisioning {
         Some(Blocker::WifiSetup)
     } else if !activity.usb_connected
-        && activity.battery_pct.is_some_and(|pct| pct < MIN_BATTERY_PCT)
+        && activity
+            .battery_pct
+            .is_some_and(|pct| pct < MIN_BATTERY_PCT)
     {
         Some(Blocker::LowBattery)
     } else {
@@ -115,12 +117,17 @@ mod tests {
     #[test]
     fn an_idle_wave_may_install() {
         assert_eq!(blocker(&idle(), false), None);
-        assert_eq!(blocker(&Activity::default(), false), None, "unknown battery");
+        assert_eq!(
+            blocker(&Activity::default(), false),
+            None,
+            "unknown battery"
+        );
     }
 
     #[test]
     fn recordings_decisions_calls_playback_and_setup_always_wait() {
-        let cases: [(fn(&mut Activity), Blocker); 6] = [
+        type Case = (fn(&mut Activity), Blocker);
+        let cases: [Case; 6] = [
             (|a| a.recording = true, Blocker::Recording),
             (|a| a.decision_pending = true, Blocker::Decision),
             (|a| a.in_call = true, Blocker::Call),
@@ -162,16 +169,18 @@ mod tests {
 
     #[test]
     fn activity_reads_the_bus_states() {
-        let mut meeting = MeetingState::default();
-        meeting.pending_decision = Some(PendingDecision {
-            id: Uuid::nil(),
-            audio_path: PathBuf::new(),
-            duration_secs: 0,
-            size_bytes: 0,
-            endpoint: String::new(),
-            speakers: 0,
-            marks: 0,
-        });
+        let meeting = MeetingState {
+            pending_decision: Some(PendingDecision {
+                id: Uuid::nil(),
+                audio_path: PathBuf::new(),
+                duration_secs: 0,
+                size_bytes: 0,
+                endpoint: String::new(),
+                speakers: 0,
+                marks: 0,
+            }),
+            ..MeetingState::default()
+        };
         let audio = AudioState {
             host_listening: true,
             ..AudioState::default()
