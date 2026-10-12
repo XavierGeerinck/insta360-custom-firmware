@@ -519,7 +519,8 @@ pub enum DeviceEvent {
 pub enum PowerKeyPress {
     /// Released before 2 s: sleep or wake the screen.
     Short,
-    /// Held for 2 s (sent while still held): ask to power off.
+    /// Held for 2 s (sent while still held): the MCU powers the unit off by
+    /// itself once the key is released, so waved powers off too.
     Long,
 }
 

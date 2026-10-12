@@ -212,8 +212,12 @@ impl Runtime {
             self.route(&event, &snap);
         }
         for press in keys {
-            for event in self.power.on_power_key(press, &snap) {
-                self.route(&event, &snap);
+            let response = self.power.on_power_key(press, &snap);
+            for event in &response.events {
+                self.route(event, &snap);
+            }
+            if response.power_off {
+                self.dispatcher().command(Command::PowerOff);
             }
         }
         // After keys and touches: the backlight is written only here.
@@ -924,18 +928,17 @@ mod tests {
     }
 
     #[test]
-    fn the_power_key_rests_and_asks_to_power_off() {
+    fn the_power_key_rests_and_powers_off() {
         lvgl(|lv| {
-            let mut rt = booted(lv);
+            let (mut rt, mut bus) = booted_with_bus(lv);
             rt.step(ready(2_000), &[DeviceEvent::PowerKey(PowerKeyPress::Short)]);
             assert_eq!(rt.shown_route(), Some(&Route::Resting));
             rt.step(ready(3_000), &[DeviceEvent::PowerKey(PowerKeyPress::Short)]);
             assert_eq!(rt.shown_route(), Some(&Route::Home), "a second press wakes");
+            drain(&mut bus);
             rt.step(ready(4_000), &[DeviceEvent::PowerKey(PowerKeyPress::Long)]);
-            assert_eq!(
-                rt.shown_route(),
-                Some(&Route::Confirm(ConfirmKind::PowerOff))
-            );
+            assert_eq!(drain(&mut bus), [Command::PowerOff], "a 2 s hold powers off, no question");
+            assert_ne!(rt.shown_route(), Some(&Route::Confirm(ConfirmKind::PowerOff)));
             rt.close();
         });
     }

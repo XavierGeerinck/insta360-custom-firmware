@@ -53,8 +53,10 @@ pub struct TouchOutcome {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PowerKeyOutcome {
     pub transition: Option<Transition>,
-    /// Open the power-off confirmation (`Route::Confirm(ConfirmKind::PowerOff)`).
-    pub confirm_power_off: bool,
+    /// The unit is powering off: a 2 s hold makes the MCU retract the lift
+    /// and cut power by itself (device pass, 2026-10-12), so there is
+    /// nothing to confirm; waved finishes its work in the seconds left.
+    pub powering_off: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -120,8 +122,8 @@ impl DisplayPower {
         self.wake(now_ms)
     }
 
-    /// Short: sleep (off, or resting while `keep_lit`) or wake. Long: wake and
-    /// ask to power off.
+    /// Short: sleep (off, or resting while `keep_lit`) or wake. Long: wake to
+    /// show that the unit is powering off.
     pub fn on_power_key(&mut self, press: PowerKeyPress, now_ms: u64, keep_lit: bool) -> PowerKeyOutcome {
         match press {
             PowerKeyPress::Short if self.state == ScreenPower::Awake => {
@@ -129,16 +131,16 @@ impl DisplayPower {
                 let to = if keep_lit { ScreenPower::Resting } else { ScreenPower::Off };
                 PowerKeyOutcome {
                     transition: self.set(to),
-                    confirm_power_off: false,
+                    powering_off: false,
                 }
             }
             PowerKeyPress::Short => PowerKeyOutcome {
                 transition: self.wake(now_ms),
-                confirm_power_off: false,
+                powering_off: false,
             },
             PowerKeyPress::Long => PowerKeyOutcome {
                 transition: self.wake(now_ms),
-                confirm_power_off: true,
+                powering_off: true,
             },
         }
     }
@@ -394,7 +396,7 @@ mod tests {
         let mut p = DisplayPower::new(0);
         let sleep = p.on_power_key(PowerKeyPress::Short, 1_000, false);
         assert_eq!(sleep.transition.unwrap().to, ScreenPower::Off);
-        assert!(sleep.transition.unwrap().rests() && !sleep.confirm_power_off);
+        assert!(sleep.transition.unwrap().rests() && !sleep.powering_off);
         let wake = p.on_power_key(PowerKeyPress::Short, 2_000, false);
         assert!(wake.transition.unwrap().wakes());
         let resting = p.on_power_key(PowerKeyPress::Short, 3_000, true);
@@ -412,17 +414,19 @@ mod tests {
     }
 
     #[test]
-    fn long_press_wakes_and_asks_to_power_off() {
+    fn long_press_wakes_and_powers_off() {
+        // A 2 s hold makes the MCU power the unit off by itself (device pass
+        // 2026-10-12): no confirmation, the screen wakes to say so.
         let mut p = DisplayPower::new(0);
         p.tick(10 * MIN, &SettingsState::default(), false);
         let out = p.on_power_key(PowerKeyPress::Long, 10 * MIN + 1, false);
-        assert!(out.confirm_power_off && out.transition.unwrap().wakes());
+        assert!(out.powering_off && out.transition.unwrap().wakes());
         let awake = p.on_power_key(PowerKeyPress::Long, 10 * MIN + 2, false);
         assert_eq!(
             awake,
             PowerKeyOutcome {
                 transition: None,
-                confirm_power_off: true
+                powering_off: true
             }
         );
     }

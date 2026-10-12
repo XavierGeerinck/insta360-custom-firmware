@@ -2,9 +2,9 @@
 //! `DisplayPower` controller and `Backlight` (E IR3). It turns their
 //! transitions into router events and acts as the wake gate for touches.
 
-use crate::kit::dispatch::UiEvent;
-use crate::kit::route::{ConfirmKind, Route};
+use crate::kit::dispatch::{Message, Severity, UiEvent};
 use crate::kit::snapshot::UiSnapshot;
+use crate::screens_v2::messages::copy;
 use waved_state::PowerKeyPress;
 use waved_system::backlight::{Backlight, BACKLIGHT_DIR};
 use waved_system::display::{DisplayPower, TouchDisposition, Transition};
@@ -26,6 +26,14 @@ pub struct TouchGate {
     /// False while a press that only woke the screen is still down.
     pub deliver: bool,
     pub event: Option<UiEvent>,
+}
+
+/// What the power key asks of the runtime.
+#[derive(Debug, PartialEq)]
+pub struct KeyResponse {
+    pub events: Vec<UiEvent>,
+    /// Send `Command::PowerOff`.
+    pub power_off: bool,
 }
 
 pub struct PowerDriver {
@@ -78,15 +86,19 @@ impl PowerDriver {
         event_for(self.power.on_activity(now_ms))
     }
 
-    /// Rest or Wake for the screen change, then the power-off confirmation
-    /// when the controller asks for it.
-    pub fn on_power_key(&mut self, press: PowerKeyPress, snap: &UiSnapshot) -> Vec<UiEvent> {
+    /// Rest or Wake for the screen change; on a 2 s hold, "Powering off"
+    /// and `power_off` (the runtime sends `Command::PowerOff`, as the
+    /// confirmation in System → Power off does).
+    pub fn on_power_key(&mut self, press: PowerKeyPress, snap: &UiSnapshot) -> KeyResponse {
         let out = self.power.on_power_key(press, snap.now_ms, keep_lit(snap));
         let mut events: Vec<UiEvent> = event_for(out.transition).into_iter().collect();
-        if out.confirm_power_off {
-            events.push(UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff)));
+        if out.powering_off {
+            events.push(UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF)));
         }
-        events
+        KeyResponse {
+            events,
+            power_off: out.powering_off,
+        }
     }
 
     /// Every loop iteration: advance the timers and apply the backlight level
@@ -104,7 +116,6 @@ impl PowerDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::route::{ConfirmKind, Route};
     use std::cell::RefCell;
     use std::rc::Rc;
     use waved_state::PowerKeyPress;
@@ -133,8 +144,8 @@ mod tests {
         }
     }
 
-    fn confirm() -> UiEvent {
-        UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff))
+    fn powering_off() -> UiEvent {
+        UiEvent::Show(Message::new(Severity::Info, copy::POWERING_OFF))
     }
 
     #[test]
@@ -201,13 +212,13 @@ mod tests {
     fn power_key_short_sleeps_and_wakes() {
         let (mut p, writes) = rig();
         assert_eq!(
-            p.on_power_key(PowerKeyPress::Short, &at(1_000)),
+            p.on_power_key(PowerKeyPress::Short, &at(1_000)).events,
             [UiEvent::Rest]
         );
         p.tick(&at(1_000));
         assert_eq!(writes.borrow().last(), Some(&0));
         assert_eq!(
-            p.on_power_key(PowerKeyPress::Short, &at(2_000)),
+            p.on_power_key(PowerKeyPress::Short, &at(2_000)).events,
             [UiEvent::Wake]
         );
         p.tick(&at(2_000));
@@ -215,14 +226,16 @@ mod tests {
     }
 
     #[test]
-    fn power_key_long_asks_to_power_off() {
+    fn power_key_long_powers_off_without_asking() {
         let (mut p, _) = rig();
-        assert_eq!(p.on_power_key(PowerKeyPress::Long, &at(1_000)), [confirm()]);
+        let first = p.on_power_key(PowerKeyPress::Long, &at(1_000));
+        assert!(first.power_off);
+        assert_eq!(first.events, [powering_off()]);
         p.on_power_key(PowerKeyPress::Short, &at(2_000));
-        assert_eq!(
-            p.on_power_key(PowerKeyPress::Long, &at(3_000)),
-            [UiEvent::Wake, confirm()]
-        );
+        let asleep = p.on_power_key(PowerKeyPress::Long, &at(3_000));
+        assert!(asleep.power_off);
+        assert_eq!(asleep.events, [UiEvent::Wake, powering_off()]);
+        assert!(!p.on_power_key(PowerKeyPress::Short, &at(4_000)).power_off);
     }
 
     #[test]
@@ -244,7 +257,7 @@ mod tests {
             let mut snap = at(1_000);
             snap.meeting.recording = !call;
             snap.audio.call_off_hook = call;
-            assert_eq!(p.on_power_key(PowerKeyPress::Short, &snap), [UiEvent::Rest]);
+            assert_eq!(p.on_power_key(PowerKeyPress::Short, &snap).events, [UiEvent::Rest]);
             p.tick(&snap);
             assert_eq!(writes.borrow().last(), Some(&resting_pct(80)));
         }

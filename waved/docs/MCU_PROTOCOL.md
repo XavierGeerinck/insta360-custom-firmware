@@ -105,9 +105,17 @@ A click is `PRESSED` then `CLICKED`; a 1.5 s hold is `PRESSED`,
 `1s_DONE`, `1s_2s_UP`. Holding about 3 s cuts power in the MCU itself.
 The events arrived while the host answered heartbeats; the MCU did not resend
 them without an acknowledgement (stock sends cmd 0x0E sub 0 three times after
-each event, not required). **The MCU does nothing else on its own**: a click
-did not move the motor. Stock's reactions (`ui:`): PRESSED wakes the screen,
+each event, not required). A click or double click does nothing on its own
+(the motor did not move). Stock's reactions (`ui:`): PRESSED wakes the screen,
 CLICK → motor to 0 mm, DOUBLE_CLICK → 50 mm, 2 s hold → power off.
+
+**A hold of 2 s or more powers the unit off in the MCU itself** (captured
+2026-10-12, a 2.5 s hold): after `2s_5s_UP` the MCU reports motor state WORK
+(cmd 4 sub 2 = 1), then `POWER_CHECK` (cmd 6, `params` `00 02`), then the
+lift's position as it retracts (cmd 4 sub 1: 40, 30, 0 mm), and cuts power
+(the next boot is a `cold_boot`), without any command from the host. waved
+therefore treats `2s_DONE` as "powering off" (no confirmation) and uses the
+seconds before the cut to stop the services.
 
 ## Commands (host → MCU, `mcu_control`)
 

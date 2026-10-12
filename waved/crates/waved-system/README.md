@@ -121,7 +121,9 @@ Push to `/data/waved/waved.new`, compare `md5sum`, then `mv` it over `waved`.
 5. **Power key behaviour.**
    - A short press puts the screen off (resting while recording).
    - A second short press wakes it.
-   - Holding for 2 s opens "Power off?" while the key is still held.
+   - Holding for 2 s shows "Powering off": the MCU retracts the lift and cuts
+     power by itself once the key is released (no confirmation; System →
+     Power off still asks).
    - Confirm. Does the unit actually power off, or does waved restart?
 6. **RTC.**
    - Run `adb shell i2cdetect -y 3` if busybox has it; expect `68`, not `UU`.

@@ -248,7 +248,7 @@ Rules for the parallel milestones:
   - Never fully off while recording or in a call.
 - [ ] **E2 Power key** (S) — read `KEY_POWER` from `/dev/input/event0`, which is never read today
   - Short press: sleep or wake.
-  - Hold 2 s: power-off confirmation.
+  - Hold 2 s: power off, no confirmation (the MCU powers off by itself, device pass 2026-10-12).
 - [ ] **E3 Time** (M)
   - Time zone and 24-hour clock.
   - Check the RTC on i2c-3.
