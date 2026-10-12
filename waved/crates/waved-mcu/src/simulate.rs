@@ -59,7 +59,7 @@ impl SimMcuService {
                                 info!("[SIM] motor -> {:?}", pos);
                                 self.mcu_tx.send_modify(|s| s.motor_position = pos);
                             }
-                            Command::PowerOff => {
+                            Command::PowerOffNow => {
                                 info!("[SIM] power off");
                                 self.mcu_tx.send_modify(|s| s.power_off = waved_state::PowerOffPhase::Sent);
                             }

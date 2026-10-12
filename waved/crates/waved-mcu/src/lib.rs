@@ -36,7 +36,7 @@ enum Plan {
 
 fn command_plan(cmd: &Command) -> Plan {
     match cmd {
-        Command::PowerOff => Plan::PowerOff,
+        Command::PowerOffNow => Plan::PowerOff,
         Command::SetMotorPosition(position) => match position {
             MotorPosition::Low => Plan::Send(protocol::motor_to_mm(0)),
             MotorPosition::Medium => Plan::Send(protocol::motor_to_mm(30)),
@@ -135,7 +135,10 @@ mod tests {
         // Every exit sends Shutdown (deploys, watchdog restarts): it must
         // never reach the MCU as a power-off.
         assert_eq!(command_plan(&Command::Shutdown), Plan::Nothing);
-        assert_eq!(command_plan(&Command::PowerOff), Plan::PowerOff);
+        // PowerOff is the intent; main sends PowerOffNow once the services
+        // stopped, and only that runs the MCU sequence.
+        assert_eq!(command_plan(&Command::PowerOff), Plan::Nothing);
+        assert_eq!(command_plan(&Command::PowerOffNow), Plan::PowerOff);
         assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::High)), Plan::Send(protocol::motor_to_mm(50)));
         assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::Low)), Plan::Send(protocol::motor_to_mm(0)));
         assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::Moving)), Plan::Nothing);

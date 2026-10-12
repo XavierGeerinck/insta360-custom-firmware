@@ -552,10 +552,14 @@ pub enum Command {
     RetryFailedUploads,
     SetMotorPosition(MotorPosition),
     Shutdown,
-    /// Switch the device off (the user confirmed, or the battery is empty):
-    /// waved-mcu retracts the lift and has the MCU cut power. Unlike
-    /// `Shutdown`, which every exit sends to stop the services.
+    /// Switch the device off (the user confirmed, or the battery is empty).
+    /// waved stops the services, waits for the meeting to finalize its take,
+    /// then sends `PowerOffNow`. Unlike `Shutdown`, which every exit sends to
+    /// stop the services.
     PowerOff,
+    /// Sent by waved once the services stopped after a `PowerOff`:
+    /// waved-mcu retracts the lift and has the MCU cut power.
+    PowerOffNow,
     /// Test hook: force the beamformer to steer at a fixed (azimuth_deg, elevation_deg)
     /// instead of tracking the live DOA estimate. `None` clears the override.
     /// Used by `scripts/test-beamforming.sh` Test 1 to measure front-to-back ratio

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use waved_state::{Command, DeviceEvent, MotorPosition, StateBus};
+use waved_state::{Command, DeviceEvent, StateBus};
 
 #[cfg(any(test, not(feature = "simulate")))]
 mod mic_capture;
@@ -695,7 +695,9 @@ async fn run_async(
         tokio::spawn(async move { sim_wifi.run(sim_cmds).await });
     }
 
-    // Meeting service
+    // Meeting service. Its task ends once a Shutdown finalized the take,
+    // which a power off waits for.
+    let mut meeting_task: Option<tokio::task::JoinHandle<()>> = None;
     match waved_meeting::MeetingService::new_with_integrity(
         config.clone(),
         DB_PATH,
@@ -718,7 +720,7 @@ async fn run_async(
                 .with_files_publisher(Arc::clone(&bus.files));
             let meeting_cmd_rx = bus.commands.subscribe();
             let wifi_rx = bus.wifi.subscribe();
-            tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await });
+            meeting_task = Some(tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await }));
         }
         Err(e) => error!("meeting service init failed: {e}"),
     }
@@ -732,14 +734,10 @@ async fn run_async(
         loop {
             match battery_events_rx.recv().await {
                 Ok(DeviceEvent::LowBattery(level)) => {
-                    if level < 10 {
-                        warn!("low battery ({level}%), stopping recording and retracting motor");
-                        let _ = low_battery_bus.commands.send(Command::StopRecording);
-                        let _ = low_battery_bus.commands.send(Command::SetMotorPosition(MotorPosition::Low));
-                    }
-                    if level < 5 {
-                        warn!("critical battery ({level}%), shutting down");
-                        let _ = low_battery_bus.commands.send(Command::PowerOff);
+                    warn!("low battery ({level}%)");
+                    if let Some(command) = low_battery_command(level) {
+                        warn!("critical battery ({level}%), powering off");
+                        let _ = low_battery_bus.commands.send(command);
                     }
                 }
                 Ok(_) => {}
@@ -857,20 +855,50 @@ async fn run_async(
     };
 
     info!("shutdown signal received");
-    let _ = bus.commands.send(Command::Shutdown);
+    if cause == ExitCause::PowerOff {
+        let meeting_finished = async move {
+            if let Some(task) = meeting_task {
+                let _ = task.await;
+            }
+        };
+        power_off_in_order(bus.commands.clone(), meeting_finished, bus.mcu.subscribe()).await;
+    } else {
+        let _ = bus.commands.send(Command::Shutdown);
+    }
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    if cause == ExitCause::PowerOff {
-        info!("waiting for the MCU to power the device off");
-        let mut mcu = bus.mcu.subscribe();
-        let finished = tokio::time::timeout(POWER_OFF_WAIT, mcu.wait_for(|s| power_off_finished(s.power_off))).await;
-        if finished.is_err() {
-            warn!("power off did not finish within {} s", POWER_OFF_WAIT.as_secs());
-        }
-    }
     // After ALL_SHUTDOWN the MCU cuts power within this wait; otherwise it
     // gives the services time to stop.
     tokio::time::sleep(EXIT_WAIT).await;
+}
+
+/// Power off in stock's order: stop the services, let the meeting finalize
+/// its take (at most `MEETING_STOP_WAIT`), and only then have waved-mcu run
+/// the MCU sequence, which may cut power within a second.
+async fn power_off_in_order(
+    commands: tokio::sync::broadcast::Sender<Command>,
+    meeting_finished: impl std::future::Future<Output = ()>,
+    mut mcu: tokio::sync::watch::Receiver<waved_state::McuState>,
+) {
+    let _ = commands.send(Command::Shutdown);
+    if tokio::time::timeout(MEETING_STOP_WAIT, meeting_finished).await.is_err() {
+        warn!("the meeting did not stop within {} s; powering off anyway", MEETING_STOP_WAIT.as_secs());
+    }
+    info!("waiting for the MCU to power the device off");
+    let _ = commands.send(Command::PowerOffNow);
+    if tokio::time::timeout(POWER_OFF_WAIT, mcu.wait_for(|s| power_off_finished(s.power_off)))
+        .await
+        .is_err()
+    {
+        warn!("power off did not finish within {} s", POWER_OFF_WAIT.as_secs());
+    }
+}
+
+/// What a low-battery report asks for: power off at the critical level
+/// (TODO F2), nothing above it. waved-mcu reports a level only once it held
+/// on battery power, so one reading never powers off.
+fn low_battery_command(level: u8) -> Option<Command> {
+    (level <= CRITICAL_BATTERY_LEVEL).then_some(Command::PowerOff)
 }
 
 /// The MCU sequence is over: power off was sent, or the lift was obstructed.
@@ -891,6 +919,12 @@ enum ExitCause {
 /// sends on the way out only stops the services; waved-mcu never powers off
 /// for it, so `killall waved` (deploys, the S60waved respawn) is safe.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// At or below this level the unit powers off (TODO F2).
+const CRITICAL_BATTERY_LEVEL: u8 = 3;
+
+/// Longest wait for the meeting to finalize its take before power is cut.
+const MEETING_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Longest wait for waved-mcu's power-off sequence: the lift may take up to
 /// 20 s to retract (`waved_mcu::power_off::Limits::STOCK`).
@@ -1175,6 +1209,37 @@ fn parse_doa_override(s: &str) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod exit_tests {
     use super::*;
+
+    #[test]
+    fn only_a_critical_battery_powers_off_and_nothing_moves_the_lift() {
+        assert_eq!(low_battery_command(9), None);
+        assert_eq!(low_battery_command(4), None);
+        assert_eq!(low_battery_command(3), Some(Command::PowerOff));
+        assert_eq!(low_battery_command(0), Some(Command::PowerOff));
+    }
+
+    #[tokio::test]
+    async fn power_off_cuts_power_only_after_the_meeting_finished() {
+        // Review 2026-10-12: stock ends the meeting before the MCU sequence;
+        // the take must be finalized before power can be cut.
+        let (commands, mut rx) = tokio::sync::broadcast::channel(8);
+        let (mcu_tx, mcu_rx) = tokio::sync::watch::channel(waved_state::McuState::default());
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(power_off_in_order(
+            commands.clone(),
+            async move {
+                let _ = done_rx.await;
+            },
+            mcu_rx,
+        ));
+        assert_eq!(rx.recv().await.unwrap(), Command::Shutdown);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(rx.try_recv().is_err(), "power is not cut while the meeting finishes");
+        done_tx.send(()).unwrap();
+        assert_eq!(rx.recv().await.unwrap(), Command::PowerOffNow);
+        mcu_tx.send_modify(|s| s.power_off = waved_state::PowerOffPhase::Sent);
+        task.await.unwrap();
+    }
 
     #[test]
     fn a_power_off_waits_until_the_mcu_sent_it_or_gave_up() {
