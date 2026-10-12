@@ -52,7 +52,7 @@ impl Key {
     fn face(self) -> (String, Font, u32) {
         match self {
             Key::Digit(digit) => (digit.to_string(), Font::Num20, TEXT),
-            Key::Cancel => ("Cancel".into(), Font::Small, TEXT_2),
+            Key::Cancel => ("Cancel".into(), Font::Body, TEXT_2),
             Key::Backspace => (icons::BACKSPACE.into(), Font::Icon22, TEXT_2),
         }
     }
@@ -147,6 +147,10 @@ impl PinDots {
                 dot.bg_opa(0).border(DOT_RING, TEXT_3);
             }
         }
+    }
+
+    pub fn count(&self) -> usize {
+        self.dots.len()
     }
 
     /// Tests read the dots.
