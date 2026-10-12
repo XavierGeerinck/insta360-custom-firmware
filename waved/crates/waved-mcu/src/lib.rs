@@ -1,24 +1,55 @@
-pub mod battery;
+//! The MCU link (docs/MCU_PROTOCOL.md): `/dev/ttyS4`, MAVLink v2. Answers
+//! heartbeats, publishes the battery, turns the power key into
+//! `DeviceEvent::PowerKey`, moves the lift and powers the device off.
+//! `/dev/ttyS1`, where this crate used to send, is the Bluetooth module.
+
 pub mod handler;
+pub mod link;
 pub mod mavlink;
 pub mod power_off;
 pub mod protocol;
-pub mod buttons;
-pub mod motor;
 
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
-use crossbeam_channel::Receiver;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
-use tracing::{debug, info, warn};
-use waved_state::{BatteryState, Command, DeviceEvent, McuState, MotorPosition};
-use waved_uart::{Frame, UartMux};
+use tracing::{info, warn};
+use waved_state::{BatteryState, Command, DeviceEvent, McuState, MotorPosition, PowerOffPhase};
+
+use crate::handler::{Action, Handler};
+use crate::link::Link;
+use crate::power_off::{Limits, Outcome, Transport};
+use crate::protocol::Outgoing;
+
+pub const MCU_PORT: &str = "/dev/ttyS4";
+pub const MCU_BAUD: u32 = 115_200;
+
+/// What the service does for a bus command.
+#[derive(Debug, PartialEq)]
+enum Plan {
+    Nothing,
+    Send(Outgoing),
+    PowerOff,
+}
+
+fn command_plan(cmd: &Command) -> Plan {
+    match cmd {
+        Command::PowerOff => Plan::PowerOff,
+        Command::SetMotorPosition(position) => match position {
+            MotorPosition::Low => Plan::Send(protocol::motor_to_mm(0)),
+            MotorPosition::Medium => Plan::Send(protocol::motor_to_mm(30)),
+            MotorPosition::High => Plan::Send(protocol::motor_to_mm(50)),
+            MotorPosition::Moving => Plan::Nothing,
+        },
+        // Shutdown stops the services on every exit; it is not a power-off.
+        _ => Plan::Nothing,
+    }
+}
 
 pub struct McuService {
-    mcu_rx: Receiver<Frame>,
-    uart: Arc<UartMux>,
+    link: Link,
     battery_tx: Arc<watch::Sender<BatteryState>>,
     mcu_tx: Arc<watch::Sender<McuState>>,
     events_tx: broadcast::Sender<DeviceEvent>,
@@ -26,105 +57,87 @@ pub struct McuService {
 
 impl McuService {
     pub fn new(
-        mcu_rx: Receiver<Frame>,
-        uart: Arc<UartMux>,
+        link: Link,
         battery_tx: Arc<watch::Sender<BatteryState>>,
         mcu_tx: Arc<watch::Sender<McuState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
     ) -> Self {
-        Self {
-            mcu_rx,
-            uart,
-            battery_tx,
-            mcu_tx,
-            events_tx,
-        }
+        Self { link, battery_tx, mcu_tx, events_tx }
     }
 
     pub fn run(self, mut cmd_rx: broadcast::Receiver<Command>) {
-        info!("mcu_srv started");
-
+        info!("mcu_srv started on {MCU_PORT}");
+        let start = Instant::now();
+        let mut handler = Handler::default();
         loop {
-            crossbeam_channel::select! {
-                recv(self.mcu_rx) -> msg => {
-                    match msg {
-                        Ok(frame) => self.handle_frame(&frame),
-                        Err(_) => {
-                            warn!("mcu channel closed, stopping");
-                            return;
-                        }
-                    }
+            let now = start.elapsed().as_millis() as u64;
+            if let Some(m) = self.link.recv(Duration::from_millis(50)) {
+                for action in handler.on_message(&m, now) {
+                    self.apply(action);
                 }
-                default(std::time::Duration::from_millis(50)) => {
-                    while let Ok(cmd) = cmd_rx.try_recv() {
-                        self.handle_command(&cmd);
-                    }
+            }
+            if handler.link_lost(now) {
+                warn!("mcu: no heartbeat for {} ms", handler::LINK_LOST_MS);
+            }
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(cmd) => self.handle(&cmd),
+                    Err(broadcast::error::TryRecvError::Empty) => break,
+                    Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::TryRecvError::Closed) => return,
                 }
             }
         }
     }
 
-    fn handle_frame(&self, frame: &Frame) {
-        if frame.data.is_empty() {
-            return;
-        }
-
-        let cmd_id = frame.data[0];
-        let payload = &frame.data[1..];
-
-        match cmd_id {
-            0x10..=0x1F => {
-                if let Some(state) = battery::parse_battery_frame(payload) {
-                    debug!("battery: {}% {}mV charging={}", state.level, state.voltage, state.is_charging);
-                    if state.level < 10 {
-                        let _ = self.events_tx.send(DeviceEvent::LowBattery(state.level));
-                    }
-                    let _ = self.battery_tx.send(state);
-                }
+    fn apply(&self, action: Action) {
+        match action {
+            Action::Send(out) => self.link.send(&out),
+            Action::Battery(state) => {
+                self.battery_tx.send_if_modified(|s| {
+                    let changed = *s != state;
+                    *s = state;
+                    changed
+                });
             }
-            0x40..=0x4F => {
-                if let Some(btn) = buttons::parse_button_frame(&frame.data) {
-                    debug!("button: {:?}", btn);
-                    let _ = self.events_tx.send(DeviceEvent::ButtonPress(btn));
-                }
-            }
-            0x50 => {
-                let _ = self.events_tx.send(DeviceEvent::UsbConnected);
-                self.mcu_tx.send_modify(|s| s.usb_connected = true);
-            }
-            0x51 => {
-                let _ = self.events_tx.send(DeviceEvent::UsbDisconnected);
-                self.mcu_tx.send_modify(|s| s.usb_connected = false);
-            }
-            0x60 => {
-                let _ = self.events_tx.send(DeviceEvent::MotorObstruction);
-            }
-            _ => {
-                debug!("unknown MCU command: {:#04x}", cmd_id);
+            Action::Event(event) => {
+                let _ = self.events_tx.send(event);
             }
         }
     }
 
-    fn handle_command(&self, cmd: &Command) {
-        match cmd {
-            Command::SetMotorPosition(pos) => {
-                let raw = motor::build_motor_command(pos);
-                if !raw.is_empty() {
-                    self.uart.send(raw, true);
-                    self.mcu_tx.send_modify(|s| s.motor_position = MotorPosition::Moving);
-                }
+    fn handle(&self, cmd: &Command) {
+        match command_plan(cmd) {
+            Plan::Nothing => {}
+            Plan::Send(out) => self.link.send(&out),
+            Plan::PowerOff => {
+                info!("mcu: powering off");
+                self.mcu_tx.send_modify(|s| s.power_off = PowerOffPhase::InProgress);
+                let phase = match power_off::run(&self.link, Limits::STOCK) {
+                    Outcome::Sent => PowerOffPhase::Sent,
+                    Outcome::Obstructed => {
+                        warn!("mcu: the lift was obstructed, staying on");
+                        let _ = self.events_tx.send(DeviceEvent::MotorObstruction);
+                        PowerOffPhase::Aborted
+                    }
+                };
+                self.mcu_tx.send_modify(|s| s.power_off = phase);
             }
-            Command::Shutdown => {
-                info!("shutdown requested, retracting motor first");
-                let retract = motor::build_motor_command(&MotorPosition::Low);
-                if !retract.is_empty() {
-                    self.uart.send(retract, true);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                let shutdown = motor::build_shutdown_command();
-                self.uart.send(shutdown, true);
-            }
-            _ => {}
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_is_not_power_off() {
+        // Every exit sends Shutdown (deploys, watchdog restarts): it must
+        // never reach the MCU as a power-off.
+        assert_eq!(command_plan(&Command::Shutdown), Plan::Nothing);
+        assert_eq!(command_plan(&Command::PowerOff), Plan::PowerOff);
+        assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::High)), Plan::Send(protocol::motor_to_mm(50)));
+        assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::Low)), Plan::Send(protocol::motor_to_mm(0)));
+        assert_eq!(command_plan(&Command::SetMotorPosition(MotorPosition::Moving)), Plan::Nothing);
     }
 }

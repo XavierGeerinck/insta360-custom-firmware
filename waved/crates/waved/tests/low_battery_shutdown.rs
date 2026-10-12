@@ -26,20 +26,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn critical_battery_sends_shutdown() {
+    async fn critical_battery_sends_power_off() {
         let bus = Arc::new(StateBus::new());
 
         let mut cmd_rx = bus.commands.subscribe();
 
         let _ = bus.commands.send(Command::StopRecording);
         let _ = bus.commands.send(Command::SetMotorPosition(MotorPosition::Low));
-        let _ = bus.commands.send(Command::Shutdown);
+        let _ = bus.commands.send(Command::PowerOff);
 
         let _ = cmd_rx.recv().await.unwrap(); // StopRecording
         let _ = cmd_rx.recv().await.unwrap(); // SetMotorPosition
         match cmd_rx.recv().await.unwrap() {
-            Command::Shutdown => {}
-            other => panic!("expected Shutdown, got {:?}", other),
+            Command::PowerOff => {}
+            other => panic!("expected PowerOff, got {:?}", other),
         }
     }
 }

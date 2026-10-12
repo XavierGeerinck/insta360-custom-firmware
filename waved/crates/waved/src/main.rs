@@ -73,24 +73,16 @@ fn main() {
         match uart_result {
             Ok(mut uart) => {
                 info!("UART opened: {UART_PORT} @ {UART_BAUD}");
+                // ttyS1 is the Bluetooth module; its "MCU" route carries no
+                // MCU traffic (docs/MCU_PROTOCOL.md). Keep draining it: a
+                // dropped receiver stops the mux's reader, Bluetooth included.
                 let mcu_rx = uart.take_mcu_receiver();
+                std::thread::Builder::new()
+                    .name("ttys1-drain".into())
+                    .spawn(move || for _ in mcu_rx.iter() {})
+                    .expect("spawn ttys1-drain");
                 let bt_rx = uart.take_bt_receiver();
                 let uart = Arc::new(uart);
-
-                let mcu_uart = Arc::clone(&uart);
-                let mcu_battery_tx = Arc::clone(&bus.battery);
-                let mcu_state_tx = Arc::clone(&bus.mcu);
-                let mcu_events_tx = bus.events.clone();
-                let mcu_cmd_rx = bus.commands.subscribe();
-                std::thread::Builder::new()
-                    .name("mcu-srv".into())
-                    .spawn(move || {
-                        let svc = waved_mcu::McuService::new(
-                            mcu_rx, mcu_uart, mcu_battery_tx, mcu_state_tx, mcu_events_tx,
-                        );
-                        svc.run(mcu_cmd_rx);
-                    })
-                    .expect("failed to spawn mcu thread");
 
                 let bt_uart = Arc::clone(&uart);
                 let bt_state_tx = Arc::clone(&bus.bt);
@@ -105,8 +97,27 @@ fn main() {
             }
             Err(e) => {
                 error!("failed to open UART {UART_PORT}: {e}");
-                error!("running without MCU/BT (host development mode)");
+                error!("running without Bluetooth (host development mode)");
             }
+        }
+
+        // The MCU: battery, the power key, the lift and power off.
+        match waved_mcu::link::Link::open(waved_mcu::MCU_PORT, waved_mcu::MCU_BAUD) {
+            Ok(link) => {
+                info!("MCU link opened: {} @ {}", waved_mcu::MCU_PORT, waved_mcu::MCU_BAUD);
+                let svc = waved_mcu::McuService::new(
+                    link,
+                    Arc::clone(&bus.battery),
+                    Arc::clone(&bus.mcu),
+                    bus.events.clone(),
+                );
+                let cmd_rx = bus.commands.subscribe();
+                std::thread::Builder::new()
+                    .name("mcu-srv".into())
+                    .spawn(move || svc.run(cmd_rx))
+                    .expect("spawn mcu-srv");
+            }
+            Err(e) => error!("failed to open the MCU link {}: {e}", waved_mcu::MCU_PORT),
         }
     }
 
@@ -728,7 +739,7 @@ async fn run_async(
                     }
                     if level < 5 {
                         warn!("critical battery ({level}%), shutting down");
-                        let _ = low_battery_bus.commands.send(Command::Shutdown);
+                        let _ = low_battery_bus.commands.send(Command::PowerOff);
                     }
                 }
                 Ok(_) => {}
@@ -798,9 +809,13 @@ async fn run_async(
                     info!("received configuration restart request");
                     return ExitCause::Other;
                 }
+                Ok(Command::PowerOff) => {
+                    info!("received power off command");
+                    return ExitCause::PowerOff;
+                }
                 Ok(Command::Shutdown) => {
                     info!("received shutdown command");
-                    return ExitCause::Shutdown;
+                    return ExitCause::Other;
                 }
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return ExitCause::Other,
@@ -845,40 +860,41 @@ async fn run_async(
     let _ = bus.commands.send(Command::Shutdown);
     #[cfg(all(not(feature = "simulate"), feature = "capture-alsa"))]
     capture_stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-    let wait = exit_wait(cause);
-    if cause == ExitCause::Shutdown {
-        info!("waiting {} ms for the MCU to power the device off", wait.as_millis());
+    if cause == ExitCause::PowerOff {
+        info!("waiting for the MCU to power the device off");
+        let mut mcu = bus.mcu.subscribe();
+        let finished = tokio::time::timeout(POWER_OFF_WAIT, mcu.wait_for(|s| power_off_finished(s.power_off))).await;
+        if finished.is_err() {
+            warn!("power off did not finish within {} s", POWER_OFF_WAIT.as_secs());
+        }
     }
-    tokio::time::sleep(wait).await;
+    // After ALL_SHUTDOWN the MCU cuts power within this wait; otherwise it
+    // gives the services time to stop.
+    tokio::time::sleep(EXIT_WAIT).await;
+}
+
+/// The MCU sequence is over: power off was sent, or the lift was obstructed.
+fn power_off_finished(phase: waved_state::PowerOffPhase) -> bool {
+    matches!(phase, waved_state::PowerOffPhase::Sent | waved_state::PowerOffPhase::Aborted)
 }
 
 /// Why `run_async` returns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExitCause {
-    /// `Command::Shutdown`: the user powered off, or the battery is critical.
-    Shutdown,
+    /// `Command::PowerOff`: the user powered off, or the battery is empty.
+    PowerOff,
     /// SIGTERM, SIGINT, `RestartForConfig`, a pipeline fault, a closed bus.
     Other,
 }
 
-/// The exit wait after every exit except a power-off. The Shutdown that
-/// `run_async` sends on the way out makes waved-mcu start retracting the
-/// motor, and the process exits before waved-mcu's power-off frame, so
-/// `killall waved` (deploys, the S60waved respawn) never powers the device off.
+/// The wait before every exit. The `Command::Shutdown` that `run_async`
+/// sends on the way out only stops the services; waved-mcu never powers off
+/// for it, so `killall waved` (deploys, the S60waved respawn) is safe.
 const EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// R10: the exit wait after `Command::Shutdown`. waved-mcu's Shutdown handler
-/// (`crates/waved-mcu/src/lib.rs:113–121`) sends the motor retract, sleeps
-/// 3 s, then sends the power-off frame. It sends no acknowledgement, so the
-/// wait is time-based: 3 s plus a margin for the UART write.
-const SHUTDOWN_POWER_OFF_WAIT: std::time::Duration = std::time::Duration::from_millis(3_500);
-
-fn exit_wait(cause: ExitCause) -> std::time::Duration {
-    match cause {
-        ExitCause::Shutdown => SHUTDOWN_POWER_OFF_WAIT,
-        ExitCause::Other => EXIT_WAIT,
-    }
-}
+/// Longest wait for waved-mcu's power-off sequence: the lift may take up to
+/// 20 s to retract (`waved_mcu::power_off::Limits::STOCK`).
+const POWER_OFF_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The env var that turns the power key reader on (RS7).
 #[cfg(any(test, not(feature = "simulate")))]
@@ -1161,11 +1177,12 @@ mod exit_tests {
     use super::*;
 
     #[test]
-    fn only_a_shutdown_waits_for_the_mcu_power_off_frame() {
-        // waved-mcu sends the power-off frame 3 s after Command::Shutdown.
-        assert!(exit_wait(ExitCause::Shutdown) >= std::time::Duration::from_millis(3_500));
-        // Everything else keeps 2 s, so `killall waved` never powers off.
-        assert_eq!(exit_wait(ExitCause::Other), std::time::Duration::from_secs(2));
+    fn a_power_off_waits_until_the_mcu_sent_it_or_gave_up() {
+        use waved_state::PowerOffPhase::*;
+        assert!(!power_off_finished(Idle));
+        assert!(!power_off_finished(InProgress));
+        assert!(power_off_finished(Sent));
+        assert!(power_off_finished(Aborted));
     }
 
     #[test]
