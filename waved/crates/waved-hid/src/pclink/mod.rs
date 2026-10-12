@@ -13,5 +13,6 @@
 pub mod mode;
 pub mod packet;
 pub mod snapshot;
+pub mod status;
 pub mod transport;
 pub mod vendor;
