@@ -5,8 +5,8 @@ use crate::kit::route::Route;
 use crate::kit::screen::Screen;
 use crate::screens_v2::{
     about, ambient, audio_mode, boot, confirm, datetime, decision, display, file_detail, files,
-    first_run, home, menu, noise, powering_off, recording, system, upload_mode, uploads, volume,
-    wifi, wifi_setup,
+    first_run, home, menu, noise, ota, powering_off, recording, system, upload_mode, uploads,
+    volume, wifi, wifi_setup,
 };
 
 /// The screen for `route`, or `None` for a milestone 3 route, which the
@@ -38,13 +38,14 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::TimeZone => Box::new(datetime::TimeZoneScreen::default()),
         Route::About => Box::new(about::AboutScreen::default()),
         Route::Confirm(kind) => Box::new(confirm::ConfirmScreen::new(*kind)),
-        // Milestone 3: Mic height, Bluetooth, PIN, USB storage, firmware
-        // update and incoming call have no screen yet.
+        // Milestone 3, workstream H.
+        Route::Update => Box::new(ota::UpdateScreen::default()),
+        // Milestone 3: Mic height, Bluetooth, PIN, USB storage and incoming
+        // call have no screen yet.
         Route::MicHeight
         | Route::Bluetooth
         | Route::Pin(_)
         | Route::UsbStorage
-        | Route::Update
         | Route::IncomingCall => return None,
     };
     Some(screen)
@@ -98,6 +99,8 @@ mod tests {
             Route::Confirm(ConfirmKind::DeleteRecording(FILE)),
             Route::Confirm(ConfirmKind::StopUsbStorage),
             Route::Confirm(ConfirmKind::ChangeNetwork),
+            // Milestone 3 screens built so far.
+            Route::Update,
         ]
     }
 
@@ -199,7 +202,6 @@ mod tests {
             Route::Bluetooth,
             Route::Pin(Box::new(Route::Files)),
             Route::UsbStorage,
-            Route::Update,
             Route::IncomingCall,
         ] {
             assert!(screen_for(&route).is_none(), "{route:?}");

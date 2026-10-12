@@ -23,6 +23,7 @@ pub mod datetime;
 pub mod display;
 pub mod menu;
 pub mod noise;
+pub mod ota;
 pub mod system;
 pub mod upload_mode;
 pub mod uploads;
