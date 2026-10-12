@@ -153,7 +153,7 @@ Priority:
 | Wi-Fi provisioning and saved-network reconnect | **Better** | Waved provides a WPA2 setup AP, QR/manual credentials, a captive configuration form, saved-network fallback, and live connection status; stock setup AP was open. |
 | Device configuration through setup portal | **Better** | Versioned `config.toml` fields can be edited and validated without exposing stored secrets. |
 | Raw eight-channel microphone over USB | **Not planned** | Internal eight-channel capture exists; expose it to a host only when a real application requests it. |
-| VIP9000 NPU inference | **Not planned** | DFN3 on Cortex-A55 meets the current CPU budget; revisit only if a supported toolchain or measured CPU blocker appears. |
+| VIP9000 NPU inference | **Parked** | DFN3 on the CPU takes ≈ 84 % of a core in speech (root `TODO.md` C13), but the NPU is compiler-blocked and measured gains were small (`docs/COMPUTE_HARDWARE.md` "Status: parked"). |
 
 ## Deferred, trigger-based work
 
@@ -171,8 +171,8 @@ Priority:
   diarization case.
 - **Runtime DOA backend switching and configurable SRP grid resolution.**
   Trigger: same-run A/B tuning demonstrates a need.
-- **NPU DFN3 backend.** Trigger: CPU profiling exceeds the budget or a usable
-  VIP9000nano-di+ compiler/runtime becomes available.
+- **NPU DFN3 backend.** Parked 2026-10-12. Trigger: a usable VIP9000 compiler
+  arrives, or a faster CPU runtime and a lighter model both miss the budget.
 
 ## Completed foundation
 

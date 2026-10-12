@@ -217,12 +217,12 @@ Rules for the parallel milestones:
     the status pill (Home) never shows on the device.
   - Set it while the pre-roll buffer is filling: setting on, not recording, not muted.
 
-- [ ] **C13 Neural noise reduction on the NPU** (L) — deferred until milestone 2 is done (user, 2026-10-06). DeepFilterNet on the CPU takes ≈ 84 % of a Cortex-A55 core during speech; in series with the DSP chain the UAC2 uplink underran (183 gaps / 20 s), and a dedicated thread didn't help (it alone is ≈ 8.5 ms per 10 ms hop). Noise reduction stays Off on the device until it runs on the NPU (see `memory/project_sp4_npu_status`, `docs/AUDIO_HARDWARE.md` "Uplink Level and CPU").
+- [ ] **C13 Neural noise reduction on the CPU** (M) — the NPU route is parked (user, 2026-10-12): a vendor-compiled model only tied the CPU end to end and our compiler path still can't build Conv/FC layers (`docs/COMPUTE_HARDWARE.md` "Status: parked"). DeepFilterNet on the CPU takes ≈ 84 % of a Cortex-A55 core during speech (≈ 8.5 ms per 10 ms hop, tract, fp32); in series with the DSP chain the UAC2 uplink underran (183 gaps / 20 s), and a dedicated thread didn't help. Its published cost (≈ 3.5 M MACs per hop) suggests the runtime, not the CPU, is the bottleneck. Next: profile it on the device, then try a faster runtime (stock ONNX Runtime 1.15.1, int8 with `asimddp`); a lighter model is the fallback. Noise reduction stays Off until it fits (see `docs/AUDIO_HARDWARE.md` "Uplink Level and CPU").
 - [ ] **C14 Re-measure ERLE after the 48 kHz echo canceller fix** (S) — SP#5/SP#6 figures were taken while Speex assumed 8 kHz. Quick check on 2026-10-06: linear 15.6 dB, effective 23.5 dB with speech from the Wave speaker; residual echo sits ≈ 10 dB under near-end speech in the uplink. Rerun the acceptance script.
 - [x] **C15 Stereo alignment** (host-verified; confirm on device) (S) — in Stereo mode the side signal comes from the raw beam while the mid carries the AEC/NS delay (DeepFilterNet adds ≈ 40 ms when on); delay the side to match.
 - [x] **C16 Talker wedge follows room noise** (S) — the DoA VAD gate reads open in almost every sample of a quiet room. Fixed: the wedge and the Follow talker preview gate on `doa_confidence >= 0.30` with 150 ms on / 100 ms off hysteresis (`kit::talker`). Confirm on the device.
 
-- [ ] **C17 Dereverberation** (L) — after today's fixes (2026-10-06) callers still hear the voice "subtly further away" in Whole room: mostly room reverb at desk distance. Stock firmware uses neural dereverb; do it with C13 on the NPU.
+- [ ] **C17 Dereverberation** (L) — after today's fixes (2026-10-06) callers still hear the voice "subtly further away" in Whole room: mostly room reverb at desk distance. Stock firmware uses neural dereverb; do it with C13 once that fits the CPU.
 - [x] **C18 Bass for the directional modes** (host-verified; confirm on device) (S) — Focused, Narrow, Two sides, Follow talker and Stereo are first-order differential beams: −16 dB at 125 Hz, −10 dB at 250 Hz (simulated, front, el 0). Add a limited low-shelf compensation so they don't sound thin.
   - Cardioid aimed at a mic diagonal has an on-axis null near 3.4 kHz (Stereo sides always); needs a different beam above ~2 kHz
 - [x] **C19 Show the Whole room tracker in the stats** (host-verified; confirm on device) (S) — Whole room delay-and-sums on the tracked talker and falls back to the plain average (−12 to −25 dB at 4 kHz) while no direction is confident. Publish `omni_mix` and the steered direction in `/tmp/audio_stats.json` to check it engages in real rooms.
@@ -421,6 +421,7 @@ Excluded by design, each with the reason it stays out:
 - **HD MP3 recording mode.** Lossless WAV is already better.
 - **Daisy-chaining several Wave units (Business SKU).** Revisit if someone needs it.
 - **Speaker names in diarization.** Speakers get numbers per meeting only.
-- **NPU inference.** DFN3 on the CPU fits the budget, and no open toolchain supports the
-  VIP9000 variant. Revisit if one appears or CPU becomes the bottleneck.
+- **NPU inference.** Parked 2026-10-12: no public toolchain targets the Wave's VIP9000 variant,
+  and measured gains were small (`waved/docs/COMPUTE_HARDWARE.md` "Status: parked" lists where to
+  resume). Revisit if a vendor SDK arrives or a large on-device model (e.g. transcription) is wanted.
 - **Raw eight-channel microphone over USB.** Revisit when an application asks for it.

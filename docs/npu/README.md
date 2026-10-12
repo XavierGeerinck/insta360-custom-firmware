@@ -1,5 +1,13 @@
 # Insta360 Wave NPU Research
 
+> **Parked (2026-10-12).** Noise reduction moves to the CPU; this research
+> stops here. The measured case is in
+> [`waved/docs/COMPUTE_HARDWARE.md`](../../waved/docs/COMPUTE_HARDWARE.md#status-parked-2026-10-12):
+> a vendor-compiled 41 M-MAC fp16 model ran 2.8 ms on the NPU against 4.7 ms
+> on the CPU, but 4.5–5.2 ms once its output was copied and converted, and
+> every NPU call costs about 70–90 µs. That section also lists where to resume
+> (E1–E3 compile matrix, vendor toolchain requests, the Khadas v1 probe).
+
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
 reproducibly.

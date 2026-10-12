@@ -7,11 +7,59 @@ AV400 audio platform).
 
 | Resource | What it is | Stock firmware uses it for | Suitable for waved |
 |----------|------------|----------------------------|--------------------|
-| 4× Cortex-A55 @ ~1.2 GHz, NEON + `asimddp` | CPU complex | Everything the NPU/DSP doesn't handle | AEC, beamforming, DOA, orchestration |
-| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | Learned NPU-assisted noise suppression proven for one sealed U8 `[481]` Erf partition; general models remain compiler-blocked |
+| 4× Cortex-A55 @ up to 2.016 GHz, NEON + `asimddp` + `asimdhp` | CPU complex | Everything the NPU/DSP doesn't handle | AEC, beamforming, DOA, orchestration |
+| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | **Parked 2026-10-12** (see below). One sealed U8 `[481]` Erf partition runs; general models remain compiler-blocked, and measured gains are small |
 | HiFi-class audio DSP at `/dev/audiodsp0` | 8 MB firmware region, chr dev 272 | Unknown (likely stock AEC / NR / DRC) | Out of scope unless we get Cadence/Tensilica toolchain |
 
 ## Vivante NPU
+
+### Status: parked (2026-10-12)
+
+Noise reduction is not worth the NPU's cost today. What decided it, all
+measured on the Wave:
+
+| Workload | CPU | NPU |
+|---|---|---|
+| Stock CTC model, 41 M MACs, fp16, vendor-compiled (PoC 15A) | 4.66 ms, stock ONNX Runtime 1.15.1, default thread pool | 2.79 ms `Run()`; 4.49 ms with output copy, 5.15 ms with fp16→fp32 conversion |
+| U8 `[481]` Erf lookup (PoC 13G) | 3.3 µs | 68 µs `Run()`, 86 µs with copies |
+
+- Even a vendor-compiled model only ties the CPU end to end, and our own
+  compiler path can't build Conv/FC layers for this chip yet (every tested
+  Conv/MatMul was FP32, which the NN engine most likely doesn't take).
+- DeepFilterNet's 84 % of a core (8.5 ms per 10 ms hop, tract, fp32) is far
+  above its arithmetic: DeepFilterNet3 publishes ≈ 0.35 GMAC per second of
+  audio, ≈ 3.5 M per hop, which the rate above puts near 0.4–1.6 ms. The
+  runtime looks like the bottleneck, so the CPU is tried first (TODO C13).
+- The NPU earns its keep on large, continuous models (stock ASR,
+  diarization, punctuation), which waved doesn't run on the device.
+
+Where to resume, in order, if a reason appears:
+
+1. **E1 (host only).** Recover libOpenVX's op × dtype → NN/TP/SH target
+   selection with `waved/scripts/npu/ghidra_abi.py`; it picks E2's cells.
+2. **E2 (compile only, ≤ 6 calls).** The 8C graph with `VIV_VX_DEBUG_LEVEL=1`
+   and `VIV_VX_ENABLE_PRINT_TARGET=1`; FC 481→16 U8 per-tensor with INT32
+   bias; FIR Conv U8; FIR Conv FP16; affine as a 1×1 depthwise Conv; affine
+   as a diagonal FC. Pattern: `tools/npu-compiler/tim_vx_compile_erf_affine.cc`.
+3. **E3.** Only if E2 exports an NBG: one execution against the CPU oracle,
+   then one-weight differentials (`nbg_constant_diff.py`) for the serializer.
+4. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
+   Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
+   6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
+   (`VIP9000NANOS_PID0X1000000E`) SDK. Either pairs with public acuitylite
+   6.57.1 (ovxlib 1.2.30).
+5. **E0, Khadas `aml_npu_sdk`.** Public; its Acuity device file
+   `VIPNANOQI_PID0X1E` targets `VIP9000NANOS_PID0X1000000E`, but its 6.4.8
+   simulator writes NBG v1 (`0x0001000F`). The earlier rejection
+   (`sample-add.nb`) failed on the product field first, so whether the driver
+   loads a v1 file with the right product is unknown. It is a simulator-path
+   export, which the lab rules exclude for Acuity 6.30.22: needs the owner's
+   explicit OK.
+
+No fit found: Mesa Teflon (etnaviv instead of galcore, VIPNano-QI/SI+ and
+RK3588 only, no NBG); Synaptics SyNAP and Realtek Ameba document only their
+own chips; NXP i.MX has no public x86 NBG compiler; TI, MediaTek and Rockchip
+have no Vivante NPU.
 
 ### Kernel + driver evidence
 
