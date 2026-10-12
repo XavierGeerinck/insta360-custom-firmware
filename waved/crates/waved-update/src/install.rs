@@ -96,10 +96,13 @@ fn replace_by_copy(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Delete what an install cut short by a power cut leaves behind: half
-/// written `.new` copies. Nothing needs them after a restart; the service
-/// calls this when it starts.
+/// Delete what an update cut short leaves behind: the staging directory (a
+/// restart while Waiting leaves the whole unpacked package, ~63 MB, on
+/// `/data`) and half-written `.new` copies. A `Staged` lives only in memory,
+/// so nothing needs them after a restart; the service calls this when it
+/// starts.
 pub fn clear_leftovers(paths: &Paths) {
+    clear_staging(paths);
     for target in Target::ALL {
         let new = Paths::new_copy(&paths.target(target));
         match fs::remove_file(&new) {
@@ -107,6 +110,16 @@ pub fn clear_leftovers(paths: &Paths) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => tracing::warn!("could not remove {}: {e}", new.display()),
         }
+    }
+}
+
+/// Delete the staging directory, if there is one.
+pub fn clear_staging(paths: &Paths) {
+    let staging = paths.staging();
+    match fs::remove_dir_all(&staging) {
+        Ok(()) => tracing::info!("removed {} left by an earlier update", staging.display()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!("could not remove {}: {e}", staging.display()),
     }
 }
 

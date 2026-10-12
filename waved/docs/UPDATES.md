@@ -119,8 +119,10 @@ setup page.
 `UpdateService` (`crates/waved-update/src/service.rs`), started by `main.rs` through
 `device::spawn_device`:
 
-1. **At start:** reads the trial bookkeeping (below) and reports a rollback or an
-   interrupted install as a failure. This runs even with updates off.
+1. **At start:** deletes what an earlier update left behind (the staging directory, which
+   a restart while Waiting leaves full, and half-written `.<name>.new` copies), reads the
+   trial bookkeeping (below) and reports a rollback or an interrupted install as a
+   failure. This runs even with updates off.
 2. **Checks** 2 min after start, then every 6 h; System → Firmware update checks at once.
    An automatic check that cannot reach the server stays quiet; a tapped one fails
    visibly.
@@ -129,8 +131,9 @@ setup page.
    of one package from being continued with another. A server that ignores ranges starts
    the file over.
 4. **Verifies:** whole-file SHA-256 against the index, then the signature, then the signed
-   version against the index and the version rule, then room on `/data`, then unpacks to
-   `/data/waved/update/staged/` (same filesystem as the binary).
+   version against the index and the version rule, then (with any old staging deleted
+   first) room on `/data`, then unpacks to `/data/waved/update/staged/` (same filesystem as
+   the binary).
 5. **Waits** until Wave is free (`gate.rs`): no recording or pause, no "Send this
    recording?", no call or ringing, no playback, no Wi-Fi setup, battery ≥ 30 % or USB
    connected. An automatic install also waits while the computer has the microphone open; a
@@ -145,11 +148,12 @@ restarting 100.
 
 `/data` is 512 MiB with ~440 MB usable and nearly full; the stripped binary is ~63 MB
 (`docs/DISPLAY_HARDWARE.md`, "Deploy"). The download (gzip, smaller than the binary) goes
-to RAM. Staging needs the unpacked size plus 16 MiB on `/data`. If that is short, the
-`.prev` copies of the last committed update are deleted first (`space.rs`; never during a
-trial, and a `.prev` that is a hard link of a live file frees nothing and is not counted).
-After an install `/data` holds the new binary and `.waved.prev`, which is the old binary's
-own inode (a hard link, no copy).
+to RAM. Staging needs the unpacked size plus 16 MiB on `/data`, measured after any old
+staging is deleted; if that is short the update fails with "Not enough space on Wave"
+(`space.rs`). Nothing is deleted to make room: the `.prev` copies are the last known good
+version, and the next install replaces them anyway (step 2 below). After an install `/data`
+holds the new binary and `.waved.prev`, which is the old binary's own inode (a hard link,
+no copy), so the peak is three binaries: the live one, `.waved.prev` and the staged one.
 
 ## Install and fall-back ("trial starts")
 
@@ -198,8 +202,8 @@ or Install clears it. If waved finds a `trial` that is not its own version, the 
 cut between steps 3 and 5: it puts the deploy files back and reports "The update stopped
 before it finished".
 
-`.prev` files stay after a commit as the last known good version, until the next update
-needs their space.
+`.prev` files stay after a commit as the last known good version, until the next install
+replaces them with the version it replaces.
 
 ## What the user sees
 

@@ -341,7 +341,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
         }
         let have = fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
         let free = (self.free_space)(&dir).unwrap_or(0);
-        if let SpacePlan::TooBig { .. } = space::plan(free, index.size.saturating_sub(have), &[]) {
+        if let SpacePlan::TooBig { .. } = space::plan(free, index.size.saturating_sub(have)) {
             return Err(Failure::Shown(copy::NO_SPACE));
         }
 
@@ -422,24 +422,17 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             return Err(reject(&self.paths, copy::OLDER));
         }
 
-        // Room on /data for the unpacked files, deleting last-known-good
-        // copies if that is what it takes.
+        // Room on /data for the unpacked files, measured with no old staging
+        // in the way. The `.prev` copies are never deleted for room: they
+        // are the last known good version.
         let update_dir = self.paths.update_dir();
         fs::create_dir_all(&update_dir).map_err(|_| Failure::Shown(copy::NO_SPACE))?;
+        crate::install::clear_staging(&self.paths);
         let free = (self.free_space)(&update_dir).unwrap_or(0);
         let need = header.manifest.installed_size();
-        match space::plan(free, need, &space::reclaimable(&self.paths)) {
-            SpacePlan::Fits => {}
-            SpacePlan::FitsAfterDeleting(files) => {
-                for file in files {
-                    info!("removing {} to make room for the update", file.display());
-                    let _ = fs::remove_file(file);
-                }
-            }
-            SpacePlan::TooBig { need, free } => {
-                warn!("update needs {need} bytes on /data, {free} free");
-                return Err(Failure::Shown(copy::NO_SPACE));
-            }
+        if let SpacePlan::TooBig { need, free } = space::plan(free, need) {
+            warn!("update needs {need} bytes on /data, {free} free");
+            return Err(Failure::Shown(copy::NO_SPACE));
         }
 
         let staging = self.paths.staging();
@@ -1016,6 +1009,67 @@ mod tests {
         }
         assert!(Paths::prev(&init).exists(), "the old copy stays");
         assert!(init.exists());
+    }
+
+    /// A file of `len` bytes as `metadata` reports it, without writing them.
+    fn sparse(path: &Path, len: u64) {
+        fs::File::create(path).unwrap().set_len(len).unwrap();
+    }
+
+    const MB: u64 = 1024 * 1024;
+
+    /// Little room while anything is staged, plenty once staging is gone.
+    fn short_while_staged(dir: &Path) -> io::Result<u64> {
+        Ok(if dir.join("staged").exists() { MB } else { 1024 * MB })
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_start_clears_staging_an_earlier_boot_left() {
+        let h = Harness::new();
+        fs::create_dir_all(h.paths.staging()).unwrap();
+        fs::write(h.paths.staging().join("waved"), "staged before a reboot").unwrap();
+        fs::write(h.paths.staging().join("S60waved.part"), "half").unwrap();
+        h.spawn(h.settings("0.9.3"));
+        h.until("started", |s| s.phase == OtaPhase::Idle).await;
+        assert!(!h.paths.staging().exists());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stale_staging_is_cleared_before_the_space_check_and_old_copies_stay() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        let prev = Paths::prev(&h.paths.target(Target::Waved));
+        sparse(&prev, 63 * MB);
+        h.spawn_with(
+            h.settings("0.9.3"),
+            Some(h.key.verifying_key()),
+            short_while_staged,
+        );
+        h.until("started", |s| s.phase == OtaPhase::Idle).await;
+        // Left over after the start-up clean (no reboot in between).
+        fs::create_dir_all(h.paths.staging()).unwrap();
+        sparse(&h.paths.staging().join("waved"), 63 * MB);
+        h.send(Command::InstallUpdate);
+        h.until_rebooted().await;
+        assert!(prev.exists(), "the last known good copy is kept");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn old_copies_are_never_deleted_to_make_room() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        let prev = Paths::prev(&h.paths.target(Target::Waved));
+        sparse(&prev, 63 * MB);
+        // Room in RAM for the download; on /data only with the old copy gone.
+        h.spawn_with(h.settings("0.9.3"), Some(h.key.verifying_key()), |dir| {
+            Ok(if dir.ends_with("tmp/waved-update") { 1024 * MB } else { MB })
+        });
+        h.send(Command::InstallUpdate);
+        let state = h.until("failed", failed).await;
+        assert_eq!(reason(&state), "Not enough space on Wave");
+        assert!(prev.exists(), "the last known good copy is kept");
+        assert!(h.installs().is_empty());
+        assert_eq!(h.fetcher.downloads().len(), 1, "it got as far as /data");
     }
 
     #[tokio::test(start_paused = true)]

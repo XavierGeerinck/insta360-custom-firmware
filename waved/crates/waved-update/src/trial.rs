@@ -107,7 +107,7 @@ pub fn begin(paths: &Paths, trial: &Trial) -> io::Result<()> {
 }
 
 /// The new version is healthy: stop counting. The `.prev` copies stay as the
-/// last known good version until the next update needs their space.
+/// last known good version until the next install replaces them.
 pub fn commit(paths: &Paths) -> io::Result<()> {
     remove_if_present(&paths.trial())?;
     remove_if_present(&paths.starts())
