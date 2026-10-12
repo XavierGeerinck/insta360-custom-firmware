@@ -2,6 +2,7 @@
 pub mod simulate;
 
 pub mod events;
+pub mod pclink;
 pub mod report;
 pub mod stats;
 pub mod reader;

@@ -1,135 +1,44 @@
 //! MAVLink v2 framing for the MCU link on `/dev/ttyS4` (docs/MCU_PROTOCOL.md).
 //!
-//! `FD len incompat compat seq sysid compid msgid[3 LE] payload crc[2 LE]`.
-//! Trailing payload zeros are trimmed on the wire and zero-filled here; the
-//! CRC is CRC-16/MCRF4XX over everything after `FD`, then the message's
-//! `crc_extra`.
+//! A thin layer over `waved-mavlink`, which the Wave Controller link shares:
+//! `sysid = compid = 0` and only the MCU's messages (`MCU_LINK`), so frames
+//! from another dialect are skipped like any other unknown message.
 
-const MAGIC: u8 = 0xFD;
-/// Bytes before the payload, magic included.
-const HEADER_LEN: usize = 10;
+use waved_mavlink::{Header, MCU_LINK};
 
-/// A decoded message. `payload` is zero-filled to the message's full length.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Message {
-    pub seq: u8,
-    pub msgid: u32,
-    pub payload: Vec<u8>,
-}
-
-/// Full payload length and `crc_extra` of the messages the MCU link carries.
-fn spec(msgid: u32) -> Option<(usize, u8)> {
-    match msgid {
-        0 => Some((32, 0x45)),
-        1 => Some((32, 0x20)),
-        100 => Some((36, 0x27)),
-        101 => Some((36, 0x3A)),
-        102 => Some((140, 0xA9)),
-        103 => Some((68, 0x15)),
-        _ => None,
-    }
-}
+pub use waved_mavlink::Message;
 
 /// The full payload length of `msgid`, if this link carries it.
 pub fn full_len(msgid: u32) -> Option<usize> {
-    spec(msgid).map(|(len, _)| len)
-}
-
-fn crc_accumulate(crc: u16, byte: u8) -> u16 {
-    let mut t = byte ^ (crc as u8);
-    t ^= t << 4;
-    (crc >> 8) ^ (u16::from(t) << 8) ^ (u16::from(t) << 3) ^ (u16::from(t) >> 4)
-}
-
-fn checksum(after_magic: &[u8], extra: u8) -> u16 {
-    let crc = after_magic.iter().fold(0xFFFF, |crc, &b| crc_accumulate(crc, b));
-    crc_accumulate(crc, extra)
+    waved_mavlink::spec(MCU_LINK, msgid).map(|s| s.len)
 }
 
 /// One frame for `msgid`, with the payload zero-padded to its full length
 /// and then trimmed as MAVLink v2 sends it.
 ///
-/// Panics on a `msgid` this link does not carry (a programming error).
+/// Panics on a `msgid` this link does not carry, or a payload longer than the
+/// message (programming errors).
 pub fn encode(seq: u8, msgid: u32, payload: &[u8]) -> Vec<u8> {
-    let (full, extra) = spec(msgid).expect("msgid carried by the MCU link");
-    let mut body = payload.to_vec();
-    body.resize(full, 0);
-    while body.len() > 1 && body.last() == Some(&0) {
-        body.pop();
-    }
-    let mut frame = vec![MAGIC, body.len() as u8, 0, 0, seq, 0, 0];
-    frame.extend_from_slice(&msgid.to_le_bytes()[..3]);
-    frame.extend_from_slice(&body);
-    let crc = checksum(&frame[1..], extra);
-    frame.extend_from_slice(&crc.to_le_bytes());
-    frame
+    waved_mavlink::encode(MCU_LINK, Header { seq, sysid: 0, compid: 0 }, msgid, payload)
+        .expect("msgid carried by the MCU link, payload within its length")
 }
 
 /// Reassembles frames from the byte stream, one byte at a time.
-#[derive(Default)]
-pub struct Parser {
-    buf: Vec<u8>,
+pub struct Parser(waved_mavlink::Parser);
+
+impl Default for Parser {
+    fn default() -> Self {
+        Self(waved_mavlink::Parser::new(MCU_LINK))
+    }
 }
 
 impl Parser {
     /// Feed one received byte; returns a message when it completes one.
     pub fn feed(&mut self, byte: u8) -> Option<Message> {
-        if self.buf.is_empty() && byte != MAGIC {
-            return None;
-        }
-        self.buf.push(byte);
-        // A header that can't be one of ours (e.g. a cut-off frame whose
-        // next `FD` would read as length 253) is dropped up to the next magic.
-        while self.buf.len() >= HEADER_LEN && !header_ok(&self.buf) {
-            self.resync();
-        }
-        if self.buf.len() < HEADER_LEN {
-            return None;
-        }
-        let total = HEADER_LEN + usize::from(self.buf[1]) + 2;
-        if self.buf.len() < total {
-            return None;
-        }
-        let frame: Vec<u8> = self.buf.drain(..total).collect();
-        match decode(&frame) {
-            Some(message) => Some(message),
-            None => {
-                self.buf = frame;
-                self.resync();
-                None
-            }
-        }
-    }
-
-    /// Drop the leading magic and everything up to the next one.
-    fn resync(&mut self) {
-        match self.buf[1..].iter().position(|&b| b == MAGIC) {
-            Some(at) => {
-                self.buf.drain(..=at);
-            }
-            None => self.buf.clear(),
-        }
+        self.0.feed(byte)
     }
 }
 
-/// Flags zero, a message this link carries, and a length within it.
-fn header_ok(h: &[u8]) -> bool {
-    let msgid = u32::from_le_bytes([h[7], h[8], h[9], 0]);
-    h[2] == 0 && h[3] == 0 && spec(msgid).is_some_and(|(full, _)| usize::from(h[1]) <= full)
-}
-
-fn decode(frame: &[u8]) -> Option<Message> {
-    let len = usize::from(frame[1]);
-    let msgid = u32::from_le_bytes([frame[7], frame[8], frame[9], 0]);
-    let (full, extra) = spec(msgid)?;
-    let crc = u16::from_le_bytes([frame[HEADER_LEN + len], frame[HEADER_LEN + len + 1]]);
-    if checksum(&frame[1..HEADER_LEN + len], extra) != crc {
-        return None;
-    }
-    let mut payload = frame[HEADER_LEN..HEADER_LEN + len].to_vec();
-    payload.resize(full.max(len), 0);
-    Some(Message { seq: frame[4], msgid, payload })
-}
 #[cfg(test)]
 mod tests {
     use super::*;

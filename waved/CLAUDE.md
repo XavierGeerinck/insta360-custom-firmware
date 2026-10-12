@@ -22,6 +22,7 @@ from on-device measurement and are hard to rederive.
 | MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, power off) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
 | Bluetooth module (`/dev/ttyS1` 921600, Telink; audio on TDM-A `hw:0,0`; `BT.bin`/`DONGLE.bin`) | [`docs/BLUETOOTH_PROTOCOL.md`](docs/BLUETOOTH_PROTOCOL.md) |
 | Updates (signed packages, server, fall-back in `S60waved`, back to stock) | [`docs/UPDATES.md`](docs/UPDATES.md) |
+| Wave Controller app ("PC Link", vendor HID report 0x03, MAVLink) | [`docs/WAVE_CONTROLLER_PROTOCOL.md`](docs/WAVE_CONTROLLER_PROTOCOL.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,

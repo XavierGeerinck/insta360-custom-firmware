@@ -8,6 +8,7 @@ simulate = []
 
 [dependencies]
 waved-state = { path = "../waved-state" }
+waved-mavlink = { path = "../waved-mavlink" }
 serialport = { version = "4", default-features = false }
 tokio = { workspace = true, features = ["sync"] }
 crossbeam-channel.workspace = true

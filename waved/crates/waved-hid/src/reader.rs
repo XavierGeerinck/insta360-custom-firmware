@@ -1,6 +1,7 @@
 //! HID Reader — blocking std::thread owning the read side of /dev/hidg0.
 //! Parses host Set_Report writes (Reports 0x05 / 0x06 / 0x07) into
-//! AudioState.call_*.
+//! AudioState.call_*, and hands vendor report 0x03 (the Wave Controller
+//! PC link, `crate::pclink`) to its channel.
 
 use std::io::Read;
 use std::sync::atomic::Ordering;
@@ -34,6 +35,29 @@ pub fn parse_led(buf: &[u8]) -> Option<LedReport> {
         0x07 => Some(LedReport::Ringing(bit)),
         _ => None,
     }
+}
+
+/// Where one read from `/dev/hidg0` goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    Led(LedReport),
+    /// Report 0x03: the Wave Controller PC link.
+    Vendor,
+    Unknown,
+}
+
+pub fn route(buf: &[u8]) -> Route {
+    if buf.first() == Some(&crate::pclink::vendor::REPORT_ID) {
+        return Route::Vendor;
+    }
+    parse_led(buf).map_or(Route::Unknown, Route::Led)
+}
+
+/// A vendor read as the 64-byte report the PC link expects (zero-padded).
+pub fn vendor_report(buf: &[u8]) -> Vec<u8> {
+    let mut report = buf[..buf.len().min(crate::pclink::vendor::REPORT_LEN)].to_vec();
+    report.resize(crate::pclink::vendor::REPORT_LEN, 0);
+    report
 }
 
 /// Apply a parsed `LedReport`: bump the matching counter and store the
@@ -74,6 +98,17 @@ impl HidReader {
         audio_tx: Arc<watch::Sender<AudioState>>,
         stats: Arc<HidStats>,
     ) {
+        Self::spawn_with_vendor(cfg, audio_tx, stats, None);
+    }
+
+    /// Like `spawn`, and vendor reports 0x03 go to `vendor_tx` (the PC link,
+    /// `pclink::service`) instead of being dropped.
+    pub fn spawn_with_vendor(
+        cfg: HidReaderConfig,
+        audio_tx: Arc<watch::Sender<AudioState>>,
+        stats: Arc<HidStats>,
+        vendor_tx: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+    ) {
         std::thread::spawn(move || {
             let mut f = match std::fs::OpenOptions::new().read(true).open(&cfg.device) {
                 Ok(f) => {
@@ -95,13 +130,18 @@ impl HidReader {
                         warn!("hid-reader: EOF on {}, exiting", cfg.device);
                         return;
                     }
-                    Ok(n) => {
-                        if let Some(led) = parse_led(&buf[..n]) {
-                            apply_led(led, &stats, &audio_tx);
-                        } else {
+                    Ok(n) => match route(&buf[..n]) {
+                        Route::Led(led) => apply_led(led, &stats, &audio_tx),
+                        Route::Vendor => match &vendor_tx {
+                            Some(tx) if tx.send(vendor_report(&buf[..n])).is_ok() => {}
+                            _ => {
+                                stats.glue_drops.fetch_add(1, Ordering::Relaxed);
+                            }
+                        },
+                        Route::Unknown => {
                             stats.glue_drops.fetch_add(1, Ordering::Relaxed);
                         }
-                    }
+                    },
                     Err(e) => {
                         warn!("hid-reader: read error: {} — exiting", e);
                         return;
@@ -117,6 +157,27 @@ mod tests {
     use super::*;
     use tokio::sync::watch;
     use waved_state::AudioState;
+
+    #[test]
+    fn vendor_reports_go_to_the_pc_link_and_leds_stay_leds() {
+        let mut vendor = [0u8; 64];
+        vendor[0] = 0x03;
+        vendor[1] = 0xEC;
+        assert_eq!(route(&vendor), Route::Vendor);
+        assert_eq!(route(&[0x06, 0x01]), Route::Led(LedReport::Mute(true)));
+        assert_eq!(route(&[0x09, 0x01]), Route::Unknown);
+        assert_eq!(route(&[0x03]), Route::Vendor, "short vendor reads are still vendor reads");
+    }
+
+    #[test]
+    fn vendor_reads_are_padded_to_64_bytes() {
+        let mut short = vec![0x03, 0x00, 0x01];
+        short.resize(10, 0xAA);
+        let padded = vendor_report(&short);
+        assert_eq!(padded.len(), 64);
+        assert_eq!(&padded[..10], &short[..]);
+        assert!(padded[10..].iter().all(|&b| b == 0));
+    }
 
     #[test]
     fn parse_off_hook_on() {

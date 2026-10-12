@@ -533,11 +533,23 @@ async fn run_async(
                 async move { waved_hid::HidService::run(svc_cfg, bus_rx, ev_rx, stats).await }
             });
 
-            // Reader for host LED writes — blocking std::thread.
-            waved_hid::reader::HidReader::spawn(
+            // Reader for host LED writes — blocking std::thread. Vendor
+            // report 0x03 (Wave Controller, TODO J) goes to the PC link.
+            let (pclink_tx, pclink_rx) = std::sync::mpsc::channel();
+            waved_hid::reader::HidReader::spawn_with_vendor(
                 waved_hid::reader::HidReaderConfig { device: hid_cfg.device.clone() },
                 Arc::clone(&bus.audio),
                 Arc::clone(&hid_stats),
+                Some(pclink_tx),
+            );
+            waved_hid::pclink::service::spawn(
+                waved_hid::pclink::service::PcLinkConfig { device: hid_cfg.device.clone() },
+                pclink_rx,
+                waved_hid::pclink::service::PcLinkBus::from_bus(&bus),
+                // TODO(integration): K2's PIN check (waved_config::PinAttempts) and PIN screen.
+                Box::new(waved_hid::pclink::handler::DenyAllPins),
+                Box::new(waved_hid::pclink::handler::NoClock),
+                None,
             );
 
             // State-driven event sources.
