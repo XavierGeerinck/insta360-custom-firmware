@@ -23,6 +23,7 @@ config/local.toml
 *.db-wal
 recordings/
 pulled-recordings/
+recordings-backup-*/
 
 # Debug dumps
 *.pcm
