@@ -8,6 +8,8 @@ use crate::screens_v2::{
     first_run, home, menu, noise, powering_off, recording, system, upload_mode, uploads, volume,
     wifi, wifi_setup,
 };
+// Milestone 3, K2.
+use crate::screens_v2::pin;
 
 /// The screen for `route`, or `None` for a milestone 3 route, which the
 /// runtime backs out of.
@@ -38,11 +40,11 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::TimeZone => Box::new(datetime::TimeZoneScreen::default()),
         Route::About => Box::new(about::AboutScreen::default()),
         Route::Confirm(kind) => Box::new(confirm::ConfirmScreen::new(*kind)),
-        // Milestone 3: Mic height, Bluetooth, PIN, USB storage, firmware
-        // update and incoming call have no screen yet.
+        Route::Pin(_) => Box::new(pin::PinScreen::default()),
+        // Milestone 3: Mic height, Bluetooth, USB storage, firmware update
+        // and incoming call have no screen yet.
         Route::MicHeight
         | Route::Bluetooth
-        | Route::Pin(_)
         | Route::UsbStorage
         | Route::Update
         | Route::IncomingCall => return None,
@@ -197,7 +199,6 @@ mod tests {
         for route in [
             Route::MicHeight,
             Route::Bluetooth,
-            Route::Pin(Box::new(Route::Files)),
             Route::UsbStorage,
             Route::Update,
             Route::IncomingCall,
