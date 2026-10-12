@@ -1,5 +1,6 @@
 //! Menu (B1): every setting with its current value, opened from the status
-//! pill (menu.png). Mic height (B5) and Bluetooth (I4) join in milestone 3.
+//! pill (menu.png). Mic height (B5) joined in milestone 3; Bluetooth (I4) joins
+//! with its workstream.
 //! This file also holds the value words other settings screens reuse.
 
 use crate::kit::components::buttons::back_button;
@@ -10,6 +11,7 @@ use crate::kit::obj::Obj;
 use crate::kit::route::Route;
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
+use crate::screens_v2::mic_height;
 use std::cell::Cell;
 use waved_state::{AudioMode, NrLevel, UploadMode};
 
@@ -19,17 +21,19 @@ pub enum MenuRow {
     AudioMode,
     NoiseReduction,
     Volume,
+    MicHeight,
     Wifi,
     Uploads,
     System,
 }
 
-/// Milestone 2's rows, in the mockup's order (how often people need them).
-pub const ROWS: [MenuRow; 7] = [
+/// The rows in scope, in the mockup's order (how often people need them).
+pub const ROWS: [MenuRow; 8] = [
     MenuRow::Files,
     MenuRow::AudioMode,
     MenuRow::NoiseReduction,
     MenuRow::Volume,
+    MenuRow::MicHeight,
     MenuRow::Wifi,
     MenuRow::Uploads,
     MenuRow::System,
@@ -46,6 +50,7 @@ impl MenuRow {
             MenuRow::AudioMode => Route::AudioMode,
             MenuRow::NoiseReduction => Route::NoiseReduction,
             MenuRow::Volume => Route::Volume,
+            MenuRow::MicHeight => Route::MicHeight,
             MenuRow::Wifi => Route::Wifi,
             MenuRow::Uploads => Route::Uploads,
             MenuRow::System => Route::System,
@@ -58,6 +63,7 @@ impl MenuRow {
             MenuRow::AudioMode => "Audio mode",
             MenuRow::NoiseReduction => "Noise reduction",
             MenuRow::Volume => "Volume",
+            MenuRow::MicHeight => "Mic height",
             MenuRow::Wifi => "Wi-Fi",
             MenuRow::Uploads => "Uploads",
             MenuRow::System => "System",
@@ -70,6 +76,7 @@ impl MenuRow {
             MenuRow::AudioMode => icons::PATTERN,
             MenuRow::NoiseReduction => icons::NOISE,
             MenuRow::Volume => icons::VOLUME_HIGH,
+            MenuRow::MicHeight => icons::MIC,
             MenuRow::Wifi => icons::WIFI,
             MenuRow::Uploads => icons::SEND,
             MenuRow::System => icons::SETTINGS,
@@ -90,6 +97,11 @@ impl MenuRow {
             } else {
                 let volume = snap.audio.speaker_volume.min(100);
                 format!("{volume}%")
+            }),
+            MenuRow::MicHeight => Some(if snap.mcu.lift.is_moving() {
+                mic_height::MOVING.into()
+            } else {
+                mic_height::height_name(snap.settings.mic_height).into()
             }),
             MenuRow::Wifi => Some(if !snap.wifi.connected {
                 "Not connected".into()
@@ -347,7 +359,7 @@ mod tests {
             let mut screen = MenuScreen::default();
             screen.build(root, &f.ctx, &menu_snap());
             // menu.png: Files (far), Audio mode, Noise reduction (focus), Volume, then
-            // Wi-Fi where the mockup shows the hidden Mic height row.
+            // Mic height (Medium) fading out above Back.
             assert_golden("screen_menu", &lv.render());
             assert_targets_ok(root);
         });
@@ -384,6 +396,7 @@ mod tests {
                 "Audio mode",
                 "Noise reduction",
                 "Volume",
+                "Mic height",
                 "Wi-Fi",
                 "Uploads",
                 "System"
@@ -416,9 +429,17 @@ mod tests {
             snap.audio.speaker_muted = true;
             screen.update(&snap);
             assert_eq!(value(&screen, 3), "Muted");
+            assert_eq!(value(&screen, 4), "Medium");
+            snap.mcu.lift = waved_state::LiftState::Moving;
+            snap.settings.mic_height = waved_state::MotorPosition::High;
+            screen.update(&snap);
+            assert_eq!(value(&screen, 4), "Moving");
+            snap.mcu.lift = waved_state::LiftState::Idle;
+            screen.update(&snap);
+            assert_eq!(value(&screen, 4), "High");
             snap.wifi.connected = false;
             screen.update(&snap);
-            assert_eq!(value(&screen, 4), "Not connected");
+            assert_eq!(value(&screen, 5), "Not connected");
             assert_targets_ok(root);
         });
     }
@@ -462,7 +483,12 @@ mod tests {
         ] {
             assert!(row.locked(&snap), "{row:?}");
         }
-        for row in [MenuRow::AudioMode, MenuRow::NoiseReduction, MenuRow::Volume] {
+        for row in [
+            MenuRow::AudioMode,
+            MenuRow::NoiseReduction,
+            MenuRow::Volume,
+            MenuRow::MicHeight,
+        ] {
             assert!(!row.locked(&snap), "{row:?}");
         }
     }
