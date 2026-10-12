@@ -172,12 +172,25 @@ pub struct MicHealthMonitor {
     attempts_left: u32,
     scratch: Vec<f32>,
     done: bool,
+    /// Frames still to skip after capture opened.
+    warmup_left: u64,
+    /// One-pole high-pass per channel: coefficient, last input, last output.
+    hp_alpha: f32,
+    hp_x: Vec<f32>,
+    hp_y: Vec<f32>,
 }
 
 impl MicHealthMonitor {
     pub const WINDOW_MS: u64 = 3_000;
     /// Quiet-room windows before giving up (30 s with the default window).
     pub const MAX_ATTEMPTS: u32 = 10;
+    /// Skipped after capture opens: the mics' power-up thump, which lifts
+    /// some channels more than others (device pass, 2026-10-12).
+    pub const WARMUP_MS: u64 = 1_000;
+    /// Levels are compared above this: the two PDM slots of each data line
+    /// sit on different DC offsets, and in a quiet room DC and sub-audio
+    /// drift made every odd ALSA channel read "much quieter" (0b10101010).
+    const HIGH_PASS_HZ: f32 = 100.0;
 
     pub fn new(channels: usize, sample_rate: u32) -> Self {
         Self {
@@ -187,6 +200,10 @@ impl MicHealthMonitor {
             attempts_left: Self::MAX_ATTEMPTS,
             scratch: Vec::new(),
             done: channels == 0,
+            warmup_left: u64::from(sample_rate) * Self::WARMUP_MS / 1_000,
+            hp_alpha: (-2.0 * std::f32::consts::PI * Self::HIGH_PASS_HZ / sample_rate.max(1) as f32).exp(),
+            hp_x: vec![0.0; channels],
+            hp_y: vec![0.0; channels],
         }
     }
 
@@ -201,9 +218,21 @@ impl MicHealthMonitor {
             return None;
         }
         self.scratch.clear();
-        self.scratch
-            .extend(interleaved.iter().map(|&s| f32::from(s) / 32_768.0));
-        self.check.push_interleaved(&self.scratch);
+        for frame in interleaved.chunks_exact(channels) {
+            for (ch, &s) in frame.iter().enumerate() {
+                let x = f32::from(s) / 32_768.0;
+                let y = self.hp_alpha * (self.hp_y[ch] + x - self.hp_x[ch]);
+                self.hp_x[ch] = x;
+                self.hp_y[ch] = y;
+                self.scratch.push(y);
+            }
+        }
+        // The filter runs through the warm-up so it has settled after it.
+        let frames = (self.scratch.len() / channels) as u64;
+        let skip = frames.min(self.warmup_left);
+        self.warmup_left -= skip;
+        self.check
+            .push_interleaved(&self.scratch[skip as usize * channels..]);
         if self.check.samples_per_channel() < self.window_frames {
             return None;
         }
@@ -330,9 +359,16 @@ mod tests {
         out
     }
 
+    /// A monitor past its start-up warm-up (1 kHz, so a 3 000-frame window).
+    fn warmed() -> MicHealthMonitor {
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        assert_eq!(m.push_i16(&frames_i16(&[0; 8], 1_000), 8), None);
+        m
+    }
+
     #[test]
     fn healthy_array_is_ok_after_one_window() {
-        let mut m = MicHealthMonitor::new(8, 1_000); // 3 000-frame window
+        let mut m = warmed();
         assert_eq!(m.push_i16(&frames_i16(&[3_000; 8], 2_000), 8), None);
         assert_eq!(
             m.push_i16(&frames_i16(&[3_000; 8], 1_000), 8),
@@ -350,7 +386,7 @@ mod tests {
     fn a_dead_element_is_not_responding() {
         let mut amps = [3_000i16; 8];
         amps[3] = 0;
-        let mut m = MicHealthMonitor::new(8, 1_000);
+        let mut m = warmed();
         assert_eq!(
             m.push_i16(&frames_i16(&amps, 3_000), 8),
             Some(MicHealth::NotResponding {
@@ -363,7 +399,7 @@ mod tests {
     fn a_quiet_element_is_degraded() {
         let mut amps = [3_000i16; 8];
         amps[5] = 750; // 0.25 × median
-        let mut m = MicHealthMonitor::new(8, 1_000);
+        let mut m = warmed();
         assert_eq!(
             m.push_i16(&frames_i16(&amps, 3_000), 8),
             Some(MicHealth::Degraded {
@@ -374,7 +410,7 @@ mod tests {
 
     #[test]
     fn an_all_zero_capture_is_not_responding() {
-        let mut m = MicHealthMonitor::new(8, 1_000);
+        let mut m = warmed();
         assert_eq!(
             m.push_i16(&frames_i16(&[0; 8], 3_000), 8),
             Some(MicHealth::NotResponding { dead_mask: 0xFF })
@@ -383,12 +419,50 @@ mod tests {
 
     #[test]
     fn a_quiet_room_retries_then_gives_up() {
-        let mut m = MicHealthMonitor::new(8, 1_000);
+        let mut m = warmed();
         for _ in 0..MicHealthMonitor::MAX_ATTEMPTS {
             assert!(!m.is_done());
             assert_eq!(m.push_i16(&frames_i16(&[1; 8], 3_000), 8), None);
         }
         assert!(m.is_done(), "stays Unknown after the last attempt");
+    }
+
+    #[test]
+    fn a_dc_offset_on_alternate_channels_is_not_a_quiet_mic() {
+        // Device pass 2026-10-12: the even ALSA channels sit on a larger DC
+        // offset than the odd ones. In a quiet room DC made the even
+        // channels read loud and flagged every odd one as "much quieter"
+        // (0b10101010), though all eight hear the room alike.
+        let frames = 4 * 48_000;
+        let mut state = 0x1234_5678u32;
+        let mut data = Vec::with_capacity(frames * 8);
+        for _ in 0..frames {
+            for ch in 0..8 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let noise = ((state >> 20) as i32 - 2048) as i16 / 16; // ~±128
+                let dc = if ch % 2 == 0 { 1_500 } else { 100 };
+                data.push(noise + dc);
+            }
+        }
+        let mut m = MicHealthMonitor::new(8, 48_000);
+        assert_eq!(m.push_i16(&data, 8), Some(MicHealth::Ok));
+    }
+
+    #[test]
+    fn the_power_up_transient_is_ignored() {
+        // The first second after capture opens carries the mics' power-up
+        // thump, on some channels more than others.
+        let mut m = MicHealthMonitor::new(8, 1_000);
+        // Most channels thump, which lifts the median: counted, the three
+        // that did not would read as quiet mics.
+        let mut thump = [30_000i16; 8];
+        thump[0] = 3_000;
+        thump[1] = 3_000;
+        thump[2] = 3_000;
+        assert_eq!(m.push_i16(&frames_i16(&thump, 1_000), 8), None);
+        assert_eq!(m.push_i16(&frames_i16(&[3_000; 8], 3_000), 8), Some(MicHealth::Ok));
     }
 
     #[test]

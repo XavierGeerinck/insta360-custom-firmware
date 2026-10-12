@@ -1109,10 +1109,13 @@ median of all channels. The result is `AudioState.mic_health`, and the UI shows
 "Microphones not responding" for `NotResponding`. On the device it reports `Ok` about
 3 s after boot (2026-10-06).
 
-From 2026-10-06 most boots flagged a subset of the odd ALSA channels (ch1, 3, 5, 7) as
-"much quieter" and the rest read `Ok`. The calibration above shows the elements matched
-in silence and on speech, so the flag reflects what the array hears in its first seconds
-(motor, handling), not a weak mic. The 2026-10-08 boot read `Ok`.
+From 2026-10-06 most starts flagged the odd ALSA channels (ch1, 3, 5, 7, often all four:
+`0b10101010`) as "much quieter", though the calibration found the elements matched in
+silence and on speech. Cause: the two PDM slots of each data line sit on different DC
+offsets, and the check compared raw RMS, which in a quiet room is mostly DC and sub-audio
+drift. Since 2026-10-12 the monitor high-passes each channel at 100 Hz and skips the
+first second after capture opens (the mics' power-up thump); a unit test reproduces the
+`0b10101010` verdict from the offsets alone.
 
 ## Mic Gain Pipeline
 

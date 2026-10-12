@@ -2558,8 +2558,9 @@ mod tests {
             .0,
         );
         let (frame_tx, _meeting_rx, cmd_tx, handle) = spawn_service(Arc::clone(&state), 256);
-        // 2 channels, channel 1 digitally silent: 2 × 72 000 frames = one 3 s window.
-        for _ in 0..2 {
+        // 2 channels, channel 1 digitally silent: 3 × 72 000 frames covers
+        // the 1 s start-up warm-up and one 3 s window.
+        for _ in 0..3 {
             let data: Vec<i16> = (0..72_000)
                 .flat_map(|i| [if i % 2 == 0 { 900 } else { -900 }, 0])
                 .collect();
