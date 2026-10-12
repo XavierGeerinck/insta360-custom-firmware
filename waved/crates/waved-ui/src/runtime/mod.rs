@@ -5,6 +5,7 @@
 
 pub mod device;
 pub mod gesture;
+pub mod pin;
 pub mod power;
 pub mod registry;
 pub mod run;
@@ -84,6 +85,8 @@ pub struct Runtime {
     pressed: bool,
     /// The screen changed under a press: the device loop cancels it.
     cancel_press: bool,
+    /// The PIN check and its wrong tries, shared by every PIN screen (K2).
+    pin: pin::PinGate,
 }
 
 impl Runtime {
@@ -114,6 +117,7 @@ impl Runtime {
             last_stack: Vec::new(),
             pressed: false,
             cancel_press: false,
+            pin: pin::PinGate::default(),
         }
     }
 
@@ -190,10 +194,6 @@ impl Runtime {
     /// commands of every route that left the stack; then the routed screen
     /// is shown and the top screen updated.
     pub fn step(&mut self, mut snap: UiSnapshot, events: &[DeviceEvent]) {
-        // R13: no PIN screen until milestone 3, so routing treats the device
-        // password as off. Screens get the real value back below (Menu's
-        // lock icon shows it).
-        let pin_enabled = std::mem::replace(&mut snap.settings.pin_enabled, false);
         // Before the events, so an event's message in this step wins.
         self.slot.on_snapshot(&snap);
         let mut keys = Vec::new();
@@ -225,7 +225,7 @@ impl Runtime {
             self.route(&event, &snap);
         }
         self.router.sync(&snap);
-        snap.settings.pin_enabled = pin_enabled;
+        snap.pin = self.pin.status(snap.now_ms);
         snap.message = self.slot.current(snap.now_ms);
         self.send_leave_commands(&snap);
         self.show_current(&snap);
@@ -252,10 +252,18 @@ impl Runtime {
         }
     }
 
-    /// One UiEvent: a message goes to the slot, everything else to the router.
+    /// One UiEvent: a message goes to the slot, PIN digits to the PIN check,
+    /// everything else to the router.
     fn route(&mut self, event: &UiEvent, snap: &UiSnapshot) {
         match event {
             UiEvent::Show(message) => self.slot.post(message.clone(), snap.now_ms),
+            UiEvent::PinEntered(code) => {
+                if self.pin.check(&self.ctx.config.security, code, snap.now_ms) {
+                    self.router.handle(&UiEvent::PinAccepted, snap);
+                }
+            }
+            // Only the PIN check above unlocks; a screen cannot.
+            UiEvent::PinAccepted => {}
             other => self.router.handle(other, snap),
         }
     }
@@ -317,10 +325,7 @@ impl Runtime {
             let Some(mut screen) = (self.registry)(&route) else {
                 warn!("no screen for {route:?} yet; going back");
                 if self.router.depth() > 1 {
-                    // Routing sees the PIN as off (R13), here too.
-                    let mut masked = snap.clone();
-                    masked.settings.pin_enabled = false;
-                    self.router.handle(&UiEvent::Back, &masked);
+                    self.router.handle(&UiEvent::Back, snap);
                     continue;
                 }
                 return;
@@ -345,16 +350,19 @@ impl Runtime {
     /// `next` (already loaded) becomes the screen on display. The old one is
     /// parked when `next` is the resting screen pushed right on top of its
     /// route and nothing is parked yet; otherwise it is deleted with every
-    /// handler. A press that is down while the screen changes is cancelled
-    /// (`take_cancel_press`) and swipes nothing more: it began on another
-    /// screen, and a parked screen's pressed object would still click.
+    /// handler. A PIN screen is never parked: it is rebuilt on waking, so
+    /// half-typed digits never survive a rest. A press that is down while the
+    /// screen changes is cancelled (`take_cancel_press`) and swipes nothing
+    /// more: it began on another screen, and a parked screen's pressed object
+    /// would still click.
     fn replace_shown(&mut self, next: Shown) {
         if let Some(old) = self.shown.take() {
             let stack = self.router.stack();
             let parks = next.route == Route::Resting
                 && self.parked.is_none()
                 && stack.len() >= 2
-                && stack[stack.len() - 2] == old.route;
+                && stack[stack.len() - 2] == old.route
+                && !matches!(old.route, Route::Pin(_));
             if self.pressed {
                 self.cancel_press = true;
                 // A parked screen stays alive under the press: what the press
@@ -489,7 +497,7 @@ mod tests {
 
     fn probes(route: &Route) -> Option<Box<dyn Screen>> {
         match route {
-            Route::Bluetooth | Route::MicHeight | Route::Pin(_) => None,
+            Route::Bluetooth | Route::MicHeight => None,
             other => Some(Box::new(Probe {
                 name: format!("{other:?}"),
                 status: None,
@@ -732,18 +740,18 @@ mod tests {
     }
 
     #[test]
-    fn a_device_password_locks_nothing_until_the_pin_screen_lands() {
+    fn a_device_password_puts_files_behind_the_pin() {
         lvgl(|lv| {
             let mut rt = booted(lv);
             let mut snap = ready(2_000);
             snap.settings.pin_enabled = true;
             rt.dispatcher().navigate(Route::Files);
             rt.step(snap, &[]);
-            assert_eq!(rt.shown_route(), Some(&Route::Files));
+            assert_eq!(rt.shown_route(), Some(&Route::Pin(Box::new(Route::Files))));
             assert_eq!(
                 PIN_SEEN.with(Cell::get),
                 (Some(true), Some(true)),
-                "R13: screens still see the setting (Menu's lock icon)"
+                "screens see the setting (Menu's lock icon)"
             );
             rt.close();
         });

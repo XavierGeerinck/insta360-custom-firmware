@@ -5,6 +5,8 @@ pub mod controls;
 pub mod dial;
 /// Files list rows (workstream D, D1).
 pub mod file_row;
+/// PIN keypad and entry dots (workstream K, K2).
+pub mod keypad;
 pub mod list;
 /// Radial audio-mode picker (workstream B, B2).
 pub mod mode_picker;

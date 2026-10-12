@@ -32,8 +32,10 @@ by route; the legacy screens are gone.
   device or by the setup page since.
   The exceptions are read-only, for values that do not change while waved runs: a screen may
   read `ctx.config.api.endpoint` (Uploads shows the server host, File detail checks that a server
-  is set; only the setup page changes it, and saving there restarts waved) and
-  `ctx.config.device.name` (About shows it). Screens never write to `ctx.config`.
+  is set; only the setup page changes it, and saving there restarts waved),
+  `ctx.config.device.name` (About shows it) and `ctx.config.security` (the PIN screen's dot
+  count, `waved_config::pin_digits`; the setup page sets the PIN). Screens never write to
+  `ctx.config`.
 - Screens never navigate by sending bus commands. Use `ctx.dispatch.navigate(..)`,
   `.back()` or `.show(..)`. Services get `ctx.dispatch.command(..)`.
 - Every screen test calls `assert_targets_ok(root)` and `assert_golden(..)`, and the
@@ -133,10 +135,11 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `TimeZone` | `datetime` | `TimeZoneScreen::default()` |
 | `About` | `about` | `AboutScreen::default()` |
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
+| `Pin(target)` | `pin` | `PinScreen::default()` |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
 `main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Bluetooth,
-PIN, USB storage, Update and Incoming call are milestone 3 and have no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+USB storage, Update and Incoming call are milestone 3 and have no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
@@ -175,7 +178,15 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   (Back from the power-off confirmation). For that `build` call `UiSnapshot::rebuilt` is
   `true`, so a screen that acts in `build` can skip it. It is `false` on a first visit, and
   `false` again once the route has left the stack: a route that comes back after leaving is a
-  first visit.
+  first visit. The PIN screen is never parked: it is rebuilt on waking, so half-typed
+  digits never survive a rest.
+- **PIN (K2, D10).** While `settings.pin_enabled`, the router puts `Pin(route)` in front of
+  Files, Wi-Fi, Bluetooth, Uploads, System and every screen under them (`Route::guarded_by`),
+  until the screen rests. The PIN screen only collects digits and sends
+  `UiEvent::PinEntered`; the runtime checks them (`runtime::pin::PinGate` over
+  `waved_config::PinAttempts`, one count for every PIN screen: five wrong tries, then a
+  one-minute wait) and routes `PinAccepted` itself. A `PinAccepted` sent by a screen is
+  ignored. Wrong tries and the wait reach the screen in `UiSnapshot::pin`.
 - **Leave commands.** A route can send commands when it goes away (Wi-Fi setup sends
   `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays).
   The runtime sends them once, when the route leaves the router stack by any path: a button
@@ -211,6 +222,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 | QR code | `Qr::new(root, rect, quiet)`, `set_data(text) -> bool` (white rounded panel with a quiet zone; false when the text does not fit) (`components/wifi.rs`) | Wi-Fi setup |
 | File list | `FileList::new(root, on_open(id))`, `set_rows(Vec<RowLook>)`, `scroll_to`, `empty_state()`; `RowLook` is what one 296 x 52 recording card shows (`components/file_row.rs`) | Files |
 | Playback scrubber | `Scrubber::new(root, on_event)` with `ScrubEvent::{TogglePlay, Seek(ms)}`; `set(position_ms, duration_ms, marks_ms, playing, playable)`. A ring (r 60 at (200, 140)) with mark ticks, a knob and the time caption; centre taps play or pause, the ring seeks and keeps its gestures (`components/scrubber.rs`) | File detail |
+| PIN keypad | `Keypad::new(root, on_key(Key))` with `Key::{Digit(n), Cancel, Backspace}`: 64 × 48 keys at x 96/168/240, y 56/110/164/218, digits in Num20; `set_enabled(false)` greys digits and Backspace to Text 3 and ignores them, Cancel always works. `PinDots::new(root, count)`, `set_filled(n)`: 12 px dots at top 36 (`components/keypad.rs`) | PIN |
 
 Notes on the parts that carry state:
 

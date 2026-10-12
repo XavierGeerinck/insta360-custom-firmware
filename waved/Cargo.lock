@@ -3681,7 +3681,9 @@ dependencies = [
 name = "waved-config"
 version = "0.1.0"
 dependencies = [
+ "hmac",
  "serde",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",

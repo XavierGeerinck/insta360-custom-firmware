@@ -356,12 +356,18 @@ Rules for the parallel milestones:
   - adb off or authenticated in release builds.
   - No telnet.
   - A root password policy.
-- [ ] **K2 PIN lock** (M) (D10) — `security.device_password` is stored but not enforced.
+- [x] **K2 PIN lock** (M) (D10) — host-tested; check it in the milestone 3 device pass.
+  Plan: `waved/docs/superpowers/plans/2026-10-12-m3-k2-pin-lock.md`.
   - New `screens/pin.rs`: 3 × 4 keypad.
   - Guards Files, Wi-Fi, Bluetooth, Uploads and System.
   - Unlocked until the screen rests; five wrong tries means a one-minute wait.
   - Setup page validates 4–6 digits.
-  - The Wave Controller's `verify_dev_passwd` uses the same check (J3).
+  - The Wave Controller's `verify_dev_passwd` uses the same check (J3):
+    `waved_config::verify_device_pin(&SecurityConfig, &str) -> bool`, with
+    `waved_config::PinAttempts` for the wait. Stock `slave_verify_dev_passwd`
+    (`libins_entry.so.c:17677`) never receives the PIN: an empty password asks the
+    device to show its own PIN page, and a later call returns that page's result
+    (0 page showing, 1 verified, 2 not verified).
 - [ ] **K3 Setup network review** (S) — WPA2 setup AP timeout and credential rotation.
 - [ ] **K4 Privacy indicators audit** (S) — recording ring on the resting screen, pre-recording
   indicator, start and stop tones, and mute that also silences the recording (the current

@@ -115,7 +115,7 @@ impl MenuRow {
         }
     }
 
-    /// The lock marks PIN rows (D10) once a PIN is set. Enforcement is K2.
+    /// The lock marks PIN rows (D10) once a PIN is set; the router asks for it (K2).
     pub fn locked(self, snap: &UiSnapshot) -> bool {
         snap.settings.pin_enabled && self.route().requires_pin()
     }

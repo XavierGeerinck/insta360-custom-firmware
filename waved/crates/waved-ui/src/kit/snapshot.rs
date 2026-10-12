@@ -25,6 +25,23 @@ impl ActiveMessage {
     }
 }
 
+/// The runtime's PIN check, for the PIN screen (K2, D10).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PinStatus {
+    /// Wrong tries since waved started. A PIN screen clears its dots and says
+    /// "Wrong PIN" when this grows.
+    pub wrong: u32,
+    /// `now_ms` at which the keypad works again after five wrong tries;
+    /// `None` while it is not waiting.
+    pub locked_until_ms: Option<u64>,
+}
+
+impl PinStatus {
+    pub fn locked(&self, now_ms: u64) -> bool {
+        self.locked_until_ms.is_some_and(|until| now_ms < until)
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct UiSnapshot {
     pub audio: AudioState,
@@ -54,6 +71,8 @@ pub struct UiSnapshot {
     /// it). A screen that acts in `build` (Wi-Fi setup starts provisioning)
     /// must not act again. `capture` leaves it `false`.
     pub rebuilt: bool,
+    /// Set by the runtime every step; `capture` leaves the default.
+    pub pin: PinStatus,
 }
 
 impl UiSnapshot {
@@ -83,6 +102,7 @@ impl UiSnapshot {
             clock,
             message: None,
             rebuilt: false,
+            pin: PinStatus::default(),
         }
     }
 

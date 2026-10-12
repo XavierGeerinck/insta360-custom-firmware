@@ -34,3 +34,6 @@ pub mod wifi_setup;
 // Workstream D: Files.
 pub mod file_detail;
 pub mod files;
+
+// Workstream K: security.
+pub mod pin;

@@ -48,6 +48,27 @@ impl Message {
     }
 }
 
+/// Digits typed on the PIN screen, on their way to the runtime's check
+/// (`UiEvent::PinEntered`). Debug output never shows them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PinCode(String);
+
+impl PinCode {
+    pub fn new(digits: impl Into<String>) -> Self {
+        Self(digits.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for PinCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PinCode(..)")
+    }
+}
+
 /// Requests for the UI runtime (navigation, messages, power states).
 #[derive(Clone, Debug, PartialEq)]
 pub enum UiEvent {
@@ -55,8 +76,11 @@ pub enum UiEvent {
     Back,
     /// Return to the meeting base (Home, Recording or Decision).
     ToBase,
-    /// The PIN screen accepted the code; open the route it guarded.
+    /// The runtime's PIN check accepted the code; open the route it guarded.
+    /// Only the runtime routes this: one a screen sends is ignored.
     PinAccepted,
+    /// The PIN screen's digits, for the runtime to check (K2).
+    PinEntered(PinCode),
     /// Services are up; leave the start-up screen.
     BootDone,
     /// No touch for the dim timeout: show the resting screen and relock.
@@ -127,6 +151,13 @@ mod tests {
             ui.try_recv().unwrap(),
             UiEvent::Show(Message::new(Severity::Success, "Recording sent"))
         );
+    }
+
+    #[test]
+    fn a_pin_never_shows_in_debug_output() {
+        let event = UiEvent::PinEntered(PinCode::new("4821"));
+        assert!(!format!("{event:?}").contains("4821"), "{event:?}");
+        assert_eq!(PinCode::new("4821").as_str(), "4821");
     }
 
     #[test]

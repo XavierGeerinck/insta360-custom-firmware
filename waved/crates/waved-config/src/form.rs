@@ -34,6 +34,8 @@ pub enum FieldKind {
         max_items: usize,
         item_max_len: usize,
     },
+    /// The device PIN: 4 to 6 digits, write-only like `Secret`, saved as a hash.
+    Pin,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -307,9 +309,9 @@ static FIELD_SPECS: &[FieldSpec] = &[
     FieldSpec {
         path: "security.device_password",
         section: Section::Advanced,
-        label: "Device password",
-        help: "Write-only. Leave blank to keep the saved password.",
-        kind: FieldKind::Secret { max_len: 256 },
+        label: "Device PIN",
+        help: "4 to 6 digits. Files, Wi-Fi, Bluetooth, Uploads and System ask for it on the Wave. Write-only. Leave blank to keep the saved PIN.",
+        kind: FieldKind::Pin,
         required: false,
     },
     FieldSpec {
@@ -479,11 +481,7 @@ pub fn apply_form(
         &mut next.storage.minimum_free_mb,
         &mut errors,
     );
-    secret(
-        submission,
-        "security.device_password",
-        &mut next.security.device_password,
-    );
+    pin(submission, &mut next.security.device_password, &mut errors);
     text(
         &submission.values,
         "security.ota_server",
@@ -562,6 +560,28 @@ fn secret(submission: &FormSubmission, path: &str, target: &mut String) {
         .filter(|value| !value.is_empty())
     {
         target.clone_from(value);
+    }
+}
+
+/// Like `secret`, for the device PIN: a new value must be 4 to 6 digits and
+/// is saved as a hash (`crate::pin`).
+fn pin(submission: &FormSubmission, target: &mut String, errors: &mut Vec<FieldError>) {
+    const PATH: &str = "security.device_password";
+    if submission.clear_secrets.contains(PATH) {
+        target.clear();
+    } else if let Some(value) = submission
+        .values
+        .get(PATH)
+        .filter(|value| !value.is_empty())
+    {
+        if crate::is_valid_pin(value) {
+            *target = crate::hash_pin(value);
+        } else {
+            errors.push(FieldError {
+                path: PATH,
+                message: "Enter 4 to 6 digits".into(),
+            });
+        }
     }
 }
 
@@ -712,6 +732,43 @@ mod tests {
         assert!(!next.time.clock_24h && !next.tones.enabled && !next.recording.pre_recording);
         assert_eq!(next.audio.nr_level, NrLevel::Med);
         assert_eq!(next.recording.ask_timeout_s, 120);
+    }
+
+    #[test]
+    fn the_pin_field_takes_four_to_six_digits_and_saves_a_hash() {
+        for bad in ["123", "1234567", "12a4", "12 34", "hunter2"] {
+            let errors = submit(&[("security.device_password", bad)]).unwrap_err();
+            let error = errors
+                .iter()
+                .find(|error| error.path == "security.device_password")
+                .unwrap_or_else(|| panic!("{bad}: {errors:?}"));
+            assert_eq!(error.message, "Enter 4 to 6 digits");
+        }
+        let next = submit(&[("security.device_password", "4821")]).unwrap();
+        assert!(next.security.device_password.starts_with("pin1$4$"));
+        assert!(crate::verify_device_pin(&next.security, "4821"));
+
+        // Blank keeps the saved PIN, Clear removes it.
+        let mut submission = FormSubmission::default();
+        submission
+            .values
+            .insert("security.device_password".into(), String::new());
+        assert_eq!(apply_form(&next, &submission).unwrap(), next);
+        submission
+            .clear_secrets
+            .insert("security.device_password".into());
+        let cleared = apply_form(&next, &submission).unwrap();
+        assert_eq!(cleared.security.device_password, "");
+    }
+
+    #[test]
+    fn the_pin_field_is_a_numeric_pin() {
+        let spec = field_specs()
+            .iter()
+            .find(|spec| spec.path == "security.device_password")
+            .unwrap();
+        assert_eq!(spec.kind, FieldKind::Pin);
+        assert!(spec.help.contains("4 to 6 digits"), "{}", spec.help);
     }
 
     #[test]

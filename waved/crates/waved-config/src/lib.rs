@@ -2,6 +2,7 @@ mod clamp;
 mod form;
 mod migrate;
 mod persist;
+mod pin;
 mod validate;
 
 pub use clamp::{
@@ -10,6 +11,10 @@ pub use clamp::{
 };
 pub use form::{
     apply_form, field_specs, FieldError, FieldKind, FieldSpec, FormSubmission, Section,
+};
+pub use pin::{
+    hash_pin, is_valid_pin, pin_digits, verify_device_pin, PinAttempts, PinCheck, PIN_LOCKOUT_MS,
+    PIN_MAX_DIGITS, PIN_MAX_TRIES, PIN_MIN_DIGITS,
 };
 pub use validate::{valid_time_zone, validate_config};
 
@@ -150,6 +155,7 @@ impl WavedConfig {
         if clamp::normalise(&mut config) {
             warn!("config had out-of-range settings; clamped them into range");
         }
+        pin::normalise_stored(&mut config.security);
         validate_config(&config).map_err(|errors| {
             ConfigError::Validation(
                 errors
@@ -502,10 +508,40 @@ device_password = "4821"
                 "{line}"
             );
             assert_eq!(config.api.auth_token, "secret", "{line}");
-            assert_eq!(config.security.device_password, "4821", "{line}");
+            assert!(verify_device_pin(&config.security, "4821"), "{line}");
         }
         let negative = WavedConfig::parse(&v2_with("audio", "beam_aim_deg = -60.0")).unwrap();
         assert_eq!(negative.audio.beam_aim_deg, 300.0);
+    }
+
+    #[test]
+    fn a_plain_pin_loads_as_a_hash_and_other_passwords_are_dropped() {
+        let config = WavedConfig::parse(&v2_with("tones", "enabled = true")).unwrap();
+        assert!(config.security.device_password.starts_with("pin1$4$"));
+        assert!(verify_device_pin(&config.security, "4821"));
+
+        let source = v2_with("tones", "enabled = true").replace(
+            "device_password = \"4821\"",
+            "device_password = \"hunter2\"",
+        );
+        let config = WavedConfig::parse(&source).unwrap();
+        assert_eq!(
+            config.security.device_password, "",
+            "the keypad can't type it"
+        );
+        assert_eq!(config.device.name, "Board room", "the rest still loads");
+    }
+
+    #[test]
+    fn a_pin_record_round_trips_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = WavedConfig::default();
+        config.security.device_password = hash_pin("482100");
+        config.save(&path).unwrap();
+        assert_eq!(WavedConfig::load(&path).unwrap(), config);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert!(on_disk.contains("device_password = \"pin1$6$"), "{on_disk}");
     }
 
     #[test]

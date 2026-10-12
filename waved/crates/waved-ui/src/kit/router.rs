@@ -132,7 +132,7 @@ impl Router {
                     self.stack.pop();
                 }
             }
-            UiEvent::BootDone | UiEvent::Show(_) => {}
+            UiEvent::BootDone | UiEvent::Show(_) | UiEvent::PinEntered(_) => {}
         }
     }
 
