@@ -25,7 +25,7 @@ WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release \
 $(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy --strip-all \
   target/aarch64-unknown-linux-gnu/release/waved /tmp/waved
 
-# 3. Pack and sign. --include adds deploy files (optional).
+# 3. Pack and sign. --include adds deploy files; keep deploy/S60waved (see below).
 cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.key \
   --waved /tmp/waved --include deploy/S60waved --out /srv/wave-updates
 #    -> waved-<version>.wup and latest.json
@@ -37,6 +37,13 @@ cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.
 `waved-pack inspect <file.wup> --pubkey <hex>` shows a package's manifest and checks
 its signature. The first build that carries the key has to reach the Wave the old way
 (adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
+
+Wave installs a package only if the `S60waved` that will run at the new version's first
+boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-starts)):
+the package's own when it carries one, otherwise the one on the Wave. A Wave whose
+`/etc/init.d/S60waved` came from `main`, or that got only the binary over adb, has none and
+refuses with "Wave can't go back if this update fails". Pack with
+`--include deploy/S60waved` (or push it with `deploy/install.sh`) and that Wave updates.
 
 `Cross.toml` passes `WAVED_UPDATE_PUBKEY` into the build container. A build without it
 trusts no key: its System row reads "Off" and it can only be replaced over adb.
@@ -160,7 +167,10 @@ no copy), so the peak is three binaries: the live one, `.waved.prev` and the sta
 `FsInstaller` (`install.rs`), in this order so a power cut at any point leaves a Wave that
 starts:
 
-1. `sh -n` on every staged init script; a syntax error installs nothing.
+1. `sh -n` on every staged init script; a syntax error installs nothing. Then the fall-back
+   check: the package's `S60waved` if it carries one, else `/etc/init.d/S60waved`, must
+   contain `update_guard`, or nothing is installed (`NoFallBack`; automatic checks then
+   pass over that version, a tapped Retry tries again).
 2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
    fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
    a save during the trial cannot reach it).
@@ -237,6 +247,7 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | signed version or build differs from the index | The update doesn't match the server's list |
 | signed version not allowed | The update is older than this version |
 | no room | Not enough space on Wave |
+| no `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
 | installer error | The update could not be installed |
 | reboot failed | Restart Wave to finish the update |
 | cut between trial and swap | The update stopped before it finished |
@@ -247,7 +258,7 @@ failed", "Wave is still on 0.9.3", the reason, Retry and Back.
 | # | Decision | Cost if wrong |
 |---|---|---|
 | U1 | Own `.wup` format (signed JSON header, gzip files) instead of tar or swupdate's CPIO | Needs `waved-pack inspect` to look inside. |
-| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only. |
+| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the `update_guard` check only that the word is there. |
 | U3 | Unsigned index, signed package | A hostile server can waste a download. |
 | U4 | Version from the binary; downgrades only by the device's own switch | Every release must bump the workspace version. |
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |

@@ -7,7 +7,9 @@
 //! busybox `reboot`) are listed in `docs/UPDATES.md`, "Device checks".
 //!
 //! Order, so a power cut at any point leaves a Wave that starts:
-//! 1. syntax-check the staged init scripts (`sh -n`);
+//! 1. syntax-check the staged init scripts (`sh -n`), and refuse unless the
+//!    `S60waved` the trial boots with (the package's, else the live one)
+//!    has the fall-back (`update_guard`);
 //! 2. hard-link every file about to be replaced to `.<name>.prev` beside it,
 //!    and copy `config.toml` to `.config.toml.prev`;
 //! 3. write `update/trial` (from here `S60waved` counts starts);
@@ -42,6 +44,10 @@ pub enum InstallError {
     BadScript(Target),
     #[error("a trial of another version is still running")]
     TrialPending,
+    /// The `S60waved` that would run at the trial's boots has no
+    /// `update_guard`, so nothing would go back if the new version failed.
+    #[error("the init script has no update fall-back (update_guard)")]
+    NoFallBack,
     #[error("reboot failed: {0}")]
     Reboot(String),
 }
@@ -143,6 +149,19 @@ pub fn clear_staging(paths: &Paths) {
     }
 }
 
+/// Whether the init script at `script` runs the update fall-back. A missing
+/// script has none.
+pub fn has_fall_back(script: &Path) -> io::Result<bool> {
+    match fs::read(script) {
+        Ok(text) => Ok(text.windows(GUARD.len()).any(|w| w == GUARD)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// The function in `deploy/S60waved` that counts trial starts and goes back.
+const GUARD: &[u8] = b"update_guard";
+
 fn syntax_ok(script: &Path) -> io::Result<bool> {
     Ok(Command::new("sh").arg("-n").arg(script).status()?.success())
 }
@@ -156,6 +175,17 @@ impl Installer for FsInstaller {
             if !syntax_ok(&staged.path(target))? {
                 return Err(InstallError::BadScript(target));
             }
+        }
+        // The S60waved that runs at the trial's boots must go back if the new
+        // version fails: the package's when it carries one, else the live one
+        // (a Wave set up from `main` has none).
+        let init = if staged.targets().any(|t| t == Target::S60waved) {
+            staged.path(Target::S60waved)
+        } else {
+            self.paths.target(Target::S60waved)
+        };
+        if !has_fall_back(&init)? {
+            return Err(InstallError::NoFallBack);
         }
         // Binary last, so it is the final step.
         let mut targets: Vec<Target> = staged.targets().filter(|t| *t != Target::Waved).collect();
@@ -235,8 +265,11 @@ pub enum Installed {
 #[derive(Clone, Default)]
 pub struct RecordingInstaller {
     log: Arc<Mutex<Vec<Installed>>>,
-    fail: Arc<Mutex<bool>>,
+    fail: Arc<Mutex<Option<MakeError>>>,
 }
+
+/// The error the fake's next install returns.
+type MakeError = fn() -> InstallError;
 
 impl RecordingInstaller {
     pub fn calls(&self) -> Vec<Installed> {
@@ -244,14 +277,18 @@ impl RecordingInstaller {
     }
 
     pub fn fail_next_install(&self) {
-        *self.fail.lock().unwrap() = true;
+        self.fail_next_install_with(|| InstallError::Io(io::Error::other("fake failure")));
+    }
+
+    pub fn fail_next_install_with(&self, error: MakeError) {
+        *self.fail.lock().unwrap() = Some(error);
     }
 }
 
 impl Installer for RecordingInstaller {
     fn install(&self, staged: &Staged, running: Version) -> Result<(), InstallError> {
-        if std::mem::take(&mut *self.fail.lock().unwrap()) {
-            return Err(InstallError::Io(io::Error::other("fake failure")));
+        if let Some(error) = self.fail.lock().unwrap().take() {
+            return Err(error());
         }
         self.log.lock().unwrap().push(Installed::Install {
             version: staged.version,
@@ -274,6 +311,11 @@ mod tests {
     use crate::trial::StartCheck;
 
     const OLD: Version = Version::new(0, 9, 3);
+    /// Init scripts with the fall-back (`update_guard`), as `deploy/S60waved`.
+    const OLD_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho old\n";
+    const NEW_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho new\n";
+    /// An init script from before the fall-back (`main` today).
+    const UNGUARDED_INIT: &str = "#!/bin/sh\necho waved\n";
 
     struct Device {
         _dir: tempfile::TempDir,
@@ -286,7 +328,7 @@ mod tests {
             let paths = Paths::under(dir.path());
             let device = Self { _dir: dir, paths };
             device.put(Target::Waved, "old waved");
-            device.put(Target::S60waved, "#!/bin/sh\necho old\n");
+            device.put(Target::S60waved, OLD_INIT);
             device
         }
 
@@ -325,7 +367,7 @@ mod tests {
         fs::write(device.paths.config(), "[audio]\n").unwrap();
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
-            (Target::S60waved, "#!/bin/sh\necho new\n"),
+            (Target::S60waved, NEW_INIT),
             (Target::SplashFb, "splash"),
         ]);
         FsInstaller::new(device.paths.clone())
@@ -340,10 +382,10 @@ mod tests {
             device.read(&Paths::prev(&waved)).as_deref(),
             Some("old waved")
         );
-        assert_eq!(device.read(&init).as_deref(), Some("#!/bin/sh\necho new\n"));
+        assert_eq!(device.read(&init).as_deref(), Some(NEW_INIT));
         assert_eq!(
             device.read(&Paths::prev(&init)).as_deref(),
-            Some("#!/bin/sh\necho old\n")
+            Some(OLD_INIT)
         );
         assert_eq!(device.read(&splash).as_deref(), Some("splash"));
         assert!(!device.paths.staging().exists(), "staging is cleaned up");
@@ -390,7 +432,7 @@ mod tests {
         device.put(Target::S03splash, "#!/bin/sh\necho old splash\n");
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
-            (Target::S60waved, "#!/bin/sh\necho new\n"),
+            (Target::S60waved, NEW_INIT),
             (Target::S03splash, "#!/bin/sh\necho new splash\n"),
         ]);
         FsInstaller::new(device.paths.clone())
@@ -447,12 +489,81 @@ mod tests {
         assert!(trial.remove.contains(&device.paths.config()), "{trial:?}");
     }
 
+    fn assert_nothing_changed(device: &Device) {
+        let waved = device.paths.target(Target::Waved);
+        assert_eq!(device.read(&waved).as_deref(), Some("old waved"));
+        assert!(trial::pending(&device.paths).is_none());
+        assert!(!Paths::prev(&waved).exists());
+        assert!(!Paths::prev(&device.paths.target(Target::S60waved)).exists());
+    }
+
+    #[test]
+    fn without_the_fall_back_in_the_live_init_script_nothing_is_installed() {
+        let device = Device::new();
+        device.put(Target::S60waved, UNGUARDED_INIT);
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+        assert_nothing_changed(&device);
+    }
+
+    #[test]
+    fn without_any_init_script_nothing_is_installed() {
+        let device = Device::new();
+        fs::remove_file(device.paths.target(Target::S60waved)).unwrap();
+        let staged = device.stage(&[(Target::Waved, "new waved")]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+    }
+
+    #[test]
+    fn a_package_that_brings_the_fall_back_installs_on_a_device_without_it() {
+        let device = Device::new();
+        device.put(Target::S60waved, UNGUARDED_INIT);
+        let staged = device.stage(&[(Target::Waved, "new waved"), (Target::S60waved, NEW_INIT)]);
+        FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap();
+        let init = device.paths.target(Target::S60waved);
+        assert_eq!(device.read(&init).as_deref(), Some(NEW_INIT));
+        assert!(trial::pending(&device.paths).is_some());
+    }
+
+    #[test]
+    fn a_package_init_script_without_the_fall_back_is_refused() {
+        // It would replace the guarded script before the trial's first boot.
+        let device = Device::new();
+        let staged = device.stage(&[
+            (Target::Waved, "new waved"),
+            (Target::S60waved, UNGUARDED_INIT),
+        ]);
+        let err = FsInstaller::new(device.paths.clone())
+            .install(&staged, OLD)
+            .unwrap_err();
+        assert!(matches!(err, InstallError::NoFallBack), "{err}");
+        assert_nothing_changed(&device);
+        assert_eq!(
+            device.read(&device.paths.target(Target::S60waved)).as_deref(),
+            Some(OLD_INIT)
+        );
+    }
+
+    #[test]
+    fn the_init_script_in_deploy_has_the_fall_back() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/S60waved");
+        assert!(has_fall_back(&script).unwrap());
+    }
+
     #[test]
     fn a_broken_init_script_installs_nothing() {
         let device = Device::new();
         let staged = device.stage(&[
             (Target::Waved, "new waved"),
-            (Target::S60waved, "#!/bin/sh\nif then fi (\n"),
+            (Target::S60waved, "#!/bin/sh\nupdate_guard\nif then fi (\n"),
         ]);
         let err = FsInstaller::new(device.paths.clone())
             .install(&staged, OLD)

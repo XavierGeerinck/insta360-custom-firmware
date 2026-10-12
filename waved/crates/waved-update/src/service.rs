@@ -22,7 +22,7 @@ use crate::fetch::{FetchError, Fetcher};
 use crate::format::{self, FormatError, Staged};
 use crate::gate::{self, Activity};
 use crate::index::{self, Index};
-use crate::install::Installer;
+use crate::install::{InstallError, Installer};
 use crate::paths::Paths;
 use crate::space::{self, SpacePlan};
 use crate::trial::{self, StartCheck};
@@ -40,6 +40,8 @@ pub mod copy {
     pub const OLDER: &str = "The update is older than this version";
     pub const NO_SPACE: &str = "Not enough space on Wave";
     pub const INSTALL_FAILED: &str = "The update could not be installed";
+    /// Neither the package nor Wave has an `S60waved` with `update_guard`.
+    pub const NO_FALLBACK: &str = "Wave can't go back if this update fails";
     pub const RESTART_FAILED: &str = "Restart Wave to finish the update";
     pub const INTERRUPTED: &str = "The update stopped before it finished";
 
@@ -497,8 +499,17 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
         info!("installing waved {} over {running}", staged.version);
         let installer = Arc::clone(&self.installer);
         let staging = staged.dir.clone();
+        let (version, build) = (staged.version, staged.manifest.build.clone());
         let installed =
             tokio::task::spawn_blocking(move || installer.install(&staged, running)).await;
+        if let Ok(Err(InstallError::NoFallBack)) = installed {
+            // Nothing was changed. The same package is refused until the
+            // init script changes, so automatic checks pass over it.
+            warn!("install refused: /etc/init.d/S60waved has no update_guard");
+            let _ = fs::remove_dir_all(&staging);
+            let _ = trial::skip(&self.paths, version, &build);
+            return Err(Failure::Shown(copy::NO_FALLBACK));
+        }
         if !matches!(installed, Ok(Ok(()))) {
             if let Ok(Err(e)) = &installed {
                 warn!("install failed: {e}");
@@ -1099,6 +1110,23 @@ mod tests {
         h.send(Command::CheckForUpdate);
         let state = h.until("failed", failed).await;
         assert_eq!(reason(&state), "Can't reach the update server");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_install_without_a_fall_back_is_refused_and_not_retried_automatically() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.installer
+            .fail_next_install_with(|| crate::install::InstallError::NoFallBack);
+        h.spawn(h.settings("0.9.3"));
+        h.send(Command::InstallUpdate);
+        let state = h.until("failed", failed).await;
+        assert_eq!(reason(&state), "Wave can't go back if this update fails");
+        assert!(h.installs().is_empty());
+        assert!(
+            trial::is_skipped(&h.paths, v("0.10.0"), "b2"),
+            "the same package would be refused again"
+        );
     }
 
     #[tokio::test(start_paused = true)]
