@@ -49,7 +49,7 @@ BOOT_ID_RE = re.compile(
 )
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 KERNEL_ALERT_RE = re.compile(
-    r"(warning|error|fault|timeout|timed out|hang|recover|exception|mmu|panic|oops|BUG:)",
+    r"(warning|error|fault|timeout|timed out|(?<![a-z])hang|recover|exception|mmu|panic|oops|BUG:)",
     re.IGNORECASE,
 )
 
