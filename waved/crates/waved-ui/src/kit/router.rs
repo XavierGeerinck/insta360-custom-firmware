@@ -1,7 +1,7 @@
 //! Which screen is visible: a stack over a meeting-driven base.
 
 use crate::kit::dispatch::UiEvent;
-use crate::kit::route::Route;
+use crate::kit::route::{ConfirmKind, Route};
 use crate::kit::snapshot::UiSnapshot;
 use waved_state::BtCall;
 
@@ -76,6 +76,16 @@ impl Router {
         }
         match event {
             UiEvent::Navigate(route) => {
+                // USB storage (G1) owns the screen: only stopping it and
+                // powering off open over it.
+                if self.stack[0] == Route::UsbStorage
+                    && !matches!(
+                        route,
+                        Route::Confirm(ConfirmKind::StopUsbStorage | ConfirmKind::PowerOff)
+                    )
+                {
+                    return;
+                }
                 if route.is_base() {
                     self.stack.truncate(1);
                     return;
@@ -170,6 +180,13 @@ impl Router {
         }
         match self.stack[0] {
             Route::Boot | Route::PoweringOff => return,
+            _ => {}
+        }
+        if self.follow_usb_storage(snap) {
+            self.follow_call(snap);
+            return;
+        }
+        match self.stack[0] {
             Route::FirstRun if !snap.settings.first_run_done => return,
             _ => {}
         }
@@ -180,6 +197,36 @@ impl Router {
             self.stack[0] = base;
         }
         self.follow_call(snap);
+    }
+
+    /// USB storage (G1) owns the screen while the computer has the
+    /// recordings: its screen is the base, with only its stop confirmation,
+    /// the power-off confirmation, a ringing call and the resting screen over
+    /// it. When the volume is back, the meeting base (or first start) returns,
+    /// and an open confirmation goes with the takeover. Returns whether it
+    /// owns the screen.
+    fn follow_usb_storage(&mut self, snap: &UiSnapshot) -> bool {
+        let resting = *self.current() == Route::Resting;
+        let base = if snap.usb_storage.phase.takes_over_screen() {
+            if self.stack[0] == Route::UsbStorage {
+                return true;
+            }
+            Route::UsbStorage
+        } else if self.stack[0] == Route::UsbStorage {
+            if snap.settings.first_run_done {
+                Self::base_for(snap)
+            } else {
+                Route::FirstRun
+            }
+        } else {
+            return false;
+        };
+        let takes_over = base == Route::UsbStorage;
+        self.stack = vec![base];
+        if resting {
+            self.stack.push(Route::Resting);
+        }
+        takes_over
     }
 
     /// A Bluetooth call that rings takes over, on top of whatever shows (a
@@ -454,7 +501,6 @@ mod tests {
             Route::DateTime,
             Route::About,
             Route::Update,
-            Route::UsbStorage,
             Route::Confirm(ConfirmKind::FactoryReset),
         ] {
             for path in [vec![], vec![Route::Menu]] {
@@ -674,6 +720,139 @@ mod tests {
         snap.meeting.pending_decision = Some(decision());
         router.sync(&snap);
         assert_eq!(router.stack(), [Route::Decision, Route::IncomingCall]);
+    }
+
+    fn usb(snap: &mut UiSnapshot, phase: waved_state::UsbStoragePhase) {
+        snap.usb_storage.phase = phase;
+    }
+
+    #[test]
+    fn usb_storage_takes_over_until_the_volume_is_back() {
+        use crate::kit::route::ConfirmKind;
+        use waved_state::UsbStoragePhase;
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::System), &snap);
+        usb(&mut snap, UsbStoragePhase::Starting);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        usb(&mut snap, UsbStoragePhase::On);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        // Only the stop and power-off confirmations open over it.
+        for route in [
+            Route::Menu,
+            Route::Files,
+            Route::System,
+            Route::Home,
+            Route::Recording,
+            Route::Confirm(ConfirmKind::FactoryReset),
+        ] {
+            router.handle(&UiEvent::Navigate(route.clone()), &snap);
+            assert_eq!(router.stack(), [Route::UsbStorage], "{route:?}");
+        }
+        router.handle(&UiEvent::Back, &snap);
+        router.handle(&UiEvent::ToBase, &snap);
+        assert_eq!(router.stack(), [Route::UsbStorage], "nothing under it");
+        let stop = Route::Confirm(ConfirmKind::StopUsbStorage);
+        router.handle(&UiEvent::Navigate(stop.clone()), &snap);
+        assert_eq!(router.stack(), [Route::UsbStorage, stop.clone()]);
+        router.handle(&UiEvent::Back, &snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        usb(&mut snap, UsbStoragePhase::Stopping);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        usb(&mut snap, UsbStoragePhase::Off);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home]);
+    }
+
+    #[test]
+    fn the_volume_coming_back_closes_the_stop_confirmation() {
+        // The computer ejected the drive while the confirmation was open.
+        use crate::kit::route::ConfirmKind;
+        use waved_state::UsbStoragePhase;
+        let mut snap = ready();
+        usb(&mut snap, UsbStoragePhase::On);
+        let mut router = started(&snap);
+        router.sync(&snap);
+        router.handle(
+            &UiEvent::Navigate(Route::Confirm(ConfirmKind::StopUsbStorage)),
+            &snap,
+        );
+        usb(&mut snap, UsbStoragePhase::Off);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home]);
+    }
+
+    #[test]
+    fn stopping_usb_storage_never_asks_for_the_pin() {
+        // Pulling the cable stops it anyway; the PIN guards starting it (System).
+        use crate::kit::route::ConfirmKind;
+        use waved_state::UsbStoragePhase;
+        let mut snap = locked();
+        usb(&mut snap, UsbStoragePhase::On);
+        let mut router = started(&snap);
+        router.sync(&snap);
+        router.handle(&UiEvent::Rest, &snap);
+        assert_eq!(router.stack(), [Route::UsbStorage, Route::Resting]);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        let stop = Route::Confirm(ConfirmKind::StopUsbStorage);
+        router.handle(&UiEvent::Navigate(stop.clone()), &snap);
+        assert_eq!(router.current(), &stop);
+    }
+
+    #[test]
+    fn usb_storage_keeps_a_resting_screen_resting() {
+        use waved_state::UsbStoragePhase;
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Rest, &snap);
+        usb(&mut snap, UsbStoragePhase::On);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage, Route::Resting]);
+        usb(&mut snap, UsbStoragePhase::Off);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Resting]);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.stack(), [Route::Home]);
+    }
+
+    #[test]
+    fn power_off_and_calls_still_reach_usb_storage() {
+        use crate::kit::route::ConfirmKind;
+        use waved_state::UsbStoragePhase;
+        let mut snap = ready();
+        usb(&mut snap, UsbStoragePhase::On);
+        let mut router = started(&snap);
+        router.sync(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage, Route::IncomingCall]);
+        router.handle(&UiEvent::Back, &snap);
+        call(&mut snap, waved_state::BtCall::Idle);
+        router.sync(&snap);
+        router.handle(&UiEvent::Navigate(Route::Confirm(ConfirmKind::PowerOff)), &snap);
+        assert_eq!(router.current(), &Route::Confirm(ConfirmKind::PowerOff));
+        router.handle(&UiEvent::Navigate(Route::PoweringOff), &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
+    }
+
+    #[test]
+    fn usb_storage_during_the_first_start_returns_to_it() {
+        use waved_state::UsbStoragePhase;
+        let mut snap = UiSnapshot::default();
+        let mut router = started(&snap);
+        assert_eq!(router.stack(), [Route::FirstRun]);
+        usb(&mut snap, UsbStoragePhase::On);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage]);
+        usb(&mut snap, UsbStoragePhase::Off);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::FirstRun]);
     }
 
     #[test]
