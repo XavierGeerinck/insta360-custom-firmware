@@ -304,6 +304,7 @@ impl UsbStorage {
         loop {
             let waiting: Vec<&str> = self.holds().flat_map(GadgetHold::waiting_for).collect();
             if waiting.is_empty() {
+                info!("usb storage: waved's USB handles are closed for the switch ({} ms)", waited.as_millis());
                 return Ok(());
             }
             if waited >= HOLD_WAIT {
@@ -331,6 +332,11 @@ impl UsbStorage {
             if let Some(hold) = &self.hid_hold {
                 hold.lower();
             }
+        }
+        if storage_on {
+            info!("usb storage: audio may open hw:1 again; /dev/hidg0 stays closed while storage is on");
+        } else {
+            info!("usb storage: waved's USB handles may open again");
         }
     }
 
