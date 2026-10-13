@@ -1,7 +1,3 @@
-I now have comprehensive data on all 6 libraries. Here is the full analysis report.
-
----
-
 # Comprehensive Binary Analysis Report: Insta360 Wave Speakerphone Libraries
 
 All 6 libraries are **ELF 64-bit LSB shared objects, ARM aarch64, dynamically linked, stripped**.

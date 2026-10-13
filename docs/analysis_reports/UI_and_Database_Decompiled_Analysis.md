@@ -1,7 +1,3 @@
-Now I have comprehensive information. Let me compile the analysis.
-
----
-
 # Insta360 Wave Speakerphone - Firmware Analysis Report
 
 ## 1. libdatabase.so Analysis

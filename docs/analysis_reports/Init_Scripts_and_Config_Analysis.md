@@ -1,7 +1,3 @@
-I now have comprehensive data. Here is the full analysis.
-
----
-
 # Insta360 Wave Firmware v1.1.6.6 - Deep Analysis Report
 
 **Firmware version:** PSP_1.1.6.6 (SOC), MCU 0.1.3.3, BT 0.0.0.28, MODEL 2.0.0.1
