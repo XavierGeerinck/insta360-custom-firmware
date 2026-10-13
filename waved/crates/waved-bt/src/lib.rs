@@ -203,7 +203,7 @@ impl BtService {
                     out = core.command(&command, now, unix, s);
                     out.changed
                 });
-                if !out.frames.is_empty() {
+                if out.acted() {
                     info!("bt: {command:?}");
                 }
                 for c in &out.frames {

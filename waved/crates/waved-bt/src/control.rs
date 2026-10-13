@@ -27,6 +27,13 @@ pub struct Response {
     pub changed: bool,
 }
 
+impl Response {
+    /// The command did something: it sent frames or changed the state.
+    pub fn acted(&self) -> bool {
+        !self.frames.is_empty() || self.changed
+    }
+}
+
 #[derive(Debug)]
 struct Window {
     until_ms: u64,
@@ -199,6 +206,17 @@ mod tests {
         assert_eq!(s.pairing_left_s, 0);
         // Without a window it changes nothing.
         assert_eq!(c.command(&BusCommand::BtStopPairing, 30_000, T, &mut s), Response::default());
+    }
+
+    #[test]
+    fn a_command_acted_when_it_sent_frames_or_changed_the_state() {
+        // The service logs a bus command at info only when it acted.
+        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        assert!(c.command(&BusCommand::BtDisconnect, 0, T, &mut s).acted());
+        assert!(!c.command(&BusCommand::BtAnswerCall, 0, T, &mut s).acted(), "nothing rings");
+        assert!(!c.command(&BusCommand::BtStopPairing, 0, T, &mut s).acted(), "no window");
+        c.command(&BusCommand::BtPair, 0, T, &mut s);
+        assert!(c.command(&BusCommand::BtStopPairing, 1_000, T, &mut s).acted());
     }
 
     #[test]
