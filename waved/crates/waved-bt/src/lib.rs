@@ -27,7 +27,7 @@ pub mod state;
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
-use command::{ack_for, Command};
+use command::{ack_for_frame, Command};
 use control::{Control, Response};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use event::Event;
@@ -79,19 +79,61 @@ pub fn from_uart(raw: &waved_uart::Frame) -> Option<Frame> {
 struct Core {
     tracker: Tracker,
     control: Control,
+    seen: Seen,
+}
+
+/// What one module frame asks of the service.
+#[derive(Debug, Default)]
+struct Handled {
+    /// Stock's acknowledgement, for a `75 45` frame other than `0xE0`.
+    acks: Vec<Frame>,
+    /// `BluetoothState` changed (notify watchers).
+    changed: bool,
+    /// A connect / disconnect to broadcast.
+    event: Option<DeviceEvent>,
+    /// The log line and its level: info only when the frame told us
+    /// something new, so a frame the module repeats never repeats at info.
+    log: Option<(Level, String)>,
+}
+
+/// What the module said that `BluetoothState` does not keep.
+#[derive(Debug, Default)]
+struct Seen {
+    version: Option<String>,
+    build_time: Option<String>,
+}
+
+impl Seen {
+    /// Whether `event` brings a version or build time not seen before.
+    fn news(&mut self, event: &Event) -> bool {
+        let (slot, value) = match event {
+            Event::Version(v) => (&mut self.version, v),
+            Event::BuildTime(t) => (&mut self.build_time, t),
+            _ => return false,
+        };
+        if slot.as_ref() == Some(value) {
+            return false;
+        }
+        *slot = Some(value.clone());
+        true
+    }
 }
 
 impl Core {
-    /// A module frame: its acknowledgement (stock acknowledges every frame
-    /// but `0xE0`), whether `s` changed, and a connect / disconnect to
-    /// broadcast.
-    fn frame(&mut self, frame: &Frame, s: &mut BluetoothState) -> (Vec<Frame>, bool, Option<DeviceEvent>) {
-        let acks = ack_for(frame.cmd).into_iter().collect();
+    /// A module frame: its acknowledgement ([`command::ack_for_frame`]),
+    /// whether `s` changed, a connect / disconnect to broadcast and the log
+    /// line.
+    fn frame(&mut self, frame: &Frame, s: &mut BluetoothState) -> Handled {
+        let acks = ack_for_frame(frame).into_iter().collect();
         let event = event::decode(frame);
-        log_event(&event);
         let applied = self.tracker.apply(&event, s);
         let window = self.control.after_event(s);
-        (acks, applied.changed || window, applied.event)
+        let news = applied.changed || applied.event.is_some() || self.seen.news(&event);
+        let log = log_line(&event).map(|(level, line)| match level {
+            Level::INFO if !news => (Level::DEBUG, line),
+            _ => (level, line),
+        });
+        Handled { acks, changed: applied.changed || window, event: applied.event, log }
     }
 
     fn command(&mut self, command: &BusCommand, now_ms: u64, unix_time: u32, s: &mut BluetoothState) -> Response {
@@ -198,16 +240,16 @@ impl BtService {
 
     fn handle(&self, raw: &waved_uart::Frame, core: &mut Core) {
         let Some(frame) = from_uart(raw) else { return };
-        let mut out = (Vec::new(), false, None);
+        let mut out = Handled::default();
         self.bt_tx.send_if_modified(|s| {
             out = core.frame(&frame, s);
-            out.1
+            out.changed
         });
-        let (acks, _, event) = out;
-        for ack in &acks {
+        for ack in &out.acks {
             self.send(ack);
         }
-        if let Some(e) = event {
+        log_event(out.log);
+        if let Some(e) = out.event {
             let _ = self.events_tx.send(e);
         }
     }
@@ -221,8 +263,8 @@ fn unix_time() -> u32 {
         .unwrap_or(0)
 }
 
-fn log_event(event: &Event) {
-    match log_line(event) {
+fn log_event(line: Option<(Level, String)>) {
+    match line {
         Some((Level::INFO, line)) => info!("{line}"),
         Some((Level::DEBUG, line)) => debug!("{line}"),
         Some((_, line)) => trace!("{line}"),
@@ -410,6 +452,7 @@ mod tests {
     mod core {
         use super::super::Core;
         use crate::frame::{Frame, Parser};
+        use tracing::Level;
         use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
 
         fn wire(bytes: &[u8]) -> Frame {
@@ -437,34 +480,34 @@ mod tests {
             assert_eq!(s.pairing_left_s, 120);
 
             // The module: pairing mode (seen on the device), acknowledged.
-            let (acks, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B2 00 B4"]);
-            assert!(changed && s.pairing && s.pairing_left_s == 120);
-            assert_eq!(event, None);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B2 00 B4"]);
+            assert!(h.changed && s.pairing && s.pairing_left_s == 120);
+            assert_eq!(h.event, None);
 
             // A phone connects: the window closes.
             core.tick(30_000, &mut s);
             assert_eq!(s.pairing_left_s, 90);
-            let (_, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), &mut s);
-            assert!(changed && s.connected && !s.pairing);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), &mut s);
+            assert!(h.changed && s.connected && !s.pairing);
             assert_eq!(s.pairing_left_s, 0);
-            assert_eq!(event, Some(DeviceEvent::BtConnected(String::new())));
+            assert_eq!(h.event, Some(DeviceEvent::BtConnected(String::new())));
         }
 
         #[test]
         fn a_call_from_the_module_to_answer() {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let ring = [0x75, 0x45, 0x0C, 0xB1, 0x2B, 0x33, 0x32, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0xF1];
-            let (acks, changed, _) = core.frame(&wire(&ring), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B1 00 B3"]);
-            assert!(changed);
+            let h = core.frame(&wire(&ring), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B1 00 B3"]);
+            assert!(h.changed);
             assert_eq!(s.call, BtCall::Ringing { number: "+3212345678".into() });
             let out = core.command(&BusCommand::BtAnswerCall, 0, 0x6720_0000, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
                 "75 45 07 D0 03 00 00 20 67 00 61"
             ]);
-            let (acks, _, _) = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 01 D1 D2"]);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 01 D1 D2"]);
             assert!(s.call.is_active());
         }
 
@@ -472,10 +515,99 @@ mod tests {
         fn the_phone_book_is_acknowledged_and_changes_nothing() {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let entry = Frame::request(0xB0, b"\x01\0\0\0\x06+32470\x03A\0n\0n\0");
-            let (acks, changed, event) = core.frame(&entry, &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B0 00 B2"]);
-            assert!(!changed);
-            assert_eq!(event, None);
+            let h = core.frame(&entry, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B0 00 B2"]);
+            assert!(!h.changed);
+            assert_eq!(h.event, None);
+            assert_eq!(h.log, None);
+        }
+
+        fn name_frame(name: &str) -> Frame {
+            let mut data = vec![0x00];
+            data.extend_from_slice(name.as_bytes());
+            Frame::request(0xC6, &data)
+        }
+
+        #[test]
+        fn replies_to_our_requests_are_not_acknowledged() {
+            // Capture s1-pair-20261013.bin: the module answers GetStatus and
+            // GetName with `75 46 A9 00` / `75 46 C5 00` once each.
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            for echo in [[0x75, 0x46, 0x02, 0xA9, 0x00, 0xAB], [0x75, 0x46, 0x02, 0xC5, 0x00, 0xC7]] {
+                let h = core.frame(&wire(&echo), &mut s);
+                assert!(h.acks.is_empty(), "{echo:02X?}");
+                assert!(!h.changed);
+            }
+            // The version comes back in the reply itself: decoded, not acknowledged.
+            let h = core.frame(&Frame::ack(0x91, b"\x000.0.0.28"), &mut s);
+            assert!(h.acks.is_empty());
+            assert_eq!(h.log.map(|(_, line)| line), Some("bt module firmware 0.0.0.28".into()));
+            // The module's own frames still are, the name and the status included.
+            let h = core.frame(&name_frame("Insta360 Wave BT 0A1B2C"), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 C6 00 C8"]);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xAA, 0x01, 0xAD]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 AA 00 AC"]);
+            assert!(core.frame(&Frame::request(0xE0, &[]), &mut s).acks.is_empty());
+        }
+
+        #[test]
+        fn the_module_name_shows_at_info_only_when_it_changes() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, s).log.map(|(l, _)| l);
+            let name = name_frame("Insta360 Wave BT 0A1B2C");
+            assert_eq!(level(&mut core, &mut s, &name), Some(Level::INFO));
+            for _ in 0..4 {
+                assert_eq!(level(&mut core, &mut s, &name), Some(Level::DEBUG), "a repeat");
+            }
+            let renamed = name_frame("Wave Boardroom");
+            assert_eq!(level(&mut core, &mut s, &renamed), Some(Level::INFO));
+        }
+
+        #[test]
+        fn nothing_at_info_repeats_per_frame() {
+            // Every frame that logs at info, sent twice in a row as a module
+            // that is not acknowledged sends it: the second copy is not info.
+            let ring = b"+32470123456".to_vec();
+            let mut connected = vec![0x01, 0x00, 0x05];
+            connected.extend_from_slice(b"Pixel");
+            connected.extend_from_slice(&[0x00, 0x06, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            let mut request = vec![0x06, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05];
+            request.extend_from_slice(b"Pixel");
+            let frames = [
+                Frame::ack(0x91, b"\x000.0.0.28"),
+                Frame::ack(0x93, b"\x002025-11-28 20:15:49"),
+                name_frame("Insta360 Wave BT 0A1B2C"),
+                Frame::request(0xB2, &connected),
+                Frame::request(0xB1, &ring),
+                Frame::request(0xD1, &[0x00]),
+                Frame::request(0xD1, &[0x01]),
+                Frame::request(0xB1, &[]),
+                Frame::request(0xD6, &request),
+                Frame::request(0xD1, &[0x02]),
+                Frame::request(0xE1, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            ];
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            for f in &frames {
+                core.frame(f, &mut s);
+                let again = core.frame(f, &mut s).log;
+                assert!(
+                    !matches!(again, Some((Level::INFO, _))),
+                    "{:#04x} repeated at info: {again:?}",
+                    f.cmd
+                );
+            }
+        }
+
+        #[test]
+        fn a_new_call_after_the_last_one_logs_again() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let ring = Frame::request(0xB1, b"0471");
+            let cleared = Frame::request(0xB1, &[]);
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, s).log.map(|(l, _)| l);
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::DEBUG));
+            assert_eq!(level(&mut core, &mut s, &cleared), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
         }
     }
 
