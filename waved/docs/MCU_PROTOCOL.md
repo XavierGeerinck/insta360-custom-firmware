@@ -383,7 +383,7 @@ times, 200 ms apart, without a cmd 1 `mcu_notify`; a newer state replaces one st
 | Always (the floor) | IDLE |
 | `AudioState::mic_muted` on / off | MIC_MUTE / MIC_UNMUTE |
 | `speaker_volume` or `speaker_muted` changes (any source, not only on-device as stock) | SPEAKER_VOLUME (0 LEDs when muted) |
-| always (the owner's choice, 2026-10-13; stock keeps IDLE at 12) | IDLE lights `⌈12 × v / 100⌉` LEDs: the green ring is the volume, never a full bar; 0 when muted |
+| always (the owner's choice, 2026-10-13; stock keeps IDLE at 12) | IDLE lights `⌈12 × v / 100⌉` LEDs from the first frame: the green ring is the volume, never a full bar; 0 when muted. MIC_UNMUTE and BT_PAIR (green for 1 s) show the same count. |
 | `MeetingState::recording` or `paused` on / off | AI_MEETING / AI_MEETING_EXIT |
 | `BluetoothState::pairing` on / off | BT_BROADCAST |
 | `connected` turns on | BT_PAIR |

@@ -213,7 +213,12 @@ impl Scheduler {
         self.active.retain(|a| a.event != event);
         if on {
             self.order += 1;
-            let leds = entry(event).leds;
+            let leds = match event {
+                // Green is the volume, never a full ring (the owner's choice,
+                // 2026-10-13): the green confirmations show the level too.
+                LedEvent::MicUnmute | LedEvent::BtPair => self.idle_leds(),
+                _ => entry(event).leds,
+            };
             self.active.push(Active { event, since_ms: now_ms, order: self.order, leds });
         }
     }
@@ -227,8 +232,17 @@ impl Scheduler {
         if let Some(active) = self.active.last_mut() {
             active.leds = leds;
         }
-        // Unlike stock, IDLE shows the volume too (the owner's choice,
-        // 2026-10-13), rounded up so any sound lights an LED.
+        self.set_idle_volume(percent as u16);
+    }
+
+    fn idle_leds(&self) -> u8 {
+        self.active.iter().find(|a| a.event == LedEvent::Idle).map_or(LED_COUNT, |a| a.leds)
+    }
+
+    /// Unlike stock, IDLE shows the volume (the owner's choice, 2026-10-13):
+    /// `⌈12 × volume / 100⌉` LEDs, so any sound lights one. No flash.
+    pub fn set_idle_volume(&mut self, percent: u16) {
+        let percent = u32::from(percent.min(100));
         let idle_leds = (percent * u32::from(LED_COUNT)).div_ceil(100) as u8;
         if let Some(idle) = self.active.iter_mut().find(|a| a.event == LedEvent::Idle) {
             idle.leds = idle_leds;
@@ -437,6 +451,7 @@ impl Leds {
         }
         let Some(last) = last else {
             s.set_meeting(now.meeting);
+            s.set_idle_volume(if now.speaker_muted { 0 } else { now.speaker_volume });
             let lasting = [
                 (now.mic_muted, LedEvent::MicMute),
                 (now.meeting, LedEvent::AiMeeting),
@@ -811,7 +826,8 @@ mod tests {
         let (_, first) = following(&base);
         assert_eq!(first, [RED_LED], "mute, no volume flash, no unmute");
         let (_, idle) = following(&LedInputs { speaker_volume: 40, ..LedInputs::default() });
-        assert_eq!(idle, [IDLE_LED]);
+        // The ring is the volume from the first frame: ceil(12 × 40 / 100) = 5.
+        assert_eq!(idle, [LedCtrl { leds: 5, ..IDLE_LED }]);
     }
 
     #[test]
@@ -822,9 +838,11 @@ mod tests {
         inputs.mic_muted = true;
         assert_eq!(after(&mut leds, &inputs, 100), [RED_LED]);
         inputs.mic_muted = false;
-        assert_eq!(after(&mut leds, &inputs, 200), [IDLE_LED], "MIC_UNMUTE: steady green");
+        // Green is the volume, never a full ring (the owner's choice): 5 LEDs.
+        let level = LedCtrl { leds: 5, ..IDLE_LED };
+        assert_eq!(after(&mut leds, &inputs, 200), [level], "MIC_UNMUTE: steady green");
         assert!(tick(&mut leds, 1_199).is_empty());
-        assert_eq!(tick(&mut leds, 1_200), [IDLE_LED], "back to IDLE");
+        assert_eq!(tick(&mut leds, 1_200), [level], "back to IDLE");
     }
 
     #[test]
@@ -839,7 +857,7 @@ mod tests {
 
     #[test]
     fn a_recording_is_cyan_and_its_end_changes_hue_for_a_second() {
-        let mut inputs = LedInputs::default();
+        let mut inputs = LedInputs { speaker_volume: 100, ..LedInputs::default() };
         let (mut leds, _) = following(&inputs);
         inputs.meeting = true;
         assert_eq!(after(&mut leds, &inputs, 100), [ctrl(0, 0, 12, colour::CYAN, 15)]);
@@ -855,7 +873,7 @@ mod tests {
 
     #[test]
     fn bluetooth_pairing_connecting_and_calls() {
-        let mut inputs = LedInputs::default();
+        let mut inputs = LedInputs { speaker_volume: 100, ..LedInputs::default() };
         let (mut leds, _) = following(&inputs);
         inputs.bt_pairing = true;
         assert_eq!(after(&mut leds, &inputs, 100), [ctrl(3, 0, 1, colour::BLUE, 15)], "blue chase");
@@ -873,7 +891,7 @@ mod tests {
 
     #[test]
     fn power_off_falls_green_and_an_obstruction_blinks_yellow() {
-        let mut inputs = LedInputs::default();
+        let mut inputs = LedInputs { speaker_volume: 100, ..LedInputs::default() };
         let (mut leds, _) = following(&inputs);
         let fall = ctrl(7, 1, 12, colour::GREEN, 15);
         assert_eq!(leds_of(&leds.on_command(&Command::PowerOff, 100)), [fall]);
@@ -884,14 +902,14 @@ mod tests {
         assert_eq!(after(&mut leds, &inputs, 300), [ctrl(1, 1, 12, colour::YELLOW, 3)]);
         assert_eq!(tick(&mut leds, 3_300), [IDLE_LED]);
         // A power off that starts without the command (PowerOffNow) shows too.
-        let (mut direct, _) = following(&LedInputs::default());
-        let busy = LedInputs { power_off: PowerOffPhase::InProgress, ..LedInputs::default() };
+        let (mut direct, _) = following(&LedInputs { speaker_volume: 100, ..LedInputs::default() });
+        let busy = LedInputs { power_off: PowerOffPhase::InProgress, speaker_volume: 100, ..LedInputs::default() };
         assert_eq!(after(&mut direct, &busy, 100), [fall]);
     }
 
     #[test]
     fn low_battery_pulses_once_per_band() {
-        let mut inputs = LedInputs { battery_level: 20, ..LedInputs::default() };
+        let mut inputs = LedInputs { battery_level: 20, speaker_volume: 100, ..LedInputs::default() };
         let (mut leds, _) = following(&inputs);
         let yellow = ctrl(2, 0, 12, colour::YELLOW, 15);
         assert_eq!(leds_of(&leds.on_low_battery(9, 100)), [yellow]);
@@ -943,7 +961,7 @@ mod tests {
     #[test]
     fn led_ctrl_is_resent_until_the_mcu_answers() {
         let mut leds = Leds::new();
-        assert_eq!(leds_of(&leds.update(&LedInputs::default(), 0)), [IDLE_LED]);
+        assert_eq!(leds_of(&leds.update(&LedInputs { speaker_volume: 100, ..LedInputs::default() }, 0)), [IDLE_LED]);
         assert!(leds.tick(ACK_MS - 1).is_empty());
         assert_eq!(leds_of(&leds.tick(ACK_MS)), [IDLE_LED], "second try");
         leds.on_message(&ack());
