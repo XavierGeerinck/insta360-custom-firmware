@@ -555,6 +555,21 @@ def test_pad_omitted_zero_scalar_still_emits_exact_zero():
     assert "pad_front0, pad_back0, 0, tim::vx::ops::Pad::PAD_MODE_CONSTANT" in source
 
 
+def test_pad_sources_bind_canonical_lowering_identity():
+    record = pad_profile_record()
+    compiler = generate_compile_source(record, COMPILE_ROOT)
+    executor = generate_execute_source(record, EXECUTE_ROOT, 1800)
+    changed = copy.deepcopy(record)
+    changed["graph_signature"] = "3" * 64
+    seal(changed)
+    assert generate_compile_source(changed, COMPILE_ROOT) != compiler
+    assert generate_execute_source(changed, EXECUTE_ROOT, 1800) != executor
+    with pytest.raises(ValueError, match="source"):
+        validate_compile_source(changed, COMPILE_ROOT, compiler)
+    with pytest.raises(ValueError, match="source"):
+        validate_execute_source(changed, EXECUTE_ROOT, 1800, executor)
+
+
 def test_legacy_profile_cannot_admit_pad_even_after_record_reseal():
     record = pad_profile_record()
     record["profile_id"] = "fp16-marblenet-v1"
