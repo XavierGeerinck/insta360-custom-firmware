@@ -475,6 +475,21 @@ impl UsbStorage {
         let spec = self.mount.clone();
         match self.volume.check(&spec.source) {
             Ok(summary) => info!("usb storage: checked {}: {summary}", spec.source),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                // Stopped part way through its repairs: the filesystem may be
+                // half repaired. Not mounted at all, so nothing writes to it;
+                // the next waved checks it again (the note stays), and a
+                // reboot mounts it as stock does.
+                error!(
+                    "usb storage: the check of {} was stopped ({error}); \
+                     the recordings stay unmounted until Wave restarts",
+                    spec.source
+                );
+                self.problem(UsbStorageProblem::NotMounted);
+                return false;
+            }
+            // It did not run (no checker, no process): it changed nothing.
+            // Stock's boot mounts the volume after a read-only check anyway.
             Err(error) => warn!("usb storage: could not check {}: {error}", spec.source),
         }
         let mut mounted = self.volume.mount(&spec);
@@ -1159,6 +1174,19 @@ mod tests {
         rig.storage.poll();
         assert!(rig.state.borrow().recordings_away());
         assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+    }
+
+    #[test]
+    fn a_check_stopped_part_way_leaves_the_volume_unmounted() {
+        // fsck.exfat -p killed at 120 s may have left a half-repaired
+        // filesystem: never mount that read-write.
+        let mut rig = Rig::on(World::default());
+        rig.world().check_times_out = true;
+        rig.storage.stop();
+        assert_eq!(rig.log(), ["unload", "check /dev/udisk"], "no mount");
+        assert_eq!(rig.phase(), UsbStoragePhase::Stopping);
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+        assert!(rig.world().note.is_some(), "a restart checks it again");
     }
 
     #[test]

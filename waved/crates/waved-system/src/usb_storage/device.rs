@@ -22,8 +22,8 @@ pub const MOUNT: &str = "/bin/mount";
 /// waved's note that it took the recordings off Wave (`Volume::note_unmount`).
 /// `/tmp` is tmpfs: a reboot clears it, and the boot mounts the volume.
 pub const UNMOUNT_NOTE: &str = "/tmp/waved-usb-storage.unmounted";
-/// A full check of the 21 GB volume takes seconds; past this it is stopped
-/// and the volume is mounted anyway.
+/// A full check of the 21 GB volume takes seconds; past this it is stopped,
+/// and the volume is not mounted (it may be half repaired).
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 const REPLUG_PAUSE: Duration = Duration::from_secs(1);
 
