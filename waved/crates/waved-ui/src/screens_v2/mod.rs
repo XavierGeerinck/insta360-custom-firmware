@@ -42,3 +42,6 @@ pub mod pin;
 // Workstream I: Bluetooth.
 pub mod bluetooth;
 pub mod call;
+
+// Workstream G: USB storage.
+pub mod usb_storage;
