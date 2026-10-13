@@ -1155,8 +1155,10 @@ HPF → EQ → MBAGC → limiter → volume ── hw:0,1 (speaker) + AEC refere
   `enabled` (true), `device` (`hw:0,0`), `period_frames` (1024),
   `buffer_periods` (4), `playback_clock` (false). `playback_clock: true` also
   opens `hw:0,0` playback whenever phone audio plays (silence outside a call),
-  for the case where TDM-A capture needs the playback side for its clocks.
-  The open refuses any rate but 48 kHz.
+  for the case where TDM-A capture needs the playback side for its clocks
+  (without a clock the first read fails after the kernel's ≈ 10 s timeout,
+  logged as `bt-downstream read stopped`). The open refuses any rate but
+  48 kHz.
 - **Stats**: `bt_audio` in `/tmp/audio_stats.json`: `speaker_active`,
   `playback_open`, `mic_active`, `capture_frames`, `playback_frames`,
   `capture_xruns`, `playback_xruns`, `speaker_drops`, `mic_drops`,
