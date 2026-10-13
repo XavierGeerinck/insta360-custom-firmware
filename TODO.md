@@ -58,8 +58,8 @@ phone with audio, phone volume → Wave), the PIN (guards and turning it off), M
 lift's start height after a power cycle.
 
 In progress:
-- **G1 USB storage**: the first design doesn't work on this USB controller; next, stock's own mode
-  switch (see G1 below).
+- **G1 USB storage**: reworked around stock's own mode switch (adb off while on); host-tested,
+  device pass next (see G1 below).
 - **Wave → phone volume**: the Wave's own volume changes don't reach the phone, so the first phone
   press after a Wave change jumps (stock sends `0xD0` button events 1/2; unverified what the module
   does with them).
@@ -351,18 +351,21 @@ Rules for the parallel milestones:
 
 ## G — USB storage
 
-- [ ] **G1 Mass-storage mode** (M) — built and host-tested, but **does not work on this USB controller** (device, 2026-10-13): audio + HID + adb + storage times out enabling the storage endpoint, and dropping adb at runtime didn't come back (power cycle needed). Don't apply the boot patch. Next: reuse stock's `S89usbgadget uac_msc` mode switch, tested live first (`waved/docs/USB_STORAGE.md`, "Measured on the device").
-  Plan and checklist: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md`; device
-  doc `waved/docs/USB_STORAGE.md`.
-  - [x] The recordings volume as a drive: the gadget keeps an empty removable LUN from boot
-    (`scripts/patch-stock-usbgadget.sh`, reboot once) and waved swaps the medium, so audio, HID
-    and adb stay up. Unmount first, export second; unload, check and mount to come back.
+- [ ] **G1 Mass-storage mode** (M) — reworked after the device pass (2026-10-13) and host-tested; **device pass pending**. The drive next to adb doesn't work on this controller, so waved now runs stock's own `S89usbgadget uac_hid_msc` switch at runtime (verified live by hand, v3): **adb is off while storage is on**, audio and HID stay. The boot patch no longer links the drive (and removes an old G1 step).
+  Plan: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md` (R1–R4); design, measurements and
+  device-pass checklist: `waved/docs/USB_STORAGE.md`.
+  - [x] The recordings volume as a drive: unmount first, then stock's switch (unbind, adbd off,
+    drive + HID linked, bind); a switch that doesn't come up goes straight back and remounts.
+  - [x] The way back (Stop, the computer's eject, a pulled cable): unbind, a fresh detached adbd,
+    what was linked before, bind; then fsck and mount, only with the drive read back empty.
   - [x] Takeover screen with "Stop USB storage"; refused while a take is in progress.
-  - [x] Ends on the computer's eject or a pulled cable; a restarted waved takes a leftover drive
-    back before the meeting service starts.
-  - [ ] Device pass: does macOS lock the medium (Stop then says "Eject Wave on the computer
-    first"); `soft_connect` on `crgudc2`; audio xruns during a large copy.
-  - Not done: an update install does not wait for USB storage to end.
+  - [x] A restarted waved that finds storage mode goes back to normal USB first, then reclaims.
+  - [ ] Device pass (`USB_STORAGE.md`): the real volume, copy + Finder eject, adb and audio back;
+    Stop without eject (does macOS lock the medium?); cable pull; waved restart in storage mode;
+    audio xruns during a large copy.
+  - [ ] waved's own `/dev/hidg0` and `hw:1` mixer handles don't reopen after the switch (HID keys,
+    PC link, Mac volume → Wave likely stop until waved restarts): reopen on error in waved-hid
+    and `uac/control.rs`, once the device pass confirms it.
 
 ## H — Updates (self-hosted, signed)
 

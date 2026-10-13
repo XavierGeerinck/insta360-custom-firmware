@@ -24,7 +24,7 @@ from on-device measurement and are hard to rederive.
 | Updates (signed packages, server, fall-back in `S60waved`, back to stock) | [`docs/UPDATES.md`](docs/UPDATES.md) |
 | Wave Controller app ("PC Link", vendor HID report 0x03, MAVLink) | [`docs/WAVE_CONTROLLER_PROTOCOL.md`](docs/WAVE_CONTROLLER_PROTOCOL.md) |
 | Security posture, release lockdown and the way back (K1) | [`docs/SECURITY.md`](docs/SECURITY.md) |
-| USB storage (recordings volume `/dev/udisk` as a drive; stock's mode switch; the gadget's empty removable LUN) | [`docs/USB_STORAGE.md`](docs/USB_STORAGE.md) |
+| USB storage (recordings volume `/dev/udisk` as a drive; stock's `uac_hid_msc` mode switch at runtime, adb off while on; never link the drive next to adb) | [`docs/USB_STORAGE.md`](docs/USB_STORAGE.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
