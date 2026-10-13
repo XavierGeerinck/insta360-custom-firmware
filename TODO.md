@@ -319,7 +319,7 @@ Rules for the parallel milestones:
 
 ## G — USB storage
 
-- [x] **G1 Mass-storage mode** (M) — host-tested; check it in the milestone 3 device pass.
+- [ ] **G1 Mass-storage mode** (M) — built and host-tested, but **does not work on this USB controller** (device, 2026-10-13): audio + HID + adb + storage times out enabling the storage endpoint, and dropping adb at runtime didn't come back (power cycle needed). Don't apply the boot patch. Next: reuse stock's `S89usbgadget uac_msc` mode switch, tested live first (`waved/docs/USB_STORAGE.md`, "Measured on the device").
   Plan and checklist: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md`; device
   doc `waved/docs/USB_STORAGE.md`.
   - [x] The recordings volume as a drive: the gadget keeps an empty removable LUN from boot
