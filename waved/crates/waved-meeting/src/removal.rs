@@ -81,10 +81,16 @@ async fn finish_one(pool: &SqlitePool, recordings_dir: &Path, id: Uuid) -> std::
 }
 
 /// Rename `<id>/` to the trash name and make the rename durable. Blocking.
+/// No `<id>/` is fine (moved aside before, or never written), but not when
+/// the recordings directory itself is missing: the volume is not mounted
+/// (G1), and the recording would come back with it. The row then stays
+/// `deleting` until a start-up with the volume finishes it.
 fn move_to_trash(recordings_dir: &Path, id: Uuid, trash: &Path) -> std::io::Result<()> {
     match std::fs::rename(recordings_dir.join(id.to_string()), trash) {
         Ok(()) => std::fs::File::open(recordings_dir)?.sync_all(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && recordings_dir.is_dir() => {
+            Ok(())
+        }
         Err(error) => Err(error),
     }
 }
@@ -126,4 +132,67 @@ pub(crate) async fn finish_interrupted(pool: &SqlitePool, recordings_dir: &Path)
         }
     }
     finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_delete_with_the_volume_away_stays_claimed_until_it_is_back() {
+        // The recordings volume is not mounted (G1): its recordings
+        // directory is not there. Deleting the rows now would bring the
+        // recording back as an orphan once the volume is mounted.
+        let temp = tempfile::tempdir().unwrap();
+        let pool = db::init_pool(temp.path().join("meetings.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let recordings = temp.path().join("recordings");
+        let id = Uuid::new_v4();
+        let dir = recordings.join(id.to_string());
+        db::insert_meeting(&pool, &id, "omni", &dir.to_string_lossy())
+            .await
+            .unwrap();
+        db::set_status(&pool, &id, MeetingStatus::LocalOnly).await.unwrap();
+
+        assert!(remove_recording(&pool, &recordings, id).await.is_err());
+        assert_eq!(
+            db::ids_with_status(&pool, MeetingStatus::Deleting).await.unwrap(),
+            [id]
+        );
+
+        // Mounted again, files and all: the delete completes.
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("audio.wav"), b"wav").await.unwrap();
+        assert_eq!(finish_interrupted(&pool, &recordings).await, 1);
+        assert!(!dir.exists());
+        assert!(db::ids_with_status(&pool, MeetingStatus::Deleting)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_recording_already_moved_aside_still_deletes() {
+        let temp = tempfile::tempdir().unwrap();
+        let pool = db::init_pool(temp.path().join("meetings.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+        let id = Uuid::new_v4();
+        db::insert_meeting(&pool, &id, "omni", &recordings.join(id.to_string()).to_string_lossy())
+            .await
+            .unwrap();
+        db::set_status(&pool, &id, MeetingStatus::LocalOnly).await.unwrap();
+
+        assert!(matches!(
+            remove_recording(&pool, &recordings, id).await.unwrap(),
+            RemoveOutcome::Removed { .. }
+        ));
+        assert!(db::ids_with_status(&pool, MeetingStatus::Deleting)
+            .await
+            .unwrap()
+            .is_empty());
+    }
 }

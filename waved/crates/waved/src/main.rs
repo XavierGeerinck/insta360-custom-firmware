@@ -415,6 +415,8 @@ async fn run_async(
                     Arc::clone(&playback) as Arc<dyn waved_meeting::player::SpeakerOutput>,
                     Arc::clone(&bus.playback),
                 )
+                // Nothing plays while USB storage has the recordings (G1).
+                .with_usb_storage(bus.usb_storage.subscribe())
                 .run(bus.commands.subscribe(), bus.audio.subscribe(), bus.meeting.subscribe()),
             );
             // Recording start and stop tones (E5) through the playback path.
@@ -800,7 +802,9 @@ async fn run_async(
             Arc::clone(&bus.usb_storage),
             bus.events.clone(),
             bus.commands.clone(),
-        );
+        )
+        // No start while a firmware update installs (it restarts Wave).
+        .with_ota(bus.ota.subscribe());
         let reclaimed = tokio::task::block_in_place(|| usb_storage.reclaim_at_start());
         if reclaimed != waved_system::usb_storage::Reclaim::Nothing {
             warn!("usb storage at start-up: {reclaimed:?}");
@@ -816,7 +820,14 @@ async fn run_async(
     // Meeting service. Its task ends once a Shutdown finalized the take,
     // which a power off waits for.
     let mut meeting_task: Option<tokio::task::JoinHandle<()>> = None;
-    match waved_meeting::MeetingService::new_with_integrity(
+    // The recordings are reconciled only on a mounted volume (G1): on the
+    // bare /mnt/udisk every one would be marked missing.
+    #[cfg(not(feature = "simulate"))]
+    let recordings_mounted: waved_meeting::VolumeMounted =
+        Arc::new(waved_system::usb_storage::recordings_mounted);
+    #[cfg(feature = "simulate")]
+    let recordings_mounted: waved_meeting::VolumeMounted = Arc::new(|| true);
+    match waved_meeting::MeetingService::new_on_volume(
         config.clone(),
         DB_PATH,
         PathBuf::from(RECORDINGS_DIR),
@@ -828,6 +839,7 @@ async fn run_async(
             integrity: Arc::clone(&recording_integrity),
             integrity_rx,
         },
+        recordings_mounted,
     ).await {
         Ok(meeting_svc) => {
             let meeting_svc = meeting_svc

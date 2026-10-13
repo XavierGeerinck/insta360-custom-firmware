@@ -156,6 +156,14 @@ pub fn replug_opted_in(value: Option<&str>) -> bool {
     value.map(str::trim) == Some("1")
 }
 
+/// Whether the recordings volume is mounted on Wave now (`/proc/mounts` has
+/// `MOUNT_POINT`). The meeting service reconciles the recordings only then.
+pub fn recordings_mounted() -> bool {
+    device::SystemVolume::device()
+        .mounted()
+        .is_ok_and(|mount| mount.is_some())
+}
+
 /// Whether the meeting service still owns a take: recording, paused,
 /// finishing it (`recording` stays true until the file is final) or waiting
 /// for the user's decision.

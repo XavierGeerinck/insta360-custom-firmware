@@ -70,6 +70,37 @@ pub struct MeetingService {
     /// USB storage (G1): while the computer has the recordings volume, no
     /// take starts, nothing uploads and Files is not republished.
     usb_storage: Option<watch::Receiver<UsbStorageState>>,
+    /// Whether the recordings volume is mounted now (G1).
+    volume_mounted: VolumeMounted,
+    /// Reconciliation has not run on a mounted volume since start-up or the
+    /// last return from USB storage; the Files tick tries again.
+    unreconciled: bool,
+}
+
+/// Whether the recordings volume is mounted now (G1): on the device,
+/// `/proc/mounts` has `/mnt/udisk`. Reconciliation and the start-up
+/// completion of deletes run only then: on the bare mount point every
+/// recording would read as missing, and stay so.
+pub type VolumeMounted = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Finish the deletes a restart interrupted and reconcile the recordings
+/// with the database, if the volume is mounted. Returns whether it ran.
+async fn reconcile_mounted(
+    pool: &SqlitePool,
+    recordings_dir: &Path,
+    volume_mounted: &VolumeMounted,
+) -> bool {
+    if !volume_mounted() {
+        return false;
+    }
+    let finished = removal::finish_interrupted(pool, recordings_dir).await;
+    if finished > 0 {
+        info!("finished {finished} interrupted delete(s)");
+    }
+    if let Err(error) = reconcile::run(pool, recordings_dir).await {
+        warn!("recording reconciliation failed: {error}");
+    }
+    true
 }
 
 /// How long after the auto-Keep a Discard of that take still counts.
@@ -356,6 +387,7 @@ impl MeetingService {
         .await
     }
 
+    /// With the recordings directory always there (tests, simulate).
     pub async fn new_with_integrity(
         config: WavedConfig,
         db_path: &str,
@@ -364,13 +396,33 @@ impl MeetingService {
         events_tx: broadcast::Sender<DeviceEvent>,
         inputs: MeetingPipelineInputs,
     ) -> Result<Self, sqlx::Error> {
+        Self::new_on_volume(
+            config,
+            db_path,
+            recordings_dir,
+            meeting_tx,
+            events_tx,
+            inputs,
+            Arc::new(|| true),
+        )
+        .await
+    }
+
+    /// `volume_mounted` says whether the recordings volume is mounted (G1).
+    /// While it is not, nothing is reconciled.
+    pub async fn new_on_volume(
+        config: WavedConfig,
+        db_path: &str,
+        recordings_dir: PathBuf,
+        meeting_tx: Arc<watch::Sender<MeetingState>>,
+        events_tx: broadcast::Sender<DeviceEvent>,
+        inputs: MeetingPipelineInputs,
+        volume_mounted: VolumeMounted,
+    ) -> Result<Self, sqlx::Error> {
         let pool = db::init_pool(db_path).await?;
-        let finished = removal::finish_interrupted(&pool, &recordings_dir).await;
-        if finished > 0 {
-            info!("finished {finished} interrupted delete(s)");
-        }
-        if let Err(error) = reconcile::run(&pool, &recordings_dir).await {
-            warn!("recording reconciliation failed: {error}");
+        let reconciled = reconcile_mounted(&pool, &recordings_dir, &volume_mounted).await;
+        if !reconciled {
+            warn!("the recordings volume is not mounted; reconciliation waits until it is");
         }
         match db::keep_stale_decisions(&pool).await {
             Ok(0) => {}
@@ -411,6 +463,8 @@ impl MeetingService {
             files_refresh: Arc::new(Notify::new()),
             auto_kept: None,
             usb_storage: None,
+            volume_mounted,
+            unreconciled: !reconciled,
         })
     }
 
@@ -488,14 +542,21 @@ impl MeetingService {
         self.auto_kept = Some((id, tokio::time::Instant::now()));
     }
 
-    /// The recordings volume is mounted again after USB storage (G1). The
-    /// computer may have deleted or added recordings: reconcile as at boot,
-    /// recheck the storage limits and republish Files.
-    async fn recordings_back(&self) {
-        info!("recordings volume back from USB storage; reconciling");
-        if let Err(error) = reconcile::run(&self.pool, &self.recordings_dir).await {
-            warn!("recording reconciliation after USB storage failed: {error}");
+    /// The recordings volume is back after USB storage (G1), or mounted after
+    /// a start-up without it. The computer may have deleted or added
+    /// recordings: reconcile as at boot, recheck the storage limits and
+    /// republish Files. Nothing is reconciled while `/proc/mounts` does not
+    /// show the volume; the Files tick tries again.
+    async fn recordings_back(&mut self) {
+        if !reconcile_mounted(&self.pool, &self.recordings_dir, &self.volume_mounted).await {
+            if !self.unreconciled {
+                warn!("recordings volume not mounted; reconciliation waits until it is");
+            }
+            self.unreconciled = true;
+            return;
         }
+        info!("recordings volume mounted; reconciled");
+        self.unreconciled = false;
         retention::enforce(
             &self.pool,
             &self.recordings_dir,
@@ -670,6 +731,11 @@ impl MeetingService {
                     }
                 }
                 _ = files_tick.tick(), if self.files.is_some() => {
+                    if self.unreconciled && !self.recordings_away() {
+                        // Started (or came back) without the volume: once it
+                        // is mounted, reconcile and republish.
+                        self.recordings_back().await;
+                    }
                     self.publish_files();
                 }
                 _ = files_refresh.notified(), if self.files.is_some() => {
@@ -922,6 +988,13 @@ impl MeetingService {
                                     self.handle_discard_recording(id).await;
                                 }
                                 Command::DeleteRecording(id) => {
+                                    if self.recordings_away() {
+                                        // The files cannot be moved aside now; deleting
+                                        // only the rows would bring the recording back
+                                        // once the volume is mounted.
+                                        warn!("delete of {id} ignored: USB storage has the recordings volume");
+                                        continue;
+                                    }
                                     if active.as_ref().is_some_and(|rec| rec.id == id) {
                                         warn!("delete ignored: recording {id} is still running");
                                         continue;
