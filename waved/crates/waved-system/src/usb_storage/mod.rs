@@ -23,7 +23,8 @@ use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use waved_state::{
-    Command, DeviceEvent, MeetingState, UsbStoragePhase, UsbStorageProblem, UsbStorageState,
+    Command, DeviceEvent, MeetingState, OtaState, UsbStoragePhase, UsbStorageProblem,
+    UsbStorageState,
 };
 
 /// The recordings partition (`mmcblk0p16`, exFAT).
@@ -176,6 +177,8 @@ pub struct UsbStorage {
     /// `reclaim_at_start` may re-plug USB; cleared after a re-plug that did
     /// not bring the computer back.
     replug: bool,
+    /// Firmware updates (`with_ota`).
+    ota: Option<watch::Receiver<OtaState>>,
     sleep: Box<dyn Fn(Duration) + Send>,
 }
 
@@ -197,6 +200,7 @@ impl UsbStorage {
             mount: MountSpec::boot(),
             gone_polls: 0,
             replug: false,
+            ota: None,
             sleep: Box::new(std::thread::sleep),
         }
     }
@@ -224,6 +228,20 @@ impl UsbStorage {
         self
     }
 
+    /// Follow firmware updates: no start while one installs (it restarts
+    /// Wave, and the computer would lose its drive unejected). Before that
+    /// point the update waits for storage to end (waved-update).
+    pub fn with_ota(mut self, ota: watch::Receiver<OtaState>) -> Self {
+        self.ota = Some(ota);
+        self
+    }
+
+    fn installing_update(&self) -> bool {
+        self.ota
+            .as_ref()
+            .is_some_and(|ota| ota.borrow().phase.takes_over_screen())
+    }
+
     /// Let `reclaim_at_start` re-plug USB (`soft_connect`) to end a
     /// computer's hold on the drive. Off by default (`REPLUG_ENV`).
     pub fn with_replug(mut self, on: bool) -> Self {
@@ -248,9 +266,9 @@ impl UsbStorage {
     }
 
     /// `Command::StartUsbStorage`: hand the volume to the computer. Refused
-    /// (nothing changes) while a take is in progress, with no computer, with
-    /// no drive in the gadget or with the volume not mounted here; a busy
-    /// volume leaves everything as it was.
+    /// (nothing changes) while a take is in progress, while a firmware update
+    /// installs, with no computer, with no drive in the gadget or with the
+    /// volume not mounted here; a busy volume leaves everything as it was.
     pub fn start(&mut self, meeting: &MeetingState) {
         if self.phase() != UsbStoragePhase::Off {
             return;
@@ -258,6 +276,10 @@ impl UsbStorage {
         if take_in_progress(meeting) {
             info!("usb storage: not started, a recording is in progress");
             return self.problem(UsbStorageProblem::Recording);
+        }
+        if self.installing_update() {
+            info!("usb storage: not started, a firmware update is installing");
+            return self.problem(UsbStorageProblem::Unavailable);
         }
         if !self.gadget.drive_ready() {
             warn!(
@@ -602,7 +624,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use uuid::Uuid;
-    use waved_state::PendingDecision;
+    use waved_state::{OtaPhase, OtaState, PendingDecision};
 
     /// One world for both fakes, so they can check the rule this module
     /// exists for: the computer and Wave never both have the volume.
@@ -872,6 +894,28 @@ mod tests {
             assert_eq!(rig.problems(), [UsbStorageProblem::Recording]);
             assert!(rig.world().mounted.is_some());
         }
+    }
+
+    #[test]
+    fn a_firmware_install_refuses_to_start_and_touches_nothing() {
+        // The install restarts Wave: the computer would lose its drive unejected.
+        for phase in [OtaPhase::Installing, OtaPhase::Restarting] {
+            let mut rig = Rig::new(World::default());
+            let (ota_tx, ota_rx) = watch::channel(OtaState::default());
+            rig.storage = rig.storage.with_ota(ota_rx);
+            ota_tx.send_modify(|ota| ota.phase = phase.clone());
+            rig.storage.start(&idle());
+            assert_eq!(rig.phase(), UsbStoragePhase::Off, "{phase:?}");
+            assert!(rig.log().is_empty(), "{phase:?}");
+            assert_eq!(rig.problems(), [UsbStorageProblem::Unavailable]);
+        }
+        // Before the point of no return the update waits for storage instead.
+        let mut rig = Rig::new(World::default());
+        let (ota_tx, ota_rx) = watch::channel(OtaState::default());
+        rig.storage = rig.storage.with_ota(ota_rx);
+        ota_tx.send_modify(|ota| ota.phase = OtaPhase::Waiting);
+        rig.storage.start(&idle());
+        assert_eq!(rig.phase(), UsbStoragePhase::On);
     }
 
     #[test]
