@@ -384,7 +384,7 @@ Request payload sizes are the minimum stock checks; "—" means none is read.
 | 0x24 | MEETING_GET_CUR_ALL_INFO | ✓ | — | 801, `pc_link_get_cur_meeting_all_info_ack_t` | SN, "PSP", start time, language, meeting id, timezone, cloud device token | all zero (cloud transcription data; no result byte) |
 | 0x25 | MEETING_SCREENSHOT | ✓ | exactly 260, `meet_long u32, name[256]` | 1, result | tags a screenshot to the meeting | unsupported |
 | 0x26 | SET_AUDIO_SPEAKER_VOLUME | ✓ | 1 | 1, result | set volume; 0 also mutes, >0 unmutes | same |
-| 0x27 | SET_AUDIO_SPEAKER_MODE | ✓ | 1 | 1, result | EQ mode | unsupported |
+| 0x27 | SET_AUDIO_SPEAKER_MODE | ✓ | 1 | 1, result | EQ mode; stock 1.2.2.6 drops it (request `SET_AUDIO_DOWNLINK_EQ_MODE` hits the default case, `AUDIO_HARDWARE.md` "Stock speaker tuning") **[code]** | unsupported |
 | 0x28 | SET_AUDIO_SPEAKER_MUTE | ✓ | 1 | 1, result | | same |
 | 0x29 | SET_AUDIO_MIC_VOLUME | ✓ | 1 | 1, result | set volume; 0 also mutes, >0 unmutes | same |
 | 0x2A | SET_AUDIO_MIC_MODE | ✓ | 1 | 1, result | §8 | §8 |

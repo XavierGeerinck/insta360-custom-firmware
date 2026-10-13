@@ -635,78 +635,253 @@ original +5-point provisional delta target, although the four-core device
 retained real-time integrity. Sustained bidirectional load and the live
 listener echo/delay report remain acceptance gates.
 
-## Playback DSP Chain (SP#5)
+## Playback DSP Chain (SP#5; speaker scenes 2026-10-13)
 
 `PlaybackService::run_playback_loop` (in `crates/waved-audio/src/playback.rs`)
 processes every batch through the chain below before the ALSA write. The
 broadcast tap (`subscribe_reference()`) publishes the **post-DSP** buffer —
 this is what AEC consumes as the far-end reference, and matches what the
-speaker actually emits.
+speaker actually emits (except the amplifier's own EQ, below, which is part
+of the echo path).
 
 ```
-mpsc<Vec<i16>> → HPF → 4-biquad EQ → 4-band MBAGC → lookahead limiter
+mpsc<Vec<i16>> → [HPF] → [EQ, ≤ 4 biquads] → [4-band MBAGC] → [lookahead limiter]
                                                           │
                                        ┌──────────────────┤
                                        ▼                  ▼
                               ALSA write hw:0,1   broadcast<Vec<i16>>
                               (TDM-B → acm8625s)        (AEC ref)
+                                  │
+                       acm8625s "Set EQ MODE" (card 0)
 ```
 
-Default HPF cutoff: 80 Hz. Default limiter ceiling: −1 dBFS, 96-sample
-lookahead (≈ 2 ms latency).
+Every stage is optional (`PlaybackPresetTuning`: `hpf_cutoff_hz: Option`,
+`limiter: Option`, `mbagc.enabled`, EQ bands `Bypass`). With all of them off
+the chain does not touch the samples (bit-exact). Limiter when present:
+−1 dBFS ceiling, 96-sample lookahead (≈ 2 ms latency).
 
-**Voice preset** mirrors stock `dynamic_eq_config_2.json` (vendored at
-`crates/waved-audio/data/dynamic_eq_config_2.json`). 4 EQ biquads + 4-band
-MBAGC. **Media preset** = Voice with MBAGC bypassed and EQ flattened.
-Switched at runtime via `Command::SetPlaybackPreset` or
-`/tmp/waved-playback-preset` (`voice` | `media`) + SIGHUP — same wiring as
-`/tmp/waved-nr` for SP#4.
+**Presets** (`playback/preset.rs`):
 
-### SP#5 acceptance results (measured 2026-04-30)
+- **Media** = stock's speaker path: identity. No HPF, EQ, MBAGC or limiter.
+- **Voice** = the four peaking filters of stock `dynamic_eq_config_2.json`
+  (vendored at `crates/waved-audio/data/`) with the file's switches honoured:
+  `hpf_switch 0` → no HPF, `mbagc_switch 0` → no MBAGC, `agc_switch 0` → no
+  AGC, `iir_eq_switch 1` → the EQ; plus the limiter, because the EQ boosts
+  (+5 dB at 3.5 kHz). Stock ships this file but loads it nowhere (below), so
+  Voice is waved's call tuning, not stock parity. Filters use stock's peaking
+  form (`BiquadKind::StockPeaking`).
+- The parser maps every stock filter type (below) and rejects
+  `agc_switch 1` (no full-band AGC in waved). `dynamic_eq_config.json` is
+  vendored as parser test data only.
+
+Before 2026-10-13 Voice ran HPF (30 Hz) → RBJ peaking → MBAGC (max gain
+6/20/10/10 dB, lift-only, so up to +20 dB on 300 Hz–4 kHz) → limiter on all
+audio, music included, and the amp mode was never set: the "muffled"
+music report.
+
+**Preset switch:** the running chain fades out over 5 ms, the stages are
+rebuilt (fresh filter state) at silence, and the new chain fades in over
+5 ms, staying silent through a new limiter's look-ahead fill. A switch during
+a fade-in turns around at the current level. A switch to the preset already
+running is ignored. The reference carries the same fade.
+
+Switched by the speaker scene (next section), or pinned with
+`Command::SetPlaybackPreset` / `/tmp/waved-playback-preset` (`voice` |
+`media` | `auto`) + SIGHUP.
+
+### SP#5 acceptance results (measured 2026-04-30, old Voice chain)
 
 - **AEC ERLE non-regression: 23.2 dB** (SP#2 baseline 22.7 dB; SP#5 bar
-  20.7 dB). The post-DSP tap actually delivers a *more* accurate reference
-  than the pre-DSP tap — AEC sees what the speaker emits including EQ and
-  limiting, so cancellation tightens slightly. Test: `scripts/test-aec-on-device.sh`
-  with `LINEAR_ERLE_THRESHOLD_DB=20.7`. This historical result predates the
-  residual stage; rerun the current same-frame acceptance after deployment.
+  20.7 dB), with the old Voice chain (MBAGC on) and the amp in mode 2.
+  Test: `scripts/test-aec-on-device.sh` with `LINEAR_ERLE_THRESHOLD_DB=20.7`.
+  This historical result predates the residual stage and the 48 kHz echo
+  canceller fix; rerun after deployment (root `TODO.md` C14, and the speaker
+  scene checklist below).
 - **Bit-exact biquad regression**: `cargo test -p waved-audio --test biquad_regression`
   pins direct-form-1 + RBJ peaking against a Python f64 reference impulse
   response within 1e-6.
-- **Voice EQ stats sanity** (test 1 of `scripts/test-playback-eq.sh`): pass —
-  `playback_preset="voice"`, `mbagc_active_gain_db=[6.0, 20.0, 10.0, 10.0]`.
-- **Soft-talk MBAGC** (test 2): pass — total per-band gain 46.0 dB on
-  −40 dBFS multi-tone input (bar ≥ 4 dB).
-
-### Known caveats (acceptance test)
-
-- **`limiter_reduction_db` snapshot is last-block, not peak-hold.** Test 3
-  of `scripts/test-playback-eq.sh` reads stats *after* SIGUSR2 file-play
-  finishes; by then playback is silent and the limiter envelope has
-  released back to 1.0 (`reduction_db = 0.0`). The limiter still functions
-  correctly during the actual square wave — just not visible in stats
-  post-hoc. Fix is a small change to `LookaheadLimiter` (peak-hold with slow
-  decay window matching the 500 ms stats cadence). Future SP#5.5 cleanup.
-- **CPU baseline 11.5% in `scripts/cpu_delta.py` is pre-SP#4.** With DFN3
-  enabled by default, the post-SP#4 baseline at silence is much higher
-  (~43% observed). Re-baselining belongs with the SP#4 follow-up that
-  pre-builds DFN3 at startup.
-- **Preset switch is a hard swap, no cosine gain ramp.** Spec §2.8 called
-  for a 5 ms ramp at the boundary; current `PlaybackDspChain::set_preset`
-  swaps coefficients directly at the next period and resets MBAGC envelopes.
-  Test 4 (manual rapid voice↔media flip under pink noise) passed without an
-  audible click on this hardware, but the risk is real if presets ever
-  differ more aggressively. See `TODO.md` SP#5 follow-ups.
-- **`MbagcParams.knee_db` is currently a dead field.** It is populated from
-  the stock voice preset (`[5.0, 5.0, 5.0, 5.0]`) and round-trips through
-  config, but `band_gain_linear` does a hard clamp instead of a soft-knee
-  transition. Voice preset therefore diverges slightly from stock at the
-  gain-curve knee. See `TODO.md` SP#5 follow-ups.
+- `scripts/test-playback-eq.sh` now expects the MBAGC **off** (test 2: all
+  bands 0 dB) and leaves the preset on `auto`.
 
 **Local playback (milestone 2).** `play_local` input (Files playback) is mixed into the
-host stream with a saturating add *before* HPF/EQ/MBAGC/limiter, so the speaker volume,
-the limiter and the AEC reference all cover it. The saturating add can clip loud host
+host stream with a saturating add *before* the DSP chain, so the speaker volume,
+the limiter (Voice) and the AEC reference all cover it. The saturating add can clip loud host
 audio before the volume stage.
+
+## Stock speaker tuning (fw 1.2.2.6, reverse-engineered 2026-10-13)
+
+Sources: `usr/lib/libInstaAudio.so` and `usr/lib/libins_entry.so` (both ship
+DWARF: struct layouts, enums, line info), `usr/lib/libbva_audio.so`
+(symbols), `/etc/*.json`, the Ghidra output in
+`firmwares/fw_v3.0.0.1/decompiled/` (its `libInstaAudio.so` has the same
+`.text` as 1.2.2.6; the bytes differ only in `.rodata`) and
+`firmwares/fw_v1.2.2.6/decompiled/`. Addresses are 1.2.2.6 virtual
+addresses (Ghidra adds 0x100000). Every address below was checked in
+`llvm-objdump` of the 1.2.2.6 binary.
+
+### The speaker path runs no DSP [code]
+
+`Insta360_AudioInRoute::run` (libInstaAudio 0x51db4) builds every speaker
+route (`UAC_2_SPK`, `BT_2_SPK`, `DONGLE_2_SPK`, their low-latency/cascade
+variants, `FILE_2_SPK`, `TONE_2_SPK`) as input device →
+`Insta360_VolumeProccessBase` (`UAC_IN_VOL_AGLO`, `BT_IN_VOL_AGLO`,
+`FILE_IN_VOL_AGLO`) → `Insta360_Speaker` (`hw:0,1`, 48 kHz S16 stereo,
+480-frame periods, ctor 0x328a4). No EQ, HPF, MBAGC, AGC or limiter.
+The volume is a dB table per input; USB (`Insta360_UsbInDevice` ctor
+0x32c40): index 0/10/20/…/100 → −38/−32/−26/−22/−18/−14/−10/−8/−4/−2/0 dB.
+(waved's speaker volume stays linear; not changed here.)
+
+### Both EQ files are microphone EQs [code]
+
+- `Insta360_EqProccess` (aglo name `InstaDynamicEq`, ctor 0x38fa4) calls
+  `insta360_parse_eq_config_json("/etc/dynamic_eq_config.json")` (0x2c880,
+  string 0x5c9d7). **Nothing references `dynamic_eq_config_2.json`.**
+- It is connected only in `Insta360_AudioOutRoute::run` (0x51410): built-in
+  mic → `MicChannelMap` → 3A (`Insta360_Sigp3A` or `Insta360_TeaSdk`) →
+  **EqProccess** → `ReverbProccess` → `3A_OUT_VOL_AGLO` → USB/BT out. Same
+  wiring in 1.1.6.6 (repo-root `decompiled/libInstaAudio.so.c`).
+- `mBypass = (insta_eq_en == 0)` from `/etc/audio_config.json`, which ships
+  `insta_eq_en: 0` (also in 1.0.13.6); `Insta360_SetUplinkEqEnable` (0x3de84)
+  is a stub returning 0. The exported name says what it is: the **uplink**
+  EQ, and on 1.2.2.6 it never runs.
+
+### The dynamic EQ engine (`libbva_audio.so`) [code]
+
+`objASP_Param` (DWARF, `nlp/asp/common.h`): `hpf_switch` +0x10e,
+`agc_switch` +0x110, `iir_eq_switch` +0x118, `mbagc_switch` +0x11c,
+`vad_switch` +0x138, `eq_filter_num` +0x144, `eq_type[20]` +0x178,
+`eq_center_freq` +0x1a0, `eq_gain_dB` +0x1f0, `eq_Q` +0x240.
+`aspDynamicEqInitApi` (0x2b1b0) copies them to its object (+0x124) and
+creates a stage only when its switch is exactly 1: HPF
+`asp_hpf_init_api2(fs, cut_off_freq)` per mic (0x2d1d0), IIR EQ (0x2ce6c:
+`asp_iir_eq_init(eq_type[i], fs, eq_center_freq[i], eq_gain_dB[i], eq_Q[i])`
+per filter and channel), MBAGC (0x2cd24: crossover + AGC), full-band AGC
+(0x2d088), VAD (0x2d220). `aspDynamicEqProcessApi` (0x2e4f4) gates on the
+same switches (0x2e904 HPF, 0x2e9c8 EQ, 0x2e9e4 MBAGC, 0x2e9f4 AGC); order
+HPF → EQ → MBAGC → AGC **[inferred: branch order]**. So a switch of 0 means
+the stage does not exist.
+
+Filter types, `bva::asp::asp_iir_eq_init(short type, int fs, float f, float
+gain_dB, float Q)` (0x2a5c0; constants π = 3.1415926 at 0x4f8e8, √2 = 1.414
+at 0x4f990; K = tan(πf/fs), C = 1/K, G = 10^(gain_dB/20); a0 = 1, `y = b·x −
+a·y` **[inferred: the only stable reading]**):
+
+| Type | Filter | Gain | Q | waved `BiquadKind` |
+|---|---|---|---|---|
+| 0 (0x2a8cc) | peaking: bilinear of (s² + (G/Q)s + 1)/(s² + s/Q + 1). Equals RBJ peaking with Q·10^(−gain/40): cuts narrower, boosts wider than RBJ at the same Q | yes | yes | `StockPeaking` |
+| 1 (0x2a6d4) | first-order low shelf: b = [GK+1, GK−1]/(K+1), a1 = (K−1)/(K+1) | G at DC | ignored | `LowShelf1` |
+| 2 (0x2a76c) | first-order high shelf: b = [K+G, K−G]/(K+1), a1 = (K−1)/(K+1) | G at Nyquist | ignored | `HighShelf1` |
+| 3 (0x2a804) | Butterworth low-pass, 2nd order | ignored | ignored | `LowPass` |
+| 4 (0x2a620) | Butterworth high-pass, 2nd order | ignored | ignored | `HighPass` |
+| other (0x2a8a4) | passthrough (b0 = 1) | | | `Bypass` |
+
+`dynamic_eq_config.json` (`type [4, 2, 0]`) is therefore a high-pass at
+150 Hz, a +5 dB first-order shelf above 8 kHz and a −6 dB peak at 90 Hz,
+Q 2: a microphone rumble cut and presence lift. waved's earlier mapping
+(0 RBJ peaking, 1/2 RBJ shelves with Q, 4 rejected) was wrong for 1–4 and
+off in width for 0.
+
+### The amplifier's EQ mode is the only speaker tuning [code + log]
+
+- `Insta360_SetDownlinkEqMode(uint32_t)` (0x3da00, rejects ≥ 3) →
+  `Insta360_AudioPath::setDownlinkEqMode` (0x3f28c) →
+  `Insta360_Speaker::setDownlinkEqMode` (0x32990: `mode > 2` → error) →
+  `Insta360_OutputDeviceBase::setCtrlValue("Set EQ MODE", mode)` (0x30c74:
+  `snd_ctl_open("default")`, interface MIXER, element by name, value written
+  as is; name string 0x5b134). No DSP changes with it.
+- Values: `INSTA360_DOWNLINK_EQ_MODE_E` (`Insta360_AudioManager.h:97`) and
+  `SPEAKER_PA_EQ_MODE` (`Insta360_Speaker.h:14`): **BYPASS 0, MEETING 1,
+  MUSIC 2** (MAX 3). 2 is also the control's value at boot.
+- The only caller is `audio_server_select_out_path_policy` (libins_entry
+  0xc7b84; the three calls at 0xc84a0–0xc84b8). `audio_server_info_s`
+  (DWARF): `is_cur_mic_work` +0xc98, `algo_type` +0xe08. The mic "works"
+  when a microphone consumer is open: the USB host captures
+  (`is_usb_connect` +0xc74 && `is_usb_mic_work` +0xc78), a Bluetooth call
+  (`is_bt_connect` +0xc80 && `is_bt_mic_work` +0xc84), the 2.4 GHz dongle
+  (+0xc8c/+0xc90), a cascade (+0xc6c), or, with none of those, ASR
+  (`asr_init_param` +0xa8) or the pre-record setting
+  (`is_pre_record_enable` +0xe8). On a change of `is_cur_mic_work`:
+  - not working → **2 MUSIC**;
+  - working and `algo_type == 2` (the "SK" 3A, `Insta360_Sigp3A`) → **2**;
+  - working otherwise (TEA) → **1 MEETING**.
+  1.1.6.6 had no `algo_type` branch: working → 1, idle → 2.
+  **0 BYPASS is never used.**
+- `algo_type` (`audio_select_algo`, libins_entry): SK licence
+  (`UNIFYKEYS_SK_LICENSE` 0x10) first → 2; else TEA
+  (`UNIFYKEYS_TEA_LICENCE` 2) → 1; neither → SK with a built-in demo key → 2.
+  `/data/common_settings/FORCE_ALGO_MODE` forces one. Which this unit runs
+  on 1.2.2.6 is **unknown**.
+- `SET_AUDIO_DOWNLINK_EQ_MODE` (request 0x11; sent by the UI's
+  `audio_server_request_eq_mode_change` in `libui.so` and by the Wave
+  Controller's `SET_AUDIO_SPEAKER_MODE` 0x27 via `slave_set_speaker_mode`)
+  does nothing on 1.2.2.6: entry 0x11 of `audio_server_request`'s jump table
+  (0x1f4474) is the default exit (0xc276c).
+- **[log]** This unit on older stock firmware (syslog in the 2026-04-08
+  `/data` backup, `backups/partitions/p13_data.img`): `update mic work
+  status: 1` → `set downlink eq 1 success`, `status: 0` → `set downlink eq 2
+  success`.
+- **[measured, listening, 2026-10-13, waved's old Voice DSP still on]**
+  phone music: mode 0 "light, no bass", 1 "muffled, far away", 2 "bassy,
+  still not amazing".
+- `/etc/eq_drc_params.ini` (Amlogic AED EQ/DRC tables) is referenced only by
+  the SDK tool `/usr/bin/Amlogic_EQ_Param_Generator`; nothing loads it at
+  boot **[inferred: no other reference in the rootfs]**.
+
+## Speaker scenes (2026-10-13)
+
+`crates/waved-audio/src/playback/scene.rs`; plan
+`docs/superpowers/plans/2026-10-13-speaker-scenes.md`.
+
+| Scene | When | Preset | Amp `Set EQ MODE` |
+|---|---|---|---|
+| **Music** (default) | nothing reads the mic | Media (identity) | 2 |
+| **Meeting** | the host reads the USB mic (`AudioState::host_listening`) or a Bluetooth call (`BluetoothState::call_audio`) | Voice | 1 |
+
+- Phone music over Bluetooth (`phone_audio` without `call_audio`) and USB
+  playback with no capture stream are Music. USB carries no "music or call"
+  flag; like stock, the host opening the mic is what counts. A host that
+  keeps the mic open (some apps do) keeps USB music in Meeting.
+- Not mirrored from stock: local recording/ASR and the pre-record setting as
+  Meeting triggers (pre-record would pin the amp to MEETING all day).
+- The amp rule is stock's TEA / pre-1.2.2.6 rule, which this unit logged.
+  1.2.2.6 with SK keeps 2 in calls: pin `/tmp/waved-amp-eq-mode` to 2 to
+  hear it. One function (`scene::amp_mode_for`) to change.
+- The follower (`run_scene_follower`, spawned in `main.rs`) applies the
+  scene at start and on every change. The amp is written through
+  `AmpEqControl` (`AlsaAmpEqControl`: `HCtl` on the playback PCM's card,
+  `hw:0`, element "Set EQ MODE", every channel of it). A failed write is
+  logged and not retried until the wanted mode changes or an override
+  command arrives.
+- **Overrides (A/B):** `/tmp/waved-playback-preset` `voice` | `media` pins
+  the preset (`Command::SetPlaybackPreset`), `auto` releases it
+  (`SetPlaybackPresetAuto`). `/tmp/waved-amp-eq-mode` `0` | `1` | `2` (or
+  `bypass` | `meeting` | `music`) pins the amp mode, `auto` releases it
+  (`SetAmpEqMode`). Both + `killall -HUP waved`. The SIGHUP handler re-reads
+  every file, so a pin left in a file comes back on the next SIGHUP.
+- **Stats** (`/tmp/audio_stats.json`): `playback_preset` = the preset the
+  playback thread runs; `speaker_scene` (`music` | `meeting`),
+  `speaker_scene_auto`; `amp_eq_mode` (0–2 as last written, `null` before the
+  first write or after a failed one), `amp_eq_mode_auto`.
+
+### ERLE: what changed and what to re-measure
+
+- **MBAGC removed:** the old Voice chain lifted quiet far-end speech by up to
+  20 dB in 300 Hz–4 kHz. The far end now plays (and the reference carries)
+  that much less, so the echo at the mics is quieter: measured ERLE can drop
+  against the room noise floor even if cancellation is as good. Re-measure
+  at the same speaker SPL as the old runs (raise the test level or volume).
+  `SpeexAec::reference_active` uses an absolute floor (mean power ≥ 100,
+  ≈ −70 dBFS RMS), far below speech without MBAGC too.
+- **Amp mode in calls:** the old baselines (23.2 dB SP#5, 26.6 dB Apple
+  Music SP#6) were taken with the amp in mode 2. Calls now run in mode 1,
+  which changes the echo path (less bass): measure Voice + amp 1, Voice +
+  amp 2 and Media + amp 1.
+- **Scene switch mid-call:** the amp mode and the preset change the echo
+  path at once; the adaptive filter re-converges. Measure the echo burst when
+  a Bluetooth call starts while USB far-end audio plays.
+- **Limiter latency:** Voice adds 2 ms (look-ahead), Media none. The
+  reference is the post-chain buffer, so it stays aligned with the speaker.
+- Music (Media) never runs during a call in automatic mode.
 
 ## UAC2 Routing (SP#6)
 
