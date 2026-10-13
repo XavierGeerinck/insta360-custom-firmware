@@ -194,6 +194,10 @@ impl<N: Node> Reopening<N> {
         self.handle.as_mut()
     }
 
+    pub fn is_open(&self) -> bool {
+        self.handle.is_some()
+    }
+
     /// The handle failed: close it; the next open is no sooner than the
     /// back-off from `now`.
     pub fn failed(&mut self, now: Instant) {
