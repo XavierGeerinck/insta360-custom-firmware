@@ -135,3 +135,16 @@ def test_default_run_rejects_native_only_arguments(tmp_path):
     args = _run_args(tmp_path)
     args[args.index("--backend") + 1] = "default"
     assert cli.main(args) == 2
+
+
+def test_native_run_rejects_legacy_policy_override_before_session(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        native_backend,
+        "NativeSession",
+        lambda *args, **kwargs: pytest.fail("session constructed with legacy policy"),
+    )
+    args = _run_args(tmp_path)
+    args.extend(["--policy", str(tmp_path / "other-policy.json")])
+    assert cli.main(args) == 2

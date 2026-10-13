@@ -125,6 +125,14 @@ def _command_run(args: argparse.Namespace) -> int:
 def _command_native_run(args: argparse.Namespace) -> int:
     from .native_backend import NativeSession
 
+    if (
+        args.policy.resolve() != DEFAULT_POLICY.resolve()
+        or args.repository_root.resolve() != REPOSITORY_ROOT.resolve()
+    ):
+        raise HybridError(
+            ErrorCode.POLICY_INVALID,
+            "wave-native uses its fixed qualification policy",
+        )
     if args.package is None or args.run_id is None:
         raise HybridError(
             ErrorCode.POLICY_INVALID, "native run requires package and run ID"
