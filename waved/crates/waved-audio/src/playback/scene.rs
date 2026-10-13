@@ -300,6 +300,17 @@ impl AmpEqControl for AlsaAmpEqControl {
     }
 }
 
+/// The control device of the card a PCM is on: `hw:0,1` / `plughw:0,1` →
+/// `hw:0`. Anything else → `hw:0`, the Wave's only codec card.
+pub fn ctl_card_for(pcm_device: &str) -> String {
+    let card = pcm_device
+        .strip_prefix("plughw:")
+        .or_else(|| pcm_device.strip_prefix("hw:"))
+        .and_then(|rest| rest.split(',').next())
+        .filter(|card| !card.is_empty());
+    format!("hw:{}", card.unwrap_or("0"))
+}
+
 /// Stand-in where ALSA is not built in: logs and succeeds.
 pub struct NoAmpEqControl;
 
@@ -427,6 +438,33 @@ mod tests {
         // An explicit request retries.
         ctl.on_command(&Command::SetAmpEqMode(None));
         assert_eq!(ctl.actions().amp, Some(AmpEqMode::Meeting));
+    }
+
+    /// What `main.rs` spawns type-checks: the follower over any sink and amp
+    /// is a `Send` future, and the playback service (behind its `Arc`) is a sink.
+    #[test]
+    fn the_follower_spawns_on_the_playback_service() {
+        fn spawnable<F: std::future::Future + Send + 'static>(_: &F) {}
+        #[allow(dead_code)]
+        fn follower<S: PresetSink + 'static, A: AmpEqControl + 'static>(sink: S, amp: A) {
+            let (_a, audio_rx) = watch::channel(AudioState::default());
+            let (_b, bt_rx) = watch::channel(BluetoothState::default());
+            let (_c, cmd_rx) = broadcast::channel(1);
+            let fut = run_scene_follower(audio_rx, bt_rx, cmd_rx, sink, amp, Arc::new(DspMetrics::default()));
+            spawnable(&fut);
+        }
+        fn sink<S: PresetSink>() {}
+        sink::<Arc<crate::playback::PlaybackService>>();
+        let _ = follower::<Arc<crate::playback::PlaybackService>, NoAmpEqControl>;
+    }
+
+    #[test]
+    fn the_amp_control_lives_on_the_playback_card() {
+        assert_eq!(ctl_card_for("hw:0,1"), "hw:0");
+        assert_eq!(ctl_card_for("plughw:1,0"), "hw:1");
+        assert_eq!(ctl_card_for("hw:2"), "hw:2");
+        assert_eq!(ctl_card_for("default"), "hw:0");
+        assert_eq!(ctl_card_for("hw:,1"), "hw:0");
     }
 
     #[test]

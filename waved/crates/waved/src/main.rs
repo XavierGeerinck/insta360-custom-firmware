@@ -441,6 +441,27 @@ async fn run_async(
                     }
                 }
             });
+            // Speaker scenes: the preset and the amplifier's Set EQ MODE follow
+            // whether something reads the mic, as stock does
+            // (waved_audio::playback::scene, docs/AUDIO_HARDWARE.md "Speaker scenes").
+            {
+                let amp_card = waved_audio::playback::scene::ctl_card_for(&pb.device);
+                #[cfg(feature = "capture-alsa")]
+                let amp = waved_audio::playback::scene::AlsaAmpEqControl::new(amp_card);
+                #[cfg(not(feature = "capture-alsa"))]
+                let amp = {
+                    let _ = amp_card;
+                    waved_audio::playback::scene::NoAmpEqControl
+                };
+                tokio::spawn(waved_audio::playback::scene::run_scene_follower(
+                    bus.audio.subscribe(),
+                    bus.bt.subscribe(),
+                    bus.commands.subscribe(),
+                    Arc::clone(&playback),
+                    amp,
+                    playback.dsp_metrics(),
+                ));
+            }
             // SP#6: UAC2 routing — host ↔ device speakerphone bridges.
             let uac_cfg = cfg.uac.clone().unwrap_or_default();
             let uac_stats: Arc<waved_audio::uac::UacStats> = Arc::new(waved_audio::uac::UacStats::default());
@@ -1237,6 +1258,12 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
                 let preset = match raw.trim().to_ascii_lowercase().as_str() {
                     "voice" => Some(waved_state::PlaybackPreset::Voice),
                     "media" => Some(waved_state::PlaybackPreset::Media),
+                    // Release the pin: the preset follows the speaker scene.
+                    "auto" => {
+                        info!("SIGHUP: playback preset → auto");
+                        let _ = commands.send(Command::SetPlaybackPresetAuto);
+                        None
+                    }
                     "" => None,
                     other => {
                         warn!("SIGHUP: unknown playback preset {other:?}");
@@ -1250,6 +1277,28 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => warn!("SIGHUP: {PRESET_PATH}: {e}"),
+        }
+
+        // Speaker amplifier Set EQ MODE for A/B tests: 0/1/2 (or
+        // bypass/meeting/music) pins it, `auto` follows the speaker scene.
+        const AMP_EQ_PATH: &str = "/tmp/waved-amp-eq-mode";
+        match std::fs::read_to_string(AMP_EQ_PATH) {
+            Ok(raw) => match raw.trim() {
+                "" => {}
+                r if r.eq_ignore_ascii_case("auto") => {
+                    info!("SIGHUP: speaker amp EQ mode → auto");
+                    let _ = commands.send(Command::SetAmpEqMode(None));
+                }
+                r => match waved_state::AmpEqMode::parse(r) {
+                    Some(mode) => {
+                        info!("SIGHUP: speaker amp EQ mode → {mode:?}");
+                        let _ = commands.send(Command::SetAmpEqMode(Some(mode)));
+                    }
+                    None => warn!("SIGHUP: unknown amp EQ mode {r:?}"),
+                },
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {AMP_EQ_PATH}: {e}"),
         }
 
         const VOLUME_PATH: &str = "/tmp/waved-volume";
