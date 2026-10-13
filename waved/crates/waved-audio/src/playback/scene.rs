@@ -13,6 +13,13 @@
 //!
 //! Manual pins (`Command::SetPlaybackPreset`, `Command::SetAmpEqMode(Some)`)
 //! hold until `Command::SetPlaybackPresetAuto` / `SetAmpEqMode(None)`.
+//!
+//! Echo cancelling: the AEC reference is the post-chain buffer, so the preset
+//! is in it; the amplifier's EQ is not; it is part of the echo path, so a
+//! scene switch makes the adaptive filter re-converge. Without the MBAGC the
+//! far end plays up to 20 dB quieter than the old Voice chain made it: ERLE
+//! must be re-measured at matched speaker level (`docs/AUDIO_HARDWARE.md`
+//! "ERLE: what changed and what to re-measure").
 
 use std::sync::Arc;
 

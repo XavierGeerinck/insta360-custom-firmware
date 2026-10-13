@@ -731,8 +731,10 @@ mod tests {
 
     #[test]
     fn stats_without_a_scene_follower_fall_back() {
-        let mut state = waved_state::AudioState::default();
-        state.playback_preset = waved_state::PlaybackPreset::Media;
+        let state = waved_state::AudioState {
+            playback_preset: waved_state::PlaybackPreset::Media,
+            ..Default::default()
+        };
         let stats = stats_with_metrics(&state, None);
         assert_eq!(stats.playback_preset, "media");
         assert_eq!(stats.speaker_scene, None);
