@@ -287,6 +287,18 @@ def import_native_model(path: Path) -> dict[str, Any]:
     # Lower the same audited bytes, retaining the source's declared I/O shapes.
     model = onnx.load_model_from_string(payload)
     graph = model.graph
+    # Preserve the two original profile admissions; route only bounded NCW
+    # graph candidates to the separate, independently validated importer.
+    if len(graph.node) > 1 or (
+        len(graph.input) == 1
+        and graph.input[0].type.HasField("tensor_type")
+        and graph.input[0].type.tensor_type.elem_type == TensorProto.FLOAT16
+        and len(graph.input[0].type.tensor_type.shape.dim) == 3
+        and graph.input[0].type.tensor_type.shape.dim[1].dim_value in {2, 64, 80, 128}
+    ):
+        from .marblenet_graph import import_graph
+
+        return import_graph(path)
     _require(
         len(model.opset_import) == 1
         and model.opset_import[0].domain in {"", "ai.onnx"}
@@ -351,6 +363,10 @@ def independent_oracle(
     Conv accumulates three half operands in FP32 then rounds once to FP16.
     FC widens before multiplication and saturates the integer sum to UINT8.
     """
+    if record.get("profile_id") == "fp16-marblenet-v1":
+        from .marblenet_graph import independent_graph_oracle
+
+        return independent_graph_oracle(record, inputs)
     identity = {k: v for k, v in record.items() if k != "lowering_sha256"}
     _require(
         record.get("lowering_sha256")
