@@ -89,10 +89,13 @@ fn main() {
                 let bt_uart = Arc::clone(&uart);
                 let bt_state_tx = Arc::clone(&bus.bt);
                 let bt_events_tx = bus.events.clone();
+                // Pair, disconnect, answer and decline (I1, I3).
+                let bt_cmd_rx = bus.commands.subscribe();
                 std::thread::Builder::new()
                     .name("bt-srv".into())
                     .spawn(move || {
-                        let svc = waved_bt::BtService::new(bt_rx, bt_uart, bt_state_tx, bt_events_tx);
+                        let svc = waved_bt::BtService::new(bt_rx, bt_uart, bt_state_tx, bt_events_tx)
+                            .with_commands(bt_cmd_rx);
                         svc.run();
                     })
                     .expect("failed to spawn bt thread");
