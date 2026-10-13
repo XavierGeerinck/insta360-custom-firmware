@@ -40,6 +40,8 @@ die() {
         else
             echo "Could not start the watchdog: $START_WATCHDOG" >&2
         fi
+    elif [ "$STOPPED" = yes ]; then
+        echo "Stock firmware was stopped: adb reboot, then run this again." >&2
     fi
     exit 1
 }
@@ -180,12 +182,17 @@ else cp /tmp/config.toml.new /data/waved/config.toml && chmod 600 /data/waved/co
 rm -f /tmp/config.toml.new && sync && echo ok' || die "config.toml not written"
 fi
 
-echo "=== Stock pspapp off, telemetry library stubbed, recordings directory ==="
-wave_ok 'u=/data/overlay/upper; mkdir -p $u/etc/init.d $u/usr/lib /mnt/udisk/recordings && \
+echo "=== Stock pspapp off, telemetry library stubbed ==="
+# Only where they are missing (a first install): these write the overlay's
+# upper directory, as deploy/revert.sh removes them from it.
+wave_ok 'u=/data/overlay/upper; mkdir -p $u/etc/init.d $u/usr/lib && \
 { [ -f $u/etc/init.d/S60pspapp_daemon ] || \
   { echo "#!/bin/sh" > $u/etc/init.d/S60pspapp_daemon && chmod 755 $u/etc/init.d/S60pspapp_daemon; }; } && \
 { [ -f $u/usr/lib/libapplogrs.so ] || echo "" > $u/usr/lib/libapplogrs.so; } && \
 sync && echo ok' || die "could not stub the stock services"
+# S60waved makes it at every start too; it fails while USB storage has the
+# volume (/mnt/udisk not mounted), which must not fail the install.
+on_wave 'mkdir -p /mnt/udisk/recordings 2>/dev/null' >/dev/null || true
 
 if [ "$UPDATE" = yes ]; then
     echo "=== Starting the watchdog ==="
