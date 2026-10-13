@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -24,6 +25,7 @@ from .fixtures import (
     generate_fixtures,
     verify_fixtures,
 )
+from .native_cli import add_native_commands
 from .runtime import ExecutionMode, execute_cpu_model
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[5]
@@ -83,6 +85,12 @@ def _command_audit(args: argparse.Namespace) -> int:
 
 
 def _command_run(args: argparse.Namespace) -> int:
+    if args.backend == "wave-native":
+        return _command_native_run(args)
+    if args.package is not None or args.run_id is not None:
+        raise HybridError(
+            ErrorCode.POLICY_INVALID, "package and run ID require wave-native backend"
+        )
     if args.outputs.exists():
         raise HybridError(
             ErrorCode.OUTPUT_EXISTS,
@@ -106,6 +114,58 @@ def _command_run(args: argparse.Namespace) -> int:
     _write_exclusive(args.outputs, output_payload)
     try:
         _write_exclusive(args.evidence, canonical_json(evidence_document))
+    except BaseException:
+        args.outputs.unlink(missing_ok=True)
+        raise
+    print(f"wrote {args.outputs}")
+    print(f"wrote {args.evidence}")
+    return 0
+
+
+def _command_native_run(args: argparse.Namespace) -> int:
+    from .native_backend import NativeSession
+
+    if args.package is None or args.run_id is None:
+        raise HybridError(
+            ErrorCode.POLICY_INVALID, "native run requires package and run ID"
+        )
+    if args.mode not in (ExecutionMode.STRICT.value, ExecutionMode.HYBRID.value):
+        raise HybridError(
+            ErrorCode.POLICY_INVALID, "native run requires strict or hybrid mode"
+        )
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.run_id) is None:
+        raise HybridError(ErrorCode.POLICY_INVALID, "invalid native run ID")
+    paths = [args.model, args.inputs, args.outputs, args.evidence]
+    resolved = [path.resolve() for path in paths]
+    if len(set(resolved)) != len(resolved):
+        raise HybridError(
+            ErrorCode.POLICY_INVALID, "model, input and output paths must differ"
+        )
+    package_root = args.package.resolve()
+    if any(
+        path == package_root or package_root in path.parents for path in resolved[2:]
+    ):
+        raise HybridError(
+            ErrorCode.POLICY_INVALID, "outputs must be outside native package"
+        )
+    for output in (args.outputs, args.evidence):
+        if output.exists() or output.is_symlink():
+            raise HybridError(
+                ErrorCode.OUTPUT_EXISTS, f"output already exists: {output}"
+            )
+    inputs = _load_npz(args.inputs)
+    session = NativeSession(
+        args.model, args.package, run_id=args.run_id, mode=ExecutionMode(args.mode)
+    )
+    outputs = session.run(inputs)
+    evidence = {
+        "schema_version": 1,
+        "audit": session.audit.document,
+        "execution": session.evidence,
+    }
+    _write_exclusive(args.outputs, deterministic_npz_bytes(outputs))
+    try:
+        _write_exclusive(args.evidence, canonical_json(evidence))
     except BaseException:
         args.outputs.unlink(missing_ok=True)
         raise
@@ -169,6 +229,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--outputs", type=Path, required=True)
     run.add_argument("--evidence", type=Path, required=True)
+    run.add_argument("--backend", choices=("default", "wave-native"), default="default")
+    run.add_argument("--package", type=Path)
+    run.add_argument("--run-id")
     _add_policy_arguments(run)
     run.set_defaults(handler=_command_run)
 
@@ -184,6 +247,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     verify.add_argument("fixture_directory", type=Path)
     verify.set_defaults(handler=_command_verify_fixtures)
+    add_native_commands(subparsers)
     return parser
 
 
