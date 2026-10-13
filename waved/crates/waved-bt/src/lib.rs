@@ -9,13 +9,15 @@
 //!   2-minute pairing window.
 //! - [`ota`]: `BT.bin` / `DONGLE.bin` updates (TODO F6).
 //!
-//! [`BtService`] asks read-only questions at start, answers every frame with
-//! stock's acknowledgement and keeps `BluetoothState`. Given the bus
-//! (`with_commands`) it pairs, disconnects and answers or declines calls. It
-//! does not switch Bluetooth on, rename the module or save its flash.
+//! [`BtService`] asks read-only questions at start, answers every frame the
+//! module repeats (`75 45`) with stock's acknowledgement and keeps
+//! `BluetoothState`. Given the bus (`with_commands`) it pairs, stops pairing,
+//! disconnects and answers or declines calls. It does not switch Bluetooth on
+//! or off, rename the module or save its flash.
 //!
-//! Privacy: the phone book (`0xB0`) is dropped unread, and no info or debug
-//! log line carries a phone's name, MAC or a number (`log_line`).
+//! Privacy: the phone book (`0xB0`) is dropped unread, and no log line at
+//! any level carries a phone's name, MAC or a number (`log_line`): module log
+//! lines show only as known fixed messages, undecoded frames as their length.
 
 pub mod command;
 pub mod control;
@@ -27,7 +29,7 @@ pub mod state;
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
-use command::{ack_for, Command};
+use command::{ack_for_frame, Command};
 use control::{Control, Response};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use event::Event;
@@ -79,19 +81,61 @@ pub fn from_uart(raw: &waved_uart::Frame) -> Option<Frame> {
 struct Core {
     tracker: Tracker,
     control: Control,
+    seen: Seen,
+}
+
+/// What one module frame asks of the service.
+#[derive(Debug, Default)]
+struct Handled {
+    /// Stock's acknowledgement, for a `75 45` frame other than `0xE0`.
+    acks: Vec<Frame>,
+    /// `BluetoothState` changed (notify watchers).
+    changed: bool,
+    /// A connect / disconnect to broadcast.
+    event: Option<DeviceEvent>,
+    /// The log line and its level: info only when the frame told us
+    /// something new, so a frame the module repeats never repeats at info.
+    log: Option<(Level, String)>,
+}
+
+/// What the module said that `BluetoothState` does not keep.
+#[derive(Debug, Default)]
+struct Seen {
+    version: Option<String>,
+    build_time: Option<String>,
+}
+
+impl Seen {
+    /// Whether `event` brings a version or build time not seen before.
+    fn news(&mut self, event: &Event) -> bool {
+        let (slot, value) = match event {
+            Event::Version(v) => (&mut self.version, v),
+            Event::BuildTime(t) => (&mut self.build_time, t),
+            _ => return false,
+        };
+        if slot.as_ref() == Some(value) {
+            return false;
+        }
+        *slot = Some(value.clone());
+        true
+    }
 }
 
 impl Core {
-    /// A module frame: its acknowledgement (stock acknowledges every frame
-    /// but `0xE0`), whether `s` changed, and a connect / disconnect to
-    /// broadcast.
-    fn frame(&mut self, frame: &Frame, s: &mut BluetoothState) -> (Vec<Frame>, bool, Option<DeviceEvent>) {
-        let acks = ack_for(frame.cmd).into_iter().collect();
+    /// A module frame: its acknowledgement ([`command::ack_for_frame`]),
+    /// whether `s` changed, a connect / disconnect to broadcast and the log
+    /// line.
+    fn frame(&mut self, frame: &Frame, s: &mut BluetoothState) -> Handled {
+        let acks = ack_for_frame(frame).into_iter().collect();
         let event = event::decode(frame);
-        log_event(&event);
         let applied = self.tracker.apply(&event, s);
         let window = self.control.after_event(s);
-        (acks, applied.changed || window, applied.event)
+        let news = applied.changed || applied.event.is_some() || self.seen.news(&event);
+        let log = log_line(&event).map(|(level, line)| match level {
+            Level::INFO if !news => (Level::DEBUG, line),
+            _ => (level, line),
+        });
+        Handled { acks, changed: applied.changed || window, event: applied.event, log }
     }
 
     fn command(&mut self, command: &BusCommand, now_ms: u64, unix_time: u32, s: &mut BluetoothState) -> Response {
@@ -121,8 +165,8 @@ impl BtService {
         Self { bt_rx, uart, bt_tx, events_tx, commands: None }
     }
 
-    /// Take `BtPair`, `BtDisconnect`, `BtAnswerCall` and `BtDeclineCall`
-    /// from the bus. Without it the service stays passive.
+    /// Take `BtPair`, `BtStopPairing`, `BtDisconnect`, `BtAnswerCall` and
+    /// `BtDeclineCall` from the bus. Without it the service stays passive.
     pub fn with_commands(mut self, commands: broadcast::Receiver<BusCommand>) -> Self {
         self.commands = Some(commands);
         self
@@ -160,7 +204,7 @@ impl BtService {
                     out = core.command(&command, now, unix, s);
                     out.changed
                 });
-                if !out.frames.is_empty() {
+                if out.acted() {
                     info!("bt: {command:?}");
                 }
                 for c in &out.frames {
@@ -198,16 +242,16 @@ impl BtService {
 
     fn handle(&self, raw: &waved_uart::Frame, core: &mut Core) {
         let Some(frame) = from_uart(raw) else { return };
-        let mut out = (Vec::new(), false, None);
+        let mut out = Handled::default();
         self.bt_tx.send_if_modified(|s| {
             out = core.frame(&frame, s);
-            out.1
+            out.changed
         });
-        let (acks, _, event) = out;
-        for ack in &acks {
+        for ack in &out.acks {
             self.send(ack);
         }
-        if let Some(e) = event {
+        log_event(out.log);
+        if let Some(e) = out.event {
             let _ = self.events_tx.send(e);
         }
     }
@@ -221,8 +265,8 @@ fn unix_time() -> u32 {
         .unwrap_or(0)
 }
 
-fn log_event(event: &Event) {
-    match log_line(event) {
+fn log_event(line: Option<(Level, String)>) {
+    match line {
         Some((Level::INFO, line)) => info!("{line}"),
         Some((Level::DEBUG, line)) => debug!("{line}"),
         Some((_, line)) => trace!("{line}"),
@@ -230,10 +274,60 @@ fn log_event(event: &Event) {
     }
 }
 
-/// The log line for a module event, and its level. No info or debug line
+/// The module's own fixed messages about pairing, reconnecting and its radio
+/// (strings in its firmware, 0.0.0.28 and 0.0.0.33). A module log line shows
+/// only as the message it starts with, never as received: the rest of a line
+/// can carry the phone's address (`a2dp_snk_disconnect_req addr …`), and
+/// other lines its name and MAC (`app_set_bt_last_addr`).
+const MODULE_MESSAGES: &[&str] = &[
+    "BT set pairing mode by user",
+    "Warning! bt set pairing but bt has been connected",
+    "Warning! bt set pairing while bt is reconnecting",
+    "Warning! bt is reconnecting",
+    "time out ,app_bt_pairing_exit",
+    "app_exit_pairing_handle",
+    "RECONN_START!",
+    "RECONN_CANCEL!",
+    "RECONN_ERROR!",
+    "BT_RECONN_TIMEOUT!",
+    "BT_RECONN_ADDR_ERROR!",
+    "bt stop connback",
+    "app_bt_start_connback_func",
+    "Connback time out !",
+    "Connback error! Page scan",
+    "bt rf close done",
+    "bt rf close",
+    "bt rf open done",
+    "bt rf open",
+    "system_force_disconnect",
+    "app_bt_disconnect error",
+    "a2dp_snk_disconnect_req",
+    "ACL DISCONN CMP, reason",
+    "app_bt_clean_last_dev",
+    "bt clean info",
+    "set pairred_mode_switch3",
+    "delete pairred_mode_switch3",
+];
+
+/// A module log line (`0xF0`): a known message at debug, else its length at
+/// trace (see [`MODULE_MESSAGES`]).
+fn module_log(line: &str) -> (Level, String) {
+    let line = line.trim_start_matches(|c: char| c == '@' || c == '#' || c.is_whitespace());
+    let known = MODULE_MESSAGES
+        .iter()
+        .filter(|message| line.starts_with(**message))
+        .max_by_key(|message| message.len());
+    match known {
+        Some(message) => (Level::DEBUG, format!("bt module: {message}")),
+        None => (Level::TRACE, format!("bt module log line, {} bytes", line.len())),
+    }
+}
+
+/// The log line for a module event, and its level. No line at any level
 /// carries a phone's name, its MAC or a number: those reach the state (and
-/// the screen) only. Module log lines (`0xF0`) can name the phone, so they
-/// stay at trace. The phone book is never logged.
+/// the screen) only. Module log lines (`0xF0`) show only as known messages
+/// ([`MODULE_MESSAGES`]); undecoded frames only as their length. The phone
+/// book is never logged.
 fn log_line(event: &Event) -> Option<(Level, String)> {
     let info = |line: String| Some((Level::INFO, line));
     let debug = |line: String| Some((Level::DEBUG, line));
@@ -254,9 +348,9 @@ fn log_line(event: &Event) -> Option<(Level, String)> {
             "bt heartbeat{}",
             if phone.is_some() { " naming the phone" } else { "" }
         )),
-        Event::Log(line) => trace(format!("bt module log: {line}")),
+        Event::Log(line) => Some(module_log(line)),
         Event::PhoneBookEntry => None,
-        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x} {data:02x?}")),
+        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x}, {} bytes", data.len())),
         // The rest carries no phone's name, MAC or number: signal levels,
         // volumes, the dongle, versions, OTA and the module's own MAC.
         other @ (Event::Status { .. }
@@ -364,22 +458,57 @@ mod tests {
         }
 
         #[test]
-        fn no_info_or_debug_line_names_a_phone_or_a_number() {
-            for event in personal() {
+        fn no_line_at_any_level_names_a_phone_or_a_number() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                decode(&Frame::request(0xF0, &data))
+            };
+            let mut events = personal();
+            events.extend([
+                module_line(&format!("@ app_set_bt_last_addr A1B2C3D4E557 name {NAME}")),
+                // A known message followed by the phone's address: only the
+                // message may show.
+                module_line("a2dp_snk_disconnect_req addr A1B2C3D4E557"),
+                module_line(&format!("RECONN_START! {NAME}")),
+                decode(&Frame::request(0xF0, &[0x02, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57])),
+                Event::Other { cmd: 0xC8, data: vec![0x00, 0x06, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57] },
+            ]);
+            for event in events {
                 if let Some((level, line)) = log_line(&event) {
-                    if level != Level::TRACE {
-                        assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
-                    }
+                    assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
                 }
             }
         }
 
         #[test]
-        fn module_logs_are_trace_only() {
-            let line = decode(&Frame::request(0xF0, b"\x01BT set pairing mode by user"));
-            assert_eq!(log_line(&line).map(|(level, _)| level), Some(Level::TRACE));
+        fn module_messages_about_pairing_and_reconnecting_show_at_debug() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                log_line(&decode(&Frame::request(0xF0, &data)))
+            };
+            let debug = |text: &str| Some((Level::DEBUG, format!("bt module: {text}")));
+            assert_eq!(module_line("BT set pairing mode by user"), debug("BT set pairing mode by user"));
+            assert_eq!(module_line("RECONN_START!"), debug("RECONN_START!"));
+            assert_eq!(module_line("@ bt stop connback\r\n"), debug("bt stop connback"));
+            // The longest match wins.
+            assert_eq!(module_line("bt rf close done"), debug("bt rf close done"));
+            assert_eq!(module_line("bt rf close"), debug("bt rf close"));
+            assert_eq!(module_line("time out ,app_bt_pairing_exit "), debug("time out ,app_bt_pairing_exit"));
+            // Anything else: its length at trace, never its text.
+            assert_eq!(
+                module_line("@ stack_overflow_check_init 0x1234"),
+                Some((Level::TRACE, "bt module log line, 32 bytes".into()))
+            );
             let raw = decode(&Frame::request(0xF0, &[0x02, 0xE4, 0x7F]));
             assert_eq!(log_line(&raw).map(|(level, _)| level), Some(Level::TRACE));
+        }
+
+        #[test]
+        fn an_undecoded_frame_shows_its_length_only() {
+            let other = Event::Other { cmd: 0x42, data: NUMBER.as_bytes().to_vec() };
+            assert_eq!(log_line(&other), Some((Level::TRACE, "bt frame 0x42, 12 bytes".into())));
         }
 
         #[test]
@@ -410,6 +539,7 @@ mod tests {
     mod core {
         use super::super::Core;
         use crate::frame::{Frame, Parser};
+        use tracing::Level;
         use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
 
         fn wire(bytes: &[u8]) -> Frame {
@@ -431,40 +561,54 @@ mod tests {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let out = core.command(&BusCommand::BtPair, 0, 0, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
+                "75 45 02 D8 00 DA",
                 "75 45 02 A3 00 A5",
                 "75 45 02 A7 00 A9"
             ]);
             assert_eq!(s.pairing_left_s, 120);
 
             // The module: pairing mode (seen on the device), acknowledged.
-            let (acks, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B2 00 B4"]);
-            assert!(changed && s.pairing && s.pairing_left_s == 120);
-            assert_eq!(event, None);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B2 00 B4"]);
+            assert!(h.changed && s.pairing && s.pairing_left_s == 120);
+            assert_eq!(h.event, None);
 
             // A phone connects: the window closes.
             core.tick(30_000, &mut s);
             assert_eq!(s.pairing_left_s, 90);
-            let (_, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), &mut s);
-            assert!(changed && s.connected && !s.pairing);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), &mut s);
+            assert!(h.changed && s.connected && !s.pairing);
             assert_eq!(s.pairing_left_s, 0);
-            assert_eq!(event, Some(DeviceEvent::BtConnected(String::new())));
+            assert_eq!(h.event, Some(DeviceEvent::BtConnected(String::new())));
+        }
+
+        #[test]
+        fn leaving_the_pairing_screen_ends_the_window() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            core.command(&BusCommand::BtPair, 0, 0, &mut s);
+            core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
+            let out = core.command(&BusCommand::BtStopPairing, 5_000, 0, &mut s);
+            assert!(out.frames.is_empty(), "no command leaves pairing mode");
+            assert!(out.changed);
+            assert_eq!(s.pairing_left_s, 0);
+            assert!(s.pairing, "the module's own bit 3 stays until it says otherwise");
+            assert!(!core.tick(6_000, &mut s));
         }
 
         #[test]
         fn a_call_from_the_module_to_answer() {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let ring = [0x75, 0x45, 0x0C, 0xB1, 0x2B, 0x33, 0x32, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0xF1];
-            let (acks, changed, _) = core.frame(&wire(&ring), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B1 00 B3"]);
-            assert!(changed);
+            let h = core.frame(&wire(&ring), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B1 00 B3"]);
+            assert!(h.changed);
             assert_eq!(s.call, BtCall::Ringing { number: "+3212345678".into() });
             let out = core.command(&BusCommand::BtAnswerCall, 0, 0x6720_0000, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
                 "75 45 07 D0 03 00 00 20 67 00 61"
             ]);
-            let (acks, _, _) = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 01 D1 D2"]);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 01 D1 D2"]);
             assert!(s.call.is_active());
         }
 
@@ -472,10 +616,99 @@ mod tests {
         fn the_phone_book_is_acknowledged_and_changes_nothing() {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let entry = Frame::request(0xB0, b"\x01\0\0\0\x06+32470\x03A\0n\0n\0");
-            let (acks, changed, event) = core.frame(&entry, &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B0 00 B2"]);
-            assert!(!changed);
-            assert_eq!(event, None);
+            let h = core.frame(&entry, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B0 00 B2"]);
+            assert!(!h.changed);
+            assert_eq!(h.event, None);
+            assert_eq!(h.log, None);
+        }
+
+        fn name_frame(name: &str) -> Frame {
+            let mut data = vec![0x00];
+            data.extend_from_slice(name.as_bytes());
+            Frame::request(0xC6, &data)
+        }
+
+        #[test]
+        fn replies_to_our_requests_are_not_acknowledged() {
+            // Capture s1-pair-20261013.bin: the module answers GetStatus and
+            // GetName with `75 46 A9 00` / `75 46 C5 00` once each.
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            for echo in [[0x75, 0x46, 0x02, 0xA9, 0x00, 0xAB], [0x75, 0x46, 0x02, 0xC5, 0x00, 0xC7]] {
+                let h = core.frame(&wire(&echo), &mut s);
+                assert!(h.acks.is_empty(), "{echo:02X?}");
+                assert!(!h.changed);
+            }
+            // The version comes back in the reply itself: decoded, not acknowledged.
+            let h = core.frame(&Frame::ack(0x91, b"\x000.0.0.28"), &mut s);
+            assert!(h.acks.is_empty());
+            assert_eq!(h.log.map(|(_, line)| line), Some("bt module firmware 0.0.0.28".into()));
+            // The module's own frames still are, the name and the status included.
+            let h = core.frame(&name_frame("Insta360 Wave BT 0A1B2C"), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 C6 00 C8"]);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xAA, 0x01, 0xAD]), &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 AA 00 AC"]);
+            assert!(core.frame(&Frame::request(0xE0, &[]), &mut s).acks.is_empty());
+        }
+
+        #[test]
+        fn the_module_name_shows_at_info_only_when_it_changes() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, s).log.map(|(l, _)| l);
+            let name = name_frame("Insta360 Wave BT 0A1B2C");
+            assert_eq!(level(&mut core, &mut s, &name), Some(Level::INFO));
+            for _ in 0..4 {
+                assert_eq!(level(&mut core, &mut s, &name), Some(Level::DEBUG), "a repeat");
+            }
+            let renamed = name_frame("Wave Boardroom");
+            assert_eq!(level(&mut core, &mut s, &renamed), Some(Level::INFO));
+        }
+
+        #[test]
+        fn nothing_at_info_repeats_per_frame() {
+            // Every frame that logs at info, sent twice in a row as a module
+            // that is not acknowledged sends it: the second copy is not info.
+            let ring = b"+32470123456".to_vec();
+            let mut connected = vec![0x01, 0x00, 0x05];
+            connected.extend_from_slice(b"Pixel");
+            connected.extend_from_slice(&[0x00, 0x06, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            let mut request = vec![0x06, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05];
+            request.extend_from_slice(b"Pixel");
+            let frames = [
+                Frame::ack(0x91, b"\x000.0.0.28"),
+                Frame::ack(0x93, b"\x002025-11-28 20:15:49"),
+                name_frame("Insta360 Wave BT 0A1B2C"),
+                Frame::request(0xB2, &connected),
+                Frame::request(0xB1, &ring),
+                Frame::request(0xD1, &[0x00]),
+                Frame::request(0xD1, &[0x01]),
+                Frame::request(0xB1, &[]),
+                Frame::request(0xD6, &request),
+                Frame::request(0xD1, &[0x02]),
+                Frame::request(0xE1, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            ];
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            for f in &frames {
+                core.frame(f, &mut s);
+                let again = core.frame(f, &mut s).log;
+                assert!(
+                    !matches!(again, Some((Level::INFO, _))),
+                    "{:#04x} repeated at info: {again:?}",
+                    f.cmd
+                );
+            }
+        }
+
+        #[test]
+        fn a_new_call_after_the_last_one_logs_again() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let ring = Frame::request(0xB1, b"0471");
+            let cleared = Frame::request(0xB1, &[]);
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, s).log.map(|(l, _)| l);
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::DEBUG));
+            assert_eq!(level(&mut core, &mut s, &cleared), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
         }
     }
 

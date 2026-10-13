@@ -40,9 +40,11 @@ puts the PIN in front of `Route::Bluetooth` (D10).
    it. Nothing is sent at the end: no command to leave pairing is known.
    *Cost if wrong:* the module may stay discoverable after the countdown (privacy); the
    device pass measures how long bit 3 stays set.
+   **Superseded (second round, R2/R4):** `AutoReconnect(false)` goes first.
 3. **Disconnect = `Disconnect` only.** Stock's UI disconnect also enters pairing; ours does not,
    since the user asked to drop the phone, not to pair another.
    *Cost if wrong:* the phone may reconnect at once; the device pass checks.
+   **Superseded:** it did reconnect at once (second round, R4).
 4. **An incoming call takes over the screen, also during a recording.** A ringing call is the
    one thing on Wave that cannot wait, and the call screen is the only way to answer it here.
    The recording keeps running underneath; the call screen never touches it. A swipe right
@@ -72,6 +74,61 @@ puts the PIN in front of `Route::Bluetooth` (D10).
     mockup's still); naming the module from `device.name` (I1; `SetName`'s accepted lengths
     are unverified and the module already names itself `Insta360 Wave BT <serial>`); call
     waiting and outgoing calls (see the checklist).
+
+## Second round: the device pass of a856f70 (2026-10-13)
+
+What the device showed, and the research behind each fix, is in `docs/BLUETOOTH_PROTOCOL.md`
+("Acknowledgements and replies", "Stock's Bluetooth controls", "Seen on the device with waved
+a856f70", "What waved does with this").
+
+- **R1. Frames repeating twice a second (`0xC6`, `0xAA`).** waved already acknowledged every
+  frame with stock's bytes; two things went wrong. (a) `waved-uart`'s mux shared one port
+  handle behind a mutex, and the reader starved the writer: an acknowledgement waited 1.4 s
+  on a quiet pty, past the module's 500 ms repeat. The reader now has its own handle
+  (`try_clone`), as `waved-mcu` does. (b) waved also acknowledged the module's one-shot `75 46`
+  answers, which hands it our own request byte back. Now: every `75 45` frame but `0xE0`, no
+  `75 46` frame (a deviation from stock, which never looks at the prefix). Log lines are info
+  only when the frame brought something new.
+  *Cost if wrong:* if the module wanted `75 46` answers acknowledged it would repeat them; the
+  capture shows it never does. If neither cause was the one, `0xC6` still repeats, now at debug.
+- **R2. Leaving the pairing screen ends pairing.** The Bluetooth route leaves `BtStopPairing`
+  (runtime leave commands): Back, a swipe, ToBase, a takeover. Resting does not end it (the
+  route stays parked; a phone may take longer than the dim time to pair). Nothing goes to the
+  module: stock has no command that leaves pairing mode, and the least disruptive choice is to
+  send nothing. *Cost if wrong:* the module stays discoverable until its own timeout (privacy);
+  the checklist measures it. A stronger option, if it is long: `CloseBt` + `OpenBt`.
+- **R3. Pair another phone while connected.** The connected view has Disconnect (second row)
+  and Pair another phone (where Pair a device sits): `BtPair`, stock's Connect New Device. No
+  confirmation (stock asks "Connecting a new device will disconnect from <phone>. Continue?"):
+  the countdown screen follows at once and Back ends it. *Cost if wrong:* an accidental tap
+  drops the phone; a confirm step (`ConfirmKind`) can be added.
+- **R4. Disconnect that sticks.** Stock sends `0xD8 00` (reconnect off) as each phone connects,
+  so its disconnects never race the module's reconnect; waved never sent `0xD8`. Now
+  Disconnect = `D8 00`, `A3 00`, and Pair = `D8 00`, `A3 00`, `A7 00`. The copy stays
+  "Disconnect" (it is not a Bluetooth switch); the idle hint now says "Reconnect a phone from
+  its Bluetooth settings". *Cost if wrong:* if the iPhone reconnects by itself, only stock's
+  Bluetooth switch (`CloseBt`) stops it; that is not built: `CloseBt` alone left the module
+  reporting "connected" for at least 10 s (observation 5), so it needs a device test first
+  (checklist S6) and host-side "not connected while off" as stock does.
+- **R5. `OpenBt` is `CC 00`.** Stock sends 00 at boot and from the switch alike; waved's
+  `OpenBt { at_boot: true }` encoded `CC 01`. Now the unit `Command::OpenBt`. Unused so far.
+- **R6. No phone data at any level.** The first round logged module log lines (`0xF0`, which
+  carry the phone's name and MAC) and undecoded frames' bytes at trace. Now a module line
+  shows only as one of the module's fixed messages about pairing, reconnecting and its radio
+  (`MODULE_MESSAGES`, at debug, so S5 can tell who reconnected), else as its length; an
+  undecoded frame as its command byte and length. *Cost:* other module diagnostics are gone
+  from the log; add a fixed message to the list to see it.
+
+Files: `waved-uart/src/mux.rs` (reader handle, prefix in the trace line);
+`waved-bt/src/{command,control,lib}.rs` (`ack_for_frame`, `OpenBt`, `D8 00` first,
+`BtStopPairing`, info-once logging, `Response::acted`, `MODULE_MESSAGES`); `waved-ui/src/screens_v2/bluetooth.rs`
+and goldens `screen_bluetooth`, `screen_bluetooth_idle`; `waved-ui/src/kit/README.md`; this plan
+and `docs/BLUETOOTH_PROTOCOL.md`.
+
+Hotspot edits (additive): `waved-state` `Command::BtStopPairing` (and its test list);
+`waved-ui/src/runtime/gesture.rs` `leave_commands` (Bluetooth) and a test;
+`waved-ui/src/runtime/mod.rs` a test with its registry helper. `crates/waved/src/main.rs` is
+untouched.
 
 ## Files
 
@@ -127,24 +184,78 @@ puts the PIN in front of `Route::Bluetooth` (D10).
 ## Device-pass checklist
 
 Deploy the branch (`waved/CLAUDE.md`, Build & Deploy), set no PIN or know it, and keep
-`/tmp/waved.log` running with `RUST_LOG=waved_bt=debug`.
+`/tmp/waved.log` running with `RUST_LOG=waved_bt=debug,waved_uart=trace` (the `waved_uart`
+trace line names each received frame's prefix, command byte and length, never its bytes:
+`parsed frame: 75 45 cmd 0xc6, 24 data bytes, target Bluetooth`). Stop the watchdog and start
+waved with `setsid` as in `waved/CLAUDE.md`.
 
-1. **Start-up.** `grep "bt module" /tmp/waved.log`: firmware, build time and name lines appear.
+### Second round (R1-R6)
+
+- **S1. Nothing repeats (R1).** Start waved and wait 60 s with no phone connected, then
+  `grep -o "parsed frame: 75 4[56] cmd 0x[0-9a-f]*" /tmp/waved.log | sort | uniq -c`.
+  Expect `0xc6` once (one `GetName`), `0xaa` about 12 (one per 5 s poll), `0x91`/`0x93` once,
+  `0xb2` only when the status changes; the `75 46` answers (`0xa9`, `0xc5`, and `0xc7` or
+  `0xc8`) once per request. Record in `BLUETOOTH_PROTOCOL.md` which prefix `0xaa`, `0xc6` and
+  `0xc8` carry. `grep -c "INFO waved_bt: bt module name" /tmp/waved.log` = 1. With a phone
+  connected and music playing for 60 s, `grep -c "INFO waved_bt" /tmp/waved.log` grows by at
+  most a handful. If `0xc6` or `0xaa` still come every 500 ms, note their timestamps against
+  the `GetStatus` polls and record it ("Acknowledgements and replies").
+- **S2. Back ends pairing (R2).** No phone connected: Menu → Bluetooth → Pair a device; the
+  countdown starts (`INFO waved_bt: bt: BtPair`, `bt work status 0x08`). Tap Back: the log shows
+  `INFO waved_bt: bt: BtStopPairing`; Menu → Bluetooth again shows "No phone connected" and
+  Pair a device, no countdown. Repeat with a swipe right instead of Back: same. Then measure,
+  for `BLUETOOTH_PROTOCOL.md`: the time from Back to the first `bt work status` without `0x08`
+  (if any within 5 min), and whether a never-paired phone still lists "Insta360 Wave BT <hex>"
+  1 min and 3 min after Back.
+- **S3. Resting keeps pairing (R2).** Pair a device, then leave the screen untouched past the
+  dim time. Wake it: the countdown is still running, and no `BtStopPairing` is in the log.
+- **S4. Pair another phone (R3).** With phone A connected and playing music, Bluetooth shows
+  A "Connected", Disconnect and Pair another phone. Tap Pair another phone: log
+  `bt: BtPair`; A stops playing and drops; the countdown starts from 2:00 with the name large.
+  A must not come back during the countdown (`bt work status` never shows `0x01`/`0x03` until
+  B connects). Pair phone B: the screen shows B "Connected" and the countdown stops.
+- **S5. Disconnect sticks (R4).** Phone connected and playing: tap Disconnect. Log
+  `bt: BtDisconnect`; "No phone connected" within 5 s; for the next 2 min every
+  `bt work status` has bit 0 clear (`0x00`, `0x08`, `0x10`, never `0x01`/`0x03`), the screen
+  stays "No phone connected", the phone shows Wave not connected. Then connect from the
+  phone's Bluetooth settings: it connects and the screen shows it. If the phone came back by
+  itself, note after how long and whether the debug lines around it include
+  `bt module: RECONN_START!` or `bt module: app_bt_start_connback_func` (the module
+  reconnected) or not (the phone did; then run S6). `bt module: bt stop connback` right after
+  `bt: BtDisconnect` would confirm what `0xD8 00` does.
+- **S6. Does `CloseBt` drop the phone? (research for a Bluetooth switch).** waved running,
+  phone connected and playing. From `adb shell`: `printf '\165\105\001\313\314' > /dev/ttyS1`
+  (`75 45 01 CB CC`). Watch for 60 s: when the phone shows Wave disconnected (if ever), and
+  whether any `bt work status` loses bit 0. Then `printf '\165\105\002\314\000\316' > /dev/ttyS1`
+  (`75 45 02 CC 00 CE`) and note whether the phone reconnects. Record both in
+  `BLUETOOTH_PROTOCOL.md` ("Open").
+- **S7. Is the idle module discoverable after `OpenBt`?** No phone connected, not pairing,
+  after a fresh boot (or after S6): `printf '\165\105\002\314\000\316' > /dev/ttyS1`; on a
+  never-paired phone, look for "Insta360 Wave BT <hex>" for 30 s. If it shows, waved should send
+  `OpenBt` at start as stock does (follow-up); record it.
+- **S8. Pairing from idle still works with `D8 00` first (R4).** Covered by item 3 below: the
+  phone must find the name and pair.
+- Do **not** send `75 45 02 D8 02 DC` (stock's factory reset value) unless wiping the module's
+  pairings is the goal.
+
+### First round
+
+1. **Start-up.** `grep "bt module" /tmp/waved.log`: firmware, build time and name lines appear,
+   each once at info.
    Menu → Bluetooth (PIN first if one is set) shows "Shows up as Insta360 Wave BT <6 hex>".
 2. **Privacy in the log.** Connect a phone with contacts and place a call. Then
    `grep -i -E "<phone's Bluetooth name>|<phone MAC, any case, with and without colons>|<caller number>" /tmp/waved.log`
-   finds nothing at debug. With `RUST_LOG=waved_bt=trace,waved_uart=trace` it may show module
-   log lines (`bt module log:`) but never a contact: grep for a contact's name and number.
+   finds nothing, at trace too (`RUST_LOG=waved_bt=trace,waved_uart=trace`): module log lines
+   show only as `bt module: <fixed message>` or `bt module log line, N bytes`, undecoded
+   frames as `bt frame 0x.., N bytes`. Grep for a contact's name and number as well.
 3. **Pair.** With no phone connected tap Pair a device. Expect the countdown from 2:00, the
    module name large, and in the log `bt work status 0x08`. On a phone that never paired, the
    name appears in its Bluetooth list; pair. Expect the screen to switch to the phone's name
    with "Connected" and the countdown to stop.
-4. **How pairing ends.** Tap Pair a device and pair nothing. Note when `0xB2` bit 3 clears
-   (`bt work status` without 0x08), if ever; whether the phone still lists Wave after the
-   countdown ends at 0:00; record both in `BLUETOOTH_PROTOCOL.md`.
-5. **Disconnect.** Connected, tap Disconnect. Expect "No phone connected" within 5 s and the
-   phone to show Wave as not connected. Note whether the phone reconnects by itself, and after
-   how long.
+4. **How pairing ends.** Tap Pair a device and pair nothing, staying on the screen. Note when
+   `0xB2` bit 3 clears (`bt work status` without 0x08), if ever; whether the phone still lists
+   Wave after the countdown ends at 0:00; record both in `BLUETOOTH_PROTOCOL.md`.
+5. **Disconnect.** See S5.
 6. **Reconnect.** Toggle Bluetooth off and on on the phone. Expect it to reconnect and the
    screen to show it.
 7. **PhoneMac.** After a connect, debug shows `bt: phone MAC received` (no MAC); disconnecting

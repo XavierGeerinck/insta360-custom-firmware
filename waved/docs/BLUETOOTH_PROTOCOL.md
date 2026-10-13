@@ -18,11 +18,14 @@ Sources:
 The 3.0.0.1 host code uses the same command bytes as 1.2.2.6. 1.0.13.6 lacks
 `0x97`.
 
-**Nothing here has been captured on the wire yet.** Every fact carries a tag:
+Most of this comes from the decompiled code; what was seen on the device is in
+"Verified on the device (2026-10-13)" and "Acknowledgements and replies".
+Every fact carries a tag:
 
 - **[code]**: read in decompiled code.
 - **[file]**: read in an extracted file (binary data, strings, the device
   tree, configuration).
+- **[device]**: seen on the device (a capture or a session).
 - **[inferred]**: concluded from those, but not seen directly.
 
 The checklist for the first device session is at the end.
@@ -40,8 +43,11 @@ The checklist for the first device session is at the end.
 4. Each frame is `75 45|46 LEN CMD DATA SUM`. `LEN` = 1 + the data length.
    `SUM` = the low byte of `LEN + CMD + DATA`, **without the prefix bytes**.
    **[code]**
-5. The host sends requests with the `75 45` prefix. It acknowledges *every*
-   received frame with `75 46 <same CMD>` (and `00`), except `0xE0`. **[code]**
+5. The host sends requests with the `75 45` prefix. Stock acknowledges
+   *every* received frame with `75 46 <same CMD>` (and `00`), except `0xE0`.
+   **[code]** The module repeats its own `75 45` frames every 500 ms until
+   acknowledged and answers our requests with one-shot `75 46` frames;
+   waved acknowledges only the former. **[device]**
 6. `0xB2` carries the connection and audio state as bits. `0xB1` carries the
    caller's number. `0xD1` reports a call going up (0) or down (1). **[code]**
 7. To answer or decline, send `0xD0` with event 3 (answer) or 0 (hang up or
@@ -159,7 +165,45 @@ P0 P1 LEN CMD DATA[LEN-1] SUM
 
   It waits 100 ms (`timeout_set`, 77631) and otherwise ignores the result.
   Firmware updates use longer waits. **[code]**
-- **Open:** which prefix the module puts on its replies and events.
+
+**On the wire** (2026-10-13; captures `pulled-recordings/bt/s1-listen-20261013.bin`
+and `s1-pair-20261013.bin`, git-ignored because module log lines name the
+phone; taken with a shell that sent requests and never acknowledged
+anything) **[device]**:
+
+- **The module repeats each `75 45` frame about every 500 ms until it is
+  acknowledged:** 180 identical `0xB2` in 90 s; in the second capture one
+  `0xF0` log line 265 times. While it repeats one frame it sends nothing else
+  from its queue: no `0xAA` or `0xC6` ever came in the second capture,
+  although `GetStatus` and `GetName` were sent. **[inferred]**: one frame in
+  flight at a time.
+- **It answers each request at once with a `75 46` frame that carries the
+  request's own command byte, and sends it only once:** `91 00 "0.0.0.28"`,
+  `93 00 "2025-11-28 20:15:49"`, `A9 00`, `C5 00`, `A7 00`. The version and
+  build time come in that answer; the status (`0xAA`) and the name (`0xC6`)
+  come later as frames of their own (seen by waved).
+- **With waved a856f70 running, `0xC6` and `0xAA` came twice a second for
+  as long as it ran** ("bt module name …" at info). Two candidate causes,
+  both fixed; check S1 in the plan's device-pass checklist says which:
+  1. `waved-uart`'s mux shared one port handle behind a mutex between its
+     reader and its writer. The reader held it through each 100 ms read and
+     took it back at once, so a write (an acknowledgement) could wait far
+     past the module's 500 ms repeat: 1.4 s on a quiet pty in
+     `mux::tests::a_write_never_waits_for_the_reader`. The reader now has its
+     own handle (`try_clone`), as `waved-mcu`'s link does.
+  2. waved acknowledged the `75 46` answers too, as stock does. Such an
+     acknowledgement hands the module our own request byte (`75 46 02 A9 00 AB`
+     carries GetStatus' `0xA9`, `75 46 02 C5 00 C7` GetName's `0xC5`).
+     **[inferred]**: the module reads it as the request again and answers
+     with another `0xAA` / `0xC6`, which is why only answers to our own
+     requests kept coming. Stock does the same and saves its config on every
+     `0xC6` (76953), so with the 1.2.2.6 module this loop probably does not
+     happen; the 0.0.0.28 module may differ.
+- **waved now** acknowledges every `75 45` frame but `0xE0` with stock's
+  bytes, and no `75 46` frame (`command::ack_for_frame`). The `75 46` frames
+  are never repeated, so nothing waits for that acknowledgement. A log line
+  shows at info only when the frame told waved something new; a repeat goes
+  to debug.
 
 ## Commands (host → module)
 
@@ -173,7 +217,7 @@ column, byte for byte.
 | `0x93` | CTRL_GET_BUILDTIME | — | `0x93` `[?] ascii` | at boot | yes |
 | `0x97` | CTRL_BT_PHONE_MODE | mode (stock always sends 1) | `0x97` | every 5 s | yes |
 | `0x9A` | CTRL_GET_MAC | — | not handled | — | yes |
-| `0xA3` | CTRL_BT_ENABLE (used as `bt_disconnect`) | `00` | — | Disconnect | yes |
+| `0xA3` | CTRL_BT_ENABLE (used as `bt_disconnect`) | `00` | — | Connect New Device (then `0xA7`) | yes |
 | `0xA5` | CTRL_SWITCH_AUDIO_MODE | mode (stock sends 0) | `0xA6` `[?] [mode]` | test only | yes |
 | `0xA7` | CTRL_REPAIR (`bt_repair`) | `00` | — | pairing mode | yes |
 | `0xA9` | CTRL_GET_BT_STATUS | — | `0xAA` | at boot; every 5 s | yes |
@@ -183,13 +227,13 @@ column, byte for byte.
 | `0xB3` | CTRL_GET_RSSI (heartbeat) | battery step (`level/10`, minus 1 unless 0), charging 0/1, Wi-Fi present 0/1 | `0xB4` | every 5 s | yes |
 | `0xC5` | CTRL_GET_NAME | — | `0xC6` | at boot | yes |
 | `0xC7` | CTRL_GET_PHONE_MAC | — | `0xC8` | — | yes |
-| `0xCB` | CTRL_CLOSE_BT | — | — | switch off | yes |
-| `0xCC` | CTRL_OPEN_BT | `is_init` (1 at boot, 0 from the switch) | — | switch on | yes |
+| `0xCB` | CTRL_CLOSE_BT | — | — | switch off; at boot when off; cloud power off; factory reset | yes |
+| `0xCC` | CTRL_OPEN_BT | `00` always (stock's `is_init` only decides whether it saves the switch, 74446-74473) | — | switch on; at boot when on; after a module reset | yes |
 | `0xCD` | CTRL_24G_ENTER_PAIRING | mode (`ctrl_bt_pair_mode`: 1 to pair, 2 to unpair the dongle) | — | dongle | no |
 | `0xCE` | CTRL_24G_DISCONNECT | `00` | — | dongle | no |
 | `0xD0` | CTRL_BUTTON_EVENT | event, `time(NULL)` as a u32 LE, reset level (0) | `0xD0` | call buttons; recording state | yes |
 | `0xD7` | CTRL_CLOSE_CONNECT_REPLY | reply | — | answers `0xD6` | yes |
-| `0xD8` | CTRL_RECONNECT_SWITCH | 0/1 | — | at boot (the setting); 0 after each connect | yes |
+| `0xD8` | CTRL_RECONNECT_SWITCH | 0/1; 2 at factory reset | — | at boot (the setting); the Auto Reconnect switch; 0 after each connect; 2 at factory reset | yes |
 | `0xE0` | CTRL_BT_CONFIG_SAVE_FLASH | `00` | `0xE0` | at boot, after a connect, at power off | yes |
 | `0xE2`–`0xE5` | LL/BT data test modes | 2–3 bytes | — | factory | no |
 | `0xE6` | GET_DONGLE_VERSION | `00` | `0xE8` | update | yes |
@@ -299,12 +343,17 @@ the USB HID side, not this link. The call state above is what drives it.
   **[code]** The module logs "BT set pairing mode by user". It refuses while
   connected or reconnecting ("Warning! bt set pairing but bt has been
   connected", "…while bt is reconnecting"). **[file]** No command to leave
-  pairing mode is known, and the module's own timeout is unknown.
-- **Discoverable when idle:** no. With no phone connected a new phone does not
-  find the module; `Disconnect` then `EnterPairing` makes it discoverable
-  (device, 2026-10-13). Stock sends the two back to back with no wait
-  (`bluetooth_set_connect(0)`, ui 115208; `bluetooth_set_connect(1)` sends
-  `EnterPairing` alone).
+  pairing mode exists (see "Stock's Bluetooth controls"); the module ends it
+  on its own timeout ("time out ,app_bt_pairing_exit") **[file]**, whose
+  length is unknown.
+- **Discoverable when idle:** no, with waved. With no phone connected a new
+  phone does not find the module; `Disconnect` then `EnterPairing` makes it
+  discoverable (device, 2026-10-13). Stock sends the two back to back with no
+  wait (`bluetooth_set_connect(0)`, ui 115208; `bluetooth_set_connect(1)`
+  sends `EnterPairing` alone). Stock's page says "Device can be discovered as
+  …" whenever its switch is on, and stock sends `OpenBt` at every boot,
+  which waved never does. **[inferred]**: `OpenBt` may make the idle module
+  discoverable; a device test (checklist).
 - **Paired devices:** the module keeps the link keys itself
   (`app_write_stored_linkkey`, `flash_clear_last_dev_func`, "linkkey change,
   clean old services"). **[file]** The protocol has no command to list,
@@ -312,14 +361,16 @@ the USB HID side, not this link. The call state above is what drives it.
   phone, from `0xB2`, `0xB3`, `0xC8` and `0xD6`. **[code]** **[inferred]**
   from that:
   - a paired list has to be host-side memory of the phones seen;
-  - "connect" means letting the module reconnect (`AutoReconnect(1)` at
-    boot, which reaches only the last phone);
+  - "connect" means letting the module reconnect (`AutoReconnect(1)`, which
+    reaches only the last phone) or connecting from the phone;
   - "forget" can only be stock's "Connect a new device" (`Disconnect` then
-    `EnterPairing`). Whether that erases the old link key is unknown.
+    `EnterPairing`), or the factory reset's `0xD8 02`. Whether either erases
+    the old link key is unknown.
 - **Auto reconnect:** stock sends the saved setting at boot. Each time a phone
   connects it sends `0xD8 00`, then `SaveFlash` (75955, 76006). So `0xD8`
-  probably means "try to reconnect now" more than a stored setting.
-  **[code] [inferred]**
+  probably means "try to reconnect now" more than a stored setting:
+  **[inferred]** `0xD8 01` starts the module's reconnect to the last phone
+  ("connback"), `0xD8 00` stops it. Details below.
 - **Connection request:** `0xD6` puts stock in the "connecting" state. The
   answer is `ConnectReply` (`0xD7 [reply]`). In 1.2.2.6 the UI never sends
   one; only the factory/aging path replies, with 0. Stock treats reply 1 as
@@ -327,8 +378,146 @@ the USB HID side, not this link. The call state above is what drives it.
 - **Name:** `SetName` always sends exactly 23 bytes. waved NUL-pads a shorter
   name and cuts a longer one at a character boundary. Whether the module
   accepts other lengths is unknown.
-- **On/off:** `OpenBt` / `CloseBt`. The host persists the switch
-  (`INSUTIL_CFG2_BT_IS_OPEN`). **[code]**
+- **On/off:** `OpenBt` (`CC 00`) / `CloseBt` (`CB`). The host persists the
+  switch (`INSUTIL_CFG2_BT_IS_OPEN`). **[code]**
+
+### Stock's Bluetooth controls (1.2.2.6) **[code]**
+
+Plain numbers are `libins_entry.so.c` lines, `ui` ones `libui.so.c`. The copy
+is stock's English (`/etc/pspapp/lvgl/language/language_EN.json`). **[file]**
+
+**The page** (`ui_setting_bluetooth_screen_on_create`, ui 22409; refresh ui
+22256):
+
+- a Bluetooth switch, with "Device can be discovered as <name>" under it
+  while on;
+- "Auto Reconnect" ("Auto-connects to last device when powered on"), shown
+  only while on;
+- "Connect New Device", shown only while on **and** a phone is connected
+  (ui 22320-22369).
+
+There is no pairing page, no countdown, no paired list and no Disconnect or
+Forget button.
+
+**The Bluetooth switch** (ui `bt_onoff_switch_event_cb` 22124 → business
+message 0x17 → `business_executor` ui 83262 → `bluetooth_set_switch` ui
+115118):
+
+| | Frame | Host side |
+|---|---|---|
+| On | `bt_open_switch(0)` (79149): `75 45 02 CC 00 CE` | `BT_IS_OPEN` = 1, saved to config and flushed (74445-74468). `is_init` only decides this saving; data[0] is then set to 0 (74473), so the wire carries `CC 00` at boot too. |
+| Off | `bt_close_switch()` (79124): `75 45 01 CB CC` | `BT_IS_OPEN` = 0 and `BT_CONNECT_STATUS` = 1 ("not connected") at once, saved (74413-74444). |
+
+- Neither touches btpower, `0xD8` or `0xE0`, and nothing waits for a reply.
+- **While off, stock ignores the phone:** `0xB2` counts as "not connected"
+  whatever bit 0 says (75805), and `0xB4` neither connects (76303) nor counts
+  towards a disconnect (76327). `0xAA` is not gated (75696).
+- At boot `bt_info_init` (79403) sends `CloseBt` if the saved switch is off,
+  else `OpenBt`. The cloud "power off" (`mqttcli_power_off` 198112) closes it
+  too, and power on (`mqttcli_power_on` 198043) or a wake (197924) reopens it
+  if it was on. After a module reset with the switch on: 10 s, then `OpenBt`
+  (`bt_reset` 78286, `bt_crc_check`).
+
+**Auto Reconnect (`0xD8`):**
+
+- At boot: `D8 <saved setting>`, then `SaveFlash` (79438-79439).
+- The switch (ui `bt_auto_reconnect_switch_event_cb` 22153 → message 0x19 →
+  `bluetooth_set_auto_reconnect_switch` ui 115446): `D8 <0|1>` while
+  database value 0x77 is 0 (its name is not in the decompile), then saves
+  `BT_IS_RECONNECT`.
+- **Each time a phone connects** (`0xB2` bit 0 while on and not yet
+  connected, 75805-76006): status "connected", `BT_HAS_EVER_CONNECT` = 1,
+  **`D8 00`** (75955), the phone's name and MAC when new, `SaveFlash`
+  (76006). So whenever stock has a phone connected, the module's reconnect is
+  off.
+- Factory reset (`system_factory_reset` 105466): `CloseBt`, then `D8 02`
+  (105474-105475). What 2 means is unknown; **[inferred]** it clears the
+  module's last device (module strings `app_bt_clean_last_dev`, `clean all
+  info`). Destructive: test it only to wipe pairings.
+- Module strings: `RECONN_START!`, `RECONN_CANCEL!`, `bt stop connback`,
+  `app_bt_start_connback_func`. **[file]**
+
+**Connect New Device** (ui `bt_new_connect_btn_clicked_cb` 22184):
+
+1. A confirmation: "Connecting a new device will disconnect from <phone>.
+   Continue?", with "Disconnect" and a cancel.
+2. Confirm (`bluetooth_disconnect_done_event_cb` ui 39896) → message 0x1a,
+   value 0 → `bluetooth_set_connect(0)` (ui 115166): forget the stored phone
+   name, `bt_disconnect` (`75 45 02 A3 00 A5`, 78702), `bt_repair`
+   (`75 45 02 A7 00 A9`, 78724), back to back, waiting for no reply.
+3. Cancel (ui 39874) returns to the page and sends nothing.
+
+**Leaving pairing:** stock has no pairing page to leave, and no command that
+ends pairing mode: `bt_ctrl_cmd_send` (74281-74619) builds every command
+there is. The "Bluetooth connecting..." page (ui 22671, for a `0xD6`
+request) has a Cancel (ui 22648) that sends message 0x1a, value 0: the same
+`Disconnect` + `EnterPairing`.
+
+**Disconnect and forget:** no plain Disconnect and no Forget. `bt_disconnect`
+is reached only through Connect New Device, the connecting page's Cancel and
+the debug `_control_handler` ("disconnect", 89180 and onwards). The only wipe
+is the factory reset's `0xD8 02`.
+
+**When stock counts the phone as gone** (`BT_CONNECT_STATUS` = 1):
+
+| Trigger | Rule | Line |
+|---|---|---|
+| `0xB2` | bit 0 clear, or the switch is off | 75805 |
+| `0xAA` | data byte 0 is 0 | 75696 |
+| `0xE1` | its MAC is the stored phone's | 77158 |
+| `0xB4` | phone byte `0xFE` in three reports in a row, switch on | 76327 |
+| `CloseBt` | at once | 74422 |
+| `ConnectReply(1)` | at once | 74486 |
+
+It counts the phone as connected on `0xB2` bit 0 with the switch on (75805),
+`0xAA` non-zero (75708) and `0xB4` phone byte 0 with the switch on (76303).
+
+**Power off** (ui `_device_bt_poweroff_pre_action` 114129,
+`_device_bt_poweroff` 114173): `SaveFlash`, then up to 20 × (`SaveFlash`,
+0.5 s) until `0xE0` arrives, 1 s, btpower 1. btpower (`bt_power_set` 77956)
+is used only for resets (75069, 78804, 79533) and power off, never by the
+switch.
+
+**Acknowledgements:** `bt_msg_recv_thread` acknowledges every parsed frame
+but `0xE0`, whatever its prefix, at once from its receive thread
+(75273-75279; bytes from `bt_ctrl_cmd_send_without_ack` 74888).
+
+### Seen on the device with waved a856f70 (2026-10-13) **[device]**
+
+1. `0xC6` and earlier `0xAA` came twice a second for as long as waved ran
+   (see "Acknowledgements and replies").
+2. Back from the pairing countdown did not end pairing: nothing was sent, and
+   the countdown went with the screen.
+3. Connected, the screen offered only Disconnect.
+4. After `Disconnect` (`75 45 02 A3 00 A5`) the music stopped, but within a
+   second `0xB2` said `0x03` again: the iPhone was back, and the screen said
+   "connected" throughout.
+5. From a shell, `CloseBt` (`75 45 01 CB CC`), then 10 s later `OpenBt`
+   (`75 45 02 CC 00 CE`): the iPhone stopped playing, but the module kept
+   reporting `0x03` and `0xAA 01`, and the phone did not show a disconnect.
+   Stock would have shown "not connected" all along: it forces that on
+   `CloseBt` and ignores bit 0 while off. Whether the phone drops after a
+   longer wait (a link supervision timeout is often 20 s) is not known yet.
+
+### What waved does with this
+
+- **Disconnect** = `AutoReconnect(false)` then `Disconnect`
+  (`75 45 02 D8 00 DA`, `75 45 02 A3 00 A5`). Stock never disconnects with
+  the module's reconnect on (it turns it off as each phone connects); waved
+  never sent `0xD8`, so the module was free to reconnect at once. The phone
+  can still connect from its own Bluetooth settings. If the phone itself
+  reconnects, only `CloseBt` can stop it: stock's Bluetooth switch, with the
+  host forcing "not connected" while off and `OpenBt` to turn it back on.
+  That switch is not built yet (see the plan's checklist).
+- **Pair a device** and **Pair another phone** = `AutoReconnect(false)`,
+  `Disconnect`, `EnterPairing`: stock's Connect New Device with the reconnect
+  off, as stock always has it while a phone is connected (and the module
+  refuses pairing while it reconnects). No confirmation, unlike stock: the
+  countdown screen says what happens, and Back ends it.
+- **Leaving the Bluetooth screen** (Back, a swipe, a takeover; not resting)
+  sends `BtStopPairing`, which ends Wave's countdown. Nothing goes to the
+  module: there is no command for it. The module stays discoverable until
+  its own timeout or a phone connects; the device pass measures how long.
 
 ## Audio (I2)
 
@@ -469,9 +658,13 @@ Computed with the stock rule. They are also the unit-test fixtures in
 |-------|-------|
 | GetStatus | `75 45 01 A9 AA` |
 | GetVersion / GetBuildTime / GetName | `75 45 01 91 92` / `75 45 01 93 94` / `75 45 01 C5 C6` |
-| OpenBt at boot / CloseBt | `75 45 02 CC 01 CF` / `75 45 01 CB CC` |
+| OpenBt (boot and switch alike) / CloseBt | `75 45 02 CC 00 CE` / `75 45 01 CB CC` |
 | Disconnect / EnterPairing | `75 45 02 A3 00 A5` / `75 45 02 A7 00 A9` |
-| AutoReconnect on | `75 45 02 D8 01 DB` |
+| AutoReconnect on / off | `75 45 02 D8 01 DB` / `75 45 02 D8 00 DA` |
+| waved's Disconnect | `75 45 02 D8 00 DA`, `75 45 02 A3 00 A5` |
+| waved's Pair (Pair a device, Pair another phone) | `75 45 02 D8 00 DA`, `75 45 02 A3 00 A5`, `75 45 02 A7 00 A9` |
+| Module answers (not acknowledged by waved) | `75 46 02 A9 00 AB`, `75 46 02 C5 00 C7`, `75 46 02 A7 00 A9` |
+| Ack for `0xC6` / `0xAA` | `75 46 02 C6 00 C8` / `75 46 02 AA 00 AC` |
 | SaveFlash | `75 45 02 E0 00 E2` |
 | PhoneMode 1 | `75 45 02 97 01 9A` |
 | PtaMode, Wi-Fi present | `75 45 03 EA 01 00 EE` |
@@ -508,21 +701,28 @@ Computed with the stock rule. They are also the unit-test fixtures in
 | `control.rs` | bus commands → frames; the 2-minute pairing window |
 | `ota.rs` | firmware images and OTA packets |
 
-`BtService` keeps its constructor and runs on the `waved-uart` mux at 921600.
-`main.rs` hands it the bus with `.with_commands(bus.commands.subscribe())`.
+`BtService` keeps its constructor and runs on the `waved-uart` mux at 921600
+(the mux's reader and writer each have their own port handle, so an
+acknowledgement never waits behind a read). `main.rs` hands it the bus with
+`.with_commands(bus.commands.subscribe())`.
 
 - At start it sends only `GetVersion`, `GetBuildTime`, `GetStatus`, `GetName`
-  and `GetPhoneMac`. It acknowledges every frame as stock does and polls
-  `GetStatus` every 5 s once the module has answered. The loop runs every
-  100 ms for the bus and the countdown.
-- **Pair** (`Command::BtPair`, Bluetooth screen "Pair a device"):
-  `Disconnect` then `EnterPairing`, back to back as stock's "Connect a new
-  device". `BluetoothState::pairing_left_s` counts 120 s down. The window ends
-  at 0, when a phone connects (a new connection, not the old phone still
-  dropping), or when `0xB2` bit 3 clears after it was set. Nothing is sent at
-  the end: no command to leave pairing mode is known.
-- **Disconnect** (`BtDisconnect`): `Disconnect` only. Stock's UI disconnect
-  also enters pairing.
+  and `GetPhoneMac`. It acknowledges every `75 45` frame but `0xE0` with
+  stock's bytes, and no `75 46` frame (`command::ack_for_frame`; see
+  "Acknowledgements and replies"), and polls `GetStatus` every 5 s once the
+  module has answered. The loop runs every 100 ms for the bus and the
+  countdown. A log line shows at info only when its frame brought something
+  new; repeats go to debug.
+- **Pair** (`Command::BtPair`, Bluetooth screen "Pair a device", and "Pair
+  another phone" while one is connected): `AutoReconnect(false)`,
+  `Disconnect`, `EnterPairing`, back to back as stock's "Connect New Device"
+  (which runs with the reconnect off). `BluetoothState::pairing_left_s`
+  counts 120 s down. The window ends at 0, when a phone connects (a new
+  connection, not the old phone still dropping), when `0xB2` bit 3 clears
+  after it was set, or on `BtStopPairing` (leaving the Bluetooth screen).
+  Nothing is sent at the end: no command leaves pairing mode.
+- **Disconnect** (`BtDisconnect`): `AutoReconnect(false)`, then `Disconnect`,
+  so the module does not bring the phone straight back.
 - **Calls** (`BluetoothState::call`, `BtCall`): `0xB1` with a number rings,
   `0xD1 00` makes the call active while a number is known (as stock), `0xD1 01`,
   an empty `0xB1` or the phone dropping end it. `0xB2` bit 2 alone starts no
@@ -535,11 +735,14 @@ Computed with the stock rule. They are also the unit-test fixtures in
   `pairing` (bit 3) is the module's own and stays.
 - **Name:** `0xC6` fills `BluetoothState::advertised_name`, which the
   Bluetooth screen shows ("Shows up as …", and large while pairing).
-- **Privacy:** the phone book (`0xB0`) is dropped unread. No info or debug log
-  line carries a phone's name, MAC or a number (`log_line`, tested on every
-  event that carries one); module log lines (`0xF0`) are trace only; the
-  `waved-uart` reader's trace line prints the command byte and length, never
-  the payload. `BtCall`'s `Debug` hides the number.
+- **Privacy:** the phone book (`0xB0`) is dropped unread. No log line at any
+  level carries a phone's name, MAC or a number (`log_line`, tested on every
+  event that carries one). Module log lines (`0xF0`) show only as one of the
+  module's fixed messages about pairing, reconnecting and its radio, at debug
+  (`bt module: RECONN_START!`), never as received; any other line shows as
+  its length at trace. Undecoded frames show their command byte and length
+  only, and so does the `waved-uart` reader's trace line (plus the prefix).
+  `BtCall`'s `Debug` hides the number.
 
 It doesn't switch Bluetooth on or off, rename the module (`device.name`) or
 save the module's flash. The plan and the device-pass checklist are in
@@ -567,7 +770,8 @@ save the module's flash. The plan and the device-pass checklist are in
   |---------|--------|
   | `BtSetDiscoverable(true)` | `EnterPairing`, plus a 2-minute timer |
   | end of the 2 minutes | unknown (see Open); `CloseBt` + `OpenBt` is the candidate to measure |
-  | `BtDisconnect` | `Disconnect` |
+  | `BtDisconnect` | `AutoReconnect(0)` + `Disconnect` (built) |
+  | `BtSetEnabled(on)` | `OpenBt` / `CloseBt`, host forcing "not connected" while off (stock's switch; not built) |
   | `BtForget` | `Disconnect` + `EnterPairing`, and drop the phone from the host-side list |
   | `BtConnect` | `AutoReconnect(1)` (the last phone only) |
 
@@ -643,7 +847,8 @@ waved at `bae1fff`, then with `UART_BAUD = waved_bt::BT_BAUD`:
   carries nothing, and is still acknowledged ("Phone book (PBAP) sync" is not
   planned).
 - **Module log lines (`0xF0`) carry the phone's Bluetooth name and MAC**
-  (`app_set_bt_last_addr`). Keep them out of the log at info and debug.
+  (`app_set_bt_last_addr`). Keep them out of the log at every level: waved
+  shows only the module's known fixed messages (see "In waved now").
 - **`PhoneMac` decodes one byte off:** `app_set_bt_last_addr A1B2C3D4E557`
   arrived as `06 A1 B2 C3 D4 E5`: the first byte is a length (6).
   `DeviceDisconnected` decodes the same MAC correctly.
@@ -724,12 +929,20 @@ adb shell 'arecord -D hw:0,0 -c 2 -r 48000 -f S16_LE -d 5 /tmp/bt-in.wav; ls -l 
 
 ## Open
 
-- The module's prefix and echo behaviour (B, C above).
-- How to leave pairing mode and how long the module stays in it (waved ends
-  its own window after 2 minutes). The module is not discoverable when idle
-  (verified).
+- ~~The module's prefix and echo behaviour~~: it repeats its `75 45` frames
+  until acknowledged and answers requests once with `75 46` frames
+  ("Acknowledgements and replies"). Still open: whether acknowledging a
+  `75 46` answer makes the module repeat the request (the 2 Hz `0xC6`).
+- How long the module stays in pairing mode (no command leaves it; waved ends
+  its own window after 2 minutes or when the screen is left). The module is
+  not discoverable when idle with waved (verified); whether `OpenBt` changes
+  that (stock: "Device can be discovered as …").
 - What `ConnectReply` 0 and 1 mean, and when `0xD6` is sent.
-- What `0xD8` means (stock clears it on every connect).
+- What `0xD8` means exactly: **[inferred]** 1 starts and 0 stops the
+  module's reconnect to the last phone; 2 (factory reset) unknown.
+- Whether `CloseBt` drops the phone at all (it stopped the music, the phone
+  stayed "connected" for at least 10 s) and whether the module's `0xB2`
+  bit 0 ever clears while closed.
 - The unknown bytes in `0xB2`, `0xB3`, `0xB4`, `0x91`/`0x93` and `0xC6`, and
   `0xB2` bits 3 and 7.
 - Button codes other than 0, 3, 4, 6, 7 and 8, including a "clean link info"

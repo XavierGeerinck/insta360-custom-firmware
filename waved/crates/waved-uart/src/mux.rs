@@ -2,7 +2,6 @@ use crate::frame::{Frame, FrameParser, FrameTarget};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use serialport::SerialPort;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, trace, warn};
 
@@ -27,14 +26,24 @@ impl UartMux {
         let port: Box<dyn SerialPort> = serialport::new(port_path, baud_rate)
             .timeout(Duration::from_millis(100))
             .open()?;
+        Self::from_port(port)
+    }
 
-        let port: Arc<Mutex<Box<dyn SerialPort>>> = Arc::new(Mutex::new(port));
+    /// The mux over an open port (tests hand it one end of a pty pair).
+    ///
+    /// The reader gets its own handle (`try_clone`), as `waved-mcu`'s link
+    /// does. Sharing one handle behind a mutex starved the writer: the reader
+    /// held it through each 100 ms read and took it back at once, so an
+    /// acknowledgement could wait for seconds (1.4 s measured on a quiet pty)
+    /// while the module repeated its frame every 500 ms.
+    pub fn from_port(mut port: Box<dyn SerialPort>) -> Result<Self, serialport::Error> {
+        port.set_timeout(Duration::from_millis(100))?;
+        let reader_port = port.try_clone()?;
 
         let (bt_tx, bt_rx) = bounded::<Frame>(64);
         let (mcu_tx, mcu_rx) = bounded::<Frame>(64);
         let (write_tx, write_rx) = bounded::<PrioritizedFrame>(64);
 
-        let reader_port = Arc::clone(&port);
         let reader_handle = std::thread::Builder::new()
             .name("uart-reader".into())
             .spawn(move || {
@@ -42,11 +51,10 @@ impl UartMux {
             })
             .expect("failed to spawn uart reader thread");
 
-        let writer_port = Arc::clone(&port);
         let writer_handle = std::thread::Builder::new()
             .name("uart-writer".into())
             .spawn(move || {
-                Self::writer_loop(writer_port, write_rx);
+                Self::writer_loop(port, write_rx);
             })
             .expect("failed to spawn uart writer thread");
 
@@ -73,27 +81,19 @@ impl UartMux {
         let _ = self.write_tx.send(PrioritizedFrame { raw, priority });
     }
 
-    fn reader_loop(
-        port: Arc<Mutex<Box<dyn SerialPort>>>,
-        bt_tx: Sender<Frame>,
-        mcu_tx: Sender<Frame>,
-    ) {
+    fn reader_loop(mut port: Box<dyn SerialPort>, bt_tx: Sender<Frame>, mcu_tx: Sender<Frame>) {
         let mut parser = FrameParser::new();
-        let mut buf = [0u8; 1];
+        let mut buf = [0u8; 64];
 
         loop {
-            let read_result = {
-                let mut port = port.lock().unwrap();
-                port.read(&mut buf)
-            };
-
-            match read_result {
-                Ok(1) => {
-                    if handle_byte(buf[0], &mut parser, &bt_tx, &mcu_tx).is_err() {
-                        return;
+            match port.read(&mut buf) {
+                Ok(n) => {
+                    for &byte in &buf[..n] {
+                        if handle_byte(byte, &mut parser, &bt_tx, &mcu_tx).is_err() {
+                            return;
+                        }
                     }
                 }
-                Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
                     // Normal timeout, continue
                 }
@@ -105,14 +105,10 @@ impl UartMux {
         }
     }
 
-    fn writer_loop(
-        port: Arc<Mutex<Box<dyn SerialPort>>>,
-        write_rx: Receiver<PrioritizedFrame>,
-    ) {
+    fn writer_loop(mut port: Box<dyn SerialPort>, write_rx: Receiver<PrioritizedFrame>) {
         use std::io::Write;
 
         for pframe in write_rx.iter() {
-            let mut port = port.lock().unwrap();
             if let Err(e) = port.write_all(&pframe.raw) {
                 error!("UART write error: {e}");
             }
@@ -162,17 +158,18 @@ fn handle_byte(
     Ok(())
 }
 
-/// A frame for the trace log: its command byte and length, never its bytes.
-/// The Bluetooth module sends the phone book, caller numbers and the phone's
-/// name and MAC on this port.
+/// A frame for the trace log: its prefix, command byte and length, never its
+/// bytes. The Bluetooth module sends the phone book, caller numbers and the
+/// phone's name and MAC on this port.
 fn describe(frame: &Frame) -> String {
+    let [p0, p1] = frame.header;
     match frame.data.split_first() {
         Some((cmd, rest)) => format!(
-            "parsed frame: cmd {cmd:#04x}, {} data bytes, target {:?}",
+            "parsed frame: {p0:02x} {p1:02x} cmd {cmd:#04x}, {} data bytes, target {:?}",
             rest.len(),
             frame.target
         ),
-        None => format!("parsed frame: empty, target {:?}", frame.target),
+        None => format!("parsed frame: {p0:02x} {p1:02x} empty, target {:?}", frame.target),
     }
 }
 
@@ -186,6 +183,35 @@ mod tests {
         (bt_tx, bt_rx, mcu_tx, mcu_rx)
     }
 
+    /// Stock acknowledges a frame at once, from its receive thread
+    /// (`bt_msg_recv_thread`). Here the acknowledgement is a write: it must
+    /// reach the wire while the reader sits in a read on a quiet line, not
+    /// after the module has repeated its frame (every 500 ms until
+    /// acknowledged, docs/BLUETOOTH_PROTOCOL.md).
+    #[cfg(unix)]
+    #[test]
+    fn a_write_never_waits_for_the_reader() {
+        use serialport::TTYPort;
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let (ours, mut module) = TTYPort::pair().expect("pty pair");
+        let mux = UartMux::from_port(Box::new(ours)).expect("mux");
+        module.set_timeout(Duration::from_secs(2)).unwrap();
+        let ack = [0x75, 0x46, 0x02, 0xB2, 0x00, 0xB4];
+        for _ in 0..5 {
+            // A quiet line: the reader is inside a read that times out at 100 ms.
+            std::thread::sleep(Duration::from_millis(30));
+            let start = Instant::now();
+            mux.send(ack.to_vec(), false);
+            let mut got = [0u8; 6];
+            module.read_exact(&mut got).expect("the ack reaches the module");
+            let waited = start.elapsed();
+            assert_eq!(got, ack);
+            assert!(waited < Duration::from_millis(50), "the ack waited {waited:?}");
+        }
+    }
+
     #[test]
     fn the_trace_line_never_prints_a_payload() {
         // ttyS1 carries the phone book (0xB0), caller numbers (0xB1) and the
@@ -197,10 +223,14 @@ mod tests {
             data: vec![0xB1, b'+', b'3', b'2', b'4', b'7', b'0'],
         };
         let line = describe(&frame);
-        assert_eq!(line, "parsed frame: cmd 0xb1, 6 data bytes, target Bluetooth");
+        // The prefix tells the module's repeated frames (75 45) from its
+        // one-shot answers (75 46); it carries nothing personal.
+        assert_eq!(line, "parsed frame: 75 45 cmd 0xb1, 6 data bytes, target Bluetooth");
         assert!(!line.contains("43") && !line.contains("+32"), "{line}");
+        let answer = Frame { header: [0x75, 0x46], target: FrameTarget::Bluetooth, data: vec![0xC5, 0x00] };
+        assert_eq!(describe(&answer), "parsed frame: 75 46 cmd 0xc5, 1 data bytes, target Bluetooth");
         let empty = Frame { header: [0x75, 0x45], target: FrameTarget::Bluetooth, data: vec![] };
-        assert_eq!(describe(&empty), "parsed frame: empty, target Bluetooth");
+        assert_eq!(describe(&empty), "parsed frame: 75 45 empty, target Bluetooth");
     }
 
     #[test]

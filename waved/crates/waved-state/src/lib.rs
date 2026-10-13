@@ -785,14 +785,19 @@ pub enum Command {
     InstallUpdate,
     // --- Bluetooth (waved-bt, I1 / I3) ---
     /// Make Wave visible to a new phone for two minutes: drop the connected
-    /// phone, then pairing mode (stock "Connect a new device").
+    /// phone, then pairing mode (stock "Connect a new device"). Also "Pair
+    /// another phone" while one is connected.
     BtPair,
-    /// Drop the connected phone.
+    /// Drop the connected phone and keep it dropped (the module's reconnect
+    /// to the last phone goes off first).
     BtDisconnect,
     /// Answer the ringing call (button event 3).
     BtAnswerCall,
     /// Decline the ringing call or hang up the active one (button event 0).
     BtDeclineCall,
+    /// End Wave's pairing window (the user left the pairing screen). The
+    /// module has no command to leave pairing mode, so nothing is sent.
+    BtStopPairing,
 }
 
 // --- State Bus ---
@@ -1336,8 +1341,9 @@ mod tests {
             Command::BtDisconnect,
             Command::BtAnswerCall,
             Command::BtDeclineCall,
+            Command::BtStopPairing,
         ];
-        assert_eq!(commands.clone().len(), 4);
+        assert_eq!(commands.clone().len(), 5);
     }
 
     #[test]
