@@ -26,19 +26,22 @@
 //! | Power off / Factory reset confirmed | Info | Powering off / Resetting Wave |
 //! | Delete confirmed | Success | Recording deleted |
 //! | Retry on Uploads | Info | Retrying 3 uploads |
+//! | USB storage refused: recording / no computer / busy / not ejected (G1) | Warning | Stop the recording first / Connect a computer first / Recordings in use, try again / Eject Wave on the computer first |
+//! | USB storage refused: no drive in the gadget / volume not mounted again | Error | USB storage isn't available / Recordings unavailable, restart Wave |
+//! | USB storage ended (stopped, ejected or unplugged) | Success | USB storage stopped |
 
 use crate::kit::components::status::battery_look;
 use crate::kit::dispatch::{Message, Severity};
 use crate::kit::snapshot::UiSnapshot;
 use std::collections::VecDeque;
 use uuid::Uuid;
-use waved_state::{Command, DeviceEvent, LiftState, MicHealth};
+use waved_state::{Command, DeviceEvent, LiftState, MicHealth, UsbStoragePhase};
 
 /// The words, in one place, so every screen says the same thing.
 pub mod copy {
     use crate::kit::dispatch::{Message, Severity};
     use crate::screens_v2::main_parts::format_timer;
-    use waved_state::UploadMode;
+    use waved_state::{UploadMode, UsbStorageProblem};
 
     pub const HOLD_STOP: &str = "Hold Stop to end the recording";
     pub const KEEP_HOLDING: &str = "Keep holding to stop";
@@ -60,6 +63,25 @@ pub mod copy {
     pub const RESETTING: &str = "Resetting Wave";
     /// A Mic height move stalled or the lift's sensor saw something.
     pub const LIFT_BLOCKED: &str = "Mic lift blocked";
+    /// USB storage ended: stopped here, ejected on the computer or unplugged (G1).
+    pub const USB_STOPPED: &str = "USB storage stopped";
+
+    /// Why USB storage did not start or stop, and what to do about it (G1).
+    pub fn usb_storage_problem(problem: UsbStorageProblem) -> Message {
+        let (severity, text) = match problem {
+            UsbStorageProblem::Recording => (Severity::Warning, "Stop the recording first"),
+            UsbStorageProblem::NoComputer => (Severity::Warning, "Connect a computer first"),
+            UsbStorageProblem::Busy => (Severity::Warning, "Recordings in use, try again"),
+            UsbStorageProblem::EjectFirst => {
+                (Severity::Warning, "Eject Wave on the computer first")
+            }
+            UsbStorageProblem::Unavailable => (Severity::Error, "USB storage isn't available"),
+            UsbStorageProblem::NotMounted => {
+                (Severity::Error, "Recordings unavailable, restart Wave")
+            }
+        };
+        Message::new(severity, text)
+    }
 
     /// What Retry on the Uploads screen says: "Retrying 1 upload", "Retrying 3 uploads".
     pub fn retrying_uploads(count: u32) -> String {
@@ -126,6 +148,8 @@ pub struct MessageFeed {
     mics_dead: bool,
     low_space: bool,
     lift: LiftState,
+    /// The computer has had the recordings since USB storage last ended (G1).
+    usb_on: bool,
 }
 
 impl MessageFeed {
@@ -161,6 +185,7 @@ impl MessageFeed {
                 self.position(id)?;
                 Some(Message::new(Severity::Error, copy::UPLOAD_FAILED))
             }
+            DeviceEvent::UsbStorageProblem(problem) => Some(copy::usb_storage_problem(*problem)),
             DeviceEvent::RecordingIntegrityFailed { meeting_id, fault } => {
                 if meeting_id.is_some() {
                     Some(Message::new(Severity::Error, copy::RECORDING_FAILED))
@@ -240,6 +265,16 @@ impl MessageFeed {
             messages.push(Message::new(Severity::Warning, copy::STORAGE_ALMOST_FULL));
         }
         self.low_space = low_space;
+
+        // Only a mode that was on ends: a start that failed says why itself.
+        match snap.usb_storage.phase {
+            UsbStoragePhase::On => self.usb_on = true,
+            UsbStoragePhase::Off if self.usb_on => {
+                self.usb_on = false;
+                messages.push(Message::new(Severity::Success, copy::USB_STOPPED));
+            }
+            UsbStoragePhase::Off | UsbStoragePhase::Starting | UsbStoragePhase::Stopping => {}
+        }
         messages
     }
 
@@ -267,7 +302,10 @@ mod tests {
     use crate::kit::tokens::MESSAGE_MAX_W;
     use crate::kit::icons;
     use crate::screens_v2::main_parts::fixtures;
-    use waved_state::{LiftState, MicHealth, RecordingIntegrityFault, UploadMode};
+    use waved_state::{
+        LiftState, MicHealth, RecordingIntegrityFault, UploadMode, UsbStoragePhase,
+        UsbStorageProblem,
+    };
 
     fn message(severity: Severity, text: &str) -> Message {
         Message::new(severity, text)
@@ -297,9 +335,13 @@ mod tests {
             copy::POWERING_OFF,
             copy::RESETTING,
             copy::LIFT_BLOCKED,
+            copy::USB_STOPPED,
         ]
         .map(String::from)
         .into();
+        for problem in USB_PROBLEMS {
+            texts.push(copy::usb_storage_problem(problem).text);
+        }
         texts.push(copy::retrying_uploads(1));
         texts.push(copy::retrying_uploads(99_999));
         texts.push(copy::marked_at(359_999));
@@ -643,5 +685,71 @@ mod tests {
                 &snap
             )
             .is_some());
+    }
+
+    const USB_PROBLEMS: [UsbStorageProblem; 6] = [
+        UsbStorageProblem::Recording,
+        UsbStorageProblem::NoComputer,
+        UsbStorageProblem::Unavailable,
+        UsbStorageProblem::Busy,
+        UsbStorageProblem::EjectFirst,
+        UsbStorageProblem::NotMounted,
+    ];
+
+    #[test]
+    fn usb_storage_problems_say_what_to_do() {
+        let mut feed = MessageFeed::new();
+        let snap = fixtures::snap();
+        let mut said =
+            |problem| feed.on_event(&DeviceEvent::UsbStorageProblem(problem), &snap);
+        assert_eq!(
+            said(UsbStorageProblem::Recording),
+            Some(message(Severity::Warning, "Stop the recording first"))
+        );
+        assert_eq!(
+            said(UsbStorageProblem::NoComputer),
+            Some(message(Severity::Warning, "Connect a computer first"))
+        );
+        assert_eq!(
+            said(UsbStorageProblem::Unavailable),
+            Some(message(Severity::Error, "USB storage isn't available"))
+        );
+        assert_eq!(
+            said(UsbStorageProblem::Busy),
+            Some(message(Severity::Warning, "Recordings in use, try again"))
+        );
+        assert_eq!(
+            said(UsbStorageProblem::EjectFirst),
+            Some(message(Severity::Warning, "Eject Wave on the computer first"))
+        );
+        assert_eq!(
+            said(UsbStorageProblem::NotMounted),
+            Some(message(Severity::Error, "Recordings unavailable, restart Wave"))
+        );
+    }
+
+    #[test]
+    fn the_end_of_usb_storage_is_said_once() {
+        let mut feed = MessageFeed::new();
+        let mut snap = fixtures::snap();
+        let mut step = |phase| {
+            snap.usb_storage.phase = phase;
+            feed.on_snapshot(&snap)
+        };
+        assert!(step(UsbStoragePhase::Starting).is_empty());
+        assert!(
+            step(UsbStoragePhase::Off).is_empty(),
+            "a start that failed says why through its problem"
+        );
+        assert!(step(UsbStoragePhase::Starting).is_empty());
+        assert!(step(UsbStoragePhase::On).is_empty());
+        assert!(step(UsbStoragePhase::Stopping).is_empty());
+        assert!(step(UsbStoragePhase::On).is_empty(), "eject first: still on");
+        assert!(step(UsbStoragePhase::Stopping).is_empty());
+        assert_eq!(
+            step(UsbStoragePhase::Off),
+            [message(Severity::Success, copy::USB_STOPPED)]
+        );
+        assert!(step(UsbStoragePhase::Off).is_empty(), "once");
     }
 }

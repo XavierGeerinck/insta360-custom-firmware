@@ -784,6 +784,42 @@ mod tests {
         });
     }
 
+    /// The real USB storage screen, Probes elsewhere.
+    fn with_usb_storage(route: &Route) -> Option<Box<dyn Screen>> {
+        match route {
+            Route::UsbStorage => registry::screen_for(route),
+            other => probes(other),
+        }
+    }
+
+    #[test]
+    fn usb_storage_takes_the_screen_and_says_why_it_stays() {
+        use waved_state::{UsbStoragePhase, UsbStorageProblem};
+        lvgl(|lv| {
+            lv.screen();
+            let (mut rt, _bus) = runtime_with(Box::new(with_usb_storage));
+            rt.step(ready(0), &[]);
+            rt.step(ready(BOOT_MIN_MS), &[]);
+            rt.dispatcher().navigate(Route::System);
+            rt.step(ready(2_000), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::System));
+            let on = |now_ms| {
+                let mut snap = ready(now_ms);
+                snap.usb_storage.phase = UsbStoragePhase::On;
+                snap
+            };
+            rt.step(on(2_100), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::UsbStorage));
+            assert!(shows_text(rt.root().unwrap(), "USB storage is on"));
+            let eject = [DeviceEvent::UsbStorageProblem(UsbStorageProblem::EjectFirst)];
+            rt.step(on(2_200), &eject);
+            assert!(shows_text(rt.root().unwrap(), "Eject Wave on the computer first"));
+            rt.step(ready(3_000), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Home), "the volume is back");
+            rt.close();
+        });
+    }
+
     #[test]
     fn a_resent_recording_is_announced() {
         lvgl(|lv| {
