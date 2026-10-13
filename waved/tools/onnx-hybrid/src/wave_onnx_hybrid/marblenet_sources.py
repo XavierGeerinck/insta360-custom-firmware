@@ -279,7 +279,7 @@ def generate_execute_source(
         "iterations": 1,
         "executes_graph": True,
     }
-    return _execute_template(
+    source = _execute_template(
         "execute.cc.in",
         {
             "ROOT": root,
@@ -291,6 +291,36 @@ def generate_execute_source(
             "DEFINITION": _definition(definition),
         },
     )
+    # Preserve the immutable legacy template. A quiet NaN in every half element
+    # makes partially unwritten FP16 output fail the new finite-output policy.
+    nan_half_declaration = "constexpr uint16_t kCanaryHalfBits = 0x7e00U;"
+    replacements = {
+        "constexpr uint8_t kCanaryByte = 0xa5U;": nan_half_declaration,
+        "    device_canary.fill(kCanaryByte);": (
+            "    for (size_t index = 0; index < kOutputBytes; index += 2) {\n"
+            "        device_canary[index] = "
+            "static_cast<uint8_t>(kCanaryHalfBits & 0xffU);\n"
+            "        device_canary[index + 1] = "
+            "static_cast<uint8_t>(kCanaryHalfBits >> 8U);\n"
+            "    }"
+        ),
+        (
+            "    std::memset(guarded_output.data() + kGuardBytes, "
+            "kCanaryByte, kOutputBytes);"
+        ): (
+            "    for (size_t index = 0; index < kOutputBytes; index += 2) {\n"
+            "        guarded_output[kGuardBytes + index] =\n"
+            "            static_cast<uint8_t>(kCanaryHalfBits & 0xffU);\n"
+            "        guarded_output[kGuardBytes + index + 1] =\n"
+            "            static_cast<uint8_t>(kCanaryHalfBits >> 8U);\n"
+            "    }"
+        ),
+    }
+    for previous, replacement in replacements.items():
+        if source.count(previous) != 1:
+            raise ValueError("pinned executor NaN prime replacement mismatch")
+        source = source.replace(previous, replacement)
+    return source
 
 
 def validate_compile_source(

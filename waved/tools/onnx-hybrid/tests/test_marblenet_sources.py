@@ -225,11 +225,9 @@ def test_executor_reuses_pinned_input_file_lifecycle_and_actual_readback():
     assert "kWatchdogSeconds = 8" in source and "alarm(0)" not in source
     assert "kGuardBytes = 16" in source
     assert source.index("graph->Compile()") < source.index(
-        "device_canary.fill(kCanaryByte)"
+        "device_canary[index] = static_cast<uint8_t>(kCanaryHalfBits & 0xffU)"
     )
-    assert source.index("device_canary.fill(kCanaryByte)") < source.index(
-        "graph->Run()"
-    )
+    assert source.index("device_canary[index]") < source.index("graph->Run()")
     assert source.index(
         "WriteAtomicExclusive(kOutputPath, kPartialPath, observed)"
     ) < source.index("context.reset();")
@@ -323,7 +321,7 @@ def test_compiler_policy_mutations_are_refused(mutation):
     [
         lambda s: s.replace("if (!graph->Run())", "graph->Run(); if (!graph->Run())"),
         lambda s: s.replace("context.reset();", "alarm(0); context.reset();"),
-        lambda s: s.replace("device_canary.fill(kCanaryByte)", "device_canary.fill(0)"),
+        lambda s: s.replace("kCanaryHalfBits = 0x7e00U", "kCanaryHalfBits = 0xa5a5U"),
         lambda s: s.replace(
             "guarded_output.fill(kGuardByte)", "guarded_output.fill(0)"
         ),
@@ -359,3 +357,27 @@ def test_changed_reused_executor_template_is_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(native_sources, "_TEMPLATE_ROOT", tmp_path)
     with pytest.raises(ValueError, match="template hash"):
         generate_execute_source(graph_record(), EXECUTE_ROOT, 1800)
+
+
+def test_nan_prime_on_device_and_host_refuses_partial_unwritten_half():
+    import numpy as np
+
+    from wave_onnx_hybrid.errors import HybridError
+    from wave_onnx_hybrid.marblenet_graph import validate_graph_output
+
+    record = graph_record()
+    source = generate_execute_source(record, EXECUTE_ROOT, 1800)
+    assert "constexpr uint16_t kCanaryHalfBits = 0x7e00U" in source
+    assert (
+        "device_canary[index + 1] = static_cast<uint8_t>(kCanaryHalfBits >> 8U)"
+        in source
+    )
+    assert "guarded_output[kGuardBytes + index + 1] =" in source
+    assert source.count("static_cast<uint8_t>(kCanaryHalfBits >> 8U)") == 2
+    assert "device_canary.fill(kCanaryByte)" not in source
+    assert "std::memset(guarded_output.data() + kGuardBytes, kCanaryByte" not in source
+    expected = np.full((1, 2, 200), -0.022, dtype="<f2").tobytes()
+    partial_old_prime = b"\xa5\xa5" + expected[2:]
+    assert validate_graph_output(record, expected, partial_old_prime)["passed"]
+    with pytest.raises(HybridError):
+        validate_graph_output(record, expected, b"\x00\x7e" + expected[2:])
