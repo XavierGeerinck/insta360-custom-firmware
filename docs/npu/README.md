@@ -16,6 +16,15 @@ FC. Both passed one exact CPU-oracle comparison with unchanged captured
 device health. See the [REA recovery notebook](lab-notebook/2026-10-13-rea-op-dtype-recovery.md)
 and [PoC 16 results](lab-notebook/2026-10-13-poc16-native-fp16-conv-u8-fc.md).
 
+**ONNX native backend (2026-10-13).** PoC 17 imported real ONNX parameters
+for two FP16 Conv and two U8 QLinearMatMul controls, compiled each on the NN
+engine and ran each once. All returned bytes agree with ORT CPU and an
+independent oracle. Changed coefficients/bias produce different correct
+NBGs and readbacks; all eight staging roots are removed and captured health
+is unchanged. Use the explicit `wave-native` backend with an exact qualified
+package; see [commands and supported profiles](onnx/native-backend.md) and
+the [PoC 17 notebook](lab-notebook/2026-10-13-poc17-onnx-native-backend.md).
+
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
 reproducibly.
@@ -67,7 +76,7 @@ The immediate result is concrete:
   Acuity uses an embedded `6.4.6:769531` simulator SDK.
 - PoC 9E/9F added bounded general ONNX admission, recursive control-flow
   inventory, deterministic graph signatures, a CPU numerical oracle, and
-  fail-closed hybrid/strict modes; all NPU placement remains disabled.
+  fail-closed hybrid/strict modes; its default NPU placement remains disabled.
 - PoC 12A modeled five exact NBGs with total byte ownership and
   byte-identical unchanged re-emission while binding 21 serializer/load
   targets to the exact Wave binaries.
@@ -100,6 +109,10 @@ The immediate result is concrete:
   Conv and 2,056-byte U8 FC NBGs. Both compile logs name the NN target;
   each model ran once, returning all 32 or 4 oracle bytes exactly. All four
   temporary staging roots were removed and captured health stayed unchanged.
+- PoC 17 adds actual ONNX-to-native lowering for the two fixed profiles and
+  explicit qualification-bound sessions. Four changed-parameter controls
+  passed one NN compile and one byte-exact inference each. Strict loading
+  creates no CPU session; hybrid failure latches fallback without a retry.
 
 The detailed program design is in
 [`2026-07-28-wave-npu-reverse-engineering-program-design.md`](../superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md).
@@ -232,6 +245,7 @@ transfer.
 | 14A — Learned affine host contract | Does a finite integer `Multiply -> Add -> Erf` partition retain the denoiser quality gates? | **Passed host-only 2026-07-29** | The U8/per-channel-I8 candidate, six vectors, ONNX graph, CPU oracle, and nine-file package regenerate byte-identically and pass all 1,230-item quality gates; execution remains unapproved. |
 | 14B/C — Affine producer differential | Can exact Wave userspace emit deterministic baseline/weight/bias NBG controls? | **Closed clean negative 2026-07-29** | A1 was rejected at `MULTIPLY` type checking (`ASYM UINT8, SYMM PC INT8`) before NBG emission. Known-equivalent retries were skipped, health and CLC gates held, and PoC 14C has no differential to decode. |
 | 16 — REA-guided native dtype controls | Can FP16 Conv and quantized U8 FC compile and execute on the NN engine? | **Passed 2026-10-13** | Both target-native NBGs pass exact tensor/CRC qualification and one canary-protected CPU-oracle execution; captured health is unchanged and staging is removed. |
+| 17 — ONNX native backend | Can actual ONNX coefficients lower through the qualified Conv/FC routes and run with exact package evidence? | **Passed 2026-10-13** | Two FP16 Conv and two U8 QLinearMatMul models compile on NN and return every oracle byte. Explicit native strict/hybrid sessions preserve default CPU/refusal behavior. |
 | 9B / 9D continuation — Remaining compiler adapter | Can the missing no-kernel NBG consumer and exact VSINPU compiler path be proven? | Pending, separately gated | Acquire x86-64 no-kernel SDK `>=6.4.22` plus ovxlib `>=1.2.26`, prove its dependency/I/O ABI, then compile one fixed Conv before any NPU signature is approved. |
 | Production integration | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
 
@@ -283,11 +297,16 @@ consumer accepts shader source and does not emit graph NBG. The exact vendor
 profile is evidence, not authorization to use the embedded simulator or the
 quarantined adjacent CLC.
 
-PoC 9E/9F is also host-only. Its `hybrid` mode currently means one classified
+PoC 9E/9F is also host-only. Its default `hybrid` mode means one classified
 CPU-only ONNX Runtime session after NPU preflight finds no approved
 signature. It makes zero NPU attempts. The real Silero audit validates and
 counts its 51-graph, 689-node control-flow tree without running it. Neither
 the audit nor the Conv/Sigmoid fixture proves a Wave NPU operator.
+
+PoC 17 separately enables `--backend wave-native` for its exact qualified
+packages. It extracts ONNX constants, generates native source and validates
+the complete compiler/NBG/oracle/run/cleanup chain. This does not populate
+the historical PoC 9 registry or qualify arbitrary ONNX graphs.
 
 PoC 12A is host-only and serializer-first. It proves lossless unchanged
 representation, not semantic mutation: all five selected NBGs reconstruct
@@ -494,8 +513,10 @@ The distinction matters. For example:
   import the NPU stack” is static verified.
 - “The private export-data branch can run an arbitrary handcrafted graph”
   remains unknown.
-- “The ONNX hybrid runner tried the Wave NPU” is false: with the current
-  empty approval registry it records zero NPU attempts and one CPU session.
+- “The default PoC 9 ONNX hybrid runner tried the Wave NPU” is false: its
+  empty approval registry records zero NPU attempts and one CPU session.
+- “Explicit ONNX native lowering executes the four PoC 17 controls” is
+  observed live, with exact NN artifacts, oracle readback and cleanup.
 - “The v2 header checksum and section-20/26 table geometry are recovered” is
   static verified and controlled-differential verified in PoC 12C.
 - “Any ONNX initializer can now be written into section 20” remains
