@@ -46,6 +46,9 @@ minimum_free_mb = 2048
 device_password = ""
 ota_server = ""
 ota_allow_downgrade = false
+# Opt-in release lockdown (K1, docs/SECURITY.md). Keep false on development
+# units. When true, the documented /etc overlay step keeps adb off at boot.
+release_lockdown = false
 
 [ntp]
 servers = ["pool.ntp.org", "time.google.com"]

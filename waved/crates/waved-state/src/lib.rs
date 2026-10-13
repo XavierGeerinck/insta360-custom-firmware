@@ -811,6 +811,9 @@ pub enum Command {
     SetPreRecording(bool),
     SetUploadMode(UploadMode),
     SetAlertTones(bool),
+    /// Turn the device PIN off (System -> PIN, D10). Reaching System already
+    /// required the PIN, so no re-entry; the PIN is set again on the setup page.
+    ClearDevicePin,
     /// The first-start screen finished (Wi-Fi set up or skipped).
     MarkFirstRunDone,
     /// Fixed aim for Focused / Narrow / Two sides, degrees clockwise from the

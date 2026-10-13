@@ -216,10 +216,11 @@ Rules for the parallel milestones:
   - MeetingService reads `api.upload_mode` and the audio mode for metadata from the boot-time
     config, so `SetUploadMode` and audio-mode changes only apply after a restart.
   - Subscribe to `bus.settings` and the audio watch and use the live values.
-- [ ] **C12 Publish the pre-recording state** (S) — `waved-meeting/src/lib.rs`, needs C2
-  - `MeetingState.pre_recording_active` has no producer yet, so the kit's pre-recording dot in
-    the status pill (Home) never shows on the device.
-  - Set it while the pre-roll buffer is filling: setting on, not recording, not muted.
+- [x] **C12 Publish the pre-recording state** (S) — `waved-meeting/src/lib.rs`. Done:
+  `pre_recording_active(setting_on, recording, audio)` + `publish_pre_recording()` set
+  `MeetingState.pre_recording_active` on the meeting loop (true while the setting is on, not
+  recording, not muted and capture is healthy), reacting to settings and audio changes. The
+  status pill dot and the ambient chip now show it (confirmed in the K4 audit).
 
 - [ ] **C13 Neural noise reduction on the CPU** (M) — the NPU route is parked (user, 2026-10-12): a vendor-compiled model only tied the CPU end to end and our compiler path still can't build Conv/FC layers (`docs/COMPUTE_HARDWARE.md` "Status: parked"). DeepFilterNet on the CPU takes ≈ 84 % of a Cortex-A55 core during speech (≈ 8.5 ms per 10 ms hop, tract, fp32); in series with the DSP chain the UAC2 uplink underran (183 gaps / 20 s), and a dedicated thread didn't help. Its published cost (≈ 3.5 M MACs per hop) suggests the runtime, not the CPU, is the bottleneck. Next: profile it on the device, then try a faster runtime (stock ONNX Runtime 1.15.1, int8 with `asimddp`); a lighter model is the fallback. Noise reduction stays Off until it fits (see `docs/AUDIO_HARDWARE.md` "Uplink Level and CPU").
 - [ ] **C14 Re-measure ERLE after the 48 kHz echo canceller fix** (S) — SP#5/SP#6 figures were taken while Speex assumed 8 kHz. Quick check on 2026-10-06: linear 15.6 dB, effective 23.5 dB with speech from the Wave speaker; residual echo sits ≈ 10 dB under near-end speech in the uplink. Rerun the acceptance script.
@@ -368,10 +369,22 @@ Rules for the parallel milestones:
 
 ## K — Security and privacy
 
-- [ ] **K1 Release lockdown** (M)
-  - adb off or authenticated in release builds.
-  - No telnet.
-  - A root password policy.
+- [ ] **K1 Release lockdown** (M) — policy + opt-in flag landed; enforcement + device pass left.
+  Plan: `waved/docs/superpowers/plans/2026-10-13-m3-k-security.md`. Full write-up:
+  `waved/docs/SECURITY.md`.
+  - Findings (what runs today): a default waved unit exposes **no inbound shell** —
+    stock `S89usbgadget`'s `start` branch has `adbd_enable` commented out (adb off on a
+    fresh boot), `inetd`/telnetd is never started, no ssh/dropbear, and
+    `deploy/iptables.rules` drops all inbound but lo/established/DHCP/mDNS. The only dev
+    surface is USB adb, enabled by the owner's own setup (factory devmode or an `/etc`
+    overlay edit), never by waved or `deploy/install.sh`. 1.2.2.6 shipped a new `$5$` root
+    hash (TODO F6).
+  - Done: `security.release_lockdown` config flag (default **off**), exposed on the setup
+    page as the way back; `waved_config::release_lockdown_active`; `SECURITY.md` linked
+    from `waved/CLAUDE.md`. waved never disables adb by default or at deploy.
+  - Left: the opt-in `/etc` overlay enforcement step and the root-password change are
+    documented in `SECURITY.md`, to apply + verify on the device pass (checklist in the
+    plan). No telnet, no inbound shell: confirmed in the rootfs.
 - [x] **K2 PIN lock** (M) (D10) — host-tested; check it in the milestone 3 device pass.
   Plan: `waved/docs/superpowers/plans/2026-10-12-m3-k2-pin-lock.md`.
   - New `screens/pin.rs`: 3 × 4 keypad.
@@ -384,10 +397,29 @@ Rules for the parallel milestones:
     (`libins_entry.so.c:17677`) never receives the PIN: an empty password asks the
     device to show its own PIN page, and a later call returns that page's result
     (0 page showing, 1 verified, 2 not verified).
-- [ ] **K3 Setup network review** (S) — WPA2 setup AP timeout and credential rotation.
-- [ ] **K4 Privacy indicators audit** (S) — recording ring on the resting screen, pre-recording
-  indicator, start and stop tones, and mute that also silences the recording (the current
-  behaviour, keep it).
+- [x] **K3 Setup network review** (S) — reviewed, no gaps; guarantees locked with tests
+  (`waved/docs/WIFI.md` "Security review"). The setup AP is bounded (`PROV_TIMEOUT = 300 s`
+  wraps the whole session, also on cancel), the passphrase is a fresh `gen_passphrase()`
+  per session (rotation), `hostapd.conf` is `0600` in `/tmp` and removed on teardown, and
+  a per-session CSRF token gates `/save` and `/save-connect` (a missing/wrong token → 400,
+  nothing saved). Secrets are write-only; bodies bounded to 32 KiB.
+- [x] **K4 Privacy indicators audit** (S) — audited, all present, no gaps (keep as is):
+  - Recording ring + timer on the resting screen (`waved-ui/src/screens_v2/ambient.rs`);
+    the status pill leads with a teal dot while `MeetingState.pre_recording_active`
+    (`waved-ui/src/kit/components/status`, `kit/README.md`).
+  - Pre-recording indicator: C12 producer **done** — `waved-meeting/src/lib.rs`
+    (`pre_recording_active()` + `publish_pre_recording()` on the meeting loop, reacting to
+    settings/audio changes). The ambient "Pre-recording" chip consumes it.
+  - Start/stop tones: `waved-system/src/tones.rs` (rising start, falling stop), wired in
+    `crates/waved/src/main.rs`, honouring `tones.enabled`.
+  - Mute silences the recording (kept): `apply_mic_mute()` zeroes the capture frame in
+    place (`waved-audio/src/lib.rs`, in `run()`) before it forks to the recorder and the
+    uplink, so a muted stretch is silent in the file too.
+- [ ] **K-System PIN row** (S, D10) — **done (host-tested)**. System → PIN shows On/Off
+  (`waved-ui/src/screens_v2/system.rs`); with a PIN set a tap confirms turning it off
+  (`Command::ClearDevicePin`, reaching System already needed the PIN), with none a tap
+  points to the setup page where the PIN is set. Confirm on the device pass. USB storage is
+  the only System row still hidden (G workstream).
 
 ## L — Docs and cleanup
 
