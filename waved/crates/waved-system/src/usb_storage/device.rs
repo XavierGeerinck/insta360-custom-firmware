@@ -26,6 +26,11 @@ pub const UNMOUNT_NOTE: &str = "/tmp/waved-usb-storage.unmounted";
 /// and the volume is not mounted (it may be half repaired).
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 const REPLUG_PAUSE: Duration = Duration::from_secs(1);
+/// "connect" writes after a re-plug, each followed by up to `CONNECT_WAIT`
+/// for the computer to enumerate Wave again.
+const CONNECT_TRIES: u32 = 3;
+const CONNECT_WAIT: Duration = Duration::from_secs(5);
+const CONNECT_POLL: Duration = Duration::from_millis(250);
 
 /// `mass_storage.usb0` in the configfs gadget, and the UDCs under
 /// `/sys/class/udc`.
@@ -33,6 +38,7 @@ pub struct ConfigfsGadget {
     lun: PathBuf,
     link: PathBuf,
     udc_dir: PathBuf,
+    sleep: Box<dyn Fn(Duration) + Send>,
 }
 
 impl ConfigfsGadget {
@@ -41,11 +47,18 @@ impl ConfigfsGadget {
             lun: lun.into(),
             link: link.into(),
             udc_dir: udc_dir.into(),
+            sleep: Box::new(std::thread::sleep),
         }
     }
 
     pub fn device() -> Self {
         Self::new(LUN_DIR, CONFIG_LINK, crate::usb::UDC_DIR)
+    }
+
+    /// Replace the re-plug's pauses in tests.
+    pub fn with_sleep(mut self, sleep: impl Fn(Duration) + Send + 'static) -> Self {
+        self.sleep = Box::new(sleep);
+        self
     }
 
     /// Every UDC's directory.
@@ -99,22 +112,54 @@ impl Gadget for ConfigfsGadget {
         HostLink::from_states(states.iter().map(String::as_str))
     }
 
+    /// `soft_connect` is write-only, and the kernel accepts "connect" even when
+    /// the controller does not start: only the UDC state shows that the
+    /// computer has Wave again. "connect" is written up to `CONNECT_TRIES`
+    /// times, each followed by up to `CONNECT_WAIT` for a computer
+    /// (`configured` or `suspended`). Fails with `TimedOut` if none comes back:
+    /// Wave may then be off USB, adb included, until the cable is re-plugged.
     fn replug(&mut self) -> io::Result<()> {
         let controllers = self.controllers();
         if controllers.is_empty() {
             return Err(io::Error::new(io::ErrorKind::NotFound, "no USB device controller"));
         }
+        let mut disconnected = Vec::new();
         for udc in &controllers {
-            write_attribute(&udc.join("soft_connect"), "disconnect")?;
-        }
-        std::thread::sleep(REPLUG_PAUSE);
-        let mut result = Ok(());
-        for udc in &controllers {
-            if let Err(error) = write_attribute(&udc.join("soft_connect"), "connect") {
-                result = Err(error);
+            if let Err(error) = write_attribute(&udc.join("soft_connect"), "disconnect") {
+                // Connect back the ones already dropped; leave the rest alone.
+                for udc in &disconnected {
+                    let _ = write_attribute(&Path::new(udc).join("soft_connect"), "connect");
+                }
+                return Err(error);
             }
+            disconnected.push(udc.clone());
         }
-        result
+        (self.sleep)(REPLUG_PAUSE);
+        for attempt in 1..=CONNECT_TRIES {
+            for udc in &controllers {
+                if let Err(error) = write_attribute(&udc.join("soft_connect"), "connect") {
+                    tracing::warn!("usb storage: connect on {} failed: {error}", udc.display());
+                }
+            }
+            let mut waited = Duration::ZERO;
+            while waited < CONNECT_WAIT {
+                (self.sleep)(CONNECT_POLL);
+                waited += CONNECT_POLL;
+                if self.host() != HostLink::Gone {
+                    return Ok(());
+                }
+            }
+            tracing::warn!(
+                "usb storage: no computer {attempt}/{CONNECT_TRIES} after the re-plug; connecting again"
+            );
+        }
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "no computer on USB {} s after the re-plug",
+                (REPLUG_PAUSE + CONNECT_WAIT * CONNECT_TRIES).as_secs()
+            ),
+        ))
     }
 }
 
@@ -321,6 +366,7 @@ impl Volume for SystemVolume {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     struct Dirs {
         _root: tempfile::TempDir,
@@ -400,13 +446,57 @@ mod tests {
     #[test]
     fn replug_disconnects_then_connects() {
         let d = dirs();
-        gadget(&d).replug().unwrap();
+        gadget(&d).with_sleep(|_| {}).replug().unwrap();
         assert_eq!(
             std::fs::read_to_string(d.udc.join("fdd00000.crgudc2/soft_connect")).unwrap(),
             "connect"
         );
         let empty = tempfile::tempdir().unwrap();
         assert!(ConfigfsGadget::new(&d.lun, &d.link, empty.path()).replug().is_err());
+    }
+
+    /// The controller's state goes back to `configured` once `connects`
+    /// "connect" writes reached it (a computer enumerating Wave again); never
+    /// for `None`. Returns the number of pauses taken.
+    fn replug_with(connects: Option<usize>) -> (io::Result<()>, usize) {
+        let d = dirs();
+        let state = d.udc.join("fdd00000.crgudc2/state");
+        let soft_connect = d.udc.join("fdd00000.crgudc2/soft_connect");
+        std::fs::write(&state, "not attached\n").unwrap();
+        // (pauses, connects)
+        let seen = Arc::new(Mutex::new((0usize, 0usize)));
+        let watch = Arc::clone(&seen);
+        let result = gadget(&d)
+            .with_sleep(move |_| {
+                let mut seen = watch.lock().unwrap();
+                seen.0 += 1;
+                // A "connect" written since the last pause: count it, and
+                // clear the file so the next one shows.
+                if std::fs::read_to_string(&soft_connect).unwrap() == "connect" {
+                    seen.1 += 1;
+                    std::fs::write(&soft_connect, "").unwrap();
+                }
+                if connects.is_some_and(|n| seen.1 >= n) {
+                    std::fs::write(&state, "configured\n").unwrap();
+                }
+            })
+            .replug();
+        let pauses = seen.lock().unwrap().0;
+        (result, pauses)
+    }
+
+    #[test]
+    fn replug_connects_again_until_the_computer_is_back() {
+        let (result, _) = replug_with(Some(2));
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn replug_that_never_sees_the_computer_again_fails_in_bounded_time() {
+        let (result, pauses) = replug_with(None);
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+        let most = 1 + CONNECT_TRIES as usize * (CONNECT_WAIT.as_millis() / CONNECT_POLL.as_millis()) as usize;
+        assert!(pauses <= most, "{pauses} pauses");
     }
 
     #[test]

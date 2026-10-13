@@ -143,6 +143,18 @@ pub enum Reclaim {
     NotMounted,
 }
 
+/// `WAVED_USB_REPLUG=1`: at start-up, re-plug USB (`soft_connect`) when the
+/// computer still holds a drive a previous waved left loaded. Off until the
+/// device pass shows `soft_connect` brings USB, adb included, back on the
+/// `crgudc2` controller; without it the drive stays with the computer until
+/// it is ejected there or the cable is pulled.
+pub const REPLUG_ENV: &str = "WAVED_USB_REPLUG";
+
+/// Whether `REPLUG_ENV` switches the start-up re-plug on: only "1".
+pub fn replug_opted_in(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
 /// Whether the meeting service still owns a take: recording, paused,
 /// finishing it (`recording` stays true until the file is final) or waiting
 /// for the user's decision.
@@ -161,6 +173,9 @@ pub struct UsbStorage {
     mount: MountSpec,
     /// Polls in a row that found no computer.
     gone_polls: u32,
+    /// `reclaim_at_start` may re-plug USB; cleared after a re-plug that did
+    /// not bring the computer back.
+    replug: bool,
     sleep: Box<dyn Fn(Duration) + Send>,
 }
 
@@ -181,11 +196,13 @@ impl UsbStorage {
             partition: PARTITION.into(),
             mount: MountSpec::boot(),
             gone_polls: 0,
+            replug: false,
             sleep: Box::new(std::thread::sleep),
         }
     }
 
-    /// The device: configfs gadget, `/mnt/udisk` and `/dev/udisk`.
+    /// The device: configfs gadget, `/mnt/udisk` and `/dev/udisk`. The
+    /// start-up re-plug follows `REPLUG_ENV`.
     pub fn device(
         state_tx: Arc<watch::Sender<UsbStorageState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
@@ -198,11 +215,19 @@ impl UsbStorage {
             events_tx,
             commands_tx,
         )
+        .with_replug(replug_opted_in(std::env::var(REPLUG_ENV).ok().as_deref()))
     }
 
     /// Replace the pauses (`SETTLE`, the re-plug's waits) in tests.
     pub fn with_sleep(mut self, sleep: impl Fn(Duration) + Send + 'static) -> Self {
         self.sleep = Box::new(sleep);
+        self
+    }
+
+    /// Let `reclaim_at_start` re-plug USB (`soft_connect`) to end a
+    /// computer's hold on the drive. Off by default (`REPLUG_ENV`).
+    pub fn with_replug(mut self, on: bool) -> Self {
+        self.replug = on;
         self
     }
 
@@ -375,7 +400,7 @@ impl UsbStorage {
             Ok(Some(medium)) if self.gadget.drive_ready() => {
                 warn!("usb storage: the drive still held {medium} at start-up; taking the recordings back");
                 if !self.release_at_start() {
-                    error!("usb storage: the computer still holds the drive; the recordings stay unmounted");
+                    warn!("usb storage: the computer still holds the drive; storage stays on, the recordings unmounted");
                     self.publish(UsbStoragePhase::On);
                     return Reclaim::StillExported;
                 }
@@ -425,15 +450,27 @@ impl UsbStorage {
         }
     }
 
-    /// Empty the drive the computer may still hold, at start-up. False while
-    /// it still holds it.
+    /// Empty the drive the computer may still hold, at start-up. With the
+    /// re-plug switched on, drop and remake the USB connection to end its
+    /// hold. False while it still holds the drive.
     fn release_at_start(&mut self) -> bool {
         if self.unload_verified() {
             return true;
         }
+        if !self.replug {
+            warn!(
+                "usb storage: the computer holds the drive; it keeps it until it is ejected \
+                 there or the cable is pulled (start-up re-plug is off, {REPLUG_ENV}=1 turns it on)"
+            );
+            return false;
+        }
         info!("usb storage: the computer holds the drive; re-plugging USB to release it");
         if let Err(error) = self.gadget.replug() {
-            warn!("usb storage: re-plug failed: {error}");
+            error!(
+                "usb storage: USB did not come back after the re-plug ({error}); Wave may be off \
+                 USB, adb included, until the cable is re-plugged. No more re-plugs."
+            );
+            self.replug = false;
         }
         for _ in 0..RELEASE_TRIES {
             (self.sleep)(RETRY_PAUSE);
@@ -578,6 +615,8 @@ mod tests {
         locked: bool,
         /// A re-plug ends the computer's hold.
         replug_releases: bool,
+        /// USB does not come back after the re-plug.
+        replug_fails: bool,
         mounted: Option<MountSpec>,
         /// Something has a file open on the volume.
         busy: bool,
@@ -601,6 +640,7 @@ mod tests {
                 host: HostLink::Configured,
                 locked: false,
                 replug_releases: true,
+                replug_fails: false,
                 mounted: Some(live_mount()),
                 busy: false,
                 load_fails: false,
@@ -661,6 +701,9 @@ mod tests {
             w.log.push("replug".into());
             if w.replug_releases {
                 w.locked = false;
+            }
+            if w.replug_fails {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "no computer after the re-plug"));
             }
             Ok(())
         }
@@ -1078,11 +1121,62 @@ mod tests {
             locked: true,
             ..World::default()
         });
+        rig.storage = rig.storage.with_replug(true);
         assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Reclaimed);
         assert_eq!(
             rig.log(),
             ["unload", "replug", "unload", "check /dev/udisk", "mount rw,fmask=0077"]
         );
+    }
+
+    #[test]
+    fn without_the_switch_reclaim_waits_for_the_computer_to_eject() {
+        // Re-plugging is off until the device pass shows `soft_connect`
+        // brings USB (and adb) back on this controller.
+        let mut rig = Rig::new(World {
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            locked: true,
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert_eq!(rig.log(), ["unload"], "never re-plugged");
+        assert_eq!(rig.phase(), UsbStoragePhase::On, "the takeover shows; eject ends it");
+        {
+            let mut world = rig.world();
+            world.locked = false;
+            world.lun = None;
+        }
+        rig.storage.poll();
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert!(rig.world().mounted.is_some());
+    }
+
+    #[test]
+    fn a_re_plug_that_does_not_bring_usb_back_is_not_tried_again() {
+        let mut rig = Rig::new(World {
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            locked: true,
+            replug_releases: false,
+            replug_fails: true,
+            ..World::default()
+        });
+        rig.storage = rig.storage.with_replug(true);
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert_eq!(rig.log().iter().filter(|op| *op == "replug").count(), 1);
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert!(!rig.log().iter().any(|op| op == "replug"), "no second unplug");
+    }
+
+    #[test]
+    fn the_re_plug_switch_is_off_unless_set_to_1() {
+        assert!(!replug_opted_in(None));
+        assert!(!replug_opted_in(Some("")));
+        assert!(!replug_opted_in(Some("0")));
+        assert!(!replug_opted_in(Some("yes")));
+        assert!(replug_opted_in(Some("1")));
+        assert!(replug_opted_in(Some(" 1\n")));
     }
 
     #[test]
@@ -1094,6 +1188,7 @@ mod tests {
             replug_releases: false,
             ..World::default()
         });
+        rig.storage = rig.storage.with_replug(true);
         assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
         assert_eq!(rig.phase(), UsbStoragePhase::On, "the takeover shows; stop or eject ends it");
         assert!(rig.world().mounted.is_none());
