@@ -11,6 +11,9 @@ pub enum ConfirmKind {
     StopUsbStorage,
     /// Wi-Fi "Change network": leave the current network for the setup network (B7).
     ChangeNetwork,
+    /// System -> PIN: turn the device PIN off (D10). Reaching System already
+    /// needed the PIN, so this only confirms; a new PIN is set on the setup page.
+    TurnOffPin,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,9 +82,11 @@ impl Route {
             | Route::About
             | Route::Update
             | Route::UsbStorage
-            | Route::Confirm(ConfirmKind::FactoryReset | ConfirmKind::StopUsbStorage) => {
-                Some(Route::System)
-            }
+            | Route::Confirm(
+                ConfirmKind::FactoryReset
+                | ConfirmKind::StopUsbStorage
+                | ConfirmKind::TurnOffPin,
+            ) => Some(Route::System),
             // Power off stays open: the power key's long press must always work.
             _ => None,
         }
@@ -144,6 +149,7 @@ mod tests {
             (Route::UsbStorage, Route::System),
             (Route::Confirm(ConfirmKind::FactoryReset), Route::System),
             (Route::Confirm(ConfirmKind::StopUsbStorage), Route::System),
+            (Route::Confirm(ConfirmKind::TurnOffPin), Route::System),
             (Route::TimeZone, Route::System),
             (Route::DimAfter, Route::System),
             (Route::Confirm(ConfirmKind::ChangeNetwork), Route::Wifi),

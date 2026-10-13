@@ -1,6 +1,8 @@
-//! System (B6, system.png): the same rotary list as the menu. Rows that
-//! aren't built yet (USB storage, PIN) stay hidden until their milestone 3
-//! workstream lands. Power off and Factory reset go through the confirmation.
+//! System (B6, system.png): the same rotary list as the menu. The USB storage
+//! row stays hidden until the G workstream lands. The PIN row shows On/Off
+//! (D10): with a PIN set a tap confirms turning it off (reaching System already
+//! required the PIN), and with none a tap says where to set one — the setup
+//! page. Power off and Factory reset go through the confirmation.
 //! The two switch rows are optimistic: a tap shows the new value at once and
 //! a stale snapshot does not revert it (see `menu::Pending`). Firmware
 //! update (H3) checks, or opens the update screen when there is something
@@ -9,13 +11,14 @@
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::list::{ListItem, RotaryList};
 use crate::kit::components::status::StatusArea;
-use crate::kit::dispatch::Dispatcher;
+use crate::kit::dispatch::{Dispatcher, Severity};
 use crate::kit::icons;
 use crate::kit::obj::Obj;
 use crate::kit::route::{ConfirmKind, Route};
 use crate::kit::screen::{Screen, ScreenCtx};
 use crate::kit::snapshot::UiSnapshot;
 use crate::screens_v2::menu::Pending;
+use crate::screens_v2::messages::copy;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use waved_state::{Command, OtaPhase, OtaState};
@@ -26,25 +29,29 @@ pub enum SystemRow {
     DateTime,
     AlertTones,
     PreRecording,
+    Pin,
     About,
     FirmwareUpdate,
     FactoryReset,
     PowerOff,
 }
 
-pub const ROWS: [SystemRow; 8] = [
+pub const ROWS: [SystemRow; 9] = [
     SystemRow::Display,
     SystemRow::DateTime,
     SystemRow::AlertTones,
     SystemRow::PreRecording,
+    SystemRow::Pin,
     SystemRow::About,
     SystemRow::FirmwareUpdate,
     SystemRow::FactoryReset,
     SystemRow::PowerOff,
 ];
 
-/// Firmware update is centred when System opens, as in system.png.
-pub const START_ROW: usize = 5;
+/// Firmware update is centred when System opens, as in system.png. (USB storage
+/// from the G workstream slots in before PIN when it lands; the integrator
+/// re-centres then.)
+pub const START_ROW: usize = 6;
 
 fn on_off(on: bool) -> String {
     if on { "On" } else { "Off" }.into()
@@ -88,6 +95,7 @@ impl SystemRow {
             SystemRow::DateTime => "Date and time",
             SystemRow::AlertTones => "Alert tones",
             SystemRow::PreRecording => "Pre-recording",
+            SystemRow::Pin => "PIN",
             SystemRow::About => "About",
             SystemRow::FirmwareUpdate => "Firmware update",
             SystemRow::FactoryReset => "Factory reset",
@@ -101,6 +109,7 @@ impl SystemRow {
             SystemRow::DateTime => icons::CALENDAR,
             SystemRow::AlertTones => icons::BELL,
             SystemRow::PreRecording => icons::CLOCK,
+            SystemRow::Pin => icons::LOCK,
             SystemRow::About => icons::INFO,
             SystemRow::FirmwareUpdate => icons::REFRESH,
             SystemRow::FactoryReset => icons::TRASH,
@@ -118,6 +127,7 @@ impl SystemRow {
             SystemRow::DateTime => Some(snap.clock.clone()),
             SystemRow::AlertTones => Some(on_off(snap.settings.tones_enabled)),
             SystemRow::PreRecording => Some(on_off(snap.settings.pre_recording)),
+            SystemRow::Pin => Some(on_off(snap.settings.pin_enabled)),
             SystemRow::About => Some(super::about::version_line(snap)),
             SystemRow::FirmwareUpdate => Some(update_value(&snap.ota)),
             SystemRow::FactoryReset | SystemRow::PowerOff => None,
@@ -140,6 +150,8 @@ struct State {
     pre_recording: Pending<bool>,
     /// The update phase as of the last snapshot, for the row's tap.
     ota: OtaPhase,
+    /// Whether a device PIN is set, for the PIN row's value and tap.
+    pin_enabled: bool,
     /// What each row shows now.
     shown: Vec<Option<String>>,
     list: Weak<RotaryList>,
@@ -150,6 +162,7 @@ impl State {
         self.tones.follow(snap.settings.tones_enabled);
         self.pre_recording.follow(snap.settings.pre_recording);
         self.ota = snap.ota.phase.clone();
+        self.pin_enabled = snap.settings.pin_enabled;
     }
 
     fn value(&self, row: SystemRow, snap: &UiSnapshot) -> Option<String> {
@@ -187,6 +200,7 @@ impl Screen for SystemScreen {
             state.tones = Pending::new(snap.settings.tones_enabled);
             state.pre_recording = Pending::new(snap.settings.pre_recording);
             state.ota = snap.ota.phase.clone();
+            state.pin_enabled = snap.settings.pin_enabled;
             state.shown = ROWS.iter().map(|row| state.value(*row, snap)).collect();
         }
         let items = ROWS
@@ -222,6 +236,15 @@ impl Screen for SystemScreen {
                     state.show(index, Some(on_off(on)));
                     dispatch.command(Command::SetPreRecording(on));
                 }
+                SystemRow::Pin => {
+                    if state.borrow().pin_enabled {
+                        // System is already behind the PIN, so turning it off
+                        // only confirms (D10). A new PIN is set on the setup page.
+                        dispatch.navigate(Route::Confirm(ConfirmKind::TurnOffPin));
+                    } else {
+                        dispatch.show(Severity::Info, copy::PIN_ON_SETUP_PAGE);
+                    }
+                }
                 SystemRow::About => dispatch.navigate(Route::About),
                 SystemRow::FirmwareUpdate => {
                     let phase = state.borrow().ota.clone();
@@ -256,7 +279,7 @@ impl Screen for SystemScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kit::dispatch::UiEvent;
+    use crate::kit::dispatch::{Message, UiEvent};
     use crate::kit::route::ConfirmKind;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
     use crate::screens_v2::menu::fixture::{fixture, snap};
@@ -292,7 +315,9 @@ mod tests {
     }
 
     #[test]
-    fn rows_left_for_milestone_3_are_hidden() {
+    fn the_pin_row_shows_and_usb_storage_stays_hidden() {
+        // PIN is shown (K1); USB storage is the only row still waiting on its
+        // workstream (G), so it is not in the list yet.
         assert_eq!(
             ROWS.map(SystemRow::title),
             [
@@ -300,12 +325,62 @@ mod tests {
                 "Date and time",
                 "Alert tones",
                 "Pre-recording",
+                "PIN",
                 "About",
                 "Firmware update",
                 "Factory reset",
                 "Power off"
             ]
         );
+        assert!(!ROWS.iter().any(|row| row.title() == "USB storage"));
+    }
+
+    #[test]
+    fn the_pin_row_reads_on_when_a_pin_is_set() {
+        let mut snap = snap();
+        assert_eq!(SystemRow::Pin.value(&snap).as_deref(), Some("Off"));
+        snap.settings.pin_enabled = true;
+        assert_eq!(SystemRow::Pin.value(&snap).as_deref(), Some("On"));
+    }
+
+    #[test]
+    fn tapping_pin_with_a_pin_set_confirms_turning_it_off() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            snap.settings.pin_enabled = true;
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            lv.click(screen.list.as_ref().unwrap().row(4));
+            assert!(f.commands().is_empty(), "clearing waits for the confirm");
+            assert_eq!(
+                f.events(),
+                vec![UiEvent::Navigate(Route::Confirm(ConfirmKind::TurnOffPin))]
+            );
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn tapping_pin_with_no_pin_points_to_the_setup_page() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let snap = snap(); // pin_enabled is false by default
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            lv.click(screen.list.as_ref().unwrap().row(4));
+            assert!(f.commands().is_empty());
+            assert_eq!(
+                f.events(),
+                vec![UiEvent::Show(Message::new(
+                    Severity::Info,
+                    copy::PIN_ON_SETUP_PAGE
+                ))]
+            );
+            assert_targets_ok(root);
+        });
     }
 
     #[test]
@@ -417,8 +492,8 @@ mod tests {
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap());
             let list = screen.list.as_ref().unwrap();
-            lv.click(list.row(6));
             lv.click(list.row(7));
+            lv.click(list.row(8));
             assert!(f.commands().is_empty(), "nothing happens before confirming");
             assert_eq!(
                 f.events(),
@@ -441,7 +516,7 @@ mod tests {
             let list = screen.list.as_ref().unwrap();
             lv.click(list.row(0));
             lv.click(list.row(1));
-            lv.click(list.row(4));
+            lv.click(list.row(5));
             assert!(f.commands().is_empty());
             assert_eq!(
                 f.events(),
@@ -484,7 +559,7 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             snap.system.about.version = "0.2.0 (abc1234)".into();
             screen.update(&snap);
-            assert_eq!(value(&screen, 4), "0.2.0 (abc1234)");
+            assert_eq!(value(&screen, 5), "0.2.0 (abc1234)");
             assert_targets_ok(root);
         });
     }

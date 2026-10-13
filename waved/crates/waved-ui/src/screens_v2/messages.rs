@@ -58,6 +58,10 @@ pub mod copy {
     pub const STORAGE_ALMOST_FULL: &str = "Storage almost full";
     pub const POWERING_OFF: &str = "Powering off";
     pub const RESETTING: &str = "Resetting Wave";
+    /// System -> PIN: confirmed off (D10).
+    pub const PIN_OFF: &str = "PIN turned off";
+    /// System -> PIN tapped with no PIN set: it is set on the setup page (D10).
+    pub const PIN_ON_SETUP_PAGE: &str = "Set a PIN on the Wi-Fi setup page";
     /// A Mic height move stalled or the lift's sensor saw something.
     pub const LIFT_BLOCKED: &str = "Mic lift blocked";
 

@@ -60,6 +60,14 @@ pub fn spec(kind: ConfirmKind, snap: &UiSnapshot) -> ConfirmSpec {
             "Stop",
             Tone::Neutral,
         ),
+        ConfirmKind::TurnOffPin => (
+            icons::LOCK,
+            "Turn off the PIN?",
+            "Files, Wi-Fi, Bluetooth, Uploads and System stop asking for it. Set a new PIN on the Wave Wi-Fi setup page."
+                .to_string(),
+            "Turn off",
+            Tone::RecText,
+        ),
     };
     ConfirmSpec {
         icon,
@@ -112,6 +120,10 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
         },
         // G1 (milestone 3) adds Command::StopUsbStorage and sends it here.
         ConfirmKind::StopUsbStorage => done(None, None),
+        ConfirmKind::TurnOffPin => done(
+            Some(Command::ClearDevicePin),
+            Some(Message::new(Severity::Success, copy::PIN_OFF)),
+        ),
     }
 }
 
@@ -216,6 +228,30 @@ mod tests {
         lvgl(|lv| {
             let (_f, _s, root) = build(ConfirmKind::DeleteRecording(Uuid::new_v4()), &snap(), lv);
             assert_golden("screen_confirm_delete_recording", &lv.render());
+            assert_targets_ok(root);
+        });
+        lvgl(|lv| {
+            let (_f, _s, root) = build(ConfirmKind::TurnOffPin, &snap(), lv);
+            assert_golden("screen_confirm_turn_off_pin", &lv.render());
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn turning_off_the_pin_sends_clear_device_pin() {
+        let done = outcome(ConfirmKind::TurnOffPin);
+        assert_eq!(done.command, Some(Command::ClearDevicePin));
+        assert_eq!(done.backs, 1);
+        assert_eq!(
+            done.message,
+            Some(Message::new(Severity::Success, copy::PIN_OFF))
+        );
+        lvgl(|lv| {
+            let (mut f, screen, root) = build(ConfirmKind::TurnOffPin, &snap(), lv);
+            lv.click(screen.row.as_ref().unwrap().obj(0)); // Cancel
+            assert!(f.commands().is_empty(), "nothing before confirming");
+            lv.click(screen.row.as_ref().unwrap().obj(1)); // Turn off
+            assert!(matches!(f.commands().as_slice(), [Command::ClearDevicePin]));
             assert_targets_ok(root);
         });
     }
@@ -330,6 +366,7 @@ mod tests {
             (ConfirmKind::DeleteRecording(Uuid::new_v4()), "Delete"),
             (ConfirmKind::ChangeNetwork, "Change"),
             (ConfirmKind::StopUsbStorage, "Stop"),
+            (ConfirmKind::TurnOffPin, "Turn off"),
         ] {
             assert_eq!(spec(kind, &snap).confirm, word, "{kind:?}");
         }
