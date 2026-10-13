@@ -39,11 +39,12 @@ its signature. The first build that carries the key has to reach the Wave the ol
 (adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
 
 Wave installs a package only if the `S60waved` that will run at the new version's first
-boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):
+boots has the current fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):
 the package's own when it carries one, otherwise the one on the Wave. A Wave whose
 `/etc/init.d/S60waved` came from `main`, or that got only the binary over adb, has none and
-refuses with "Wave can't go back if this update fails". Pack with
-`--include deploy/S60waved` (or push it with `deploy/install.sh`) and that Wave updates.
+refuses with "Wave can't go back if this update fails". So does one with an older guard
+from this branch (see step 1 of the install). Pack with `--include deploy/S60waved` (or
+install it with `deploy/install.sh`) and that Wave updates.
 
 `Cross.toml` passes `WAVED_UPDATE_PUBKEY` into the build container. A build without it
 trusts no key: its System row reads "Off" and it can only be replaced over adb.
@@ -179,8 +180,14 @@ starts:
 
 1. `sh -n` on every staged init script; a syntax error installs nothing. Then the fall-back
    check: the package's `S60waved` if it carries one, else `/etc/init.d/S60waved`, must
-   contain `update_guard`, or nothing is installed (`NoFallBack`; automatic checks then
-   pass over that version, a tapped Retry tries again).
+   contain the current guard's lines (`install.rs`, `GUARD_MARKERS`): `update_guard()`,
+   `MAX_TRIAL_BOOTS=` and the dot-name rule `prev="${path%/*}/.${path##*/}.prev"`.
+   Otherwise nothing is installed (`NoFallBack`; automatic checks then pass over that
+   version, a tapped Retry tries again). `update_guard` alone is not enough: the first
+   guard (f6c0eff) put back `$path.prev`, which this installer no longer writes, and the
+   second (69a673d) counted starts and went back after three, which one good boot can
+   exceed (both kept in `crates/waved-update/testdata/`). Change the markers with the
+   script whenever the trial protocol changes.
 2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
    fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
    a save during the trial cannot reach it).
@@ -266,7 +273,7 @@ Back (`update_restart_needed` golden).
 | signed version or build differs from the index | The update doesn't match the server's list |
 | signed version not allowed | The update is older than this version |
 | no room | Not enough space on Wave |
-| no `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
+| no current `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
 | installer error | The update could not be installed |
 | cut between trial and swap | The update stopped before it finished |
 | new version never committed | Version X didn't start, so Wave went back |
@@ -276,7 +283,7 @@ Back (`update_restart_needed` golden).
 | # | Decision | Cost if wrong |
 |---|---|---|
 | U1 | Own `.wup` format (signed JSON header, gzip files) instead of tar or swupdate's CPIO | Needs `waved-pack inspect` to look inside. |
-| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the `update_guard` check only that the word is there. |
+| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the guard check only that the current guard's lines are there. |
 | U3 | Unsigned index, signed package | A hostile server can waste a download. |
 | U4 | Version from the binary; downgrades only by the device's own switch | Every release must bump the workspace version. |
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |

@@ -9,7 +9,8 @@
 //! Order, so a power cut at any point leaves a Wave that starts:
 //! 1. syntax-check the staged init scripts (`sh -n`), and refuse unless the
 //!    `S60waved` the trial boots with (the package's, else the live one)
-//!    has the fall-back (`update_guard`);
+//!    has the current fall-back (`update_guard` counting boots and finding
+//!    `.<name>.prev`; `has_fall_back`);
 //! 2. hard-link every file about to be replaced to `.<name>.prev` beside it,
 //!    and copy `config.toml` to `.config.toml.prev`;
 //! 3. write `update/trial` (from here `S60waved` counts starts);
@@ -45,8 +46,9 @@ pub enum InstallError {
     #[error("a trial of another version is still running")]
     TrialPending,
     /// The `S60waved` that would run at the trial's boots has no
-    /// `update_guard`, so nothing would go back if the new version failed.
-    #[error("the init script has no update fall-back (update_guard)")]
+    /// `update_guard`, or an older one that would not put this install's
+    /// files back, so nothing would go back if the new version failed.
+    #[error("the init script has no current update fall-back (update_guard)")]
     NoFallBack,
     #[error("reboot failed: {0}")]
     Reboot(String),
@@ -149,18 +151,32 @@ pub fn clear_staging(paths: &Paths) {
     }
 }
 
-/// Whether the init script at `script` runs the update fall-back. A missing
-/// script has none.
+/// Whether the init script at `script` runs the update fall-back this
+/// installer needs. A missing script has none.
 pub fn has_fall_back(script: &Path) -> io::Result<bool> {
     match fs::read(script) {
-        Ok(text) => Ok(text.windows(GUARD.len()).any(|w| w == GUARD)),
+        Ok(text) => Ok(GUARD_MARKERS
+            .iter()
+            .all(|marker| text.windows(marker.len()).any(|w| w == *marker))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e),
     }
 }
 
-/// The function in `deploy/S60waved` that counts trial starts and goes back.
-const GUARD: &[u8] = b"update_guard";
+/// Lines only the current guard in `deploy/S60waved` has. `update_guard`
+/// alone is not enough, because two older guards have it too: the first
+/// (f6c0eff) put back `$path.prev`, not the `.<name>.prev` this installer
+/// writes, so its rollback would restore nothing; the second (69a673d)
+/// counted starts and went back after three, which one good boot can exceed.
+/// Change these together with the script whenever the trial protocol
+/// (`trial.rs`, `Paths::prev`) changes.
+const GUARD_MARKERS: [&[u8]; 3] = [
+    b"update_guard()",
+    // Counts boots, not starts.
+    b"MAX_TRIAL_BOOTS=",
+    // Finds the old copy by `Paths::prev`'s dot-name rule.
+    b"prev=\"${path%/*}/.${path##*/}.prev\"",
+];
 
 fn syntax_ok(script: &Path) -> io::Result<bool> {
     Ok(Command::new("sh").arg("-n").arg(script).status()?.success())
@@ -319,9 +335,11 @@ mod tests {
     use crate::trial::StartCheck;
 
     const OLD: Version = Version::new(0, 9, 3);
-    /// Init scripts with the fall-back (`update_guard`), as `deploy/S60waved`.
-    const OLD_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho old\n";
-    const NEW_INIT: &str = "#!/bin/sh\nupdate_guard() { :; }\necho new\n";
+    /// Init scripts with the current fall-back, as `deploy/S60waved`.
+    const OLD_INIT: &str = "#!/bin/sh\nMAX_TRIAL_BOOTS=2\nupdate_guard() {\n    \
+                            prev=\"${path%/*}/.${path##*/}.prev\"\n}\necho old\n";
+    const NEW_INIT: &str = "#!/bin/sh\nMAX_TRIAL_BOOTS=2\nupdate_guard() {\n    \
+                            prev=\"${path%/*}/.${path##*/}.prev\"\n}\necho new\n";
     /// An init script from before the fall-back (`main` today).
     const UNGUARDED_INIT: &str = "#!/bin/sh\necho waved\n";
 
@@ -564,6 +582,57 @@ mod tests {
     fn the_init_script_in_deploy_has_the_fall_back() {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/S60waved");
         assert!(has_fall_back(&script).unwrap());
+    }
+
+    /// `deploy/S60waved` as first committed (f6c0eff): it has an
+    /// `update_guard`, but it restores `$path.prev` while the installer
+    /// writes `.<name>.prev`, so a rollback would find nothing to put back.
+    const PATH_PREV_INIT: &str = include_str!("../testdata/S60waved-path-prev");
+    /// `deploy/S60waved` with dot names but counting starts (69a673d): it
+    /// goes back after three starts, and one good boot takes up to five.
+    const COUNTS_STARTS_INIT: &str = include_str!("../testdata/S60waved-counts-starts");
+
+    #[test]
+    fn only_the_current_guard_counts_as_a_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, text) in [
+            ("path-prev", PATH_PREV_INIT),
+            ("counts-starts", COUNTS_STARTS_INIT),
+        ] {
+            assert!(text.contains("update_guard"), "{name} is a real old guard");
+            let script = dir.path().join(name);
+            fs::write(&script, text).unwrap();
+            assert!(!has_fall_back(&script).unwrap(), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_live_init_script_with_an_older_guard_is_refused() {
+        for old in [PATH_PREV_INIT, COUNTS_STARTS_INIT] {
+            let device = Device::new();
+            device.put(Target::S60waved, old);
+            let staged = device.stage(&[(Target::Waved, "new waved")]);
+            let err = FsInstaller::new(device.paths.clone())
+                .install(&staged, OLD)
+                .unwrap_err();
+            assert!(matches!(err, InstallError::NoFallBack), "{err}");
+            assert_nothing_changed(&device);
+        }
+    }
+
+    #[test]
+    fn a_package_init_script_with_an_older_guard_is_refused() {
+        for old in [PATH_PREV_INIT, COUNTS_STARTS_INIT] {
+            let device = Device::new();
+            let staged = device.stage(&[(Target::Waved, "new waved"), (Target::S60waved, old)]);
+            let err = FsInstaller::new(device.paths.clone())
+                .install(&staged, OLD)
+                .unwrap_err();
+            assert!(matches!(err, InstallError::NoFallBack), "{err}");
+            assert_nothing_changed(&device);
+            let live = device.paths.target(Target::S60waved);
+            assert_eq!(device.read(&live).as_deref(), Some(OLD_INIT));
+        }
     }
 
     #[test]

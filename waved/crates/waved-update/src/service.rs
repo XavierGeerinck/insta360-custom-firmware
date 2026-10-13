@@ -40,7 +40,8 @@ pub mod copy {
     pub const OLDER: &str = "The update is older than this version";
     pub const NO_SPACE: &str = "Not enough space on Wave";
     pub const INSTALL_FAILED: &str = "The update could not be installed";
-    /// Neither the package nor Wave has an `S60waved` with `update_guard`.
+    /// Neither the package nor Wave has an `S60waved` with the current
+    /// `update_guard` (`install::has_fall_back`).
     pub const NO_FALLBACK: &str = "Wave can't go back if this update fails";
     pub const INTERRUPTED: &str = "The update stopped before it finished";
 
@@ -522,7 +523,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             Ok(Err(InstallError::NoFallBack)) => {
                 // Nothing was changed. The same package is refused until the
                 // init script changes, so automatic checks pass over it.
-                warn!("install refused: /etc/init.d/S60waved has no update_guard");
+                warn!("install refused: no current update_guard in the S60waved it boots with");
                 let _ = fs::remove_dir_all(&staging);
                 let _ = trial::skip(&self.paths, version, &build);
                 return Err(Failure::Shown(copy::NO_FALLBACK));
