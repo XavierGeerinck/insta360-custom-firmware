@@ -139,10 +139,10 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `Update` | `ota` | `UpdateScreen::default()` (H3; installing and restarting take over the router) |
 | `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4) |
 | `IncomingCall` | `call` | `CallScreen::default()` (I3; a ringing Bluetooth call takes over the router) |
+| `UsbStorage` | `usb_storage` | `UsbStorageScreen::default()` (G1; takes over while `snap.usb_storage` is not Off) |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
-`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. USB storage
-is milestone 3 and has no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
@@ -210,6 +210,14 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   resting screen when resting. Back dismisses it until that call ends; it stays, as "In a
   call", once answered; it leaves when the call ends. Never during start-up, first start, an
   install or power off. `UiSnapshot::in_call` counts an active Bluetooth call.
+- **USB storage takeover (G1).** While `snap.usb_storage.phase` is not Off (Starting, On,
+  Stopping), `Router::sync` makes `UsbStorage` the base and drops everything above it; only
+  `Confirm(StopUsbStorage)`, `Confirm(PowerOff)`, a ringing call and the resting screen go on
+  top, and any other `Navigate` is ignored. When the phase is Off again the meeting base (or
+  first start) returns, with an open stop confirmation gone. The PIN does not guard the
+  takeover or its stop (System's PIN guards the start). Problems arrive as
+  `DeviceEvent::UsbStorageProblem` and show in the status slot (`copy::usb_storage_problem`);
+  the end of a mode that was on says "USB storage stopped".
 
 ## Components
 
