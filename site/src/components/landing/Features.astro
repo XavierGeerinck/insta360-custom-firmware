@@ -1,0 +1,141 @@
+---
+// Six things waved does, each shown on its own glass. Statuses follow the
+// Overview's "What works today" table.
+import Glass from './Glass.astro';
+import { href } from './href';
+import homeMuted from '../../assets/screens/home_muted.png';
+import holdStop from '../../assets/screens/recording_hold_stop.png';
+import fileDetail from '../../assets/screens/file_detail.png';
+import audioMode from '../../assets/screens/screen_audio_mode.png';
+import call from '../../assets/screens/screen_call_active.png';
+import update from '../../assets/screens/update_installing.png';
+
+const features = [
+	{
+		title: 'The dial',
+		text: 'Tap to mute. Quieter and Louder sit at the sides and Record below, and the ring shows where your voice goes.',
+		screen: { src: homeMuted, alt: 'Home with the microphones muted: the dial reads Mic off' },
+		link: href('features/#the-dial-and-home-screen'),
+	},
+	{
+		title: 'Recording',
+		text: 'A timer, who is talking, bookmarks and pause. Hold Stop for a second to end it.',
+		screen: { src: holdStop, alt: 'Recording, with the hint to hold Stop to end the recording' },
+		link: href('features/#recording'),
+	},
+	{
+		title: 'Files',
+		text: 'Every recording on the Wave, newest first, with its length and upload state.',
+		screen: { src: fileDetail, alt: 'A recording opened from Files, with its playback ring and Send again' },
+		link: href('features/#files'),
+	},
+	{
+		title: 'Audio modes',
+		text: 'Six ways for the eight microphones to listen, from the whole room to a beam that follows the talker.',
+		screen: { src: audioMode, alt: 'Audio mode: six round buttons around a preview of the pickup pattern' },
+		link: href('features/#audio-modes'),
+	},
+	{
+		title: 'Phone calls',
+		text: 'Pair a phone for music and calls, and answer or decline on the screen.',
+		screen: { src: call, alt: 'A phone call over Bluetooth, with the hang-up button' },
+		link: href('features/#bluetooth-audio-and-calls'),
+		pending: 'Host-tested so far',
+	},
+	{
+		title: 'Updates',
+		text: 'Packages signed with your own key, from your own server. The Wave checks every six hours.',
+		screen: { src: update, alt: 'Installing an update: a progress ring at 64 percent' },
+		link: href('features/#updates'),
+		pending: 'Host-tested so far',
+	},
+];
+---
+
+<section class="features" aria-labelledby="features-title">
+	<h2 id="features-title">What it does</h2>
+	<ul>
+		{
+			features.map((f) => (
+				<li>
+					<Glass screens={[f.screen]} />
+					<div>
+						<h3>
+							<a href={f.link}>{f.title}</a>
+						</h3>
+						<p>{f.text}</p>
+						{f.pending && <p class="pending">{f.pending}</p>}
+					</div>
+				</li>
+			))
+		}
+	</ul>
+</section>
+
+<style>
+	.features {
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 2rem 1.5rem 6rem;
+	}
+	h2 {
+		margin: 0 0 3rem;
+		font: 600 clamp(1.9rem, 3.2vw, 2.6rem) / 1.1 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	ul {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 3.5rem 3rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	li {
+		display: flex;
+		gap: 1.75rem;
+		align-items: center;
+	}
+	li :global(.glass) {
+		flex: none;
+	}
+	h3 {
+		margin: 0 0 0.4rem;
+		font: 600 1.35rem/1.2 var(--wave-font-display);
+	}
+	h3 a {
+		color: var(--wave-text);
+		text-decoration: none;
+	}
+	h3 a:hover {
+		color: var(--wave-live);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+	}
+	p {
+		margin: 0;
+		max-width: 28rem;
+		color: var(--wave-text-2);
+		line-height: 1.55;
+	}
+	p.pending {
+		margin-top: 0.5rem;
+		color: var(--wave-warn);
+		font-size: 0.92rem;
+	}
+
+	@media (max-width: 56rem) {
+		ul {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 2.5rem;
+		}
+	}
+	@media (max-width: 30rem) {
+		li :global(.glass) {
+			--d: 7.5rem;
+		}
+		li {
+			gap: 1.25rem;
+		}
+	}
+</style>

@@ -1,0 +1,199 @@
+---
+// Stock firmware next to waved, row by row. Every stock claim links to its
+// evidence; every waved claim links to where it is explained. Wording matches
+// the Overview and Security Q&A pages, which were checked against the sources.
+import { href } from './href';
+
+interface Row {
+	topic: string;
+	stock: string;
+	stockLink: string;
+	waved: string;
+	wavedLink: string;
+	wavedLinkText: string;
+	pending?: string;
+}
+
+const rows: Row[] = [
+	{
+		topic: 'Telemetry',
+		stock:
+			"Sends more than 35 kinds of usage event to ByteDance's DataFinder service, tagged with the Wave's serial number.",
+		stockLink: href('research/security/'),
+		waved:
+			'The stock app and its telemetry library never run. waved asks your time servers for the time, and talks to the webhook and update servers only once you set them.',
+		wavedLink: href('how/architecture/'),
+		wavedLinkText: 'How waved is built',
+	},
+	{
+		topic: 'Your meetings',
+		stock: "Routes meeting audio, transcripts and voiceprints to Insta360's cloud.",
+		stockLink: href('research/security/'),
+		waved:
+			'Recordings stay on the Wave, or go to a webhook you choose, with retries that survive a restart.',
+		wavedLink: href('guides/webhooks/'),
+		wavedLinkText: 'Recording webhooks',
+	},
+	{
+		topic: 'Updates',
+		stock: 'Signed with a 512-bit RSA key, small enough to factor on ordinary hardware.',
+		stockLink: href('research/report/#soc-firmware-update-flow'),
+		waved:
+			'Signed with your own key and served from your own server, with a trial boot and an automatic way back.',
+		wavedLink: href('guides/updates/'),
+		wavedLinkText: 'Updates',
+		pending: 'Tested on the host so far',
+	},
+	{
+		topic: 'Shell access',
+		stock: 'Releases up to 1.0.13.6 opened a root shell over telnet, with the password 123456.',
+		stockLink: href('research/device-access/#method-2-telnet-v10136-and-earlier'),
+		waved:
+			'No network shell. You reach the Wave over USB with ADB, and one script puts stock back.',
+		wavedLink: href('start/revert/'),
+		wavedLinkText: 'Revert to stock',
+	},
+];
+---
+
+<section class="compare" aria-labelledby="compare-title">
+	<h2 id="compare-title">What changes when you install it</h2>
+	<table>
+		<thead>
+			<tr>
+				<td></td>
+				<th scope="col" class="stock">Stock firmware</th>
+				<th scope="col" class="waved">waved</th>
+			</tr>
+		</thead>
+		<tbody>
+			{
+				rows.map((r) => (
+					<tr>
+						<th scope="row">{r.topic}</th>
+						<td class="stock" data-label="Stock firmware">
+							<p>{r.stock}</p>
+							<a href={r.stockLink}>See the evidence</a>
+						</td>
+						<td class="waved" data-label="waved">
+							<p>{r.waved}</p>
+							{r.pending && <p class="pending">{r.pending}</p>}
+							<a href={r.wavedLink}>{r.wavedLinkText}</a>
+						</td>
+					</tr>
+				))
+			}
+		</tbody>
+	</table>
+</section>
+
+<style>
+	.compare {
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 6rem 1.5rem 5rem;
+	}
+	h2 {
+		margin: 0 0 2.5rem;
+		font: 600 clamp(1.9rem, 3.2vw, 2.6rem) / 1.1 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	table {
+		width: 100%;
+		border-collapse: collapse;
+		table-layout: fixed;
+	}
+	thead th {
+		padding: 0 1.5rem 1rem 0;
+		text-align: left;
+		font: 600 1.15rem/1.3 var(--wave-font-display);
+	}
+	thead th.stock {
+		color: var(--wave-rec);
+	}
+	thead th.waved {
+		color: var(--wave-live);
+	}
+	thead td {
+		width: 11rem;
+	}
+	tbody th,
+	tbody td {
+		padding: 1.5rem 1.5rem 1.5rem 0;
+		border-top: 1px solid var(--wave-line);
+		vertical-align: top;
+		text-align: left;
+	}
+	tbody th {
+		font: 600 1.05rem/1.5 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	td p {
+		margin: 0 0 0.6rem;
+		max-width: 34rem;
+		line-height: 1.55;
+	}
+	td.stock p {
+		color: var(--wave-text-2);
+	}
+	td.stock {
+		box-shadow: inset 2px 0 0 0 rgb(255 75 62 / 0.55);
+		padding-left: 1.25rem;
+	}
+	td.waved {
+		box-shadow: inset 2px 0 0 0 var(--wave-live);
+		padding-left: 1.25rem;
+	}
+	td.waved p {
+		color: var(--wave-text);
+	}
+	td p.pending {
+		color: var(--wave-warn);
+		font-size: 0.92rem;
+	}
+	td a {
+		font-size: 0.92rem;
+	}
+
+	@media (max-width: 48rem) {
+		thead {
+			display: none;
+		}
+		table,
+		tbody,
+		tr,
+		th,
+		td {
+			display: block;
+			width: auto;
+		}
+		tbody tr {
+			padding: 1.25rem 0;
+			border-top: 1px solid var(--wave-line);
+		}
+		tbody th,
+		tbody td {
+			border-top: 0;
+			padding: 0 0 0 1rem;
+		}
+		tbody th {
+			padding-left: 0;
+			margin-bottom: 0.75rem;
+		}
+		tbody td + td {
+			margin-top: 1rem;
+		}
+		td::before {
+			content: attr(data-label);
+			display: block;
+			margin-bottom: 0.25rem;
+			font: 600 0.95rem/1.3 var(--wave-font-display);
+		}
+		td.stock::before {
+			color: var(--wave-rec);
+		}
+		td.waved::before {
+			color: var(--wave-live);
+		}
+	}
+</style>

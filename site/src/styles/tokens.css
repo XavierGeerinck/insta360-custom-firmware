@@ -1,0 +1,27 @@
+/* The Wave's own design tokens (waved/crates/waved-ui/src/kit/tokens.rs) and
+   typefaces (Barlow, waved-ui/fonts). The site uses the device's palette so it
+   looks like the thing it documents. Fonts are bundled, never fetched from a
+   third party: the site makes no outside requests. */
+@import '@fontsource/barlow/400.css';
+@import '@fontsource/barlow/500.css';
+@import '@fontsource/barlow/600.css';
+@import '@fontsource/barlow-semi-condensed/500.css';
+@import '@fontsource/barlow-semi-condensed/600.css';
+
+:root {
+	--wave-glass: #000000; /* BG: the panel itself */
+	--wave-slate: #141c1e; /* SURFACE */
+	--wave-raised: #1f292b; /* RAISED */
+	--wave-line: #2a3639; /* LINE */
+	--wave-text: #f2f5f4; /* TEXT */
+	--wave-text-2: #9aa7a6; /* TEXT_2 */
+	--wave-text-3: #7d8a89; /* TEXT_3, lifted for contrast on slate */
+	--wave-live: #3fd6b1; /* LIVE: working, yours */
+	--wave-on-live: #00140f; /* ON_LIVE */
+	--wave-rec: #ff4b3e; /* REC */
+	--wave-warn: #ffb547; /* WARN: not yet verified on a Wave */
+
+	--wave-font: 'Barlow', system-ui, sans-serif;
+	--wave-font-display: 'Barlow Semi Condensed', 'Barlow', system-ui, sans-serif;
+	--wave-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}

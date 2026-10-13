@@ -1,0 +1,36 @@
+/* Starlight in the Wave's colours and type, so the docs and the front page read
+   as one site. Tokens come from tokens.css. */
+@import './tokens.css';
+
+:root {
+	--sl-font: var(--wave-font);
+	--sl-font-mono: var(--wave-font-mono);
+}
+
+:root[data-theme='dark'] {
+	--sl-color-accent-low: #0d3a30;
+	--sl-color-accent: var(--wave-live);
+	--sl-color-accent-high: #b8f2e3;
+	--sl-color-white: var(--wave-text);
+	--sl-color-gray-1: #dfe6e4;
+	--sl-color-gray-2: var(--wave-text-2);
+	--sl-color-gray-3: var(--wave-text-3);
+	--sl-color-gray-4: #46534f;
+	--sl-color-gray-5: var(--wave-line);
+	--sl-color-gray-6: var(--wave-raised);
+	--sl-color-black: var(--wave-slate);
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #c8f1e6;
+	--sl-color-accent: #0b7560;
+	--sl-color-accent-high: #063d32;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4),
+h1#_top,
+.site-title {
+	font-family: var(--wave-font-display);
+	font-weight: 600;
+	letter-spacing: -0.005em;
+}

@@ -1,0 +1,192 @@
+---
+// The install, in its three real steps, with the commands from the Install page.
+import { href } from './href';
+
+const steps = [
+	{
+		title: 'Turn on ADB',
+		text: 'With the Wave on stock firmware and plugged in over USB-C. This lasts until the next reboot, which is all the installer needs.',
+		code: 'pip3 install pyusb\nsudo python3 waved/scripts/enable_adb.py',
+	},
+	{
+		title: 'Build waved',
+		text: 'Needs Rust, Docker and cross. The first build downloads its toolchain image and takes a while.',
+		code: 'cd waved\nWAVED_BUILD_ID=$(git rev-parse --short HEAD) \\\n  cross build --release --target aarch64-unknown-linux-gnu \\\n  --features "ui,capture-alsa" -p waved',
+	},
+	{
+		title: 'Install and reboot',
+		text: 'The installer checks everything before it changes anything, and makes sure ADB comes back after the reboot.',
+		code: './deploy/install.sh && adb reboot',
+	},
+];
+---
+
+<section class="start" aria-labelledby="start-title">
+	<div class="inner">
+		<h2 id="start-title">Install it in three steps</h2>
+		<ol>
+			{
+				steps.map((s) => (
+					<li>
+						<h3>{s.title}</h3>
+						<p>{s.text}</p>
+						<div class="code">
+							<pre><code>{s.code}</code></pre>
+							<button type="button" class="copy" data-copy={s.code}>
+								Copy
+							</button>
+						</div>
+					</li>
+				))
+			}
+		</ol>
+		<p class="after">
+			Requirements, what each step does, and what to do if one fails are in the{' '}
+			<a href={href('start/install/')}>install guide</a>. Changed your mind?{' '}
+			<code>./deploy/revert.sh && adb reboot</code> puts stock back{' '}
+			(<a href={href('start/revert/')}>how revert works</a>).
+		</p>
+	</div>
+</section>
+
+<script>
+	for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-copy]')) {
+		button.addEventListener('click', async () => {
+			try {
+				await navigator.clipboard.writeText(button.dataset.copy ?? '');
+				button.textContent = 'Copied';
+			} catch {
+				button.textContent = 'Select and copy';
+			}
+			setTimeout(() => (button.textContent = 'Copy'), 2000);
+		});
+	}
+</script>
+
+<style>
+	.start {
+		background: var(--wave-raised);
+		border-block: 1px solid var(--wave-line);
+	}
+	.inner {
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 5rem 1.5rem;
+	}
+	h2 {
+		margin: 0 0 2.5rem;
+		font: 600 clamp(1.9rem, 3.2vw, 2.6rem) / 1.1 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	ol {
+		display: grid;
+		/* minmax(0, …): a long command scrolls inside its box instead of
+		   widening the page. */
+		grid-template-columns: minmax(0, 1fr);
+		gap: 2.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		counter-reset: step;
+	}
+	li {
+		position: relative;
+		padding-left: 3.5rem;
+		counter-increment: step;
+	}
+	li::before {
+		content: counter(step);
+		position: absolute;
+		left: 0;
+		top: -0.1rem;
+		width: 2.25rem;
+		height: 2.25rem;
+		border-radius: 50%;
+		border: 2px solid var(--wave-live);
+		color: var(--wave-live);
+		font: 600 1.15rem/2rem var(--wave-font-display);
+		text-align: center;
+	}
+	h3 {
+		margin: 0 0 0.3rem;
+		font: 600 1.35rem/1.3 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	p {
+		margin: 0 0 0.9rem;
+		max-width: 40rem;
+		color: var(--wave-text-2);
+		line-height: 1.55;
+	}
+	.code {
+		position: relative;
+		max-width: 52rem;
+	}
+	pre {
+		margin: 0;
+		padding: 1rem 5.5rem 1rem 1.1rem;
+		overflow-x: auto;
+		border-radius: 0.5rem;
+		background: var(--wave-glass);
+		border: 1px solid var(--wave-line);
+	}
+	pre code,
+	.after code {
+		font: 0.9rem/1.6 var(--wave-font-mono);
+		color: var(--wave-text);
+	}
+	.copy {
+		position: absolute;
+		top: 0.6rem;
+		right: 0.6rem;
+		padding: 0.3rem 0.75rem;
+		border: 1px solid var(--wave-line);
+		border-radius: 999px;
+		background: var(--wave-raised);
+		color: var(--wave-text-2);
+		font: 500 0.85rem/1.4 var(--wave-font);
+		cursor: pointer;
+	}
+	.copy:hover {
+		color: var(--wave-text);
+		border-color: var(--wave-text-3);
+	}
+	.after {
+		margin: 2.5rem 0 0;
+		max-width: 46rem;
+	}
+	.after code {
+		padding: 0.1rem 0.35rem;
+		border-radius: 0.3rem;
+		background: var(--wave-glass);
+		white-space: nowrap;
+	}
+
+	/* On a phone the command scrolls sideways, so Copy moves above it
+	   instead of sitting on top of the text. */
+	@media (max-width: 40rem) {
+		.code {
+			display: flex;
+			flex-direction: column;
+			align-items: flex-end;
+		}
+		.copy {
+			order: -1;
+			position: static;
+			margin-bottom: 0.4rem;
+		}
+		pre {
+			align-self: stretch;
+			padding-right: 1.1rem;
+		}
+		li {
+			padding-left: 3rem;
+		}
+		li::before {
+			width: 2rem;
+			height: 2rem;
+			font-size: 1.05rem;
+			line-height: 1.75rem;
+		}
+	}
+</style>

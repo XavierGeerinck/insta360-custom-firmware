@@ -1,0 +1,256 @@
+---
+// The front page. Starlight serves every docs page; this one is hand-built so
+// the Wave's own screen can carry it. Colours and type are the device's
+// (src/styles/tokens.css).
+import '../styles/tokens.css';
+import Glass from '../components/landing/Glass.astro';
+import Compare from '../components/landing/Compare.astro';
+import Features from '../components/landing/Features.astro';
+import GetStarted from '../components/landing/GetStarted.astro';
+import { href } from '../components/landing/href';
+import { REPO_URL, SITE, BASE } from '../../site.config.mjs';
+import home from '../assets/screens/home.png';
+import recording from '../assets/screens/recording.png';
+import audioMode from '../assets/screens/screen_audio_mode.png';
+import call from '../assets/screens/screen_call_active.png';
+import files from '../assets/screens/files.png';
+
+const title = 'Wave Open Firmware';
+const description =
+	'Open firmware for the Insta360 Wave speakerphone: no telemetry, recordings that go only where you send them, and one script back to stock.';
+
+const screens = [
+	{ src: home, alt: 'Home: the dial reads Mic on, with Quieter, Louder and Record', caption: 'Home' },
+	{ src: recording, alt: 'Recording: a timer at 42 minutes, with Mark, Stop and Pause', caption: 'Recording' },
+	{ src: audioMode, alt: 'Audio mode: six round buttons around a preview of the pickup pattern', caption: 'Audio mode' },
+	{ src: call, alt: 'A phone call over Bluetooth, with the hang-up button', caption: 'Phone call' },
+	{ src: files, alt: 'Files: recordings newest first, with length and upload state', caption: 'Files' },
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<meta name="theme-color" content="#141c1e" />
+		<link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+		<link rel="canonical" href={`${SITE}${BASE}/`} />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content={`${SITE}${BASE}/`} />
+	</head>
+	<body>
+		<a class="skip" href="#main">Skip to the content</a>
+		<header class="top">
+			<a class="wordmark" href={href('')}>Wave Open Firmware</a>
+			<nav aria-label="Site">
+				<a href={href('start/overview/')}>Docs</a>
+				<a href={href('research/report/')}>Research</a>
+				<a href={REPO_URL}>GitHub</a>
+			</nav>
+		</header>
+
+		<main id="main">
+			<section class="hero">
+				<div class="copy">
+					<h1>Your Wave.<br />Your recordings.<br />Nobody else listening.</h1>
+					<p>
+						waved is open firmware for the Insta360 Wave speakerphone. One Rust program
+						replaces the stock software: no telemetry, meetings that go only where you send
+						them, and a one-script way back to stock.
+					</p>
+					<div class="actions">
+						<a class="button primary" href={href('start/install/')}>Install</a>
+						<a class="button" href={href('how/architecture/')}>How it works</a>
+					</div>
+				</div>
+				<Glass screens={screens} size="hero" />
+			</section>
+
+			<Compare />
+			<Features />
+			<GetStarted />
+		</main>
+
+		<footer>
+			<p>
+				Unofficial and not affiliated with Insta360. Use it at your own risk: the installer
+				never writes the Wave's system partition, and <code>revert.sh</code> puts stock back.
+			</p>
+			<nav aria-label="More">
+				<a href={href('start/overview/')}>Getting started</a>
+				<a href={href('features/')}>Features</a>
+				<a href={href('research/report/')}>Reverse-engineering report</a>
+				<a href={href('research/security/')}>Security Q&amp;A</a>
+				<a href={REPO_URL}>Source on GitHub</a>
+				<a href={`${REPO_URL}/blob/main/LICENSE`}>MIT licence</a>
+			</nav>
+		</footer>
+	</body>
+</html>
+
+<style is:global>
+	html {
+		background: var(--wave-slate);
+		color: var(--wave-text);
+		font: 400 1.0625rem/1.55 var(--wave-font);
+		-webkit-text-size-adjust: 100%;
+	}
+	body {
+		margin: 0;
+	}
+	a {
+		color: var(--wave-live);
+		text-underline-offset: 0.2em;
+	}
+	:focus-visible {
+		outline: 2px solid var(--wave-live);
+		outline-offset: 3px;
+		border-radius: 2px;
+	}
+</style>
+
+<style>
+	.skip {
+		position: absolute;
+		left: 1rem;
+		top: -3rem;
+		padding: 0.5rem 0.75rem;
+		background: var(--wave-live);
+		color: var(--wave-on-live);
+		border-radius: 0.3rem;
+	}
+	.skip:focus {
+		top: 1rem;
+	}
+
+	.top {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem 1rem;
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 1.5rem 1.5rem 0;
+	}
+	.wordmark {
+		color: var(--wave-text);
+		text-decoration: none;
+		font: 600 1.2rem/1 var(--wave-font-display);
+		letter-spacing: 0.01em;
+	}
+	.top nav {
+		display: flex;
+		gap: 1.75rem;
+	}
+	.top nav a {
+		color: var(--wave-text-2);
+		text-decoration: none;
+		font-weight: 500;
+	}
+	.top nav a:hover {
+		color: var(--wave-text);
+	}
+
+	.hero {
+		display: grid;
+		grid-template-columns: minmax(0, 1.1fr) auto;
+		align-items: center;
+		gap: 4rem;
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 5.5rem 1.5rem 4rem;
+	}
+	h1 {
+		margin: 0 0 1.75rem;
+		font: 600 clamp(2.6rem, 5.6vw, 4.4rem) / 1.02 var(--wave-font-display);
+		letter-spacing: -0.015em;
+		color: var(--wave-text);
+	}
+	.copy p {
+		margin: 0 0 2.25rem;
+		max-width: 33rem;
+		color: var(--wave-text-2);
+		font-size: 1.15rem;
+	}
+	.actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.9rem;
+	}
+	.button {
+		display: inline-block;
+		padding: 0.75rem 1.5rem;
+		border-radius: 999px;
+		border: 1px solid var(--wave-line);
+		color: var(--wave-text);
+		text-decoration: none;
+		font: 600 1.05rem/1.2 var(--wave-font-display);
+		letter-spacing: 0.01em;
+	}
+	.button:hover {
+		border-color: var(--wave-text-3);
+	}
+	.button.primary {
+		background: var(--wave-live);
+		border-color: var(--wave-live);
+		color: var(--wave-on-live);
+	}
+	.button.primary:hover {
+		background: #6fe3c6;
+	}
+
+	footer {
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 3rem 1.5rem 4rem;
+		color: var(--wave-text-2);
+	}
+	footer p {
+		margin: 0 0 1.25rem;
+		max-width: 44rem;
+	}
+	footer code {
+		font: 0.92em var(--wave-font-mono);
+	}
+	footer nav {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem 1.75rem;
+	}
+	footer nav a {
+		color: var(--wave-text-2);
+	}
+	footer nav a:hover {
+		color: var(--wave-text);
+	}
+
+	@media (max-width: 56rem) {
+		.hero {
+			grid-template-columns: minmax(0, 1fr);
+			justify-items: center;
+			gap: 3rem;
+			padding-top: 3rem;
+		}
+		.copy {
+			order: 2;
+			justify-self: stretch;
+		}
+	}
+	@media (max-width: 30rem) {
+		.wordmark {
+			font-size: 1.05rem;
+		}
+		.top nav {
+			gap: 1rem;
+		}
+		.top nav a {
+			font-size: 0.95rem;
+		}
+	}
+</style>
