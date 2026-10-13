@@ -38,10 +38,10 @@ recording in progress stay safe.
    rw,fmask=0077`. The kernel does not stop either double writer itself: the LUN's open is not
    exclusive, and mount does not see it.
 3. **Refuse to start** while recording, paused, finalizing a take, or a decision is pending ("Stop
-   the recording first"); with no computer configured on USB ("Connect Wave to a computer
-   first"); or when the gadget has no removable drive linked ("USB storage isn't available").
+   the recording first"); with no computer configured on USB ("Connect a computer first"); or
+   when the gadget has no removable drive linked ("USB storage isn't available").
 4. **Stop never forces.** If the computer still holds the drive (it locked the medium, so the
-   unload fails with EBUSY), Stop says "Eject Wave on your computer first" and storage stays on.
+   unload fails with EBUSY), Stop says "Eject Wave on the computer first" and storage stays on.
    The computer's own eject ends the mode by itself: the LUN reads empty.
 5. **Cable pull** ends the mode: the UDC state stays neither `configured` nor `suspended` for
    3 s. A disconnect clears the computer's lock in `f_mass_storage`, so the unload succeeds. A
@@ -110,7 +110,7 @@ Run from the Mac with adb. `G=/sys/kernel/config/usb_gadget/amlogic`,
 6. **Eject on the Mac** (Finder ⏏). Expect the takeover to leave by itself, "USB storage
    stopped", `cat $L/file` empty, `/mnt/udisk` mounted again, Files lists the recordings.
 7. **Stop without ejecting:** start again, then Stop USB storage → Stop. If macOS locked the
-   medium: "Eject Wave on your computer first" and the screen stays; eject, and it leaves.
+   medium: "Eject Wave on the computer first" and the screen stays; eject, and it leaves.
    If not locked: storage stops and the Mac warns "Disk Not Ejected Properly". Note which one
    happens in USB_STORAGE.md.
 8. **Cable pull:** start, unplug the cable. Within ~4 s the takeover leaves, the volume is
@@ -119,7 +119,7 @@ Run from the Mac with adb. `G=/sys/kernel/config/usb_gadget/amlogic`,
 9. **Mac sleep:** start, close the lid 30 s, open. The drive is still there; Wave still in
    storage mode.
 10. **Refusals:** start while recording ("Stop the recording first"); with the cable out
-    ("Connect Wave to a computer first"); while a file plays in Files (start succeeds, playback
+    ("Connect a computer first"); while a file plays in Files (start succeeds, playback
     stops first). With an `adb shell` sitting in `cd /mnt/udisk`: "Recordings in use, try
     again", and nothing changed (`/mnt/udisk` still mounted, `file` empty).
 11. **Restart while exported:** start, then `adb shell killall waved`. After the watchdog

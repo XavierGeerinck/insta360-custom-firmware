@@ -62,7 +62,8 @@ Rules for the parallel milestones:
   - Add recording-policy commands: `SetPreRecording(bool)`, `SetUploadMode(UploadMode)`.
   - Add file commands: `DeleteRecording(Uuid)`, `PlayRecording(Uuid)`, `PausePlayback`,
     `SeekPlayback(u32)`, `StopPlayback`.
-  - Add system commands: `FactoryReset`, `StartUsbStorage`, `StopUsbStorage`.
+  - Add system commands: `FactoryReset`, `StartUsbStorage`, `StopUsbStorage` (the USB storage
+    ones landed with G1).
   - Add Bluetooth commands: `BtSetDiscoverable(bool)`, `BtConnect`, `BtDisconnect`, `BtForget`.
   - Add call commands: `AnswerCall`, `DeclineCall`.
   - Add `SetAim(Option<f32>)`, which wraps `SetDoaOverride` and is persisted.
@@ -304,10 +305,18 @@ Rules for the parallel milestones:
 
 ## G — USB storage
 
-- [ ] **G1 Mass-storage mode** (M)
-  - Switch the gadget to mass storage over the recordings volume and pause audio.
-  - Takeover screen with "Stop USB storage".
-  - Recover cleanly on cable pull.
+- [x] **G1 Mass-storage mode** (M) — host-tested; check it in the milestone 3 device pass.
+  Plan and checklist: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md`; device
+  doc `waved/docs/USB_STORAGE.md`.
+  - [x] The recordings volume as a drive: the gadget keeps an empty removable LUN from boot
+    (`scripts/patch-stock-usbgadget.sh`, reboot once) and waved swaps the medium, so audio, HID
+    and adb stay up. Unmount first, export second; unload, check and mount to come back.
+  - [x] Takeover screen with "Stop USB storage"; refused while a take is in progress.
+  - [x] Ends on the computer's eject or a pulled cable; a restarted waved takes a leftover drive
+    back before the meeting service starts.
+  - [ ] Device pass: does macOS lock the medium (Stop then says "Eject Wave on the computer
+    first"); `soft_connect` on `crgudc2`; audio xruns during a large copy.
+  - Not done: an update install does not wait for USB storage to end.
 
 ## H — Updates (self-hosted, signed)
 
