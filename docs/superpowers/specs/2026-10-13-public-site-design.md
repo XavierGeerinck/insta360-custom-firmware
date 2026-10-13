@@ -18,7 +18,7 @@ gone, and the tinkerers and researchers who come for the protocol and RE materia
 |---|---|
 | 1 | Generator: Astro Starlight, in `site/`. |
 | 2 | Markdown stays where it lives (`docs/`, `waved/docs/`). The site copies an explicit allowlist at build time. There is no second copy in git. |
-| 3 | Install documents today's flow (build from source, ADB, `install.sh`). Prebuilt GitHub Releases come later; the install page is laid out so that path slots in above the source build. |
+| 3 | Install documents today's flow (build from source, ADB, `install.sh`). Prebuilt GitHub Releases come later; the install page is laid out so that path slots in above the source build. `install.sh` and `revert.sh` are brought up to the device-proven procedure first (see "Install and revert scripts"): as of 2026-10-13 they would leave a stranger without ADB after the first reboot. |
 | 4 | `decompiled/*.c` (Ghidra output of Insta360 binaries) is removed from the tree and from history. Every report, finding and line reference built on it stays, as prose. `ghidra_decompile.*` stays so others can reproduce it. |
 | 5 | Personal data is scrubbed from the tree, then history is rewritten. |
 | 6 | The rewritten history goes to a **new** public repository. The current private repository is renamed to `insta360-custom-firmware-archive` and stays private. Force-pushing in place would leave the old commits reachable by SHA on a public repo. |
@@ -135,6 +135,42 @@ repository's name is one edit away.
 - `.gitignore`: `site/node_modules/`, `site/dist/`, `site/.astro/`, the generated content
   directories.
 
+## Install and revert scripts
+
+Found while planning (amendment, 2026-10-13). `waved/deploy/install.sh` was last changed on
+2026-04-10 and no longer matches the procedure in `waved/docs/DISPLAY_HARDWARE.md#deploy`:
+
+- **ADB is lost after the first reboot.** Stock `S89usbgadget` keeps `adbd_enable` commented
+  out at boot; stock `pspapp` turns ADB on later, and under waved `pspapp` never runs. waved
+  has no ADB-enable path of its own, and the HID `0xC0` enable goes through `pspapp` too. A
+  stranger who installs and reboots can no longer run `revert.sh`. The maintainer's Wave
+  works only because its `S89usbgadget` was edited by hand
+  (`docs/GUIDE_DEVICE_ACCESS.md`, "Making ADB Survive a `pspapp` Failure").
+- It pushes the unstripped binary straight over `/data/waved/waved` (the documented failure
+  that leaves no binary), checks for an existing `config.toml` on the host instead of the
+  Wave, and skips `rsyslog.conf` (without it stock logging fills `/data`), `S03splash`,
+  `splash.fb` and the USB gadget patch (`waved/scripts/patch-stock-usbgadget.sh`).
+- `revert.sh` leaves `S03splash`, `rsyslog.conf` and the patched `S89usbgadget` in the overlay
+  (`waved/docs/UPDATES.md`, "Paths back").
+
+Changes:
+
+- `patch-stock-usbgadget.sh` also uncomments the two `adbd_enable` lines in the boot branch
+  (idempotent like its other patches). `INIT` and `BACKUP_DIR` become overridable so it can
+  be tested against a copy.
+- `install.sh`: preflight (Wave on adb, binary built, `llvm-objcopy` present, enough room on
+  `/data`) before anything on the Wave changes; strip; push to `/tmp` and compare md5; stop
+  the stock app, the watchdog and waved, wait for waved to exit; swap; push `config.toml`
+  only if the Wave has none; install `S60waved`, `S03splash`, `splash.fb`, `rsyslog.conf`,
+  `iptables.rules` and the two stock stubs; run the gadget patch on the Wave; refuse to
+  report success unless ADB is enabled at boot.
+- `revert.sh` also removes `S03splash`, `rsyslog.conf` and `S89usbgadget` from the overlay,
+  and says that ADB is off again after the reboot, as on stock.
+- Tests: a host test runs both scripts against a fake `adb` (order of operations, md5
+  mismatch, low space, no device, ADB-at-boot check, config preserved). The gadget patch is
+  tested on a Wave against a `/tmp` copy of the stock script. One real install on a Wave
+  happens with the owner's go.
+
 ## Going public
 
 ### 1. Tree scrub (normal commits on `feat/public-site`)
@@ -177,7 +213,10 @@ grep for each original value (diffs and messages), and `git log --all -- decompi
 
 ### 3. Publish
 
-1. Rename the private repo to `insta360-custom-firmware-archive`.
+1. Rename the private repo to `insta360-custom-firmware-archive`, then immediately point
+   every local checkout's `origin` at the archive URL. Once a new repo takes the old name,
+   the old URL resolves to it, and a push from an old checkout would publish the
+   unscrubbed history.
 2. Create `insta360-custom-firmware` (public) and push the rewritten mirror.
 3. Enable Pages (source: GitHub Actions) and run the workflow.
 4. Re-clone locally; the old checkout and its worktrees point at the archived history.
