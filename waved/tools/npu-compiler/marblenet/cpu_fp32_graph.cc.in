@@ -1,0 +1,501 @@
+// SPDX-License-Identifier: MIT
+// Fixed stock-ORT-only MarbleNet runner; no NPU runtime dependency.
+#include "onnxruntime_c_api.h"
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <csignal>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <limits>
+#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
+
+namespace {
+static_assert(ORT_API_VERSION == 15, "ORT C API must be version 15");
+constexpr size_t kCpuModelBytes = @@CPU_MODEL_BYTES@@;
+constexpr size_t kExpectedOrtBytes = 8299512;
+constexpr size_t kInputBytes = 128000;
+constexpr size_t kOutputBytes = 1600;
+constexpr size_t kCpuInputBytes = kInputBytes;
+constexpr size_t kCpuOutputBytes = kOutputBytes;
+constexpr size_t kInputElements = 32000;
+constexpr size_t kOutputElements = 400;
+constexpr size_t kFrames = 200;
+constexpr size_t kWarmupIterations = 4;
+constexpr size_t kMeasuredIterations = 32;
+constexpr size_t kGuardBytes = 16;
+constexpr uint8_t kCanaryByte = 0xa5U;
+constexpr uint8_t kGuardByte = 0x5aU;
+constexpr unsigned int kWatchdogSeconds = 8;
+constexpr char kExpectedLibraryPath[] = "@@ROOT@@/lib:/usr/lib";
+constexpr char kOrtLibraryPath[] = "/usr/lib/libonnxruntime.so.1.15.1";
+constexpr char kCpuModelPath[] = "@@ROOT@@/model/cpu.onnx";
+constexpr char kCpuInputPath[] = "@@ROOT@@/input/cpu-input.bin";
+constexpr char kCpuReferencePath[] = "@@ROOT@@/input/cpu-reference.bin";
+constexpr char kOutputPath[] = "@@ROOT@@/output/output.bin";
+constexpr char kPartialPath[] = "@@ROOT@@/output/.output.bin.partial";
+volatile sig_atomic_t g_partial_owned = 0;
+void WatchdogHandler(int) {
+    if (g_partial_owned != 0) {
+        unlink(kPartialPath);
+    }
+    constexpr char kMessage[] =
+        "CPU_EXECUTION status=TIMEOUT mode=execute-once exit=124\n";
+    const ssize_t message_bytes =
+        write(STDERR_FILENO, kMessage, sizeof(kMessage) - 1);
+    (void)message_bytes;
+    _exit(124);
+}
+
+bool PathIsAbsent(const char* path) {
+    struct stat path_stat {};
+    if (lstat(path, &path_stat) == 0) {
+        return false;
+    }
+    return errno == ENOENT;
+}
+
+bool EnvironmentIsFixed() {
+    const char* library = std::getenv("LD_LIBRARY_PATH");
+    return library != nullptr && std::strcmp(library, kExpectedLibraryPath) == 0 &&
+        std::getenv("LD_PRELOAD") == nullptr && std::getenv("LD_AUDIT") == nullptr;
+}
+bool ReadFixedFile(const char* path, size_t expected_bytes, std::vector<char>* data) {
+    const int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        std::fprintf(
+            stderr, "open(%s): %s\n", path, std::strerror(errno));
+        return false;
+    }
+    struct stat file_stat {};
+    if (fstat(fd, &file_stat) != 0 ||
+        !S_ISREG(file_stat.st_mode) ||
+        (file_stat.st_mode & 07777) != 0444 ||
+        file_stat.st_size != static_cast<off_t>(expected_bytes)) {
+        std::fprintf(
+            stderr,
+            "wave_marblenet_cpu: fixed file metadata mismatch\n");
+        close(fd);
+        return false;
+    }
+
+    data->assign(expected_bytes, 0);
+    size_t offset = 0;
+    while (offset < data->size()) {
+        const ssize_t count =
+            read(fd, data->data() + offset, data->size() - offset);
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::fprintf(
+                stderr, "read(%s): %s\n", path, std::strerror(errno));
+            close(fd);
+            return false;
+        }
+        if (count == 0) {
+            std::fprintf(
+                stderr,
+                "wave_marblenet_cpu: short file read\n");
+            close(fd);
+            return false;
+        }
+        offset += static_cast<size_t>(count);
+    }
+    char extra = 0;
+    const ssize_t extra_bytes = read(fd, &extra, 1);
+    const int close_status = close(fd);
+    if (extra_bytes != 0 || close_status != 0) {
+        std::fprintf(
+            stderr,
+            "wave_marblenet_cpu: file close/length check "
+            "failed\n");
+        return false;
+    }
+
+    return true;
+}
+
+bool WriteAtomicExclusive(
+    const char* path,
+    const char* partial_path,
+    const std::array<uint8_t, kOutputBytes>& data) {
+    if (!PathIsAbsent(path) ||
+        !PathIsAbsent(partial_path)) {
+        return false;
+    }
+    const int fd = open(
+        partial_path,
+        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+        0600);
+    if (fd < 0) {
+        std::fprintf(
+            stderr, "open(%s): %s\n", partial_path, std::strerror(errno));
+        return false;
+    }
+    g_partial_owned = 1;
+    size_t written = 0;
+    while (written < data.size()) {
+        const ssize_t count =
+            write(fd, data.data() + written, data.size() - written);
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            std::fprintf(
+                stderr,
+                "write(%s): %s\n",
+                partial_path,
+                std::strerror(errno));
+            close(fd);
+            unlink(partial_path);
+            g_partial_owned = 0;
+            return false;
+        }
+        if (count == 0) {
+            std::fprintf(
+                stderr, "write(%s): zero-byte write\n", partial_path);
+            close(fd);
+            unlink(partial_path);
+            g_partial_owned = 0;
+            return false;
+        }
+        written += static_cast<size_t>(count);
+    }
+    struct stat output_stat {};
+    const bool metadata_ok = fstat(fd, &output_stat) == 0 &&
+        S_ISREG(output_stat.st_mode) && output_stat.st_nlink == 1 &&
+        output_stat.st_size == static_cast<off_t>(data.size());
+    const bool mode_ok = fchmod(fd, 0444) == 0;
+    const bool sync_ok = fsync(fd) == 0;
+    const bool close_ok = close(fd) == 0;
+    if (!metadata_ok || !mode_ok || !sync_ok || !close_ok) {
+        std::fprintf(
+            stderr,
+            "wave_marblenet_cpu: finalize failed\n");
+        unlink(partial_path);
+        g_partial_owned = 0;
+        return false;
+    }
+    if (link(partial_path, path) != 0 || unlink(partial_path) != 0) {
+        std::fprintf(
+            stderr,
+            "wave_marblenet_cpu: install failed\n");
+        unlink(partial_path);
+        g_partial_owned = 0;
+        return false;
+    }
+    g_partial_owned = 0;
+    return true;
+}
+
+bool CpuOutputMatches(const float* observed, const float* reference) {
+    for (size_t i = 0; i < kOutputElements; ++i) {
+        if (!std::isfinite(observed[i]) || !std::isfinite(reference[i]) ||
+            std::fabs(observed[i] - reference[i]) > 0.0001F + 0.00001F * std::fabs(reference[i])) return false;
+    }
+    return true;
+}
+bool SoftmaxSpeechSum(const float* logits, float* sum) {
+    *sum = 0;
+    for (size_t frame = 0; frame < kFrames; ++frame) {
+        const float a = logits[frame], b = logits[kFrames + frame];
+        if (!std::isfinite(a) || !std::isfinite(b)) return false;
+        const float maximum = std::max(a, b);
+        const float ea = expf(a - maximum), eb = expf(b - maximum);
+        const float probability = eb / (ea + eb);
+        if (!std::isfinite(probability) || probability < 0 || probability > 1) return false;
+        *sum += probability;
+    }
+    return std::isfinite(*sum);
+}
+template <typename T, size_t Count>
+struct GuardedArray {
+    static_assert(kGuardBytes % sizeof(T) == 0, "guard alignment");
+    static constexpr size_t kPadding = kGuardBytes / sizeof(T);
+    std::array<T, Count + 2 * kPadding> storage{};
+    T* data() { return storage.data() + kPadding; }
+    const T* data() const { return storage.data() + kPadding; }
+    void Reset() {
+        std::memset(storage.data(), kGuardByte, sizeof(storage));
+        std::memset(data(), kCanaryByte, Count * sizeof(T));
+    }
+    bool GuardsIntact() const {
+        const auto* bytes = reinterpret_cast<const uint8_t*>(storage.data());
+        for (size_t i = 0; i < kGuardBytes; ++i) {
+            if (bytes[i] != kGuardByte ||
+                bytes[kGuardBytes + Count * sizeof(T) + i] != kGuardByte) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+struct ClockPair { uint64_t wall_ns; uint64_t thread_ns; };
+struct PairTiming {
+    uint64_t cpu_boundary_ns = 0, cpu_thread_ns = 0;
+    uint64_t cpu_input_copy_ns = 0, cpu_run_ns = 0, cpu_postprocess_ns = 0;
+    float cpu_speech_probability_sum = 0;
+};
+bool ReadClock(clockid_t id, uint64_t* value) {
+    struct timespec time{};
+    if (clock_gettime(id, &time) != 0 || time.tv_sec < 0 ||
+        time.tv_nsec < 0 || time.tv_nsec >= 1000000000L) return false;
+    *value = static_cast<uint64_t>(time.tv_sec) * UINT64_C(1000000000) +
+        static_cast<uint64_t>(time.tv_nsec);
+    return true;
+}
+bool StartClocks(ClockPair* started) {
+    return ReadClock(CLOCK_MONOTONIC_RAW, &started->wall_ns) &&
+        ReadClock(CLOCK_THREAD_CPUTIME_ID, &started->thread_ns);
+}
+bool FinishWall(uint64_t started, uint64_t* elapsed) {
+    uint64_t finished = 0;
+    if (!ReadClock(CLOCK_MONOTONIC_RAW, &finished) || finished < started) return false;
+    *elapsed = finished - started;
+    return true;
+}
+bool FinishClocks(const ClockPair& started, uint64_t* wall, uint64_t* thread) {
+    uint64_t finished = 0;
+    if (!ReadClock(CLOCK_THREAD_CPUTIME_ID, &finished) ||
+        finished < started.thread_ns || !FinishWall(started.wall_ns, wall)) return false;
+    *thread = finished - started.thread_ns;
+    return true;
+}
+
+bool OrtCall(const OrtApi* api, OrtStatus* status, const char* label) {
+    if (status == nullptr) return true;
+    std::fprintf(stderr, "wave_marblenet_cpu: ORT %s failed: %s\n",
+        label, api->GetErrorMessage(status));
+    api->ReleaseStatus(status);
+    return false;
+}
+struct CpuRuntime {
+    void* library = nullptr;
+    const OrtApi* api = nullptr;
+    OrtEnv* env = nullptr;
+    OrtSessionOptions* options = nullptr;
+    OrtSession* session = nullptr;
+    OrtMemoryInfo* memory_info = nullptr;
+    OrtValue* input_value = nullptr;
+    OrtValue* output_value = nullptr;
+    bool Close() {
+        if (api != nullptr) {
+            if (output_value != nullptr) api->ReleaseValue(output_value);
+            if (input_value != nullptr) api->ReleaseValue(input_value);
+            if (memory_info != nullptr) api->ReleaseMemoryInfo(memory_info);
+            if (session != nullptr) api->ReleaseSession(session);
+            if (options != nullptr) api->ReleaseSessionOptions(options);
+            if (env != nullptr) api->ReleaseEnv(env);
+        }
+        output_value = nullptr; input_value = nullptr; memory_info = nullptr;
+        session = nullptr; options = nullptr; env = nullptr; api = nullptr;
+        void* owned = library; library = nullptr;
+        if (owned != nullptr && dlclose(owned) != 0) {
+            std::fprintf(stderr, "wave_marblenet_cpu: ORT dlclose failed\n");
+            return false;
+        }
+        return true;
+    }
+    ~CpuRuntime() { Close(); }
+};
+
+bool ValidateOrtLibrary() {
+    const int fd = open(kOrtLibraryPath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return false;
+    struct stat metadata{};
+    const bool okay = fstat(fd, &metadata) == 0 && S_ISREG(metadata.st_mode) &&
+        metadata.st_size == static_cast<off_t>(kExpectedOrtBytes);
+    const bool closed = close(fd) == 0;
+    return okay && closed;
+}
+
+bool ValidateCpuIo(CpuRuntime* cpu, bool input) {
+    OrtAllocator* allocator = nullptr;
+    if (!OrtCall(cpu->api, cpu->api->GetAllocatorWithDefaultOptions(&allocator),
+            "GetAllocatorWithDefaultOptions") || allocator == nullptr) return false;
+    char* name = nullptr;
+    OrtTypeInfo* type = nullptr;
+    const OrtTensorTypeAndShapeInfo* tensor = nullptr;
+    ONNXTensorElementDataType dtype = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+    size_t rank = 0;
+    std::array<int64_t, 3> dims{};
+    bool okay = OrtCall(cpu->api, input ?
+        cpu->api->SessionGetInputName(cpu->session, 0, allocator, &name) :
+        cpu->api->SessionGetOutputName(cpu->session, 0, allocator, &name), "SessionGetName");
+    okay = okay && name != nullptr && std::strcmp(name, input ? "input" : "output") == 0;
+    if (okay) okay = OrtCall(cpu->api, input ?
+        cpu->api->SessionGetInputTypeInfo(cpu->session, 0, &type) :
+        cpu->api->SessionGetOutputTypeInfo(cpu->session, 0, &type), "SessionGetTypeInfo");
+    if (okay) okay = type != nullptr && OrtCall(cpu->api,
+        cpu->api->CastTypeInfoToTensorInfo(type, &tensor), "CastTypeInfoToTensorInfo");
+    if (okay) okay = tensor != nullptr && OrtCall(cpu->api,
+        cpu->api->GetTensorElementType(tensor, &dtype), "GetTensorElementType") &&
+        OrtCall(cpu->api, cpu->api->GetDimensionsCount(tensor, &rank), "GetDimensionsCount");
+    if (okay) okay = dtype == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT && rank == 3 &&
+        OrtCall(cpu->api, cpu->api->GetDimensions(tensor, dims.data(), 3), "GetDimensions");
+    const std::array<int64_t, 3> expected = input ?
+        std::array<int64_t, 3>{1, 80, 400} : std::array<int64_t, 3>{1, 2, 200};
+    okay = okay && dims == expected;
+    if (name != nullptr) allocator->Free(allocator, name);
+    if (type != nullptr) cpu->api->ReleaseTypeInfo(type);
+    return okay;
+}
+
+bool InitializeCpu(CpuRuntime* cpu, const std::vector<char>& model,
+    GuardedArray<float, kInputElements>* input,
+    GuardedArray<float, kOutputElements>* output) {
+    if (!ValidateOrtLibrary()) return false;
+    cpu->library = dlopen(kOrtLibraryPath, RTLD_NOW | RTLD_LOCAL);
+    if (cpu->library == nullptr) return false;
+    dlerror();
+    using GetApiBase = const OrtApiBase* (*)();
+    const auto get_base = reinterpret_cast<GetApiBase>(dlsym(cpu->library, "OrtGetApiBase"));
+    if (dlerror() != nullptr || get_base == nullptr) return false;
+    const OrtApiBase* base = get_base();
+    if (base == nullptr || base->GetVersionString == nullptr || base->GetApi == nullptr ||
+        std::strcmp(base->GetVersionString(), "1.15.1") != 0) return false;
+    cpu->api = base->GetApi(ORT_API_VERSION);
+    if (cpu->api == nullptr) return false;
+    char** providers = nullptr;
+    int count = 0;
+    if (!OrtCall(cpu->api, cpu->api->GetAvailableProviders(&providers, &count),
+        "GetAvailableProviders")) return false;
+    const bool cpu_only = count == 1 && providers != nullptr && providers[0] != nullptr &&
+        std::strcmp(providers[0], "CPUExecutionProvider") == 0;
+    const bool released = OrtCall(cpu->api,
+        cpu->api->ReleaseAvailableProviders(providers, count), "ReleaseAvailableProviders");
+    if (!cpu_only || !released) return false;
+    if (!OrtCall(cpu->api, cpu->api->CreateEnv(ORT_LOGGING_LEVEL_WARNING,
+            "wave-marblenet-benchmark", &cpu->env), "CreateEnv") ||
+        !OrtCall(cpu->api, cpu->api->CreateSessionOptions(&cpu->options), "CreateSessionOptions") ||
+        !OrtCall(cpu->api, cpu->api->SetIntraOpNumThreads(cpu->options, 1), "SetIntraOpNumThreads") ||
+        !OrtCall(cpu->api, cpu->api->SetInterOpNumThreads(cpu->options, 1), "SetInterOpNumThreads") ||
+        !OrtCall(cpu->api, cpu->api->SetSessionExecutionMode(cpu->options, ORT_SEQUENTIAL),
+            "SetSessionExecutionMode") ||
+        !OrtCall(cpu->api, cpu->api->SetSessionGraphOptimizationLevel(cpu->options,
+            ORT_ENABLE_ALL), "SetSessionGraphOptimizationLevel") ||
+        !OrtCall(cpu->api, cpu->api->CreateSessionFromArray(cpu->env, model.data(),
+            model.size(), cpu->options, &cpu->session), "CreateSessionFromArray")) return false;
+    size_t inputs = 0, outputs = 0;
+    if (!OrtCall(cpu->api, cpu->api->SessionGetInputCount(cpu->session, &inputs),
+            "SessionGetInputCount") ||
+        !OrtCall(cpu->api, cpu->api->SessionGetOutputCount(cpu->session, &outputs),
+            "SessionGetOutputCount") || inputs != 1 || outputs != 1 ||
+        !ValidateCpuIo(cpu, true) || !ValidateCpuIo(cpu, false)) return false;
+    if (!OrtCall(cpu->api, cpu->api->CreateCpuMemoryInfo(OrtArenaAllocator,
+        OrtMemTypeDefault, &cpu->memory_info), "CreateCpuMemoryInfo")) return false;
+    const std::array<int64_t, 3> input_shape{1, 80, 400}, output_shape{1, 2, 200};
+    if (!OrtCall(cpu->api, cpu->api->CreateTensorWithDataAsOrtValue(cpu->memory_info,
+            input->data(), kCpuInputBytes, input_shape.data(), 3,
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &cpu->input_value), "CreateInput") ||
+        !OrtCall(cpu->api, cpu->api->CreateTensorWithDataAsOrtValue(cpu->memory_info,
+            output->data(), kCpuOutputBytes, output_shape.data(), 3,
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &cpu->output_value), "CreateOutput")) return false;
+    void* input_data = nullptr; void* output_data = nullptr;
+    return OrtCall(cpu->api, cpu->api->GetTensorMutableData(cpu->input_value, &input_data),
+        "GetInputData") && OrtCall(cpu->api,
+        cpu->api->GetTensorMutableData(cpu->output_value, &output_data), "GetOutputData") &&
+        input_data == input->data() && output_data == output->data();
+}
+
+bool RunCpu(CpuRuntime* cpu, const std::vector<char>& input_bytes,
+    const std::array<float, kOutputElements>& reference,
+    GuardedArray<float, kInputElements>* input,
+    GuardedArray<float, kOutputElements>* output, PairTiming* timing) {
+    output->Reset();
+    std::fill(output->data(), output->data() + kOutputElements,
+        std::numeric_limits<float>::quiet_NaN());
+    ClockPair boundary{}; uint64_t started = 0;
+    if (!StartClocks(&boundary) || !ReadClock(CLOCK_MONOTONIC_RAW, &started)) return false;
+    std::memcpy(input->data(), input_bytes.data(), kCpuInputBytes);
+    if (!FinishWall(started, &timing->cpu_input_copy_ns) ||
+        !ReadClock(CLOCK_MONOTONIC_RAW, &started)) return false;
+    const OrtValue* inputs[] = {cpu->input_value};
+    OrtValue* outputs[] = {cpu->output_value};
+    const char* input_names[] = {"input"}; const char* output_names[] = {"output"};
+    if (!OrtCall(cpu->api, cpu->api->Run(cpu->session, nullptr, input_names, inputs,
+        1, output_names, 1, outputs), "Run")) return false;
+    if (!FinishWall(started, &timing->cpu_run_ns) ||
+        !ReadClock(CLOCK_MONOTONIC_RAW, &started)) return false;
+    if (!SoftmaxSpeechSum(output->data(), &timing->cpu_speech_probability_sum)) return false;
+    if (!FinishWall(started, &timing->cpu_postprocess_ns) ||
+        !FinishClocks(boundary, &timing->cpu_boundary_ns, &timing->cpu_thread_ns)) return false;
+    return outputs[0] == cpu->output_value && input->GuardsIntact() &&
+        output->GuardsIntact() && CpuOutputMatches(output->data(), reference.data());
+}
+
+void PrintDefinition() { std::puts(@@DEFINITION@@); }
+void PrintSample(size_t iteration, const PairTiming& t) {
+    std::printf("CPU_SAMPLE {\"sample_index\":%zu,\"iteration\":%zu,"
+        "\"boundary_ns\":%llu,\"thread_ns\":%llu,\"input_copy_ns\":%llu,"
+        "\"run_ns\":%llu,\"postprocess_ns\":%llu,\"speech_probability_sum\":%.9g}\n",
+        iteration - kWarmupIterations, iteration,
+        static_cast<unsigned long long>(t.cpu_boundary_ns),
+        static_cast<unsigned long long>(t.cpu_thread_ns),
+        static_cast<unsigned long long>(t.cpu_input_copy_ns),
+        static_cast<unsigned long long>(t.cpu_run_ns),
+        static_cast<unsigned long long>(t.cpu_postprocess_ns),
+        static_cast<double>(t.cpu_speech_probability_sum));
+    std::fflush(stdout);
+}
+} // namespace
+
+int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--describe") == 0) { PrintDefinition(); return 0; }
+    if (argc != 2 || std::strcmp(argv[1], "--execute-once") != 0) return 10;
+    if (!EnvironmentIsFixed()) return 12;
+    if (!PathIsAbsent(kOutputPath) || !PathIsAbsent(kPartialPath)) return 16;
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() == 1) return 17;
+    struct sigaction action{}; action.sa_handler = WatchdogHandler;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGALRM, &action, nullptr) != 0) return 18;
+    alarm(kWatchdogSeconds);
+    std::vector<char> model, input_bytes, reference_bytes;
+    if (!ReadFixedFile(kCpuModelPath, kCpuModelBytes, &model) ||
+        !ReadFixedFile(kCpuInputPath, kInputBytes, &input_bytes) ||
+        !ReadFixedFile(kCpuReferencePath, kOutputBytes, &reference_bytes)) return 13;
+    std::array<float, kOutputElements> reference{};
+    std::memcpy(reference.data(), reference_bytes.data(), kOutputBytes);
+    for (const float value : reference) if (!std::isfinite(value)) return 22;
+    for (size_t i = 0; i < kInputElements; ++i) {
+        float value = 0; std::memcpy(&value, input_bytes.data() + i * 4, 4);
+        if (!std::isfinite(value)) return 22;
+    }
+    GuardedArray<float, kInputElements> input;
+    GuardedArray<float, kOutputElements> output;
+    input.Reset(); output.Reset();
+    CpuRuntime cpu;
+    if (!InitializeCpu(&cpu, model, &input, &output)) return 23;
+    std::puts("CPU_IDENTITY ort_version=1.15.1 provider=CPUExecutionProvider threads=1");
+    std::fflush(stdout);
+    uint64_t total_run_ns = 0;
+    for (size_t iteration = 0; iteration < kWarmupIterations + kMeasuredIterations; ++iteration) {
+        PairTiming timing{};
+        if (!RunCpu(&cpu, input_bytes, reference, &input, &output, &timing)) {
+            std::fprintf(stderr, "wave_marblenet_cpu: iteration %zu failed\n", iteration);
+            return 24;
+        }
+        total_run_ns += timing.cpu_run_ns;
+        if (iteration >= kWarmupIterations) PrintSample(iteration, timing);
+    }
+    std::array<uint8_t, kOutputBytes> observed{};
+    std::memcpy(observed.data(), output.data(), kOutputBytes);
+    if (!WriteAtomicExclusive(kOutputPath, kPartialPath, observed)) return 11;
+    if (!cpu.Close()) return 25;
+    std::printf("CPU_EXECUTION status=PASS mode=execute-once operation=fp32-marblenet-cpu "
+        "iterations=36 input_bytes=%zu output_bytes=%zu graph_us=%llu output_hex=",
+        kInputBytes, kOutputBytes, static_cast<unsigned long long>(total_run_ns / 1000));
+    for (const uint8_t byte : observed) std::printf("%02x", static_cast<unsigned int>(byte));
+    std::puts(" cleanup=0"); std::fflush(stdout); return 0;
+}
