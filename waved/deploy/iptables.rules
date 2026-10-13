@@ -6,4 +6,9 @@
 -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 -A INPUT -p udp --sport 67 --dport 68 -j ACCEPT
 -A INPUT -p udp --dport 5353 -j ACCEPT
+# The Wi-Fi setup network (waved-provision): while it is open, wlan0 is an
+# access point and waved serves DHCP, DNS and the setup page on it.
+-A INPUT -i wlan0 -p udp --dport 67 -j ACCEPT
+-A INPUT -i wlan0 -p udp --dport 53 -j ACCEPT
+-A INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT
 COMMIT

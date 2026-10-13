@@ -23,7 +23,8 @@
 #   2. the USB gadget patch (ADB at boot) and a check that it took
 #   3. stop the stock app and waved; swap the binary only once waved has exited
 #   4. config, start-up scripts, splash, logging, firewall rules
-#   5. last of all, the stubs that switch the stock app and telemetry off
+#   5. last of all, the stubs that switch the stock app and telemetry off,
+#      read back to check they took
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,6 +37,9 @@ trap 'echo "ERROR: install.sh stopped at: ${STEP}" >&2' ERR
 trap 'echo "ERROR: install.sh interrupted at: ${STEP}" >&2; exit 130' INT TERM
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+# bash does not run the ERR trap inside a function, so an adb shell that fails
+# in on_wave would end the install without a word: its callers add || stopped.
+stopped() { die "install.sh stopped at: ${STEP}"; }
 on_wave() { adb shell "$1" | tr -d '\r'; }
 
 strip_tool() {
@@ -86,13 +90,26 @@ STEP="patching the USB gadget: ADB at boot, volume ranges, HID controls"
 echo "=== Patching the USB gadget: ADB at boot, volume ranges, HID controls ==="
 adb push "${WAVED_DIR}/scripts/patch-stock-usbgadget.sh" /tmp/patch-usbgadget.sh >/dev/null
 PATCH_OUT="$(on_wave "sh /tmp/patch-usbgadget.sh && echo patched; rm -f /tmp/patch-usbgadget.sh")" || true
-echo "$PATCH_OUT"
-[ "$(echo "$PATCH_OUT" | tail -n 1)" = "patched" ] \
-    || die "the USB gadget patch did not finish. Nothing was changed except possibly /etc/init.d/S89usbgadget (a backup is in /data/waved); the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"."
+if [ "$(echo "$PATCH_OUT" | tail -n 1)" != "patched" ]; then
+    echo "$PATCH_OUT" | grep -v -e '^reboot the device' -e 'adb reboot' >&2 || true
+    die "the USB gadget patch did not finish. Nothing was changed except possibly /etc/init.d/S89usbgadget (a backup is in /data/waved); the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"."
+fi
+# Only what it patched. Its closing "reboot the device ... adb reboot" is for
+# running the patch by hand; here the reboot comes once everything is in place.
+echo "$PATCH_OUT" | grep -E '^(already )?patched .' || true
 
+# Both must hold: no adbd_enable line in the gadget script is still commented
+# out, and at least one live adbd_enable line is inside start_usbgadget(), the
+# function the boot runs (from its declaration to the "}" in column 0 that
+# closes it; start_usbgadget_ota_mode() does not count). busybox awk on the
+# Wave; the answer is read from its output, not from an exit code.
 STEP="checking that ADB is enabled at boot"
-[ "$(on_wave "grep -c '^[[:space:]]*#[[:space:]]*adbd_enable[[:space:]]*\$' /etc/init.d/S89usbgadget")" = "0" ] \
-    || die "ADB is not enabled at boot (/etc/init.d/S89usbgadget). Nothing was changed except possibly that file; the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"."
+ADB_AWK='/^[[:space:]]*#[[:space:]]*adbd_enable[[:space:]]*$/ { commented++ }; /^[[:space:]]*(function[[:space:]]+)?start_usbgadget[[:space:]]*[(][)]/ { boot = 1 }; boot && /^}/ { boot = 0 }; boot && /^[[:space:]]*adbd_enable[[:space:]]*$/ { live++ }; END { print "commented=" commented+0 " live=" live+0 }'
+ADB_AT_BOOT="$(on_wave "awk '${ADB_AWK}' /etc/init.d/S89usbgadget")" || stopped
+case "$ADB_AT_BOOT" in
+    "commented=0 live="[1-9]*) ;;
+    *) die "ADB is not enabled at boot (/etc/init.d/S89usbgadget: ${ADB_AT_BOOT:-no answer}). Nothing was changed except possibly that file; the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"." ;;
+esac
 
 # --- Stop the stock app, the watchdog and waved, then swap. ---
 STEP="stopping the stock app and waved"
@@ -102,7 +119,7 @@ kill \$(ps | awk '/S60waved start/ && !/awk/ {print \$1}') 2>/dev/null; \
 killall waved 2>/dev/null; \
 n=0; while pidof waved >/dev/null && [ \$n -lt 15 ]; do sleep 1; n=\$((n+1)); done; \
 if pidof waved >/dev/null; then killall -9 waved 2>/dev/null; n=0; while pidof waved >/dev/null && [ \$n -lt 5 ]; do sleep 1; n=\$((n+1)); done; fi; \
-true" >/dev/null
+true" >/dev/null || stopped
 
 # The old binary's space is only freed once waved has exited: copying over a
 # live one fails with ENOSPC over a partial file. Swap only if it is gone.
@@ -116,26 +133,37 @@ case "$SWAP" in
 esac
 
 STEP="writing the config"
-if [ "$(on_wave "[ -f /data/waved/config.toml ] && echo yes || echo no")" = "no" ]; then
-    echo "=== Writing the default config.toml ==="
-    adb push "${WAVED_DIR}/config/default.toml" /data/waved/config.toml >/dev/null
-fi
+HAS_CONFIG="$(on_wave "[ -f /data/waved/config.toml ] && echo yes || echo no")" || stopped
+case "$HAS_CONFIG" in
+    yes) ;;
+    no)
+        echo "=== Writing the default config.toml ==="
+        adb push "${WAVED_DIR}/config/default.toml" /data/waved/config.toml >/dev/null ;;
+    *) stopped ;;
+esac
 
 # The /etc overlay: write through the mount, not into /data/overlay/upper.
 STEP="installing start-up scripts, splash, logging and firewall rules"
 echo "=== Installing start-up scripts, splash, logging and firewall rules ==="
-on_wave "mkdir -p /mnt/udisk/recordings" >/dev/null
+on_wave "mkdir -p /mnt/udisk/recordings" >/dev/null || stopped
 adb push "${SCRIPT_DIR}/S60waved" /etc/init.d/S60waved >/dev/null
 adb push "${SCRIPT_DIR}/S03splash" /etc/init.d/S03splash >/dev/null
 adb push "${SCRIPT_DIR}/splash.fb" /data/waved/splash.fb >/dev/null
 adb push "${SCRIPT_DIR}/rsyslog.conf" /etc/rsyslog.conf >/dev/null
 adb push "${SCRIPT_DIR}/iptables.rules" /data/waved/iptables.rules >/dev/null
-on_wave "chmod 0600 /data/waved/config.toml; chmod 755 /etc/init.d/S60waved /etc/init.d/S03splash" >/dev/null
+on_wave "chmod 0600 /data/waved/config.toml; chmod 755 /etc/init.d/S60waved /etc/init.d/S03splash" >/dev/null || stopped
 
 # Last: these switch the stock app and its telemetry off for good.
 STEP="switching the stock app and telemetry off"
 echo "=== Switching the stock app and its telemetry off ==="
 on_wave "printf '#!/bin/sh\n' > /etc/init.d/S60pspapp_daemon; chmod 755 /etc/init.d/S60pspapp_daemon; \
-: > /usr/lib/libapplogrs.so" >/dev/null
+: > /usr/lib/libapplogrs.so" >/dev/null || stopped
+
+# Read them back. A stub that did not take leaves the stock app starting next
+# to waved at the next boot.
+STEP="checking the stubs"
+STUBS="$(on_wave "cat /etc/init.d/S60pspapp_daemon; if [ -f /usr/lib/libapplogrs.so ] && [ ! -s /usr/lib/libapplogrs.so ]; then echo 'libapplogrs.so: empty'; fi")" || stopped
+[ "$STUBS" = "$(printf '#!/bin/sh\nlibapplogrs.so: empty')" ] \
+    || die "the stock app and telemetry stubs did not take (/etc/init.d/S60pspapp_daemon, /usr/lib/libapplogrs.so). waved is installed, but the stock app would start next to it. Run install.sh again before you reboot. See Troubleshooting: \"The installer stopped part-way\"."
 
 echo "=== Done. Reboot the Wave to start waved: adb reboot ==="

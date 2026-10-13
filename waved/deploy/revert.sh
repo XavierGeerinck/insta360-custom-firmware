@@ -5,6 +5,8 @@
 # (stock updater, raw restore) are in docs/UPDATES.md, "Paths back".
 set -euo pipefail
 UPPER=/data/overlay/upper
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WAVED_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 [ "$(adb get-state 2>/dev/null || true)" = "device" ] || { echo "ERROR: no Wave found on adb." >&2; exit 1; }
 
@@ -18,4 +20,4 @@ ${UPPER}/etc/init.d/.S03splash.prev ${UPPER}/etc/init.d/.S03splash.new \
 ${UPPER}/etc/.rsyslog.conf.prev ${UPPER}/etc/.rsyslog.conf.new; \
 rm -rf /data/waved"
 echo "=== Done. Reboot the Wave to start the stock app: adb reboot ==="
-echo "After the reboot ADB is off again, as on stock. To turn it on: sudo python3 waved/scripts/enable_adb.py"
+echo "After the reboot ADB is off again, as on stock. To turn it on: sudo python3 \"${WAVED_DIR}/scripts/enable_adb.py\""
