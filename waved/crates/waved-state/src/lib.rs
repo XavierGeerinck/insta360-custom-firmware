@@ -291,6 +291,8 @@ pub struct BluetoothState {
     pub connected: bool,
     pub device_name: String,
     pub mac: String,
+    /// The Bluetooth switch as waved-bt applied it (config `[bluetooth]
+    /// enabled`, `Command::SetBluetooth`); false until the service starts.
     pub bt_on: bool,
     /// The module is in pairing mode (`0xB2` bit 3, seen 2026-10-13).
     pub pairing: bool,
@@ -850,6 +852,10 @@ pub enum Command {
     /// End Wave's pairing window (the user left the pairing screen). The
     /// module has no command to leave pairing mode, so nothing is sent.
     BtStopPairing,
+    /// Stock's Bluetooth switch: `OpenBt` (`CC 00`) or `CloseBt` (`CB`).
+    /// Persisted as config `[bluetooth] enabled` (waved-settings). Off
+    /// counts the phone as gone at once and ignores it until switched on.
+    SetBluetooth(bool),
 }
 
 // --- State Bus ---
@@ -1429,8 +1435,19 @@ mod tests {
             Command::BtAnswerCall,
             Command::BtDeclineCall,
             Command::BtStopPairing,
+            Command::SetBluetooth(false),
         ];
-        assert_eq!(commands.clone().len(), 5);
+        assert_eq!(commands.clone().len(), 6);
+    }
+
+    #[test]
+    fn bluetooth_is_off_until_its_service_says_otherwise() {
+        // waved-bt sets `bt_on` from config `[bluetooth] enabled` when it
+        // starts and on `SetBluetooth`; without the module there is no
+        // Bluetooth to offer.
+        assert!(!BluetoothState::default().bt_on);
+        assert_eq!(Command::SetBluetooth(true), Command::SetBluetooth(true));
+        assert_ne!(Command::SetBluetooth(true), Command::SetBluetooth(false));
     }
 
     #[test]
