@@ -86,7 +86,7 @@ matching TIM-VX implementation. **Write:** private `poc19/rea/` report/evidence.
 
 - [x] Select a supported route using Task2/3 facts; record exact graph/source
   contract and remaining compile/Run budget before implementation/launch.
-- [ ] Prove learned-tap accounting, fixed tensor geometry and original FP32/
+- [x] Prove learned-tap accounting, fixed tensor geometry and original FP32/
   folded FP16/logit/probability parity on all four host clips. Add meaningful
   wrong-shift/pad/group/tap and unsupported-op refusal tests.
 - [ ] Qualify the rewritten problematic block and remaining untested trained
@@ -162,3 +162,28 @@ rewrite on all four original clips, preserve tap/checkpoint identities, and
 bind a deterministic derivation receipt. File frontend and benchmark
 admission must explicitly verify that receipt rather than weaken the old
 full-model hash gate. Independent source/ELF review precedes live launches.
+
+### Task5 continuity correction after the USB incident
+
+Snapshot0015 records a real transfer-event WARNING between19d cleanup and
+19e staging.19e's local baseline already contained it, so its local compile
+PASS does not clear the failed encompassing interval. Stop native work and
+retain this incident, the successful local compile and missing19e/full/bench
+qualification separately. Do not relabel a quiet snapshot as recovery.
+
+Correct the inter-run gap with a persistent host phase guard for the new Pad
+profile. A reviewed explicit phase seed binds the selected unit and accepted
+health snapshot. Check continuity from that accepted anchor before staging
+mutations and again on the native runner's immediate preflight, before the
+vendor command. Missing/invalid anchors, lost overlap, health deltas and
+new warnings block launch and leave the phase HALTED; no automatic reseed.
+Advance only from a verified CLEAN cleanup. Preserve previous receipts and
+older profile source/qualification semantics. Add meaningful replay tests
+for this exact warning present in a new local baseline, plus missing-anchor,
+history-gap, changed state, immediate-preflight and failed-cleanup cases.
+
+This is a host guard correction; it authorizes no new device experiment,
+driver reset, USB configuration change, or service action. Starting a new
+eligible phase requires a documented incident disposition and authorization.
+Attempt the already-authorized Wi-Fi restoration; if ADB is absent, retain
+the failed restoration and request reconnection while completing host work.

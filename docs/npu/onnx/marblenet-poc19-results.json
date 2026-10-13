@@ -1,0 +1,187 @@
+{
+  "controls": {
+    "19a": {
+      "compile_run_id": "rea-poc19a-isolation-compile-20261013-a1",
+      "compile_status": "PASS",
+      "lowering_sha256": "4e442cbae3a2f96dec8bf242fe2580f28d05fe96eca90c22d5e654d1033d4da7",
+      "max_abs_error": 0.000244140625,
+      "model_sha256": "594848558e01285e2e780053cca0cb6cab70988499c85df280428b6489a6f97f",
+      "nbg_bytes": 24608,
+      "nbg_sha256": "280a6eb0c1fcd81c6950ed015b9520ccd35b0005a2a054238d1088024c6d17cb",
+      "output_sha256": "c54210eaa9d089c15eac1e88b2b42e349cf6f496d0487f15de7f3a29a68d80f3",
+      "profile_id": "fp16-marblenet-v1",
+      "qualification_run_id": "rea-poc19a-isolation-execute-20261013-a1",
+      "qualification_status": "PASS"
+    },
+    "19b": {
+      "compile_run_id": "rea-poc19b-isolation-compile-20261013-a1",
+      "compile_status": "PASS",
+      "lowering_sha256": "3617ab817e55ac093095b3afd4556fe4a581dc41cb08fe85e588d7cf4d8d2fe8",
+      "max_abs_error": 0.000244140625,
+      "model_sha256": "49a26402823d4ac5b0e88fb24e14c456c688f70d6faff046e814a07c1b4766db",
+      "nbg_bytes": 26656,
+      "nbg_sha256": "f8ac26a452561cbcddfefbedc0527cb308a2f6ca22760eb3a76e55d70c4ade65",
+      "output_sha256": "cc2c260b51bb64e0fb0e0e92d77c7f0c27c4b2512b9609b66a994bb352727906",
+      "profile_id": "fp16-marblenet-v1",
+      "qualification_run_id": "rea-poc19b-isolation-execute-20261013-a1",
+      "qualification_status": "PASS"
+    },
+    "19c": {
+      "compile_run_id": "rea-poc19c-pad-compile-20261013-a1",
+      "compile_status": "PASS",
+      "lowering_sha256": "58e160f2a1a6cb5fe8791c1a2abc4911aeb9b2cb75721f011b1b553531dcfa99",
+      "max_abs_error": 0.000244140625,
+      "model_sha256": "66ba1d940ba87c8626d7a08318f00bf1fcdf3d87e09cfc55f51c3c50cb31ae1a",
+      "nbg_bytes": 32168,
+      "nbg_sha256": "e17eacec88feaa2dad67322a7cddfb8168fc5a75b56cc762ee401906d3151093",
+      "output_sha256": "a4a03084464719c4e4b7c516945131b608b26668ad345b780fba59334c62aea0",
+      "profile_id": "fp16-marblenet-pad-v1",
+      "qualification_run_id": "rea-poc19c-pad-execute-20261013-a1",
+      "qualification_status": "PASS"
+    },
+    "19d": {
+      "compile_run_id": "rea-poc19d-first-block-compile-20261013-a1",
+      "compile_status": "PASS",
+      "lowering_sha256": "825b2845dfb770c5ee5155e94e758e567aa2573267863ded211e067155fd1e53",
+      "max_abs_error": 0.001953125,
+      "model_sha256": "0a90a0c599283ec58fc844bc63e1671d45788787a94b10cba725eb303c3eead9",
+      "nbg_bytes": 28960,
+      "nbg_sha256": "04fab377fa3a23330c3812e8b20d56339e960d7a076d4cd72bf944a8ae9bd600",
+      "output_sha256": "ce46fb6b24a019b54ff319cf3e6ab40c61ea003fe0c45f08b4f74c6cc6dd15f7",
+      "profile_id": "fp16-marblenet-pad-v1",
+      "qualification_run_id": "rea-poc19d-first-block-execute-20261013-a1",
+      "qualification_status": "PASS"
+    },
+    "19e": {
+      "compile_run_id": "rea-poc19e-residuals-compile-20261013-a1",
+      "compile_status": "PASS",
+      "eligibility_note": "local compile began after USB warning; encompassing inter-run interval FAILED",
+      "lowering_sha256": "69795fd7510e1ec95627bcdab9a3e3d6c421e5e8f7365c28356b73044ee96df3",
+      "model_sha256": "435ad68767d955fd79e4de12b593f7956a1917cc0a6af9090805c8175ac5d26e",
+      "nbg_bytes": 79376,
+      "nbg_sha256": "75697f84d71c5b83f1bab6fe5bda9c804fabf790bb6eb45eed3e9d5a9322301e",
+      "profile_id": "fp16-marblenet-pad-v1",
+      "qualification_status": "NOT_LAUNCHED"
+    },
+    "19f": {
+      "compile_status": "NOT_LAUNCHED",
+      "lowering_sha256": "7cbb31bfc04628f2797346ae4854f30c84b04fc232fa41ad5d2f34831ca00014",
+      "model_sha256": "4929d1c702ed471bc6a9c50fae46bd23561892457405b4fd02fffb372ac10186",
+      "profile_id": "fp16-marblenet-pad-v1",
+      "qualification_status": "NOT_LAUNCHED"
+    }
+  },
+  "full_model_status": "UNQUALIFIED",
+  "health": {
+    "final_target_state": "UNVERIFIED: selected device absent from ADB",
+    "pre_native_wifi_incidents": [
+      "snapshot-0001",
+      "snapshot-0004",
+      "snapshot-0005"
+    ],
+    "quiet_phase": "snapshot0006 through19d cleanup locally clean",
+    "status": "FAIL",
+    "usb_incident": {
+      "after19d_cleanup": 4955.5,
+      "before19e_stage": 5008.78,
+      "detected_at": "snapshot-0015",
+      "interpretation": "USB-associated context; exact Wave callsite unproven",
+      "uptime_seconds": 4992.636165,
+      "warning": "WARNING: Drop the transfer event"
+    }
+  },
+  "host_final_integrity": {
+    "cpu_sessions": 0,
+    "packages_loaded": 14,
+    "prepared_files_verified": 123,
+    "production_phase_created": false,
+    "qualified_packages": 10,
+    "status": "PASS",
+    "transport_calls": 0
+  },
+  "host_proof": {
+    "all_original_initializer_bits_preserved": true,
+    "folded_initializer_bytes": 180836,
+    "folded_initializer_elements": 90418,
+    "folded_initializer_tensors": 34,
+    "fp32_and_fp16_original_folded_logits_four_clips": "byte-exact",
+    "frames": 800,
+    "full_model_sha256": "4929d1c702ed471bc6a9c50fae46bd23561892457405b4fd02fffb372ac10186",
+    "max_probability_error": 0.0007275641,
+    "original_fp32_decisions_agreement": 1.0,
+    "pad_preparation_sha256": "92019faefcd00d93faee1d28b5d2cf9c8b1ba63d8c13bc71ac00048ac79df76d"
+  },
+  "native_budget_used": {
+    "compile_processes": 5,
+    "compile_to_binary_calls": 10,
+    "runs": 4
+  },
+  "objective": "qualify trained full MarbleNet on Wave NN",
+  "pending": [
+    "restore Wi-Fi after ADB reconnection",
+    "approved fresh eligible phase",
+    "19e native qualification",
+    "19f full compile and4 clips",
+    "36Run paired benchmark",
+    "final live state/root verification"
+  ],
+  "phase_guard": {
+    "anchor_advance": "verified CLEAN cleanup only",
+    "checks": [
+      "before staging mutations",
+      "after staging",
+      "immediate native preflight"
+    ],
+    "clean_compiler_negative": "narrow READY continuation, no retry",
+    "commit": "0843080",
+    "fault_response": "persistent HALTED, no automatic reseed",
+    "independent_review": "PASS for sole-controller host workflow; no live continuation approval",
+    "interprocess_lock_or_cas": false,
+    "production_phase_or_seed_created": false,
+    "scope": "new Pad profile, single controller only",
+    "status": "IMPLEMENTED"
+  },
+  "qualified_load_tamper": {
+    "altered_artifacts_refused": 26,
+    "controls": [
+      "19c",
+      "19d"
+    ],
+    "cpu_sessions": 0,
+    "original_artifacts_modified": false,
+    "status": "PASS",
+    "transport_calls": 0
+  },
+  "schema_version": 1,
+  "status": "PARTIAL_BLOCKED",
+  "tests": {
+    "all_host_collection": "nine unrelated optional ERF modules lack SciPy/pystoi in isolated Torch env; negative retained",
+    "final_uncompiled_qualification_refusal": {
+      "attempt_markers": 0,
+      "cpu_sessions": 0,
+      "observed_red_then_green": true,
+      "passed": 1,
+      "phase_activations": 0,
+      "transport_calls": 0
+    },
+    "non_erf_host": {
+      "passed": 430
+    },
+    "root_harness": {
+      "passed": 425,
+      "skipped": 2,
+      "total": 427
+    },
+    "root_phase_guard_full": {
+      "passed": 470,
+      "skipped": 2,
+      "subtests_passed": 329
+    }
+  },
+  "wifi": {
+    "configuration_saved_or_credentials_changed": false,
+    "last_known_state": "DISCONNECTED",
+    "manual_disconnect_acknowledged": true,
+    "restoration": "BLOCKED_DEVICE_ABSENT"
+  }
+}

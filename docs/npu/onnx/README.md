@@ -12,6 +12,14 @@ depthwise block was rejected and the complete NPU model remains
 unqualified. The [MarbleNet guide](marblenet.md) documents the real model,
 explicit CPU fallback, fixed audio window and measured limits.
 
+PoC19 qualifies the original dilated layer by moving zero padding into an
+explicit TP operation, followed by unchanged NN convolutions. The first
+trained strided block also qualifies. Full-model NN testing is still pending:
+a USB warning invalidated inter-run continuity, then ADB disappeared and
+blocked Wi-Fi restoration. The
+[compatibility notebook](../lab-notebook/2026-10-13-poc19-marblenet-compatibility.md)
+preserves the passing blocks and failed enclosing interval separately.
+
 ## Historical PoC 9E/9F result
 
 **PoC:** 9E/9F

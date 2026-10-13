@@ -1,10 +1,10 @@
 # Trained MarbleNet VAD on the Wave
 
-The trained pointwise and residual blocks run correctly on the Wave NPU.
-The complete model is **not NPU-qualified**: the Wave rejected the trained
-depthwise convolution with temporal kernel 29 and dilation 2 during kernel
-initialization. The full-model compile and NPU benchmark were consequently
-skipped. Use the explicit CPU fallback for the complete model.
+The Wave runs the trained dilated layer through an exact explicit-padding
+rewrite, as well as trained strided, pointwise and residual blocks. The
+complete model is **not NPU-qualified**. A USB transfer warning and subsequent
+loss of ADB stopped testing before the full graph was launched. Use the
+explicit CPU fallback for the complete model while qualification is pending.
 
 This is [NVIDIA Frame-VAD Multilingual MarbleNet v2.0](https://huggingface.co/nvidia/Frame_VAD_Multilingual_MarbleNet_v2.0),
 with a source-matched reconstruction of the serialized NeMo checkpoint.
@@ -22,6 +22,46 @@ checkpoint's epsilon 0.001. Its folded neural graph contains 21 Conv,
 | 18B: first trained residual block | NN export and one Run passed | max activation error 0.00048828125 |
 | 18C: trained depthwise K29, rate 2, pointwise, Relu | size-query export rejected, exit 5 | no native output |
 | 18D: complete trained graph | skipped after 18C | no full-model NPU output |
+
+PoC19 isolated the rejection and qualified a compatible trained layer:
+
+| Control | Native result | Numerical result |
+|---|---|---|
+| 19a: diagnostic centered K13, rate2 | NN export and one Run passed | max error0.000244140625 |
+| 19b: diagnostic K29, rate1 | NN export and one Run passed | max error0.000244140625 |
+| 19c: exact zero Pad28, original K29/rate2 VALID, pointwise/Relu | TP padding + NN convolution export and one Run passed | max error0.000244140625 |
+| 19d: original first trained K11/stride2 block | NN export and one Run passed | max error0.001953125 |
+| 19e: original remaining K15/K17 residual blocks | local NN export passed; encompassing health interval failed | no native inference launched |
+| 19f: complete padded graph | not launched | no full-model NPU output |
+
+19a/b are diagnostic changes, not full-layer equivalents.19c preserves every
+trained coefficient: `[1,64,200]` receives28 positive-zero samples on each
+side, then the original29-tap/rate2 filter uses VALID pads0 to return200
+frames. Its padding runs on TP and its convolutions on NN.19d uses equivalent
+native2×2 strides only for height1/kernel-height1/height-pad0 depthwise Conv.
+These changes have their own bounded `fp16-marblenet-pad-v1` profile.
+
+The candidate full graph has34 nodes, adding one Pad. All34 folded initializer
+tensors/90,418 elements retain their exact180,836 FP16 bytes. Its CPU FP32
+and FP16 outputs match the original folded exports byte-for-byte on all four
+clips. Full frontend admission reverses the deterministic rewrite to the
+pinned original full-model hash; a same-shape graph or resealed weight receipt
+cannot pass. This host proof does not qualify full-model native inference.
+
+The new USB warning occurred after19d cleanup and before19e staging.19e's
+local before/after check began after it, so local PASS did not clear the failed
+inter-run interval. Further native calls stopped when that gap was detected.
+The selected device subsequently disappeared from ADB; the authorized Wi-Fi
+restoration attempt could not reach it. Reconnection, restoration and final
+live verification remain outstanding. See the
+[PoC19 ledger](marblenet-poc19-results.json) and
+[compatibility notebook](../lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
+
+New Pad-profile launches now require a reviewed persistent host phase under
+the package family. The guard checks inter-run continuity before staging
+and immediately before native execution, and advances only from verified
+CLEAN cleanup. No production phase has been seeded. This guard assumes one
+controller; it does not provide interprocess locking or automatic recovery.
 
 Every native activation element must be finite and satisfy
 `abs(error) <= 0.02 + 0.02 * abs(reference)`. Actual NPU, actual ORT CPU and
@@ -56,8 +96,9 @@ Its prepared-feature timings include input copying, ORT Run and softmax;
 they exclude output priming, result validation, feature extraction and
 file/ADB orchestration. No CPU-versus-NPU speedup is available for this full model.
 
-Every individual native/CPU call passed its captured health checks, all
-eight derived staging roots are absent, and final hashes, services, boot
+For the completed PoC18 experiment, every individual native/CPU call passed
+its captured health checks, all eight derived staging roots were absent,
+and final hashes, services, boot
 identity and parameters match the initial state. Whole-experiment kernel
 history remains inconclusive: the first compile-to-inference gap lacks
 retained overlap, and its marker had aged out by final collection.
@@ -99,8 +140,8 @@ The current18D package has no native qualification. Hybrid uses
 `CPUExecutionProvider` with zero native attempts and one CPU session.
 `--mode strict` refuses it before feature preparation or inference.
 Neither mode treats a partial trained block as the complete model.
-The same frontend can use a future exact full-model qualification through
-the existing native backend; that qualification does not exist here.
+The same frontend admits the exact deterministic full Pad rewrite after
+native qualification. That qualification does not exist here.
 
 ## Context and reproducibility
 
@@ -120,11 +161,13 @@ frames, padded to402; cropping them to400 would change this test contract.
 | NeMo source revision | `ceeafa4f2b8cece8a0fd47b29051ad659e55b76c` |
 | Checkpoint | `84bda37e925ac6fd740c2ced55642cb79f94f81348e1fa0db992ca50d4b09706` |
 | Full FP16 ONNX | `f5d1cdfe2c1f3ae8b3feb3ffa7568403839a7c59e8ff363846e3fde46cfad46a` |
+| Full Pad rewrite, unqualified | `4929d1c702ed471bc6a9c50fae46bd23561892457405b4fd02fffb372ac10186` |
 | Folded FP32 ONNX | `354de9ff0d0b3f75b9c197d322db37ef2a8e38e4f671905024cffa7c8926b96f` |
 | Preparation receipt | `4fcc00ccc0f1983f0a43c88053586da7ec3b5154ff13e4829f55972912db38cb` |
 
 Raw weights, audio, builds and device receipts remain ignored under
-`artifacts/npu/poc18/`. Tracked source generators/templates require this
+`artifacts/npu/poc18/` and `artifacts/npu/poc19/`. Tracked source generators
+and templates require this
 repository, exact SDK/runtime inputs and qualified evidence; the native
 adapter is not a portable general-purpose ONNX execution provider.
 An algebraically equivalent zero-expanded57-tap kernel could remove this

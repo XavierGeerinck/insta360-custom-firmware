@@ -79,16 +79,32 @@ Research continuation and remaining routes:
    Every call's captured health passed. Final state hashes/services/boot/
    parameters match and all roots are absent; whole-experiment kernel
    history is inconclusive because the initial diagnostic marker aged out.
-5. **Remaining model-specific work.** Other shapes, multi-layer graphs,
+5. **MarbleNet compatibility (PoC19, 2026-10-13).** Diagnostic K13/rate2
+   and K29/rate1 controls both exported on NN and ran with maximum error
+   0.000244140625. The original K29/rate2 trained layer then passed export
+   and inference unchanged by making its zero Pad28/28 explicit: TP performs
+   Pad, NN performs the original VALID convolution and pointwise/Relu. The
+   original first K11/stride2 trained block also passed using equivalent
+   native2×2 strides for height1 only, maximum error0.001953125. REA proves
+   conditional generic/depthwise routing and runtime-configured bounds,
+   without establishing the old rejecting branch or a universal15-tap limit.
+   All full-graph folded initializer bits and four-clip CPU logits remain
+   exact. A USB transfer WARNING between runs invalidated continuity;
+   remaining residual export passed only its local baseline and no inference
+   followed. Full-model NN qualification and benchmark were not launched.
+   ADB subsequently disappeared, blocking the authorized Wi-Fi restoration
+   and final live checks. See the
+   [PoC19 notebook](../../docs/npu/lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
+6. **Remaining model-specific work.** Other shapes, multi-layer graphs,
    additional operator/dtype pairs and one-weight serializer differentials
    need separate qualification. The two first-run timings are correctness
    observations, not performance measurements.
-6. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
+7. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
    Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
    6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
    (`VIP9000NANOS_PID0X1000000E`) SDK. Either pairs with public acuitylite
    6.57.1 (ovxlib 1.2.30).
-7. **E0, Khadas `aml_npu_sdk`.** Public; its Acuity device file
+8. **E0, Khadas `aml_npu_sdk`.** Public; its Acuity device file
    `VIPNANOQI_PID0X1E` targets `VIP9000NANOS_PID0X1000000E`, but its 6.4.8
    simulator writes NBG v1 (`0x0001000F`). The earlier rejection
    (`sample-add.nb`) failed on the product field first, so whether the driver

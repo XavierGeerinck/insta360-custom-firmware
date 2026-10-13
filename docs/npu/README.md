@@ -25,7 +25,7 @@ is unchanged. Use the explicit `wave-native` backend with an exact qualified
 package; see [commands and supported profiles](onnx/native-backend.md) and
 the [PoC 17 notebook](lab-notebook/2026-10-13-poc17-onnx-native-backend.md).
 
-**Trained MarbleNet trial (2026-10-13).** The real pointwise and residual
+**Trained MarbleNet trial (PoC18, 2026-10-13).** The real pointwise and residual
 blocks exported on NN and passed numerical qualification. The trained
 depthwise K29/dilation2 block was rejected during kernel initialization,
 so the complete-model NPU compile and benchmark were skipped. A file VAD
@@ -33,6 +33,15 @@ frontend provides an explicit CPU fallback; all800 frozen host frame
 decisions match the original FP32 reference. See the
 [MarbleNet guide](onnx/marblenet.md) and
 [PoC18 notebook](lab-notebook/2026-10-13-poc18-trained-marblenet.md).
+
+**MarbleNet compatibility (PoC19, 2026-10-13).** The rejected trained layer
+now passes native export and inference through exact TP zero padding followed
+by unchanged NN convolution. The first trained strided block also passes.
+The complete candidate preserves every folded parameter bit and all four
+original CPU outputs. Full NN qualification remains blocked by a USB warning
+between runs and subsequent ADB loss; Wi-Fi restoration and final live state
+are unverified. See the
+[PoC19 notebook](lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
 
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
@@ -256,6 +265,7 @@ transfer.
 | 16 — REA-guided native dtype controls | Can FP16 Conv and quantized U8 FC compile and execute on the NN engine? | **Passed 2026-10-13** | Both target-native NBGs pass exact tensor/CRC qualification and one canary-protected CPU-oracle execution; captured health is unchanged and staging is removed. |
 | 17 — ONNX native backend | Can actual ONNX coefficients lower through the qualified Conv/FC routes and run with exact package evidence? | **Passed 2026-10-13** | Two FP16 Conv and two U8 QLinearMatMul models compile on NN and return every oracle byte. Explicit native strict/hybrid sessions preserve default CPU/refusal behavior. |
 | 18 — Trained MarbleNet | Can the real VAD backbone compile and match FP32 speech decisions? | **Partial native pass; full NPU blocked 2026-10-13** | Trained pointwise/residual blocks qualified; depthwise K29/rate2 rejected. Full model uses explicit CPU fallback, with800/800 frozen host decisions agreeing. |
+| 19 — MarbleNet compatibility | Can an exact rewrite remove the trained convolution rejection? | **Layer qualified; full NN pending, 2026-10-13** | Exact Pad28/28 + original K29/rate2 and first strided block passed. USB warning/ADB loss stopped full testing and blocked Wi-Fi restoration; encompassing failed interval retained. |
 | 9B / 9D continuation — Remaining compiler adapter | Can the missing no-kernel NBG consumer and exact VSINPU compiler path be proven? | Pending, separately gated | Acquire x86-64 no-kernel SDK `>=6.4.22` plus ovxlib `>=1.2.26`, prove its dependency/I/O ABI, then compile one fixed Conv before any NPU signature is approved. |
 | Production integration | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
 
