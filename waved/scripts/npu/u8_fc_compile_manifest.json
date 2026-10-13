@@ -1,0 +1,56 @@
+{
+  "candidates": {
+    "candidate-1": {
+      "argument": "--candidate-1",
+      "output": "/tmp/wave-npu-compile16b/output/wave-u8-fc-candidate-1.nbg",
+      "partial_output": "/tmp/wave-npu-compile16b/output/.wave-u8-fc-candidate-1.nbg.partial"
+    }
+  },
+  "device": {
+    "galcore_major_minor": "199:0",
+    "kernel": "Linux buildroot 5.4.242-ab575 #2 SMP PREEMPT Fri Nov 28 20:02:25 CST 2025 aarch64 GNU/Linux",
+    "npu_parameters": {
+      "enableNN": "255",
+      "nanoqFreq": "838860800",
+      "recovery": "1"
+    },
+    "serial": "PSP_0000000000000000"
+  },
+  "environment": {
+    "LD_LIBRARY_PATH": "/tmp/wave-npu-compile16b/lib:/usr/lib",
+    "VIVANTE_SDK_DIR": "/tmp/wave-npu-compile16b/sdk",
+    "VIV_VX_DEBUG_LEVEL": "1",
+    "VIV_VX_ENABLE_PRINT_TARGET": "1",
+    "VSI_NN_LOG_LEVEL": "5"
+  },
+  "expected_nbg": {
+    "chip_model": "0x00009000",
+    "magic": "VPMN",
+    "maximum_bytes": 67108864,
+    "minimum_bytes": 513,
+    "product": "0x1000000e",
+    "version": "0x00020000"
+  },
+  "remote_executable": "/tmp/wave-npu-compile16b/bin/wave-npu-compile-u8-fc-v1",
+  "required_artifacts": {
+    "/lib/libc.so.6": "cfc6aa042a880a87e4f0adbfb74b55c9ba9607561905b20f58da96fcb2d3bb86",
+    "/lib/libgcc_s.so.1": "859408230bf4baf943d0c7985870488683b6e61c0cb5725ed8934d8c45ea0ab1",
+    "/lib/libpthread.so.0": "7bbc9a4a3924f9da05f6969be2422f1ee65ce9432eb376f9be071b59e39a13f3",
+    "/lib64/ld-2.31.so": "912002c930f3096d98fc32e0897466049d6e5182cbb606b456b2ebcc99551366",
+    "/tmp/wave-npu-compile16b/bin/wave-npu-compile-u8-fc-v1": "bd755c476780b2fa1ce4d2baf8535192c41b47072043967832cd4301ce8c9a98",
+    "/tmp/wave-npu-compile16b/lib/libtim-vx.so": "c984e063e9ab4fe4d7e7ac85e783d88a330f1560268924ba4f449f5b258478dc",
+    "/tmp/wave-npu-compile16b/sdk/include/CL/cl_viv_vx_ext.h": "908d36ab616e27cabf5022bf16185825ce1c49f91fbaa37b98e67b4b6bb9af57",
+    "/usr/lib/libArchModelSw.so": "2b3df0844a2ff582f71da6517113939b54acdc7c97bebcac771e6e58140df63f",
+    "/usr/lib/libGAL.so": "13b7d87eabb8924758d49fbd8f1fac41bb81f34069f6ceed949af764893061e6",
+    "/usr/lib/libNNArchPerf.so": "253167677e9839d09815de93a86423824f26f56f097c100d59c03170adecffa9",
+    "/usr/lib/libOpenCL.so": "40ea26cfc80a43b79af09c0798ced760bb5339f9eef9450e6d08931c3b320ded",
+    "/usr/lib/libOpenVX.so": "f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb",
+    "/usr/lib/libOpenVXU.so": "370083254b7de8478f95fe90914245ddb4a52b2b3520749fe01f3ab45fba791c",
+    "/usr/lib/libVSC.so": "e9a39fe3b522b3926ff34f3fb380c73983ad8d48c5f40ffd6e6d8024adc2ed18",
+    "/usr/lib/libVSC_Lite.so": "e7c2c38fa813c669b7370795fad5d7b1207881103c481a6ac90e4785d058591f",
+    "/usr/lib/libovxlib.so": "09e740b4d4b0a759fb7f274ebf91456bdd6b702c96e47ab04a8a1655ffc65ba9",
+    "/usr/lib/libstdc++.so.6": "d2189eb10122876a7fd35909eaecbea22da38462ce345d9bf46a53f500435009"
+  },
+  "schema_version": 1,
+  "timeout_ms": 20000
+}

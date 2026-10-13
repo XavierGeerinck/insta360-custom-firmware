@@ -447,7 +447,7 @@ def load_manifest(
     if (
         expected["input"] != list(policy.input_values)
         or expected["output"] != list(policy.output_values)
-        or expected["bytes"] != 4
+        or expected["bytes"] != len(policy.output_values)
         or expected["iterations"] != 1
     ):
         raise ExecutionManifestError(
@@ -588,6 +588,15 @@ def compare_health(
         differences.append("a forbidden compiler artifact is visible")
     if _competing_executor(manifest, after):
         differences.append("the PoC 6 executor remains after execution")
+    if manifest.policy.poc_id in ("16C", "16D"):
+        def services(snapshot):
+            return sorted(
+                (line.split()[0], re.sub(r"\s+", " ", line).split(" ", 2)[-1])
+                for line in snapshot.get("processes", [])
+                if re.search(r"(?:/|\b)(?:waved|S60waved|audioserver|pspapp)(?:\s|$)", line)
+            )
+        if services(before) != services(after):
+            differences.append("service process identities changed during execution")
     return differences, alerts
 
 
@@ -658,27 +667,27 @@ def parse_result(
     identity_match = npu_compile_lab.IDENTITY_RE.fullmatch(
         identity_lines[0]
     )
-    if (
-        identity_match is None
-        or manifest.policy.execution_re.fullmatch(
-            execution_lines[0]
-        )
-        is None
-    ):
+    execution_match = manifest.policy.execution_re.fullmatch(execution_lines[0])
+    if identity_match is None or execution_match is None:
         raise ExecutionResultError(
             "identity or execution result line is malformed"
         )
     identity = identity_match.groupdict()
     if identity != manifest.expected_result["identity"]:
         raise ExecutionResultError("live identity differs from fixed policy")
-    return {
+    result = {
         "identity": identity,
         "mode": "execute-once",
         "iterations": 1,
         "input": list(manifest.policy.input_values),
         "output": list(manifest.policy.output_values),
-        "bytes": 4,
+        "bytes": len(manifest.policy.output_values),
     }
+    measured = execution_match.groupdict()
+    if "graph_us" in measured:
+        result["graph_us"] = int(measured["graph_us"])
+        result["output_hex"] = measured["output_hex"]
+    return result
 
 
 def run_once(

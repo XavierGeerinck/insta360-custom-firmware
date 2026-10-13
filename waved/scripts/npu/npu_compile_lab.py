@@ -473,7 +473,7 @@ def load_manifest(
 
     environment = _keys(
         root["environment"],
-        {"LD_LIBRARY_PATH", "VIVANTE_SDK_DIR", "VSI_NN_LOG_LEVEL"},
+        set(policy.expected_environment),
         "environment",
     )
     environment = {
@@ -701,8 +701,9 @@ def collect_snapshot(transport: Any, manifest: CompileManifest) -> dict[str, Any
         (
             "ps 2>/dev/null | "
             "grep -E '([w]ave-npu-(compile-(add|erf|erf-affine|signal-frame|"
-            "audio-denoiser|conv-audio-denoiser)|"
+            "audio-denoiser|conv-audio-denoiser|fp16-conv|u8-fc)|"
             "query-caps|clc-loader-probe|execute-erf-(zero|nonzero)|"
+            "execute-(fp16-conv|u8-fc)|"
             "run-(audio-denoiser|conv-audio-denoiser|"
             "erf-mask-qualification)|soak-erf-mask)|"
             "[w]aved|[a]udioserver|[p]spapp)' | "
@@ -854,11 +855,7 @@ def build_remote_command(
         "LC_ALL=C",
         *(
             f"{key}={manifest.environment[key]}"
-            for key in (
-                "LD_LIBRARY_PATH",
-                "VIVANTE_SDK_DIR",
-                "VSI_NN_LOG_LEVEL",
-            )
+            for key in manifest.policy.expected_environment
         ),
         manifest.remote_executable,
         candidate.argument,
