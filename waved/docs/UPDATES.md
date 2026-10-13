@@ -224,8 +224,10 @@ remove /data/waved/splash.fb
 
 `config.toml` is listed like the files the update replaces (`remove` when there was none),
 because every config section denies unknown fields: an older waved rejects a file a newer
-one saved, and its `.bak` too, and runs on defaults (first-run screen, PIN off, API token
-and uploads gone). **Settings changed during a trial are lost on a rollback**: the old
+one saved with a key it does not know, and its `.bak` too, and runs on defaults (first-run
+screen, PIN off, API token and uploads gone). New keys are saved only when they differ
+from their default ([Going back over adb](#going-back-over-adb)), which narrows this but
+does not remove it. **Settings changed during a trial are lost on a rollback**: the old
 waved gets the settings it had when the update was installed.
 
 While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) counts **boots**:
@@ -295,9 +297,12 @@ Back (`update_restart_needed` golden).
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
 | U6 | File-level fall-back in `S60waved`, 2 boots (or 10 starts in one boot), commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after two power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back on the third boot. |
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
-| U10 | USB storage and Bluetooth phone calls (ringing, up, or call audio) hold every install, tapped ones too; phone music does not | A computer that keeps the drive, or a module state that never clears `call_audio`, holds installs until it does (the update waits; nothing fails). Phone music is cut by the restart. |
 | U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |
+| U10 | USB storage and Bluetooth phone calls (ringing, up, or call audio) hold every install, tapped ones too; phone music does not | A computer that keeps the drive, or a module state that never clears `call_audio`, holds installs until it does (the update waits; nothing fails). Phone music is cut by the restart. |
+| U11 | The installer accepts only an `S60waved` with the current guard's lines (`GUARD_MARKERS`), not any `update_guard` | A Wave with an older guard refuses every package that does not carry `S60waved` until `deploy/install.sh` (or a package with it) installs the current one. A future guard that changes the protocol must change the markers too, or old Waves accept a package whose guard would not undo it. |
+| U12 | Config keys added since the pre-M3 waved are saved only when not the default; `config/default.toml` has them as comments | A non-default value (table in [Going back over adb](#going-back-over-adb)) still makes an older waved run on defaults. A key added later without the same treatment breaks downgrades again (`PRE_M3_KEYS` test in `waved-config` catches it for defaults). |
+| U13 | `deploy/install.sh` never replaces the Wave's `config.toml` and copies it to `config.toml.before-<time>` first; it refuses while an OTA trial is pending; a first install ends with a reboot, an update restarts the watchdog | The copies pile up on `/data` (a few KB each); delete old ones by hand. A trial that never commits blocks adb installs until it rolls back or `update/trial` is removed by hand. |
 
 ## Device checks
 
@@ -330,6 +335,37 @@ Not verified on a Wave. Before trusting this, a device pass should check:
 | A/B: `boot_a/b`, `system_a/b`; slot state in `misc` (AvbABData "AB0": priority, tries, successful_boot); U-Boot `bcb_cmd=…get_valid_slot` | `../backups/partitions/p07_misc.img`, `p04_env.img` (main checkout only) |
 | `/tmp` tmpfs ~1.9 GiB; RAM 3.8 GB | `../docs/REPORT_DEVICE_DUMP.md:26-27`; `../docs/npu/lab-notebook/2026-07-28-poc3-runtime-driver-trace.md:191` |
 | waved lives in `/data/waved`; `S60waved` in the `/etc` overlay; the SquashFS is never modified | `deploy/install.sh` |
+
+## Going back over adb
+
+An older waved goes back on with `deploy/install.sh` (`WAVED_BINARY=<that build>`; its
+`S60waved` is the checkout's). The script keeps the Wave's `config.toml` and copies it to
+`/data/waved/config.toml.before-<UTC time>` before every install, so the settings an older
+waved could read are still there.
+
+Every config section denies unknown fields, so an older waved rejects a `config.toml` with
+a key it does not know (and its `.bak`, which the newer waved may have written too) and
+runs on defaults: first-run screen, PIN off, API token and uploads gone. Its settings
+service does not write over that file; a save on the setup page moves it aside to
+`config.toml.unloadable`. The keys added in milestone 3 (`waved-config`, `PRE_M3_KEYS` test) are saved only
+when they differ from their default, so a Wave that never changed them goes back to the
+pre-M3 waved (`main` at 3cc3707) with its settings. These still break that downgrade:
+
+| Key | Written when |
+|---|---|
+| `device.mic_height` | Mic height set to Low or High (Medium is the default) |
+| `bluetooth.enabled` | Bluetooth switched off |
+| `security.release_lockdown` | release lockdown on (setup page) |
+| `security.ota_allow_downgrade` | set to `true` by hand |
+
+`security.device_password` changed format in milestone 3 (a `pin1$…` record instead of the
+PIN). The pre-M3 waved loads it (any string up to 256 characters) and has no PIN screen,
+so nothing is locked; the newer waved reads the record again when it comes back.
+
+To go back with settings that break it: before installing the older build, remove those
+lines from `/data/waved/config.toml` (watchdog stopped, `docs/DISPLAY_HARDWARE.md#deploy`),
+or afterwards copy a `config.toml.before-<time>` from before the newer install over
+`config.toml` (mode 600) and restart the watchdog.
 
 ## Going back to stock (H4)
 
