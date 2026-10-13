@@ -47,6 +47,38 @@ Sources:
 | 2 | A main screens, B settings screens, C recording and audio, D Files, E system services | Parallel, one worktree each | Home, Recording, menus; pause/resume; brightness; power key |
 | 3 | F hardware, G USB storage, H updates, I Bluetooth, J Wave Controller, K security | Parallel, one worktree each | Each feature on the device |
 | 4 | M acceptance, L docs, parity matrix | Parallel | Full regression and the one-hour certification |
+| 5 | "Devialet-style" speaker: measure the speaker with the 8 built-in mics, correct the response, extend the bass safely | After M4 | Listening A/B with the owner |
+
+## Milestone 3 status (device pass 2026-10-13, merged to `main` at 5dc45c1)
+
+Verified on the device: start-up with the boot-counting update guard (2 starts per boot), the LED
+ring (green = volume, red = muted; the owner's choice), speaker scenes (stock passthrough + amp
+`Set EQ MODE`), Bluetooth (pairing, Pair another phone, on/off, module name, calls answered on the
+phone with audio, phone volume → Wave), the PIN (guards and turning it off), Mic height and the
+lift's start height after a power cycle.
+
+In progress:
+- **G1 USB storage**: the first design doesn't work on this USB controller; next, stock's own mode
+  switch (see G1 below).
+- **Wave → phone volume**: the Wave's own volume changes don't reach the phone, so the first phone
+  press after a Wave change jumps (stock sends `0xD0` button events 1/2; unverified what the module
+  does with them).
+
+Deferred (built, not yet checked on the device):
+- **H update cycle**: a signed package from a LAN server, a resumed download, a forced rollback,
+  `/sbin/reboot` from waved, rustls against the owner's HTTPS server (`waved/docs/UPDATES.md`
+  "Device checks").
+- **F3 power-off retract with the new lift code** (the owner saw it work on an older build), and
+  what a firm hand on the lift reports (BLOCK or SENSOR_TRIGGER).
+- **F6 Bluetooth module firmware** 0.0.0.28 → 0.0.0.33 with `waved-bt-flash` (only with the owner
+  present: `check`, then `version`, then `flash --owner-approved`).
+- **J5 Wave Controller** against the official app.
+- **K1 release lockdown** enforcement and the root password (documented in `waved/docs/SECURITY.md`;
+  nothing applied).
+- **Bluetooth leftovers**: the module's pairing-mode timeout, the HID hook-switch to the computer,
+  dongle audio, stock's 5 s heartbeat (`0xB3`) and `0xA5` when an audio path opens.
+- **Speaker volume curve** in dB steps like stock (−38 dB at 0 % to 0 dB at 100 %).
+- **What holds the speaker for the first ~10 s of a boot** (waved now waits for it).
 
 Rules for the parallel milestones:
 - Only the integrator edits the hotspot files.
