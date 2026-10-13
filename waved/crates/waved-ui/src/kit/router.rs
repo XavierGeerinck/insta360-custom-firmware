@@ -11,6 +11,9 @@ pub struct Router {
     /// The user went Back from the call screen: it stays away until the call
     /// ends (I3).
     call_dismissed: bool,
+    /// The call screen was shown for this call: it comes back after anything
+    /// that reset the stack under it, until the call ends or Back.
+    call_shown: bool,
 }
 
 impl Default for Router {
@@ -25,6 +28,7 @@ impl Router {
             stack: vec![Route::Boot],
             unlocked: false,
             call_dismissed: false,
+            call_shown: false,
         }
     }
 
@@ -234,13 +238,20 @@ impl Router {
     /// it; once answered it stays as "In a call". It leaves when the call
     /// ends. A ring while resting goes under the resting screen (the runtime
     /// wakes the screen for a ring). Plan 2026-10-13, decision 4.
+    ///
+    /// Once shown for a call, the screen comes back, ringing or answered,
+    /// after anything that reset the stack under it (a decision, USB
+    /// storage, a base navigate, a relock): its Hang up is the only one on
+    /// the Wave. Only Back keeps it away. A call already up when the Wave
+    /// first heard of it still shows nothing.
     fn follow_call(&mut self, snap: &UiSnapshot) {
         if snap.bt.call == BtCall::Idle {
             self.call_dismissed = false;
+            self.call_shown = false;
             self.stack.retain(|route| *route != Route::IncomingCall);
             return;
         }
-        if !snap.bt.call.is_ringing()
+        if !(snap.bt.call.is_ringing() || self.call_shown)
             || self.call_dismissed
             || self.stack.contains(&Route::IncomingCall)
         {
@@ -252,6 +263,7 @@ impl Router {
             self.stack.len()
         };
         self.stack.insert(at, Route::IncomingCall);
+        self.call_shown = true;
     }
 }
 
@@ -709,6 +721,63 @@ mod tests {
         router.sync(&snap);
         router.handle(&UiEvent::Wake, &snap);
         assert_eq!(router.stack(), [Route::Home, Route::IncomingCall]);
+    }
+
+    #[test]
+    fn an_answered_call_comes_back_after_its_screen_was_reset_away() {
+        // Hang up lives on the call screen only: anything that resets the
+        // stack during the call (a decision, USB storage, a base navigate,
+        // a relock) must not leave the Wave without it.
+        use waved_state::UsbStoragePhase;
+        let up = |snap: &mut UiSnapshot| -> Router {
+            let mut router = started(snap);
+            call(snap, ringing());
+            router.sync(snap);
+            call(snap, active());
+            router.sync(snap);
+            router
+        };
+
+        let mut snap = ready();
+        let mut router = up(&mut snap);
+        snap.meeting.pending_decision = Some(decision());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Decision, Route::IncomingCall], "a recording's decision");
+
+        let mut snap = ready();
+        let mut router = up(&mut snap);
+        router.handle(&UiEvent::ToBase, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall], "ToBase");
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        router.handle(&UiEvent::Navigate(Route::Home), &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall], "a base navigate");
+
+        let mut snap = ready();
+        let mut router = up(&mut snap);
+        usb(&mut snap, UsbStoragePhase::On);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::UsbStorage, Route::IncomingCall], "USB storage");
+
+        let mut snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Bluetooth), &snap);
+        router.handle(&UiEvent::PinAccepted, &snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        call(&mut snap, active());
+        router.sync(&snap);
+        router.handle(&UiEvent::Rest, &snap);
+        router.sync(&snap);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall], "a relock");
+
+        // Back is the user's own choice: it stays away until the call ends.
+        router.handle(&UiEvent::Back, &snap);
+        router.handle(&UiEvent::ToBase, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home]);
     }
 
     #[test]
