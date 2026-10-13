@@ -259,7 +259,7 @@ class NativeSession:
                 "native output byte count differs from ONNX contract",
             )
         expected = independent_oracle(record, inputs)[spec["name"]].tobytes(order="C")
-        if record["profile_id"] == "fp16-marblenet-v1":
+        if record["profile_id"] in {"fp16-marblenet-v1", "fp16-marblenet-pad-v1"}:
             from .marblenet_graph import validate_graph_output
 
             validate_graph_output(record, expected, payload)

@@ -33,6 +33,7 @@ IMAGE = "sha256:a45f1308adfe3fc3b90e329e72d5efe9d743e6cc77017254d28bbba1c689586a
 TIM_COMMIT = "702715d714277376d7ff466b7b72833ff57564c1"
 ROOT_RE = re.compile(r"/tmp/wave-npu-onnx(?:17|18)-[0-9a-f]{16}-(?:compile|execute)\Z")
 GRAPH_PROFILE = "fp16-marblenet-v1"
+GRAPH_PROFILES = frozenset({GRAPH_PROFILE, "fp16-marblenet-pad-v1"})
 MAXIMUM_GRAPH_TENSOR_BYTES = 8 * 1024 * 1024
 SYSTEM_HASHES = {
     path: digest
@@ -112,14 +113,14 @@ def remote_root(record: dict, kind: str) -> str:
     digest = record.get("lowering_sha256", "")
     if kind not in ("compile", "execute") or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise NativeLabError("invalid native root identity")
-    poc = "18" if record.get("profile_id") == GRAPH_PROFILE else "17"
+    poc = "18" if record.get("profile_id") in GRAPH_PROFILES else "17"
     return f"/tmp/wave-npu-onnx{poc}-{digest[:16]}-{kind}"
 
 
 def _tensor_bytes(record: dict, key: str) -> int:
     size = record[key]["byte_size"]
     maximum = (
-        MAXIMUM_GRAPH_TENSOR_BYTES if record.get("profile_id") == GRAPH_PROFILE else 32
+        MAXIMUM_GRAPH_TENSOR_BYTES if record.get("profile_id") in GRAPH_PROFILES else 32
     )
     if type(size) is not int or not 0 < size <= maximum:
         raise NativeLabError("native tensor exceeds its profile byte bound")
@@ -131,7 +132,7 @@ def _compare_output(record: dict, expected: bytes, observed: bytes) -> dict:
         expected
     ):
         raise NativeLabError("native output length differs from its tensor contract")
-    if record.get("profile_id") == GRAPH_PROFILE:
+    if record.get("profile_id") in GRAPH_PROFILES:
         _host()
         from wave_onnx_hybrid.marblenet_graph import validate_graph_output
 
@@ -283,7 +284,7 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
             raise NativeLabError("compile envelope does not bind this NBG")
         stdout = _regular(root / "evidence/compile/stdout.txt").decode()
         if _digest(stdout.encode()) != compiled.get("stdout_sha256") or not _nn_target(
-            stdout, allow_tp=record["profile_id"] == GRAPH_PROFILE
+            stdout, allow_tp=record["profile_id"] in GRAPH_PROFILES
         ):
             raise NativeLabError("NN target evidence changed or absent")
         cleanup = _json(root / "evidence/compile/cleanup.json")
@@ -345,7 +346,7 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
         _compare_output(record, oracle, expected)
         manifest_reference = expected
         cpu_output_digest = _digest(expected)
-        if record["profile_id"] == GRAPH_PROFILE:
+        if record["profile_id"] in GRAPH_PROFILES:
             independent_bytes = _regular(
                 root / "qualification-independent-output.bin",
                 _tensor_bytes(record, "onnx_output"),
@@ -710,7 +711,7 @@ def _tensor_expectation(tensor: dict) -> compile_lab.TensorExpectation:
 def _compile_policy(package: dict) -> npu_op_dtype_lab.DiagnosticCompilePolicy:
     record = package["record"]
     root = remote_root(record, "compile")
-    poc = "18" if record["profile_id"] == GRAPH_PROFILE else "17"
+    poc = "18" if record["profile_id"] in GRAPH_PROFILES else "17"
     return npu_op_dtype_lab.DiagnosticCompilePolicy(
         poc_id=poc,
         experiment=f"wave-npu-poc{poc}-onnx-compile",
@@ -1102,7 +1103,7 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
     _successful_run(envelope)
     stdout = _regular(run_dir / "stdout.txt").decode()
     if not _nn_target(
-        stdout, allow_tp=package["record"]["profile_id"] == GRAPH_PROFILE
+        stdout, allow_tp=package["record"]["profile_id"] in GRAPH_PROFILES
     ):
         raise NativeLabError(
             "native compiler did not establish exclusive NN target selection"
@@ -1179,7 +1180,7 @@ def _cpu_expected(
             )
         if evidence_path is not None:
             _write_json(evidence_path, cpu_run.evidence)
-            if package["record"]["profile_id"] == GRAPH_PROFILE:
+            if package["record"]["profile_id"] in GRAPH_PROFILES:
                 _write(
                     evidence_path.with_name("qualification-cpu-output.bin"),
                     cpu[output_spec["name"]].tobytes(),
@@ -1214,11 +1215,15 @@ def _execute_manifest(
         for path in artifacts
         if path.startswith(root + "/")
     }
-    numerical = record["profile_id"] == GRAPH_PROFILE
+    numerical = record["profile_id"] in GRAPH_PROFILES
     operation = (
-        "fp16-marblenet"
-        if numerical
-        else ("fp16-conv" if record["profile_id"] == "fp16-conv-v1" else "u8-fc")
+        "fp16-marblenet-pad"
+        if record["profile_id"] == "fp16-marblenet-pad-v1"
+        else (
+            "fp16-marblenet"
+            if numerical
+            else ("fp16-conv" if record["profile_id"] == "fp16-conv-v1" else "u8-fc")
+        )
     )
     result_re = re.compile(
         r"^EXECUTION status=PASS mode=execute-once target=wave operation="
@@ -1368,7 +1373,7 @@ def execute_package(
         )
         _cleanup(manifest, payloads, remote, envelope, directory, execute=True)
         raise
-    if package["record"]["profile_id"] == GRAPH_PROFILE:
+    if package["record"]["profile_id"] in GRAPH_PROFILES:
         _write_json(directory / "numerical-comparison.json", comparison)
     _cleanup(manifest, payloads, remote, envelope, directory, execute=True)
     native_identity = {
@@ -1437,7 +1442,7 @@ def qualify_package(
             _regular(root / "qualification-cpu-oracle.json")
         ),
     }
-    if package["record"]["profile_id"] == GRAPH_PROFILE:
+    if package["record"]["profile_id"] in GRAPH_PROFILES:
         qualification.update(
             {
                 "independent_output_sha256": _digest(

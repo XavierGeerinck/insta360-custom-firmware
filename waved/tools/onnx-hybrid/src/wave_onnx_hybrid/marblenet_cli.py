@@ -184,9 +184,16 @@ def _full_package(
         "package directory identity mismatch",
     )
     record = loaded.get("record", {})
+    if record.get("profile_id") == "fp16-marblenet-pad-v1":
+        from .marblenet_pad import validate_full_pad_model
+
+        validate_full_pad_model((package / "model.onnx").read_bytes())
+        model_identity = record.get("source_model_sha256")
+    else:
+        model_identity = FULL_MODEL_SHA256
     _require(
-        record.get("profile_id") == "fp16-marblenet-v1"
-        and record.get("source_model_sha256") == FULL_MODEL_SHA256
+        record.get("profile_id") in {"fp16-marblenet-v1", "fp16-marblenet-pad-v1"}
+        and record.get("source_model_sha256") == model_identity
         and record.get("onnx_input")
         == {
             "name": "input",
@@ -221,7 +228,7 @@ def _full_package(
     if require_qualification:
         _require(qualification is not None, "full MarbleNet package is not qualified")
     _require(
-        _hash_file(package / "model.onnx") == FULL_MODEL_SHA256,
+        _hash_file(package / "model.onnx") == model_identity,
         "full ONNX model identity changed",
         ErrorCode.MODEL_WEIGHT_HASH_MISMATCH,
     )
@@ -381,7 +388,7 @@ def run_marblenet(
         ErrorCode.EVIDENCE_INVALID,
     )
     _require(
-        execution.get("model_sha256") == FULL_MODEL_SHA256,
+        execution.get("model_sha256") == loaded["record"]["source_model_sha256"],
         "backend model identity differs",
         ErrorCode.EVIDENCE_INVALID,
     )
@@ -502,6 +509,12 @@ def run_marblenet(
             ),
         },
     }
+    if record["profile_id"] == "fp16-marblenet-pad-v1":
+        from .marblenet_pad import validate_full_pad_model
+
+        document["model"]["derivation"] = validate_full_pad_model(
+            (package / "model.onnx").read_bytes()
+        )
     _write_exclusive(outputs, payload)
     try:
         _write_exclusive(evidence, canonical_json(document))

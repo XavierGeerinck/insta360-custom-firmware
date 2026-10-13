@@ -89,12 +89,30 @@ def compare_vad(reference: bytes, observed: bytes) -> dict:
     return result
 
 
+def _full_model_identity(package: dict) -> dict:
+    record = package["record"]
+    payload = lab._regular(Path(package["directory"]) / "model.onnx")
+    if lab._digest(payload) != record["source_model_sha256"]:
+        raise BenchmarkError("full model identity changed")
+    if record["profile_id"] == "fp16-marblenet-v1":
+        if record["source_model_sha256"] != FULL_MODEL_SHA256:
+            raise BenchmarkError("exact full trained model required")
+        return {"model_sha256": FULL_MODEL_SHA256, "derivation": None}
+    if record["profile_id"] == "fp16-marblenet-pad-v1":
+        from wave_onnx_hybrid.marblenet_pad import validate_full_pad_model
+
+        return {
+            "model_sha256": record["source_model_sha256"],
+            "derivation": validate_full_pad_model(payload),
+        }
+    raise BenchmarkError("full model profile unsupported")
+
+
 def vad_gate(package_dir: Path, prepared: Path, runs: dict[str, Path]) -> dict:
     _preparation(prepared)
     package = lab.load_package(package_dir, require_qualification=True)
-    if package["record"]["source_model_sha256"] != FULL_MODEL_SHA256 or set(
-        runs
-    ) != set(CLIPS):
+    model_identity = _full_model_identity(package)
+    if set(runs) != set(CLIPS):
         raise BenchmarkError("four frozen clips and qualified full model required")
     clips = {}
     for clip in CLIPS:
@@ -145,7 +163,7 @@ def vad_gate(package_dir: Path, prepared: Path, runs: dict[str, Path]) -> dict:
             raise BenchmarkError("clip raw result differs")
         expected_identity = {
             "package_sha256": package["package_sha256"],
-            "source_model_sha256": FULL_MODEL_SHA256,
+            "source_model_sha256": model_identity["model_sha256"],
             "lowering_sha256": package["record"]["lowering_sha256"],
             "nbg_sha256": package["compiled"]["nbg_sha256"],
             "input_sha256": lab._digest(input_bytes),
@@ -176,13 +194,16 @@ def vad_gate(package_dir: Path, prepared: Path, runs: dict[str, Path]) -> dict:
                 lab._regular(directory / "native-identity.json")
             ),
         }
-    return {
+    result = {
         "schema_version": 1,
         "status": "PASS",
         "preparation_sha256": PREPARATION_SHA256,
         "package_sha256": package["package_sha256"],
         "clips": clips,
     }
+    if model_identity["derivation"] is not None:
+        result["model_derivation"] = model_identity["derivation"]
+    return result
 
 
 def ir8_model(payload: bytes) -> bytes:

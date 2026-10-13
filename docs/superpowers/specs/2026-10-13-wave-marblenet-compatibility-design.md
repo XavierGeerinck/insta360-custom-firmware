@@ -84,3 +84,21 @@ lowering and full-model qualification/timings when achievable; host tests,
 durable notebook/result ledger and updated guide with observed coverage only.
 Keep work in the existing feature checkout, commit owned files only, and
 do not push, merge or deploy a production service.
+
+## Owner-approved temporary Wi-Fi exception
+
+During host preparation, three real atbm Wi-Fi AP-loss/tx-flush kernel WARNs
+invalidated the pre-launch interval before any model/NPU call. A separate
+alert-detector bug matched `hang` inside `changed`; it was fixed with
+regressions while preserving every real warning/timeout. The owner then
+explicitly approved temporary Wi-Fi disable and restoration.
+
+Capture original link/association state privately, issue supplicant
+`disconnect` without saving configuration, and temporarily lower the
+interface. The running waved station poller may raise the interface; keep
+its manual DISCONNECTED state rather than stopping services. Restore the
+original UP state and request supplicant reassociation at closure; verify
+restoration. Do not edit credentials, stop waved/watchdog, reset drivers
+or change NPU settings. Establish a separately recorded quiet post-change
+baseline before any native launch, preserving the earlier FAIL intervals.
+The ordinary stop-all gate applies to every native call in that new phase.

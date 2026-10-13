@@ -169,6 +169,19 @@ def test_strict_failure_writes_no_outputs_and_does_not_retry(tmp_path, monkeypat
     assert not args["outputs"].exists() and not args["evidence"].exists()
 
 
+def test_self_consistent_pad_profile_does_not_bypass_trained_model_gate(
+    tmp_path, monkeypatch
+):
+    args, calls, loaded = fixture(tmp_path, monkeypatch)
+    loaded["record"]["profile_id"] = "fp16-marblenet-pad-v1"
+    # Even a matching loader/model digest and PASS qualification cannot
+    # authorize bytes that do not reverse to the pinned trained graph.
+    with pytest.raises(HybridError):
+        marblenet_cli.run_marblenet(**args)
+    assert calls == []
+    assert not args["outputs"].exists() and not args["evidence"].exists()
+
+
 def test_dangling_output_symlink_refuses_before_dispatch(tmp_path, monkeypatch):
     args, calls, _ = fixture(tmp_path, monkeypatch)
     args["outputs"].symlink_to(tmp_path / "new-target.npz")

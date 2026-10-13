@@ -298,6 +298,16 @@ def import_native_model(path: Path) -> dict[str, Any]:
     ):
         from .marblenet_graph import import_graph
 
+        markers = [
+            p.value for p in model.metadata_props if p.key == "wave.native_profile"
+        ]
+        if markers:
+            _require(
+                markers == ["fp16-marblenet-pad-v1"],
+                "unsupported or duplicate native graph profile marker",
+                ErrorCode.ONNX_OPERATOR_UNSUPPORTED,
+            )
+            return import_graph(path, profile_id=markers[0])
         return import_graph(path)
     _require(
         len(model.opset_import) == 1
@@ -363,7 +373,7 @@ def independent_oracle(
     Conv accumulates three half operands in FP32 then rounds once to FP16.
     FC widens before multiplication and saturates the integer sum to UINT8.
     """
-    if record.get("profile_id") == "fp16-marblenet-v1":
+    if record.get("profile_id") in {"fp16-marblenet-v1", "fp16-marblenet-pad-v1"}:
         from .marblenet_graph import independent_graph_oracle
 
         return independent_graph_oracle(record, inputs)

@@ -10,6 +10,21 @@ import npu_onnx_native_lab as lab
 
 
 class NativeBridgeTests(unittest.TestCase):
+    def test_pad_profile_keeps_bounded_tensor_policy_and_distinct_root(self):
+        record = {
+            "profile_id": "fp16-marblenet-pad-v1",
+            "lowering_sha256": "cd" * 32,
+            "onnx_input": {"byte_size": 64000},
+        }
+        self.assertEqual(lab._tensor_bytes(record, "onnx_input"), 64000)
+        self.assertEqual(
+            lab.remote_root(record, "compile"),
+            "/tmp/wave-npu-onnx18-" + "cd" * 8 + "-compile",
+        )
+        record["onnx_input"]["byte_size"] = lab.MAXIMUM_GRAPH_TENSOR_BYTES + 1
+        with self.assertRaises(lab.NativeLabError):
+            lab._tensor_bytes(record, "onnx_input")
+
     def test_package_hash_mismatch_refuses_before_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

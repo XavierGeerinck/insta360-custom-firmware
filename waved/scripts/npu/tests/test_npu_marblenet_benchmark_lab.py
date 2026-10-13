@@ -14,6 +14,25 @@ import npu_marblenet_benchmark_lab as benchmark
 
 
 class MarbleNetBenchmarkTests(unittest.TestCase):
+    def test_arbitrary_full_model_hash_is_not_a_benchmark_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = b"arbitrary model with a self-consistent hash"
+            (root / "model.onnx").write_bytes(payload)
+            package = {
+                "directory": str(root),
+                "record": {
+                    "profile_id": "fp16-marblenet-v1",
+                    "source_model_sha256": benchmark.lab._digest(payload),
+                },
+            }
+            with (
+                mock.patch.object(benchmark.lab.npu_lab, "AdbTransport") as transport,
+                self.assertRaises(benchmark.BenchmarkError),
+            ):
+                benchmark._full_model_identity(package)
+            transport.assert_not_called()
+
     def test_iterations_are_explicit_and_old_policy_stays_one(self):
         self.assertEqual(execution.POC7_POLICY.expected_iterations, 1)
         with tempfile.TemporaryDirectory() as temporary:
