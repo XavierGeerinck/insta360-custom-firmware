@@ -246,6 +246,12 @@ pub struct BluetoothState {
     pub device_name: String,
     pub mac: String,
     pub bt_on: bool,
+    /// The module is in pairing mode (`0xB2` bit 3, seen 2026-10-13).
+    pub pairing: bool,
+    /// Phone audio plays on the speaker: music or a call (`0xB2` bit 1).
+    pub phone_audio: bool,
+    /// Phone audio runs both ways, microphone too: a call (`0xB2` bit 2).
+    pub call_audio: bool,
 }
 
 #[derive(Clone, Debug, Default)]

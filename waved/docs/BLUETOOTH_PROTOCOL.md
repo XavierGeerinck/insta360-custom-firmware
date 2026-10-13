@@ -571,6 +571,40 @@ module's flash.
 - The host-side paired list, with Forget.
 - Locked behind the PIN (D10).
 
+## Verified on the device (2026-10-13)
+
+waved at `bae1fff`, then with `UART_BAUD = waved_bt::BT_BAUD`:
+
+- **Framing and speed confirmed.** At 921600 raw, the module's first frame was
+  `75 45 03 B2 00 00 B5`: prefix `75 45`, `LEN` = 1 + data, `SUM` over
+  `LEN CMD DATA`. No junk bytes in 13 KB. (`stty` reports "Inappropriate ioctl"
+  for one of the flow-control flags but sets the speed; busybox here has no
+  `timeout`, use `cat & sleep; kill`.)
+- **The module repeats a frame every 500 ms until it is acknowledged** (180
+  identical `0xB2` in 90 s with no host). Our `75 46` acknowledgements stop
+  it; replies to our requests come back as `75 46` frames.
+- **Firmware 0.0.0.28, built 2025-11-28 20:15:49**: older than 1.2.2.6's
+  `BT.bin` (0.0.0.33, F6). Name: `Insta360 Wave BT <six hex digits of the
+  serial>`.
+- **Pairing:** idle, the module is not discoverable to a new phone. Stock's
+  "Connect a new device" sequence, `Disconnect` (`75 45 02 A3 00 A5`) then
+  `EnterPairing` (`75 45 02 A7 00 A9`), made it discoverable; an iPhone paired
+  and connected. **`0xB2` bit 3 (`0x08`) is pairing mode**; a connected phone
+  is `0x01`. A phone paired under stock reconnects by itself.
+- **The phone book arrives by itself.** Right after an iPhone connected, the
+  module sent `0xB0` frames: one contact each (index, length, number as ASCII,
+  name as UTF-16LE). It is PBAP, which stock uses for caller names. waved must
+  never log or store these (TODO: decode as a dropped event; "Phone book
+  (PBAP) sync" is not planned).
+- **Module log lines (`0xF0`) carry the phone's Bluetooth name and MAC**
+  (`app_set_bt_last_addr`). Keep them out of the log at info and debug.
+- **`PhoneMac` decodes one byte off:** `app_set_bt_last_addr A1B2C3D4E557`
+  arrived as `06 A1 B2 C3 D4 E5`: the first byte is a length (6).
+  `DeviceDisconnected` decodes the same MAC correctly.
+- **Audio arrives with no host command:** with the phone playing, `arecord -D
+  hw:0,0 -c 2 -r 48000 -f S16_LE` recorded a full-scale signal (peak ≈ 24 000).
+  waved routes none of it yet, so the speaker stays silent (I2).
+
 ## First device session
 
 Run everything below with **waved stopped**, together with its watchdog

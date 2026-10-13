@@ -282,8 +282,9 @@ Rules for the parallel milestones:
   - [x] Status pill variants for charging and low battery (goldens).
   - [x] Messages at 10 % and 5 %, with the battery icon.
   - [x] At 3 %, finalize any recording, then shut down.
-- [ ] **F3 Motor** (S) — verify the `MotorPosition` frames and the obstruction event on
-  the device before Mic height ships.
+- [ ] **F3 Motor** (S) — moves, positions and IDLE verified on the device 2026-10-13
+  (`waved/docs/MCU_PROTOCOL.md`). Left: the retract at power off, the start height after a
+  power cycle, and what a firm hold reports (BLOCK or SENSOR_TRIGGER).
   - Host side done 2026-10-12: `waved-mcu/src/lift.rs` (move, start height, motor reports,
     polling, blocked / obstructed) and a frame-level MCU simulator (`simulate.rs`) that the
     tests and the `simulate` build run against. Device checks: the plan above, "F3 Motor".

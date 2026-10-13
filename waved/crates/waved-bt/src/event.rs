@@ -32,6 +32,11 @@ impl WorkStatus {
     pub fn phone_mic(self) -> bool {
         self.0 & 0x04 != 0
     }
+    /// Bit 3: pairing mode (0x08 right after `EnterPairing`, seen on the
+    /// device 2026-10-13; not named in stock's code).
+    pub fn pairing(self) -> bool {
+        self.0 & 0x08 != 0
+    }
     /// Bit 4: the 2.4 GHz dongle is connected.
     pub fn dongle_connected(self) -> bool {
         self.0 & 0x10 != 0

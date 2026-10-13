@@ -34,6 +34,9 @@ impl Tracker {
                     set_name(s, &p.name, &mut out);
                 }
                 set_connected(s, status.phone_connected(), &mut out);
+                set_flag(&mut s.pairing, status.pairing(), &mut out);
+                set_flag(&mut s.phone_audio, status.phone_speaker(), &mut out);
+                set_flag(&mut s.call_audio, status.phone_mic(), &mut out);
             }
             Event::Heartbeat { phone: Some(p) } => {
                 self.phone_mac = p.mac.or(self.phone_mac);
@@ -76,6 +79,13 @@ impl Tracker {
     }
 }
 
+fn set_flag(flag: &mut bool, value: bool, out: &mut Applied) {
+    if *flag != value {
+        *flag = value;
+        out.changed = true;
+    }
+}
+
 fn set_name(s: &mut BluetoothState, name: &str, out: &mut Applied) {
     if !name.is_empty() && s.device_name != name {
         s.device_name = name.to_string();
@@ -110,6 +120,22 @@ mod tests {
 
     fn report(phone: Link<i8>) -> Event {
         Event::LinkReport { dongle: Link::Absent, phone, counters: None }
+    }
+
+    #[test]
+    fn work_status_bits_set_audio_and_pairing() {
+        // Seen on the device 2026-10-13: 0x08 after EnterPairing, 0x01 once a
+        // phone connected. Bits 1 and 2 are stock's audio bits (I2).
+        let mut t = Tracker::default();
+        let mut s = BluetoothState::default();
+        let a = t.apply(&Event::WorkStatus { status: WorkStatus(0x08), phone: None }, &mut s);
+        assert!(a.changed && s.pairing && !s.connected && !s.phone_audio && !s.call_audio);
+        t.apply(&Event::WorkStatus { status: WorkStatus(0x03), phone: None }, &mut s);
+        assert!(s.connected && s.phone_audio && !s.call_audio && !s.pairing);
+        t.apply(&Event::WorkStatus { status: WorkStatus(0x07), phone: None }, &mut s);
+        assert!(s.phone_audio && s.call_audio);
+        let same = t.apply(&Event::WorkStatus { status: WorkStatus(0x07), phone: None }, &mut s);
+        assert!(!same.changed);
     }
 
     #[test]

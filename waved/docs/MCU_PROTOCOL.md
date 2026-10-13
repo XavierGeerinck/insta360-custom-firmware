@@ -226,7 +226,7 @@ reaches the MCU. Verified on the device 2026-10-12: heartbeats answered,
 click sleeps and wakes, a 2 s hold and System → Power off both power the
 unit off, `killall waved` does not.
 
-### The lift in waved (Mic height, unverified on the device)
+### The lift in waved (Mic height)
 
 `crates/waved-mcu/src/lift.rs` (2026-10-12): `SetMotorPosition` sends the move
 (sub 0, stock's limits and speeds), then the start height (sub 4), each resent
@@ -240,6 +240,12 @@ ignored), BLOCK ends it as Blocked, SENSOR_TRIGGER as Obstructed with
 power key's hold) shows as moving too. Nothing retries by itself: the user's
 next tap on a stalled height uses the block speeds 80 / 45. waved never moves
 the lift at start-up (the MCU raised it to the start height).
+Verified on the device 2026-10-13: High (50 mm) arrives in 1.8 s; Low goes
+50 → 40 → 30 with cmd 4 sub 1 position reports on the way; IDLE ends each move;
+the choice is saved (`mic_height` in config.toml). A gentle finger on the lift
+produced no BLOCK or SENSOR_TRIGGER: the MCU kept driving and the move took
+2.6 s instead of 1.8. Not yet checked: the retract at power off and the
+start height after a power cycle.
 `crates/waved-mcu/src/simulate.rs` (`SimMcu`) answers like this description;
 the device pass checks it (`docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md`,
 "Device-pass checklist").

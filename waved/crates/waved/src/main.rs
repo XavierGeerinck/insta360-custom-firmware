@@ -26,7 +26,9 @@ const RECORDINGS_DIR: &str = "/mnt/udisk/recordings";
 const RECORDINGS_DIR: &str = "./recordings";
 
 const UART_PORT: &str = "/dev/ttyS1";
-const UART_BAUD: u32 = 115200;
+/// The Telink module's speed (docs/BLUETOOTH_PROTOCOL.md); frames verified on
+/// the device 2026-10-13.
+const UART_BAUD: u32 = waved_bt::BT_BAUD;
 
 fn main() {
     tracing_subscriber::fmt()
