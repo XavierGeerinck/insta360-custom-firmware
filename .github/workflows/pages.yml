@@ -34,6 +34,8 @@ jobs:
         working-directory: site
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
@@ -48,7 +50,8 @@ jobs:
           path: site/dist
 
   deploy:
-    if: github.event_name != 'pull_request'
+    # Only main publishes; a manual run from another branch builds but never deploys.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
