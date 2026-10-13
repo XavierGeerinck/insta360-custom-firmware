@@ -19,6 +19,9 @@ pub const PROC_MOUNTS: &str = "/proc/mounts";
 /// what is safe without asking.
 pub const FSCK: &str = "/sbin/fsck.exfat";
 pub const MOUNT: &str = "/bin/mount";
+/// waved's note that it took the recordings off Wave (`Volume::note_unmount`).
+/// `/tmp` is tmpfs: a reboot clears it, and the boot mounts the volume.
+pub const UNMOUNT_NOTE: &str = "/tmp/waved-usb-storage.unmounted";
 /// A full check of the 21 GB volume takes seconds; past this it is stopped
 /// and the volume is mounted anyway.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -120,6 +123,7 @@ impl Gadget for ConfigfsGadget {
 pub struct SystemVolume {
     target: PathBuf,
     proc_mounts: PathBuf,
+    note: PathBuf,
 }
 
 impl SystemVolume {
@@ -127,11 +131,18 @@ impl SystemVolume {
         Self {
             target: target.into(),
             proc_mounts: proc_mounts.into(),
+            note: UNMOUNT_NOTE.into(),
         }
     }
 
     pub fn device() -> Self {
         Self::new(MOUNT_POINT, PROC_MOUNTS)
+    }
+
+    /// Keep the unmount note at `note` instead of `UNMOUNT_NOTE`.
+    pub fn with_note(mut self, note: impl Into<PathBuf>) -> Self {
+        self.note = note.into();
+        self
     }
 }
 
@@ -153,6 +164,17 @@ pub fn mount_on(mounts: &str, target: &Path) -> Option<MountSpec> {
 }
 
 /// `/proc/mounts` writes space, tab, newline and backslash as octal escapes.
+fn escape(field: &str) -> String {
+    let mut out = String::with_capacity(field.len());
+    for c in field.chars() {
+        match c {
+            ' ' | '\t' | '\n' | '\\' => out.push_str(&format!("\\{:03o}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn unescape(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -265,6 +287,33 @@ impl Volume for SystemVolume {
             Ok(())
         } else {
             Err(io::Error::other(format!("mount failed, {summary}")))
+        }
+    }
+
+    fn note_unmount(&mut self, spec: &MountSpec) -> io::Result<()> {
+        // One `/proc/mounts` line, read back with `mount_on`.
+        let line = format!(
+            "{} {} {} {} 0 0\n",
+            escape(&spec.source),
+            escape(&spec.target),
+            escape(&spec.fstype),
+            escape(&spec.options)
+        );
+        std::fs::write(&self.note, line)
+    }
+
+    fn unmount_noted(&self) -> Option<MountSpec> {
+        let note = std::fs::read_to_string(&self.note).ok()?;
+        // A note cut short still says the volume was taken off Wave: it is
+        // then mounted as the boot mounts it.
+        Some(mount_on(&note, &self.target).unwrap_or_else(MountSpec::boot))
+    }
+
+    fn clear_unmount_note(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.note) {
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::warn!("usb storage: could not remove {}: {error}", self.note.display());
+            }
         }
     }
 }
@@ -400,6 +449,28 @@ tmpfs /mnt/udisk tmpfs ro 0 0
         assert_eq!(volume.mounted().unwrap().unwrap().source, "/dev/udisk");
         std::fs::write(&mounts, "/dev/root / squashfs ro 0 0\n").unwrap();
         assert_eq!(volume.mounted().unwrap(), None);
+    }
+
+    #[test]
+    fn the_unmount_note_keeps_the_mount_until_it_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("note");
+        let mut volume = SystemVolume::new("/mnt/my disk", dir.path().join("mounts")).with_note(&note);
+        assert_eq!(volume.unmount_noted(), None, "no note: the boot mounts the volume");
+        let spec = MountSpec {
+            source: "/dev/udisk".into(),
+            target: "/mnt/my disk".into(),
+            fstype: "exfat".into(),
+            options: "rw,relatime,fmask=0077".into(),
+        };
+        volume.note_unmount(&spec).unwrap();
+        assert_eq!(volume.unmount_noted(), Some(spec));
+        // Cut short: still a note, with the boot's mount.
+        std::fs::write(&note, "/dev/udisk").unwrap();
+        assert_eq!(volume.unmount_noted(), Some(MountSpec::boot()));
+        volume.clear_unmount_note();
+        assert_eq!(volume.unmount_noted(), None);
+        volume.clear_unmount_note();
     }
 
     #[test]
