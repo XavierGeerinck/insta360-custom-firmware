@@ -11,6 +11,9 @@ pub enum ConfirmKind {
     StopUsbStorage,
     /// Wi-Fi "Change network": leave the current network for the setup network (B7).
     ChangeNetwork,
+    /// Bluetooth "Pair another phone": drops the connected phone (stock's
+    /// "Connecting a new device will disconnect from <phone>. Continue?").
+    PairAnotherPhone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +72,9 @@ impl Route {
             Route::Wifi | Route::WifiSetup | Route::Confirm(ConfirmKind::ChangeNetwork) => {
                 Some(Route::Wifi)
             }
-            Route::Bluetooth => Some(Route::Bluetooth),
+            Route::Bluetooth | Route::Confirm(ConfirmKind::PairAnotherPhone) => {
+                Some(Route::Bluetooth)
+            }
             Route::Uploads | Route::UploadMode => Some(Route::Uploads),
             Route::System
             | Route::Display
@@ -147,6 +152,7 @@ mod tests {
             (Route::TimeZone, Route::System),
             (Route::DimAfter, Route::System),
             (Route::Confirm(ConfirmKind::ChangeNetwork), Route::Wifi),
+            (Route::Confirm(ConfirmKind::PairAnotherPhone), Route::Bluetooth),
         ];
         for (route, entry) in cases {
             assert_eq!(route.guarded_by(), Some(entry), "{route:?}");
@@ -174,6 +180,7 @@ mod tests {
             Route::TimeZone,
             Route::DimAfter,
             Route::Confirm(ConfirmKind::ChangeNetwork),
+            Route::Confirm(ConfirmKind::PairAnotherPhone),
         ] {
             assert!(!route.requires_pin(), "{route:?}");
             assert!(!route.is_base(), "{route:?}");

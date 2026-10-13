@@ -53,6 +53,19 @@ pub fn spec(kind: ConfirmKind, snap: &UiSnapshot) -> ConfirmSpec {
                 Tone::Live,
             )
         }
+        // Stock asks too: "Connecting a new device will disconnect from
+        // <phone>. Continue?" (libui bt_new_connect_btn_clicked_cb 22184).
+        ConfirmKind::PairAnotherPhone => {
+            let name = snap.bt.device_name.trim();
+            let phone = if name.is_empty() { "the connected phone" } else { name };
+            (
+                icons::BLUETOOTH,
+                "Pair another phone?",
+                format!("Wave disconnects from {phone}, then shows up for a new phone for two minutes."),
+                "Pair",
+                Tone::Live,
+            )
+        }
         ConfirmKind::StopUsbStorage => (
             icons::USB,
             "Stop USB storage?",
@@ -110,6 +123,8 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
             then: Some(Route::WifiSetup),
             message: None,
         },
+        // Back to the Bluetooth screen, which counts the two minutes down.
+        ConfirmKind::PairAnotherPhone => done(Some(Command::BtPair), None),
         // G1 (milestone 3) adds Command::StopUsbStorage and sends it here.
         ConfirmKind::StopUsbStorage => done(None, None),
     }
@@ -322,6 +337,32 @@ mod tests {
     }
 
     #[test]
+    fn pairing_another_phone_only_after_confirming() {
+        let next = outcome(ConfirmKind::PairAnotherPhone);
+        assert_eq!(next.command, Some(Command::BtPair));
+        assert_eq!((next.backs, next.then), (1, None));
+        assert!(next.message.is_none(), "the Bluetooth screen counts down");
+        let mut snap = snap();
+        snap.bt.connected = true;
+        snap.bt.device_name = "iPhone".into();
+        assert!(spec(ConfirmKind::PairAnotherPhone, &snap).body.contains("disconnects from iPhone"));
+        snap.bt.device_name.clear();
+        assert!(spec(ConfirmKind::PairAnotherPhone, &snap).body.contains("the connected phone"));
+        snap.bt.device_name = "iPhone".into();
+        lvgl(|lv| {
+            let (mut f, screen, root) = build(ConfirmKind::PairAnotherPhone, &snap, lv);
+            assert_golden("screen_confirm_pair_another_phone", &lv.render());
+            assert_targets_ok(root);
+            lv.click(screen.row.as_ref().unwrap().obj(0)); // Cancel
+            assert!(f.commands().is_empty(), "cancel keeps the phone");
+            assert_eq!(f.events(), vec![UiEvent::Back]);
+            lv.click(screen.row.as_ref().unwrap().obj(1)); // Pair
+            assert_eq!(f.commands(), vec![Command::BtPair]);
+            assert_eq!(f.events(), vec![UiEvent::Back]);
+        });
+    }
+
+    #[test]
     fn every_action_button_repeats_the_action() {
         let snap = snap();
         for (kind, word) in [
@@ -330,6 +371,7 @@ mod tests {
             (ConfirmKind::DeleteRecording(Uuid::new_v4()), "Delete"),
             (ConfirmKind::ChangeNetwork, "Change"),
             (ConfirmKind::StopUsbStorage, "Stop"),
+            (ConfirmKind::PairAnotherPhone, "Pair"),
         ] {
             assert_eq!(spec(kind, &snap).confirm, word, "{kind:?}");
         }

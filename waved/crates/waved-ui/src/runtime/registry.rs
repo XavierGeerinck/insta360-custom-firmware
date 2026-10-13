@@ -97,6 +97,7 @@ mod tests {
             Route::Confirm(ConfirmKind::DeleteRecording(FILE)),
             Route::Confirm(ConfirmKind::StopUsbStorage),
             Route::Confirm(ConfirmKind::ChangeNetwork),
+            Route::Confirm(ConfirmKind::PairAnotherPhone),
             // Milestone 3 screens built so far.
             Route::MicHeight,
             Route::Update,
