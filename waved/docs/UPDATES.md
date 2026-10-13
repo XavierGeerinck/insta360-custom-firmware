@@ -325,6 +325,24 @@ Not verified on a Wave. Before trusting this, a device pass should check:
 7. rustls against the owner's HTTPS server (certificate roots are compiled in by
    reqwest's `rustls-tls`; a self-signed server needs plain HTTP on the LAN, which the
    signature makes safe).
+8. `deploy/install.sh` as an update, the first time (host-tested against a fake `adb`
+   only): before it, note `md5sum /data/waved/config.toml` and `df -h /data /tmp`. Check that
+   the Wave's `adb shell` output is read right (the `echo ready` probe, `\r` stripped), that
+   busybox `ps` shows the watchdog as `/bin/sh /etc/init.d/S60waved start` both after a boot
+   (rcS) and after a `start-stop-daemon` start, that `config.toml` has the same md5 after and
+   `config.toml.before-<time>` is there with mode 600, that `/tmp/waved.old` holds the old
+   binary, and that exactly one waved runs afterwards (`ps | grep -c '[w]aved$'`; one
+   watchdog: `ps | grep -c '[S]60waved start'`).
+9. The guard check against the Wave's own `/etc/init.d/S60waved`: `grep -c
+   'MAX_TRIAL_BOOTS=' /etc/init.d/S60waved`. A Wave whose script predates boot counting
+   refuses a package without `S60waved` ("Wave can't go back if this update fails") until
+   `install.sh` or a package carrying `deploy/S60waved` replaces it.
+10. The gate on the Wave: with an update Ready, a phone call through Bluetooth (ringing,
+    answered, hung up) keeps it Waiting until the call and its audio end; USB storage on
+    holds a tapped Install until the drive is ejected and Wave has the volume back.
+11. Going back: with Mic height Medium, Bluetooth on and lockdown off, install the pre-M3
+    build (`main`, 3cc3707) with `WAVED_BINARY=... deploy/install.sh`; it must start without
+    the first-run screen and with the API endpoint kept. Then install this build again.
 
 ## Device facts used here
 
