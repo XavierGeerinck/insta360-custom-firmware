@@ -1,11 +1,12 @@
 #!/bin/sh
-# Host test for patch-stock-usbgadget.sh (G1, docs/USB_STORAGE.md). Patches a
-# copy of an S89usbgadget-shaped script, then runs the patched boot code's
-# USB storage step against a fake configfs tree, with a fake usb_flash that
-# can refuse to bind while mass_storage.usb0 is linked. Run it under busybox,
-# as the Wave runs S89 (the Wave has busybox 1.32):
+# Host test for patch-stock-usbgadget.sh. Patches a copy of an
+# S89usbgadget-shaped script and checks the result: the UAC volume ranges and
+# hid.0, nothing of USB storage at boot (G1 switches the gadget at runtime,
+# docs/USB_STORAGE.md), and a G1 step left by an earlier version of the patch
+# removed. Run it under busybox, as the Wave runs S89 (the Wave has busybox
+# 1.32):
 #
-#   docker run --rm -v "$PWD/waved/scripts:/w:ro" busybox:1.36 sh /w/test-patch-stock-usbgadget.sh
+#   docker run --rm --network none -v "$PWD/waved/scripts:/w:ro" busybox:1.36 sh /w/test-patch-stock-usbgadget.sh
 #
 # STOCK_S89=<path inside the container> also patches that copy (the stock
 # rootfs' script, e.g. mount firmwares/fw_v1.2.2.6/extracted/rootfs/etc/init.d).
@@ -82,120 +83,163 @@ EOF
     chmod 755 "$1"
 }
 
-# patch_copy <source S89> <name>: patch a copy in its own init.d, check the
-# result, patch it again (nothing changes), and leave it in $WORK/<name>.
-patch_copy() {
-    dir=$WORK/$2
+# The first G1 patch (b61d7c1, its awk verbatim): the drive linked right
+# before start_usbgadget's usb_flash.
+old_g1_v1() {
+    awk '
+        BEGIN { in_start = 0; inserted = 0 }
+        /start_usbgadget\(\)[[:space:]]*\{/ { in_start = 1 }
+        in_start && !inserted && /^[[:space:]]*usb_flash[[:space:]]*$/ {
+            print "\t\t# waved G1: USB storage (docs/USB_STORAGE.md). A removable drive with no"
+            print "\t\t# medium; waved loads /dev/udisk only after unmounting /mnt/udisk."
+            print "\t\tif [ -d /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0 ]; then"
+            print "\t\t\techo > /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0/lun.0/file"
+            print "\t\t\techo 1 > /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0/lun.0/removable"
+            print "\t\t\tln -s /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0 /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1/mass_storage.usb0"
+            print "\t\tfi"
+            inserted = 1
+        }
+        { print }
+    ' "$1"
+}
+
+# The second G1 patch (1f154d8): its functions in a marked block before
+# start_usbgadget (a blank line after it), and link, bind, check around
+# start_usbgadget's usb_flash (its awk verbatim, the block shortened).
+old_g1_v2() {
+    cat > "$WORK/g1-block" <<'EOF'
+# >>> waved G1: USB storage (docs/USB_STORAGE.md), by patch-stock-usbgadget.sh.
+WAVED_G1_GADGET=${WAVED_G1_GADGET:-/sys/kernel/config/usb_gadget/amlogic}
+
+waved_g1_link_drive()
+{
+    waved_g1_msc=$WAVED_G1_GADGET/functions/mass_storage.usb0
+    [ -d "$waved_g1_msc" ] || return 0
+    ln -s "$waved_g1_msc" "$WAVED_G1_GADGET/configs/amlogic.1/mass_storage.usb0"
+}
+
+waved_g1_check_bind()
+{
+    [ -n "$(cat "$WAVED_G1_GADGET/UDC" 2>/dev/null)" ] && return 0
+    rm -f "$WAVED_G1_GADGET/configs/amlogic.1/mass_storage.usb0"
+    usb_flash
+}
+# <<< waved G1
+EOF
+    awk -v block="$WORK/g1-block" '
+        BEGIN { in_start = 0; done = 0 }
+        /^[[:space:]]*(function[[:space:]]+)?start_usbgadget[[:space:]]*\(\)/ {
+            while ((getline line < block) > 0) print line
+            close(block)
+            print ""
+            in_start = 1
+        }
+        in_start && !done && /^[[:space:]]*usb_flash[[:space:]]*$/ {
+            indent = $0
+            sub(/usb_flash.*/, "", indent)
+            print indent "waved_g1_link_drive"
+            print
+            print indent "waved_g1_check_bind"
+            done = 1
+            next
+        }
+        in_start && /^}/ { in_start = 0 }
+        { print }
+    ' "$1"
+}
+
+# run_patch <dir>: the patch on <dir>/init.d/S89usbgadget, backups in <dir>/backup.
+run_patch() {
+    INIT=$1/init.d/S89usbgadget BACKUP_DIR=$1/backup sh "$PATCH" > "$1/out" 2>&1
+}
+
+# setup <name> <source S89>: a unit with that S89 in its own init.d.
+setup() {
+    dir=$WORK/$1
     mkdir -p "$dir/init.d" "$dir/backup"
-    cp "$1" "$dir/init.d/S89usbgadget"
+    cp "$2" "$dir/init.d/S89usbgadget"
     chmod 755 "$dir/init.d/S89usbgadget"
+}
+
+# check_patched <name>: S89 has the earlier steps and nothing of G1, is
+# executable and parses, and nothing else is left in init.d.
+check_patched() {
+    dir=$WORK/$1
     s89=$dir/init.d/S89usbgadget
-
-    INIT=$s89 BACKUP_DIR=$dir/backup sh "$PATCH" > "$dir/out" 2>&1 \
-        || { cat "$dir/out" >&2; fail "$2: the patch failed"; }
-    [ -x "$s89" ] || fail "$2: S89 is not executable after the patch"
-    sh -n "$s89" || fail "$2: the patched S89 does not parse"
+    [ -x "$s89" ] || fail "$1: S89 is not executable after the patch"
+    sh -n "$s89" || fail "$1: the patched S89 does not parse"
     [ "$(ls -A "$dir/init.d")" = "S89usbgadget" ] \
-        || fail "$2: left in init.d: $(ls -A "$dir/init.d" | tr '\n' ' ')"
-    [ "$(ls "$dir/backup" | wc -l)" -eq 1 ] || fail "$2: expected one backup"
-    [ "$(grep -c '^waved_g1_check_bind()' "$s89")" -eq 1 ] || fail "$2: the bind check is not defined once"
-    # In start_usbgadget only: link, bind, check, in that order.
-    steps=$(awk '/start_usbgadget[[:space:]]*\(\)/ { on = 1 } on && /^}/ { on = 0 }
-        on && /^[[:space:]]*(waved_g1_link_drive|usb_flash|waved_g1_check_bind)[[:space:]]*$/ { gsub(/[[:space:]]/, ""); printf "%s ", $0 }' "$s89")
-    [ "$steps" = "waved_g1_link_drive usb_flash waved_g1_check_bind " ] \
-        || fail "$2: start_usbgadget runs: $steps"
-    [ "$(grep -c 'waved_g1_link_drive$' "$s89")" -eq 1 ] || fail "$2: linked outside start_usbgadget"
-    pass "$2: patched, executable, parses, nothing left in init.d"
+        || fail "$1: left in init.d: $(ls -A "$dir/init.d" | tr '\n' ' ')"
+    grep -q "echo -16384 > functions/uac2.0/p_volume_min" "$s89" || fail "$1: no p_volume range"
+    grep -q "echo -10240 > functions/uac2.0/c_volume_min" "$s89" || fail "$1: no c_volume range"
+    [ "$(grep -c 'mkdir -p functions/hid.0' "$s89")" -eq 1 ] || fail "$1: hid.0 not added once"
+    if grep -q "waved G1\|waved_g1_" "$s89"; then
+        fail "$1: USB storage is still in the boot: $(grep -n 'waved G1\|waved_g1_' "$s89" | head -3)"
+    fi
+}
 
+# check_again <name>: a second run says so and changes nothing, no backup.
+check_again() {
+    dir=$WORK/$1
+    s89=$dir/init.d/S89usbgadget
+    backups=$(ls "$dir/backup" | wc -l)
     before=$(cksum < "$s89")
-    INIT=$s89 BACKUP_DIR=$dir/backup sh "$PATCH" > "$dir/out" 2>&1 || fail "$2: the second run failed"
-    grep -q "already patched" "$dir/out" || fail "$2: the second run did not say already patched"
-    [ "$(cksum < "$s89")" = "$before" ] || fail "$2: the second run changed S89"
-    [ "$(ls "$dir/backup" | wc -l)" -eq 1 ] || fail "$2: the second run made a backup"
-    pass "$2: a second run changes nothing"
+    run_patch "$dir" || { cat "$dir/out" >&2; fail "$1: the second run failed"; }
+    grep -q "already patched" "$dir/out" || fail "$1: the second run did not say already patched"
+    [ "$(cksum < "$s89")" = "$before" ] || fail "$1: the second run changed S89"
+    [ "$(ls "$dir/backup" | wc -l)" -eq "$backups" ] || fail "$1: the second run made a backup"
+}
+
+# patch_copy <source S89> <name>: patch a stock copy, check it, patch again.
+patch_copy() {
+    setup "$2" "$1"
+    run_patch "$WORK/$2" || { cat "$WORK/$2/out" >&2; fail "$2: the patch failed"; }
+    check_patched "$2"
+    [ "$(ls "$WORK/$2/backup" | wc -l)" -eq 1 ] || fail "$2: expected one backup"
+    grep -n "usb_flash" "$1" > "$WORK/$2.flash.before"
+    grep -n "usb_flash" "$WORK/$2/init.d/S89usbgadget" | sed 's/^[0-9]*://' > "$WORK/$2.flash.after"
+    sed 's/^[0-9]*://' "$WORK/$2.flash.before" | cmp -s - "$WORK/$2.flash.after" \
+        || fail "$2: the binds changed"
+    pass "$2: volume ranges and hid.0, no USB storage at boot, parses, nothing left in init.d"
+    check_again "$2"
+    pass "$2: a unit with these steps applied: a second run changes nothing"
 }
 
 fixture "$WORK/S89.fixture"
 patch_copy "$WORK/S89.fixture" fixture
+REFERENCE=$WORK/fixture/init.d/S89usbgadget
+BASES=fixture
 if [ -n "${STOCK_S89:-}" ]; then
     patch_copy "$STOCK_S89" stock
+    BASES="fixture stock"
 fi
 
-# An older G1 patch (no bind check) is refused, untouched.
-mkdir -p "$WORK/old/init.d" "$WORK/old/backup"
-sed 's|^\(\t*\)usb_flash$|\1# waved G1: USB storage (docs/USB_STORAGE.md).\n&|' "$WORK/S89.fixture" > "$WORK/old/init.d/S89usbgadget"
-grep -q "waved G1: USB storage" "$WORK/old/init.d/S89usbgadget" || fail "old fixture"
-before=$(cksum < "$WORK/old/init.d/S89usbgadget")
-if INIT=$WORK/old/init.d/S89usbgadget BACKUP_DIR=$WORK/old/backup sh "$PATCH" > "$WORK/old/out" 2>&1; then
-    fail "an older G1 patch was patched over"
-fi
-[ "$(cksum < "$WORK/old/init.d/S89usbgadget")" = "$before" ] || fail "the older patch was changed"
-pass "an older G1 patch is refused and left alone"
+# A unit patched by an earlier version, G1 included: the G1 step goes, the
+# rest stays exactly as this version writes it.
+for base in $BASES; do
+    reference=$WORK/$base/init.d/S89usbgadget
+    for version in v1 v2; do
+        name=$base-g1-$version
+        "old_g1_$version" "$reference" > "$WORK/S89.$name"
+        grep -q "waved G1" "$WORK/S89.$name" || fail "$name: the old patch did not apply"
+        setup "$name" "$WORK/S89.$name"
+        run_patch "$WORK/$name" || { cat "$WORK/$name/out" >&2; fail "$name: the patch failed"; }
+        check_patched "$name"
+        cmp -s "$WORK/$name/init.d/S89usbgadget" "$reference" \
+            || fail "$name: not the same as a unit never given G1: $(diff "$reference" "$WORK/$name/init.d/S89usbgadget" | head -5)"
+        [ "$(ls "$WORK/$name/backup" | wc -l)" -eq 1 ] || fail "$name: expected one backup"
+        cmp -s "$WORK/$name/backup/"* "$WORK/S89.$name" || fail "$name: the backup is not the S89 it replaced"
+        check_again "$name"
+        pass "$base: the $version G1 boot step is removed, the rest left as it was"
+    done
+done
 
-# The patched boot code, against a fake gadget.
-sed -n '/^# >>> waved G1/,/^# <<< waved G1/p' "$WORK/fixture/init.d/S89usbgadget" > "$WORK/g1.sh"
-[ -s "$WORK/g1.sh" ] || fail "no waved G1 block in the patched S89"
-
-# boot <case> <reject> <drive>: a fresh fake configfs tree, stock's msc_init
-# state, then the patched start_usbgadget's three steps. <reject>: "msc"
-# refuses the bind while the drive is linked, "all" refuses every bind,
-# "none". <drive>: "no" leaves out the drive function.
-boot() {
-    G=$WORK/$1/gadget
-    reject=$2
-    rm -rf "$WORK/$1"
-    mkdir -p "$G/configs/amlogic.1"
-    : > "$G/UDC"
-    if [ "$3" != no ]; then
-        mkdir -p "$G/functions/mass_storage.usb0/lun.0"
-        echo /dev/udisk > "$G/functions/mass_storage.usb0/lun.0/file"
-        echo 0 > "$G/functions/mass_storage.usb0/lun.0/removable"
-    fi
-    (
-        WAVED_G1_GADGET=$G
-        WAVED_G1_LOG=$WORK/$1/log
-        WAVED_G1_CONSOLE=$WORK/$1/console
-        . "$WORK/g1.sh"
-        usb_flash() {
-            if [ "$reject" = all ] \
-                || { [ "$reject" = msc ] && [ -L "$G/configs/amlogic.1/mass_storage.usb0" ]; }; then
-                : > "$G/UDC"
-            else
-                echo fdd00000.crgudc2 > "$G/UDC"
-            fi
-        }
-        waved_g1_link_drive
-        usb_flash
-        waved_g1_check_bind
-    )
-}
-
-boot binds none yes
-G=$WORK/binds/gadget
-[ -L "$G/configs/amlogic.1/mass_storage.usb0" ] || fail "binds: the drive is not linked"
-[ "$(cat "$G/functions/mass_storage.usb0/lun.0/file")" = "" ] || fail "binds: the drive holds a medium"
-[ "$(cat "$G/functions/mass_storage.usb0/lun.0/removable")" = 1 ] || fail "binds: not removable"
-[ "$(cat "$G/UDC")" = fdd00000.crgudc2 ] || fail "binds: not bound"
-[ ! -e "$WORK/binds/log" ] || fail "binds: logged $(cat "$WORK/binds/log")"
-pass "a gadget that binds with the drive keeps it, empty and removable"
-
-boot rejects msc yes
-G=$WORK/rejects/gadget
-[ "$(cat "$G/UDC")" = fdd00000.crgudc2 ] || fail "rejects: USB is not bound again"
-[ ! -e "$G/configs/amlogic.1/mass_storage.usb0" ] || fail "rejects: the drive is still linked"
-grep -q "did not bind with mass_storage.usb0" "$WORK/rejects/log" || fail "rejects: the log does not say why"
-grep -q "bound without USB storage" "$WORK/rejects/log" || fail "rejects: the log does not say it bound"
-grep -q "did not bind with mass_storage.usb0" "$WORK/rejects/console" || fail "rejects: nothing on the console"
-pass "a gadget that will not bind with the drive binds again without it, and says why"
-
-boot dead all yes
-grep -q "did not bind without mass_storage.usb0 either" "$WORK/dead/log" || fail "dead: the log does not say so"
-pass "a bind that fails without the drive too is logged as such"
-
-boot plain none no
-G=$WORK/plain/gadget
-[ ! -e "$G/configs/amlogic.1/mass_storage.usb0" ] || fail "plain: linked a drive that does not exist"
-[ "$(cat "$G/UDC")" = fdd00000.crgudc2 ] || fail "plain: not bound"
-pass "no drive function: nothing linked, bound as stock"
+# Only G1 on an otherwise stock S89 (the earlier steps undone by hand).
+old_g1_v2 "$WORK/S89.fixture" > "$WORK/S89.g1-only"
+setup g1-only "$WORK/S89.g1-only"
+run_patch "$WORK/g1-only" || { cat "$WORK/g1-only/out" >&2; fail "g1-only: the patch failed"; }
+check_patched g1-only
+cmp -s "$WORK/g1-only/init.d/S89usbgadget" "$REFERENCE" || fail "g1-only: not the same as a stock unit patched"
+pass "G1 alone: removed, and the earlier steps applied"
 
 echo "all $PASSES passed"
