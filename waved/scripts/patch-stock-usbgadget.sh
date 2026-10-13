@@ -75,7 +75,11 @@ fi
 if [ "$ALREADY_HID" = "0" ]; then
     DESCRIPTOR='\\x06\\x00\\xff\\x09\\x01\\xa1\\x01\\x85\\x03\\x09\\x01\\x15\\x00\\x26\\xff\\x00\\x95\\x3f\\x75\\x08\\x81\\x02\\x09\\x01\\x15\\x00\\x26\\xff\\x00\\x95\\x3f\\x75\\x08\\x91\\x22\\xc0\\x05\\x0b\\x09\\x05\\xa1\\x01\\x85\\x02\\x15\\x00\\x25\\x01\\x75\\x01\\x95\\x01\\x09\\x20\\x81\\x22\\x09\\x2f\\x81\\x06\\x09\\x21\\x81\\x02\\x09\\x24\\x81\\x06\\x09\\x07\\x05\\x09\\x09\\x01\\x81\\x06\\x75\\x03\\x81\\x01\\x85\\x05\\x05\\x08\\x09\\x17\\x75\\x01\\x91\\x02\\x75\\x07\\x91\\x03\\x85\\x06\\x09\\x09\\x75\\x01\\x91\\x02\\x75\\x07\\x91\\x03\\x85\\x07\\x09\\x18\\x75\\x01\\x91\\x02\\x75\\x07\\x91\\x03\\xc0\\x05\\x0c\\x09\\x01\\xa1\\x01\\x85\\x01\\x05\\x0c\\x15\\x00\\x25\\x01\\x09\\xe9\\x09\\xea\\x09\\xe2\\x09\\xcd\\x09\\xb5\\x09\\xb6\\x09\\xb0\\x09\\xb1\\x75\\x01\\x95\\x08\\x81\\x02\\xc0'
 
-    awk -v desc="$DESCRIPTOR" '
+    # A dot name in the same directory: rcS runs every /etc/init.d/S??* at boot,
+    # so a leftover "${INIT}.tmp" would run. A failed awk must stop the patch,
+    # or the "patched" that install.sh waits for would be a lie.
+    TMP="$(dirname "$INIT")/.S89usbgadget.tmp"
+    if ! awk -v desc="$DESCRIPTOR" '
         BEGIN { inserted = 0 }
         /^[[:space:]]*usb_flash[[:space:]]*$/ && !inserted {
             print "\t# SP#7d HID control surface (Vendor + Telephony_V4 + Consumer)"
@@ -88,7 +92,12 @@ if [ "$ALREADY_HID" = "0" ]; then
             inserted = 1
         }
         { print }
-    ' "$INIT" > "${INIT}.tmp" && mv "${INIT}.tmp" "$INIT"
+    ' "$INIT" > "$TMP"; then
+        rm -f "$TMP"
+        echo "FATAL: could not insert the HID gadget into $INIT" >&2
+        exit 1
+    fi
+    mv "$TMP" "$INIT"
     chmod +x "$INIT"
     echo "patched HID gadget (hid.0)"
 fi
