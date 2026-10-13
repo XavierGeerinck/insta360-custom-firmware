@@ -137,10 +137,12 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
 | `Pin(target)` | `pin` | `PinScreen::default()` |
 | `Update` | `ota` | `UpdateScreen::default()` (H3; installing and restarting take over the router) |
+| `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4) |
+| `IncomingCall` | `call` | `CallScreen::default()` (I3; a ringing Bluetooth call takes over the router) |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
-`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. Bluetooth,
-USB storage and Incoming call are milestone 3 and have no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. USB storage
+is milestone 3 and has no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
@@ -199,7 +201,13 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   at once (LVGL sends its own only on the release), so a hold-to-Stop in progress resets instead of
   completing on the hidden screen. A press that only woke the screen is never delivered to LVGL.
 - **Wake on arrival.** A new pending decision (a recording stopped) or an incoming call
-  (`audio.call_ringing`) wakes a resting or dark screen without delivering a press.
+  (the host's `audio.call_ringing`, or a phone ringing through Bluetooth, `snap.bt_ringing()`)
+  wakes a resting or dark screen without delivering a press.
+- **Call takeover (I3).** While a Bluetooth call rings, `Router::sync` puts `IncomingCall` on
+  top of whatever shows, a recording included (it keeps running underneath), and under the
+  resting screen when resting. Back dismisses it until that call ends; it stays, as "In a
+  call", once answered; it leaves when the call ends. Never during start-up, first start, an
+  install or power off. `UiSnapshot::in_call` counts an active Bluetooth call.
 
 ## Components
 
@@ -213,7 +221,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 | Side buttons | `SideButton::new(root, Side::Left, icons::VOLUME_LOW, "Quieter", on_step)` (a round button at the side spot) | Home, Recording, File detail |
 | Pill pair | `ButtonRow::two(root, [cancel, action], on_tap)` at `BOTTOM_PILL_PAIR` | Confirmation |
 | Confirmation | `confirm_dialog(root, &ConfirmSpec { .. }, on_confirm, on_cancel)` | Power off, Factory reset, Delete, Stop USB storage |
-| Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Call, Start-up |
+| Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Bluetooth (the pairing countdown), Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
 | Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`: whole rows only (three from `RADIO_TOP`, y 68–231), snapping to rows when longer; `.scroll_to(index)` puts the row at the top without animation, or shows the last rows | After a recording, Time zone, Dim after |
 | Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
@@ -223,6 +231,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 | QR code | `Qr::new(root, rect, quiet)`, `set_data(text) -> bool` (white rounded panel with a quiet zone; false when the text does not fit) (`components/wifi.rs`) | Wi-Fi setup |
 | File list | `FileList::new(root, on_open(id))`, `set_rows(Vec<RowLook>)`, `scroll_to`, `empty_state()`; `RowLook` is what one 296 x 52 recording card shows (`components/file_row.rs`) | Files |
 | Playback scrubber | `Scrubber::new(root, on_event)` with `ScrubEvent::{TogglePlay, Seek(ms)}`; `set(position_ms, duration_ms, marks_ms, playing, playable)`. A ring (r 60 at (200, 140)) with mark ticks, a knob and the time caption; centre taps play or pause, the ring seeks and keeps its gestures (`components/scrubber.rs`) | File detail |
+| Bluetooth pieces | `DeviceRow::new(root, rect)`, `set(&DeviceLook { icon, name, name_color, value, value_color })` (a Surface row, radius 20, not tappable; the name ends in "..."); `icon_button(root, rect, icon, text, on_tap)` (a content pill with a 16 px icon); `CallRings::new(root, cx, cy)`, `set_ripples(on)` (r 76 / 82 / 88 in Live at 100 / 30 / 12 %, drawn still) (`components/bluetooth.rs`) | Bluetooth, Incoming call |
 | PIN keypad | `Keypad::new(root, on_key(Key))` with `Key::{Digit(n), Cancel, Backspace}`: 64 × 48 keys at x 96/168/240, y 56/110/164/218, digits in Num20; `set_enabled(false)` greys digits and Backspace to Text 3 and ignores them, Cancel always works. `PinDots::new(root, count)`, `set_filled(n)`: 12 px dots at top 36 (`components/keypad.rs`) | PIN |
 
 Notes on the parts that carry state:
