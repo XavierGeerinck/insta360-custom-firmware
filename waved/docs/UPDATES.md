@@ -149,9 +149,14 @@ setup page.
    first) room on `/data`, then unpacks to `/data/waved/update/staged/` (same filesystem as
    the binary).
 5. **Waits** until Wave is free (`gate.rs`): no recording or pause, no "Send this
-   recording?", no call or ringing, no playback, no Wi-Fi setup, battery ≥ 30 % or USB
-   connected. An automatic install also waits while the computer has the microphone open; a
-   tapped one does not (some apps keep it open all day).
+   recording?", USB storage off (`UsbStorageState::phase` is `Off`: the restart would pull
+   the recordings drive from under the computer, and `Starting`/`Stopping` are mid-handover),
+   no call or ringing on the computer, no phone call through Bluetooth (`BluetoothState::call`
+   ringing or up, or `call_audio` still running), no playback, no Wi-Fi setup, battery ≥ 30 %
+   or USB connected. All of these hold a tapped install too. Only one does not: an automatic
+   install also waits while the computer has the microphone open; a tapped one does not
+   (some apps keep it open all day). Music from a phone (`phone_audio` without
+   `call_audio`) does not hold an install.
 6. **Installs** (`install.rs`, below), shows "Restarting" for a second, then runs
    `/sbin/reboot`. If the reboot fails the update is installed and its trial armed, so
    the phase becomes `RestartNeeded` ("Restart Wave"), not a failure with Retry: the new
@@ -290,6 +295,7 @@ Back (`update_restart_needed` golden).
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
 | U6 | File-level fall-back in `S60waved`, 2 boots (or 10 starts in one boot), commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after two power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back on the third boot. |
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
+| U10 | USB storage and Bluetooth phone calls (ringing, up, or call audio) hold every install, tapped ones too; phone music does not | A computer that keeps the drive, or a module state that never clears `call_audio`, holds installs until it does (the update waits; nothing fails). Phone music is cut by the restart. |
 | U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |
 
