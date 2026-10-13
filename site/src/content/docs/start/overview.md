@@ -14,7 +14,8 @@ This project is not affiliated with Insta360.
 
 ## What changes on your Wave, and what doesn't
 
-The installer writes only to the Wave's `/data` partition:
+The installer never writes the system partition. Apart from one folder for
+recordings (below), everything it writes is on the Wave's `/data` partition:
 
 - `/data/waved/`: waved itself, `config.toml`, the boot splash
   (`splash.fb`) and the firewall rules (`iptables.rules`). waved keeps its log
@@ -31,8 +32,8 @@ The installer writes only to the Wave's `/data` partition:
 Recordings go to `/mnt/udisk/recordings`, on the Wave's recordings volume.
 The installer creates that folder and changes nothing else there.
 
-The system partition is never written. The Wave keeps the stock system it
-had, which is why [Revert to stock](/insta360-custom-firmware/start/revert/) is
+With the system partition untouched, the Wave keeps the stock system it had,
+which is why [Revert to stock](/insta360-custom-firmware/start/revert/) is
 one script and a reboot.
 
 ## What works today
@@ -55,7 +56,7 @@ its tests on a computer but has not run on a Wave yet.
 | Signed over-the-air updates from your own server | Host-tested only | [Updates](/insta360-custom-firmware/guides/updates/) |
 | PIN lock | Host-tested | [First setup](/insta360-custom-firmware/start/first-setup/#pin-lock) |
 | Battery level | Host-tested | [MCU protocol](/insta360-custom-firmware/reference/mcu-protocol/) |
-| Mic height | The lift moves on the Wave; the Mic height screen is host-tested | [MCU protocol](/insta360-custom-firmware/reference/mcu-protocol/) |
+| Mic height | Works, on the Wave: High and Low move the lift, and the choice is saved. The blocked-lift warning and the height at power-on are still to check. | [MCU protocol](/insta360-custom-firmware/reference/mcu-protocol/#the-lift-in-waved-mic-height) |
 | USB storage mode | Not yet | |
 | Languages other than English | Not yet | |
 

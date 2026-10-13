@@ -14,9 +14,10 @@ yours, and one script back to stock.
 ## Why
 
 The stock firmware sends more than 35 kinds of usage events to ByteDance's
-DataFinder service, routes meeting audio and transcripts to Insta360's cloud,
-and signs its updates with a 512-bit RSA key. See the
-[Security Q&A](docs/QUESTIONS_SECURITY.md).
+DataFinder service and routes meeting audio and transcripts to Insta360's
+cloud ([Security Q&A](docs/QUESTIONS_SECURITY.md)). It signs its updates with
+a 512-bit RSA key
+([reverse-engineering report](docs/REPORT.md#soc-firmware-update-flow)).
 
 ## Quick start
 

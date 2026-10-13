@@ -374,7 +374,7 @@ sync
 '
 ```
 
-After this change, even `start` mode enables ADB, so you get ADB at every boot regardless of `pspapp` state. **Keep a copy of the original script before editing** (`cp /etc/init.d/S89usbgadget /etc/init.d/S89usbgadget.orig`) — if your edit breaks boot, you'll need UART to recover.
+After this change, even `start` mode enables ADB, so you get ADB at every boot regardless of `pspapp` state. **Keep a copy of the original script before editing** (`mkdir -p /data/waved && cp /etc/init.d/S89usbgadget /data/waved/S89usbgadget.orig`) — if your edit breaks boot, you'll need UART to recover. Never keep the copy in `/etc/init.d`: rcS runs every `S??*` file there at boot, a copy included.
 
 Note: this method does not survive a firmware OTA (SWUpdate will overwrite the rootfs, and the overlay will be re-applied to the new base).
 

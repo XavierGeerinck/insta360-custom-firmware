@@ -10,7 +10,8 @@ waved is one Rust program, `/data/waved/waved`, built from the workspace in
 own where hardware needs blocking reads and writes: the Bluetooth and MCU
 serial links, audio capture, the USB audio bridges and the screen.
 
-Two start-up scripts run it, both from `waved/deploy/`:
+Two start-up scripts come with it, both from `waved/deploy/`. `S60waved` runs
+it; `S03splash` draws the splash:
 
 - `/etc/init.d/S60waved` starts waved at boot and restarts it about 3 seconds
   after any exit. Before each start it runs the update fall-back check (see

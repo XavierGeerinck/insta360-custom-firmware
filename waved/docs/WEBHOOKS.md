@@ -6,13 +6,15 @@ restart, and the meeting UUID is reused as the idempotency key for every retry.
 
 ## Configure on the phone
 
-1. On Wave, open **More → Settings → Wi-Fi**.
-2. Tap **Connect / configure** and scan the temporary `Wave-XXXX` Wi-Fi QR.
+1. On Wave, open the Menu (swipe down from the top of Home, or tap the status
+   at the top), then **Wi-Fi**.
+2. Tap **Set up Wi-Fi** (it reads **Change network** when Wave is already
+   connected, and asks first) and scan the temporary `Wave-XXXX` Wi-Fi QR.
 3. Open the captive setup page on the phone.
 4. In **Webhook**, enter:
-   - **Endpoint** — the full receiver URL;
+   - **Webhook URL** — the full receiver URL;
    - **Bearer token** — optional;
-   - **Upload mode** — Automatic, Ask, or Local only; and
+   - **After recording** — Automatic, Ask after recording, or Keep locally; and
    - retry timings.
 5. For a plain `http://` development endpoint, explicitly enable **Allow
    insecure HTTP**. Use HTTPS in production.
@@ -20,8 +22,9 @@ restart, and the meeting UUID is reused as the idempotency key for every retry.
    network.
 
 The access point closes while Wave reconnects. `waved` then restarts with the
-new settings and sends a small `webhook.test` request. Its result appears under
-**More → Settings → Webhook** together with queue and failure counts. The
+new settings and sends a small `webhook.test` request. Wave's screens don't
+show its result; it is saved in `/data/waved/webhook-test.result`.
+**Menu → Uploads** shows the counts of sent, waiting and failed recordings. The
 bearer token is write-only: the setup page never returns the saved value.
 
 An empty endpoint disables sending. Automatic recordings remain safely queued
@@ -31,7 +34,8 @@ until an endpoint is configured.
 
 - `automatic` (default): finalize and queue immediately; no confirmation
   screen.
-- `ask`: show Save / Send / Discard after each meeting.
+- `ask`: show **Send this recording?** with Keep / Send / Delete after each
+  meeting (without an endpoint: **Keep this recording?**, Keep / Delete).
 - `local_only`: finalize and retain locally without queuing.
 
 ## HTTP contract
@@ -57,7 +61,8 @@ User-Agent: waved/<version>
 Any 2xx response completes delivery. Network failures, 408, 429, and 5xx
 responses retry with capped exponential backoff and bounded jitter. Other
 responses, including redirects and authentication errors, remain visible as
-configuration failures until settings change or **Retry failed** is tapped.
+configuration failures until settings change or **Retry … failed** is tapped
+in **Menu → Uploads**.
 Response diagnostics are bounded and control characters are removed.
 
 Receivers should persist the request before returning 2xx and deduplicate on

@@ -78,21 +78,24 @@ boot, after disconnect, or after an explicit Connect action.
 
 ## Wi-Fi menu
 
-Settings → Wi-Fi opens a non-disruptive management screen. It shows the live
-connection status, SSID, signal quality/RSSI, and IPv4 address. Opening this
-screen does not stop station mode or start the provisioning AP.
+Menu → Wi-Fi opens a non-disruptive management screen. It shows the network
+name, the connection status with the signal (excellent, good, fair or weak),
+and the IPv4 address. Opening this screen does not stop station mode or start
+the provisioning AP.
 
-`Connect to another network` immediately starts QR/captive provisioning; there
-is no confirmation dialog. During provisioning the screen shows Scanning, the
-QR/manual fallback, Connecting, or a failure with a retry action. On success it
-returns to the live management view.
+Its button opens the **Set up Wi-Fi** screen, which starts QR/captive
+provisioning. Not connected, the button reads **Set up Wi-Fi** and goes
+straight there; connected, it reads **Change network** and asks first
+(**Change network?**), because Wave leaves its network while the setup network
+is open. The setup screen shows the QR with the manual fallback under it,
+progress such as **Connecting to …**, or a failure with **Try again**, and
+**Cancel** closes the setup network.
 
 ## Provisioning (`waved-provision`)
 
 `ProvisioningService` owns the flow and publishes `ProvisioningState` to the bus
-so the UI can render it. Triggered by `Command::OpenWifiProvisioning` from the
-management screen's Connect button. The System settings Wi-Fi row emits the
-UI-only `Command::OpenWifiSettings` instead.
+so the UI can render it. Triggered by `Command::OpenWifiProvisioning`, which
+the **Set up Wi-Fi** screen sends when it opens and on **Try again**.
 
 ### State machine
 
@@ -198,8 +201,8 @@ The persistent station config is `/etc/wpa_supplicant.conf`.
 
 ## Acceptance
 
-`scripts/test-wifi-provisioning.sh <ssid> <psk>` — opens the management screen,
-then starts provisioning with its Connect button,
+`scripts/test-wifi-provisioning.sh <ssid> <psk>` — the operator opens Menu →
+Wi-Fi and taps **Set up Wi-Fi** or **Change network**; the script then
 asserts AP/DHCP/DNS/HTTP readiness, checks a captive-probe redirect, pauses for
 the operator to scan the QR and observe the captive setup sheet/prompt, POSTs
 credentials, and asserts STA reconnect, saved-profile reuse, enabled state, and

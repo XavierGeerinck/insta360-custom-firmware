@@ -57,10 +57,11 @@ Invalid input keeps the page open with an error next to the field.
 Every setting lives in `/data/waved/config.toml` on the Wave. The setup page
 and the Wave's own screens write to it. You can also edit it over ADB.
 
-Edit it in place:
+Edit it in place, in a shell on the Wave:
 
 ```bash
-adb shell vi /data/waved/config.toml
+adb shell
+vi /data/waved/config.toml   # on the Wave; type exit when done
 ```
 
 Or copy it to your computer and back:

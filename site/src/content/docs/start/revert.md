@@ -10,9 +10,10 @@ back.
 ## Revert
 
 With the Wave connected over USB (waved keeps ADB on at every boot), from the
-repository's `waved/` directory:
+repository root:
 
 ```bash
+cd waved
 ./deploy/revert.sh
 adb reboot
 ```
@@ -40,11 +41,13 @@ firewall rules, the recordings list with each recording's upload state
 
 ## After the reboot
 
-ADB is off again, as on stock. To turn it on, from the repository root:
+ADB is off again, as on stock. To turn it on, still in `waved/`:
 
 ```bash
-sudo python3 waved/scripts/enable_adb.py
+sudo python3 scripts/enable_adb.py
 ```
+
+`revert.sh` ends by printing the same command with the script's full path.
 
 ## What it keeps
 
@@ -69,10 +72,9 @@ They are research notes and none of them has been tested.
 
 ## Installing again
 
-Turn ADB on as above, then run the installer again from `waved/`:
+Turn ADB on as above, then, still in `waved/`, run the installer again:
 
 ```bash
-cd waved
 ./deploy/install.sh
 ```
 

@@ -217,7 +217,11 @@ same height to try again. The choice is saved in `config.toml`
 (`device.mic_height`) and in the Wave's microcontroller, which raises the lift
 to it at power-on.
 
-**Status:** The lift moves on the Wave; the Mic height screen is host-tested.
+**Status:** Works on the Wave (2026-10-13): High and Low move the lift, each
+move ends when the lift stops, and the choice is saved in `config.toml`. Not
+yet checked on a Wave: the warning when something blocks the lift (a gentle
+finger on it did not trigger one), the retract at power off, and the height
+the lift rises to after a power cycle.
 
 More: [MCU protocol](/insta360-custom-firmware/reference/mcu-protocol/#the-lift-in-waved-mic-height).
 

@@ -24,8 +24,9 @@ chore(scripts): keep the linux toolchain between container runs
 test(meeting): pre-roll tests turn pre-recording on themselves
 ```
 
-The type is `feat`, `fix`, `docs`, `test` or `chore`. The scope is the crate
-or area without the `waved-` prefix (`ui`, `audio`, `mcu`, `deploy`, `site`).
+The type is `feat`, `fix`, `docs`, `test`, `refactor` or `chore`. The scope
+is the crate or area without the `waved-` prefix (`ui`, `audio`, `mcu`,
+`deploy`, `site`).
 
 ## Docs
 
@@ -34,7 +35,9 @@ files in `docs/` and `waved/docs/`. Edit them there; the site copies them at
 build time ([Project structure](/insta360-custom-firmware/dev/structure/#how-the-site-uses-them)).
 
 - A new document needs a line in `site/sync/manifest.mjs` (its group, path,
-  page address and sidebar label) before it shows up on the site.
+  page address and sidebar label) before it shows up on the site. The
+  exception is `docs/npu/`: the manifest takes that whole folder, so a new
+  document there is published without a line of its own.
 - Link between documents with relative Markdown links. The sync step turns
   them into site links.
 - The site's own pages are in `site/src/content/docs/`. Their internal links
@@ -62,8 +65,8 @@ script you ran, or what you checked by hand.
 
 ## No personal data
 
-Never put a real Wi-Fi network name (SSID), MAC address, IP address, serial
-number or device ID in fixtures, tests or docs. That includes values copied
+Never add a real Wi-Fi network name (SSID), MAC address, IP address, serial
+number or device ID to fixtures, tests or docs. That includes values copied
 from your own Wave's logs. Use these placeholders:
 
 | Kind | Placeholder |

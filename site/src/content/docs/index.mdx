@@ -33,11 +33,13 @@ import uploads from '../../assets/screens/screen_uploads.png';
 The stock firmware runs ByteDance's DataFinder telemetry SDK. It reports more
 than 35 kinds of event, from every boot to every mute, keyed to the Wave's
 serial number, with no visible opt-out. It uploads meeting audio, transcripts
-and voiceprints to Insta360's cloud, to a data centre picked by region. It
-signs its updates with a 512-bit RSA key, a size that can be factored on
-ordinary hardware, and releases up to 1.0.13.6 ran a root shell over telnet
-with the password `123456`. The evidence is in the
-[Security Q&A](/insta360-custom-firmware/research/security/).
+and voiceprints to Insta360's cloud, to a data centre picked by region, and
+releases up to 1.0.13.6 ran a root shell over telnet with the password
+`123456`. The evidence is in the
+[Security Q&A](/insta360-custom-firmware/research/security/). It also signs
+its updates with a 512-bit RSA key, a size that can be factored on ordinary
+hardware: see the
+[reverse-engineering report](/insta360-custom-firmware/research/report/#soc-firmware-update-flow).
 
 ## What you get
 
@@ -49,10 +51,11 @@ with the password `123456`. The evidence is in the
     The webhook and update servers stay empty until you set them.
   </Card>
   <Card title="Your recordings" icon="document">
-    Recordings are made on the Wave and stay there. With a webhook set, each
-    one is sent to your server as one HTTP `POST`, queued on the Wave so it
-    survives a restart, and retried when a send fails. The full failure test on
-    a Wave is still to do.
+    Recordings are made on the Wave and kept there until you send them. With a
+    webhook set, each one is sent to your server as one HTTP `POST`, queued on
+    the Wave so it survives a restart, and retried when a send fails. When the
+    Wave runs low on space, it removes only recordings your server has already
+    received, oldest first. The full failure test on a Wave is still to do.
   </Card>
   <Card title="A real speakerphone" icon="laptop">
     Plug it into a computer and it works as a USB speakerphone (USB Audio Class
@@ -99,7 +102,8 @@ seconds after any exit.
 
 ## Status
 
-Unofficial and not affiliated with Insta360. The core works on a real Wave: the
+Unofficial, not affiliated with Insta360, and reversible with one script. Use
+it at your own risk. The core works on a real Wave: the
 screens, USB audio with echo cancellation, recording, uploads, Wi-Fi setup and
 the power key. Other parts, such as Bluetooth, signed updates, the PIN lock and
 the Wave Controller app, are host-tested or not yet tried on a Wave. The

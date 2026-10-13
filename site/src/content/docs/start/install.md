@@ -19,6 +19,10 @@ you need Rust, Docker, `cross`, `adb` and Python with `pyusb`.
 
 ## 1. Enable ADB
 
+Already running waved? Skip to [step 2](/insta360-custom-firmware/start/install/#2-build):
+waved turns ADB on at every boot, and `enable_adb.py` only works with the
+stock app.
+
 ADB is how your computer talks to the Wave. Stock firmware keeps it off. With
 the Wave on stock firmware, connected over USB-C, and its screen awake on the
 home screen, run this from the repository root:
@@ -82,7 +86,8 @@ Then it
    `/data` from filling up, and the firewall rules (`Installing start-up
    scripts, splash, logging and firewall rules`), and
 7. last of all, switches the stock app and its telemetry library off with two
-   stubs (`Switching the stock app and its telemetry off`).
+   stubs, and reads them back to check they took (`Switching the stock app
+   and its telemetry off`).
 
 The order is deliberate. A Wave without the stock app and without ADB can't
 be reached again, so nothing stock is switched off until ADB is known to come

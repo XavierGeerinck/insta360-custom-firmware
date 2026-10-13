@@ -15,6 +15,8 @@ description: What to check and what to do when ADB, the build, the installer or 
 | `the USB gadget patch did not finish` | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
 | `ADB is not enabled at boot` | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
 | `waved did not stop`, `could not copy waved into /data/waved`, `install.sh stopped at: …` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
+| `install.sh interrupted at: …` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
+| `the stock app and telemetry stubs did not take` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
 
 ## `adb devices` is empty
 
@@ -105,11 +107,19 @@ If it still refuses, look at the lines it changes:
 adb shell grep -n adbd_enable /etc/init.d/S89usbgadget
 ```
 
-The two lines in the boot branches must read `adbd_enable`, without a `#` in
-front. The stock script has them as `#adbd_enable` and `# adbd_enable`. If
-they still start with `#`, see
+The two lines in the boot branches, inside `start_usbgadget()`, must read
+`adbd_enable`, without a `#` in front. The stock script has them as
+`#adbd_enable` and `# adbd_enable`. The installer checks both: no
+`adbd_enable` line in the file may still start with `#`, and at least one
+must be live inside `start_usbgadget()`, the function that runs at boot. The
+other `adbd_enable` lines in the file belong to modes the stock app switches
+to, and don't count. If the lines still start with `#`, see
 [Making ADB Survive a pspapp Failure](/insta360-custom-firmware/research/device-access/#making-adb-survive-a-pspapp-failure)
 in the device access guide.
+
+The installer already keeps a copy of the original script in `/data/waved/`.
+Never put copies of init scripts in `/etc/init.d`: the Wave runs every `S??*`
+file there at boot, so a backup such as `S89usbgadget.orig` would run too.
 
 If the Wave reboots in the meantime, it comes back on what it ran before. On
 stock firmware that means ADB is off: turn it on again with `enable_adb.py`
@@ -133,6 +143,15 @@ the space with `adb shell df -h /data`, then run the installer again.
 
 `install.sh stopped at: …` names the step that failed. Run the installer
 again; each run starts from the beginning.
+
+`install.sh interrupted at: …` means the installer was stopped, by Ctrl-C or
+a closed terminal, during the step it names. Run it again.
+
+`the stock app and telemetry stubs did not take` means everything else is
+installed, but the two stubs that switch the stock app and its telemetry off
+did not read back as written. Run the installer again before you reboot: with
+the stock app's start-up script still in place, the stock app would start
+next to waved.
 
 Once the installer is past `Patching the USB gadget`, ADB comes up at every
 boot. So even if the Wave reboots after a later step failed, you can reach it
