@@ -1145,6 +1145,8 @@ def run_candidate(
     manifest: CompileManifest,
     candidate_id: str,
     run_id: str,
+    *,
+    preflight_validator=None,
 ) -> tuple[dict[str, Any], Path]:
     if RUN_ID_RE.fullmatch(run_id) is None:
         raise CompileLabError(f"run ID must match {RUN_ID_RE.pattern}")
@@ -1181,6 +1183,8 @@ def run_candidate(
     _write_json_exclusive(run_directory / "preflight.json", preflight)
     try:
         verify_preflight(manifest, candidate, preflight)
+        if preflight_validator is not None:
+            preflight_validator(preflight)
     except PreflightError as exc:
         envelope["status"] = "PREFLIGHT_FAILED"
         envelope["errors"].append(str(exc))

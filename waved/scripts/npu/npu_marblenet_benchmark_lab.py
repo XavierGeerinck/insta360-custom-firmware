@@ -491,6 +491,7 @@ def _manifest(package: dict, directory: Path, receipt: dict):
     return replace(manifest, candidates={"output": candidate}), payloads
 
 
+@lab._phase_guarded
 def run_benchmark(
     package_dir: Path,
     prepared: Path,
@@ -506,6 +507,7 @@ def run_benchmark(
 
     lab._run_id(run_id)
     package = lab.load_package(package_dir, require_qualification=True)
+    lab._activate_phase(package)
     _preparation(prepared)
     gate = lab._json(gate_path)
     runs = {
@@ -589,7 +591,10 @@ def run_benchmark(
     remote = manifest.policy.remote_root
     lab._stage(manifest, payloads, remote, stage_dir, execute=True)
     envelope, run_directory = lab.execution.run_once(
-        lab.npu_lab.AdbTransport(), manifest, run_id
+        lab.npu_lab.AdbTransport(),
+        manifest,
+        run_id,
+        **lab._phase_runner_kwargs(lab.execution.ExecutionPreflightError),
     )
     lab._successful_run(envelope)
     before, after = (

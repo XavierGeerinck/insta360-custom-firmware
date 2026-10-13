@@ -11,7 +11,9 @@ import re
 import shlex
 import subprocess
 import sys
+from contextvars import ContextVar
 from dataclasses import replace
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ import nbg_format
 import npu_compile_lab as compile_lab
 import npu_erf_execution_lab as execution
 import npu_lab
+import npu_native_phase
 import npu_op_dtype_lab
 import npu_op_dtype_stage as stage_tools
 
@@ -49,6 +52,70 @@ DEVICE = json.loads(npu_op_dtype_lab.POLICIES["fp16-conv"].manifest_path.read_te
 
 class NativeLabError(Exception):
     """A local package, transport, native result or health gate failed."""
+
+
+class CleanCompileNegative(NativeLabError):
+    """One canonical unsupported compile, with verified healthy cleanup."""
+
+    def __init__(self, message, cleanup):
+        super().__init__(message)
+        self.cleanup = cleanup
+
+
+_ACTIVE_PHASE = ContextVar("onnx_native_phase", default=None)
+
+
+def _phase_guarded(function):
+    @wraps(function)
+    def guarded(package_dir, *args, **kwargs):
+        if _ACTIVE_PHASE.get() is not None:
+            return function(package_dir, *args, **kwargs)
+        token = _ACTIVE_PHASE.set(None)
+        try:
+            result = function(package_dir, *args, **kwargs)
+            phase = _ACTIVE_PHASE.get()
+            if phase is not None:
+                phase.advance(phase.pending_cleanup)
+            return result
+        except CleanCompileNegative as exc:
+            phase = _ACTIVE_PHASE.get()
+            if phase is not None:
+                phase.advance(exc.cleanup)
+            raise
+        except Exception as exc:
+            phase = _ACTIVE_PHASE.get()
+            if phase is not None:
+                phase.halt(str(exc))
+            raise
+        finally:
+            _ACTIVE_PHASE.reset(token)
+    return guarded
+
+
+def _activate_phase(package):
+    if package.get("record", {}).get("profile_id") != "fp16-marblenet-pad-v1":
+        return
+    path = Path(package["directory"]).parent / "native-phase.json"
+    current = _ACTIVE_PHASE.get()
+    if current is not None:
+        if current.path != path:
+            raise NativeLabError("nested native operation changed the shared phase path")
+        return
+    manifest = _system_manifest(_compile_manifest(package))
+    _ACTIVE_PHASE.set(npu_native_phase.NativePhase(path, manifest, SYSTEM_HASHES))
+
+
+def _phase_runner_kwargs(error_type):
+    phase = _ACTIVE_PHASE.get()
+    return (
+        {}
+        if phase is None
+        else {
+            "preflight_validator": phase.callback(
+                error_type, "immediate-native-preflight"
+            )
+        }
+    )
 
 
 def _host():
@@ -861,7 +928,13 @@ def _snapshot(transport, manifest, execute: bool = False) -> dict:
 
 
 def _stage(
-    manifest, payloads: dict, root: str, run_dir: Path, execute: bool = False
+    manifest,
+    payloads: dict,
+    root: str,
+    run_dir: Path,
+    execute: bool = False,
+    *,
+    phase=None,
 ) -> dict:
     _verify_runtime()
     for remote, (local, _) in payloads.items():
@@ -872,6 +945,9 @@ def _stage(
     baseline = _system_manifest(manifest)
     transport = npu_lab.AdbTransport()
     before = compile_lab.collect_snapshot(transport, baseline)
+    phase = phase or _ACTIVE_PHASE.get()
+    if phase is not None:
+        phase.check(before, "before-staging-mutations")
     candidate = next(iter(baseline.candidates.values()))
     compile_lab.verify_preflight(baseline, candidate, before)
     if (
@@ -931,6 +1007,8 @@ def _stage(
     )
     if differences or alerts:
         raise NativeLabError("staging changed device health")
+    if phase is not None:
+        phase.check(current, "after-staging")
     return inventory
 
 
@@ -1034,6 +1112,8 @@ def _cleanup(
     _write_json(run_dir / "cleanup.json", result)
     if differences or alerts:
         raise NativeLabError("cleanup health gate failed")
+    if _ACTIVE_PHASE.get() is not None:
+        _ACTIVE_PHASE.get().pending_cleanup = result
     return result
 
 
@@ -1066,12 +1146,14 @@ def _run_id(run_id: str) -> None:
         raise NativeLabError("run evidence directory already exists")
 
 
+@_phase_guarded
 def compile_package(package_dir: Path | str, run_id: str) -> dict:
     _run_id(run_id)
     package = load_package(package_dir)
     root = Path(package["directory"])
     if package["compiled"] or (root / "compile-attempt.json").exists():
         raise NativeLabError("this package already has a compile attempt; no retry")
+    _activate_phase(package)
     manifest = _compile_manifest(package)
     remote = manifest.policy.remote_root
     payloads = {
@@ -1090,7 +1172,11 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
         {**_identity(package), "run_id": run_id, "manifest_sha256": manifest.sha256},
     )
     envelope, run_dir = compile_lab.run_candidate(
-        npu_lab.AdbTransport(), manifest, "candidate-1", run_id
+        npu_lab.AdbTransport(),
+        manifest,
+        "candidate-1",
+        run_id,
+        **_phase_runner_kwargs(compile_lab.PreflightError),
     )
     if envelope.get("status") != "PASS":
         if (
@@ -1098,7 +1184,20 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
             and not envelope.get("health_differences")
             and not envelope.get("kernel_alerts")
         ):
-            _cleanup(manifest, payloads, remote, envelope, run_dir)
+            state = envelope.get("transport", {})
+            canonical = (
+                state.get("timed_out") is False
+                and state.get("adb_returncode") == 0
+                and envelope.get("errors") == ["native compiler exited 5"]
+            )
+            if _ACTIVE_PHASE.get() is None or canonical:
+                cleanup = _cleanup(manifest, payloads, remote, envelope, run_dir)
+                if _ACTIVE_PHASE.get() is not None:
+                    raise CleanCompileNegative(
+                        "native compiler cleanly rejected this candidate; "
+                        f"evidence: {run_dir}",
+                        cleanup,
+                    )
         raise NativeLabError(f"native compilation did not pass; evidence: {run_dir}")
     _successful_run(envelope)
     stdout = _regular(run_dir / "stdout.txt").decode()
@@ -1296,6 +1395,7 @@ def _execute_manifest(
     return replace(manifest, candidates={"output": candidate})
 
 
+@_phase_guarded
 def execute_package(
     package_dir: Path | str,
     inputs: dict,
@@ -1306,6 +1406,7 @@ def execute_package(
     package = load_package(package_dir, require_qualification=require_qualification)
     if package["compiled"] is None:
         raise NativeLabError("package has no qualified native compile artifact")
+    _activate_phase(package)
     root = Path(package["directory"])
     input_bytes, expected = _cpu_expected(
         package, inputs, verify_onnx_runtime=not require_qualification
@@ -1335,7 +1436,12 @@ def execute_package(
     }
     # Output directory is intentionally empty before execution.
     _stage(manifest, payloads, remote, attempt_dir, execute=True)
-    envelope, directory = execution.run_once(npu_lab.AdbTransport(), manifest, run_id)
+    envelope, directory = execution.run_once(
+        npu_lab.AdbTransport(),
+        manifest,
+        run_id,
+        **_phase_runner_kwargs(execution.ExecutionPreflightError),
+    )
     _successful_run(envelope)
     before = _json(directory / "preflight.json")
     after = _json(directory / "postflight.json")
@@ -1392,6 +1498,7 @@ def execute_package(
     }
 
 
+@_phase_guarded
 def qualify_package(
     package_dir: Path | str, inputs_path: Path | str, run_id: str
 ) -> dict:
@@ -1404,6 +1511,12 @@ def qualify_package(
         raise NativeLabError(
             "this package already has a qualification attempt; no retry"
         )
+    if (
+        package["record"]["profile_id"] == "fp16-marblenet-pad-v1"
+        and package["compiled"] is None
+    ):
+        raise NativeLabError("package has no qualified native compile artifact")
+    _activate_phase(package)
     with np.load(inputs_path, allow_pickle=False) as archive:
         inputs = {
             name: np.array(archive[name], copy=True, order="C")

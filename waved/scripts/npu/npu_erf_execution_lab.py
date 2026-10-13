@@ -702,6 +702,8 @@ def run_once(
     transport: Any,
     manifest: ExecutionManifest,
     run_id: str,
+    *,
+    preflight_validator=None,
 ) -> tuple[dict[str, Any], Path]:
     if RUN_ID_RE.fullmatch(run_id) is None:
         raise ExecutionLabError(f"run ID must match {RUN_ID_RE.pattern}")
@@ -733,6 +735,8 @@ def run_once(
     )
     try:
         verify_preflight(manifest, preflight)
+        if preflight_validator is not None:
+            preflight_validator(preflight)
     except ExecutionPreflightError as exc:
         envelope["status"] = "PREFLIGHT_FAILED"
         envelope["errors"].append(str(exc))
