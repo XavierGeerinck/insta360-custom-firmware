@@ -1,6 +1,7 @@
 //! System (B6, system.png): the same rotary list as the menu. Rows that
-//! aren't built yet (USB storage, PIN) stay hidden until their milestone 3
-//! workstream lands. Power off and Factory reset go through the confirmation.
+//! aren't built yet (PIN) stay hidden until their milestone 3 workstream
+//! lands. Power off and Factory reset go through the confirmation. USB
+//! storage (G1) starts at once; its screen takes over and confirms the stop.
 //! The two switch rows are optimistic: a tap shows the new value at once and
 //! a stale snapshot does not revert it (see `menu::Pending`). Firmware
 //! update (H3) checks, or opens the update screen when there is something
@@ -26,17 +27,19 @@ pub enum SystemRow {
     DateTime,
     AlertTones,
     PreRecording,
+    UsbStorage,
     About,
     FirmwareUpdate,
     FactoryReset,
     PowerOff,
 }
 
-pub const ROWS: [SystemRow; 8] = [
+pub const ROWS: [SystemRow; 9] = [
     SystemRow::Display,
     SystemRow::DateTime,
     SystemRow::AlertTones,
     SystemRow::PreRecording,
+    SystemRow::UsbStorage,
     SystemRow::About,
     SystemRow::FirmwareUpdate,
     SystemRow::FactoryReset,
@@ -44,7 +47,7 @@ pub const ROWS: [SystemRow; 8] = [
 ];
 
 /// Firmware update is centred when System opens, as in system.png.
-pub const START_ROW: usize = 5;
+pub const START_ROW: usize = 6;
 
 fn on_off(on: bool) -> String {
     if on { "On" } else { "Off" }.into()
@@ -88,6 +91,7 @@ impl SystemRow {
             SystemRow::DateTime => "Date and time",
             SystemRow::AlertTones => "Alert tones",
             SystemRow::PreRecording => "Pre-recording",
+            SystemRow::UsbStorage => "USB storage",
             SystemRow::About => "About",
             SystemRow::FirmwareUpdate => "Firmware update",
             SystemRow::FactoryReset => "Factory reset",
@@ -101,6 +105,7 @@ impl SystemRow {
             SystemRow::DateTime => icons::CALENDAR,
             SystemRow::AlertTones => icons::BELL,
             SystemRow::PreRecording => icons::CLOCK,
+            SystemRow::UsbStorage => icons::USB,
             SystemRow::About => icons::INFO,
             SystemRow::FirmwareUpdate => icons::REFRESH,
             SystemRow::FactoryReset => icons::TRASH,
@@ -120,7 +125,7 @@ impl SystemRow {
             SystemRow::PreRecording => Some(on_off(snap.settings.pre_recording)),
             SystemRow::About => Some(super::about::version_line(snap)),
             SystemRow::FirmwareUpdate => Some(update_value(&snap.ota)),
-            SystemRow::FactoryReset | SystemRow::PowerOff => None,
+            SystemRow::UsbStorage | SystemRow::FactoryReset | SystemRow::PowerOff => None,
         }
     }
 }
@@ -222,6 +227,7 @@ impl Screen for SystemScreen {
                     state.show(index, Some(on_off(on)));
                     dispatch.command(Command::SetPreRecording(on));
                 }
+                SystemRow::UsbStorage => dispatch.command(Command::StartUsbStorage),
                 SystemRow::About => dispatch.navigate(Route::About),
                 SystemRow::FirmwareUpdate => {
                     let phase = state.borrow().ota.clone();
@@ -300,6 +306,7 @@ mod tests {
                 "Date and time",
                 "Alert tones",
                 "Pre-recording",
+                "USB storage",
                 "About",
                 "Firmware update",
                 "Factory reset",
@@ -417,8 +424,8 @@ mod tests {
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap());
             let list = screen.list.as_ref().unwrap();
-            lv.click(list.row(6));
             lv.click(list.row(7));
+            lv.click(list.row(8));
             assert!(f.commands().is_empty(), "nothing happens before confirming");
             assert_eq!(
                 f.events(),
@@ -441,7 +448,7 @@ mod tests {
             let list = screen.list.as_ref().unwrap();
             lv.click(list.row(0));
             lv.click(list.row(1));
-            lv.click(list.row(4));
+            lv.click(list.row(5));
             assert!(f.commands().is_empty());
             assert_eq!(
                 f.events(),
@@ -484,7 +491,24 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             snap.system.about.version = "0.2.0 (abc1234)".into();
             screen.update(&snap);
-            assert_eq!(value(&screen, 4), "0.2.0 (abc1234)");
+            assert_eq!(value(&screen, 5), "0.2.0 (abc1234)");
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn the_usb_storage_row_starts_it() {
+        // No confirmation to start (the mockup confirms only the stop); the
+        // takeover screen follows the state. Nothing else happens on the row.
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap());
+            assert_eq!(SystemRow::UsbStorage.value(&snap()), None);
+            lv.click(screen.list.as_ref().unwrap().row(4));
+            assert!(matches!(f.commands().as_slice(), [Command::StartUsbStorage]));
+            assert!(f.events().is_empty());
             assert_targets_ok(root);
         });
     }
