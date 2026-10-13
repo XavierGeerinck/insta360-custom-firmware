@@ -137,7 +137,7 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
 | `Pin(target)` | `pin` | `PinScreen::default()` |
 | `Update` | `ota` | `UpdateScreen::default()` (H3; installing and restarting take over the router) |
-| `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4) |
+| `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4; stock's Bluetooth switch in the device row, `SetBluetooth`; Pair another phone opens `Confirm(PairAnotherPhone)`) |
 | `IncomingCall` | `call` | `CallScreen::default()` (I3; a ringing Bluetooth call takes over the router) |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
@@ -226,7 +226,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Bluetooth (the pairing countdown), Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
 | Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`: whole rows only (three from `RADIO_TOP`, y 68–231), snapping to rows when longer; `.scroll_to(index)` puts the row at the top without animation, or shows the last rows | After a recording, Time zone, Dim after |
-| Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
+| Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)`; a bare `Switch::new(parent, on, on_toggle)` (the same track in a 56 x 44 target) for a row that is not itself the control | Uploads, Display, Date and time, Bluetooth (the switch in the device row) |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
 | Audio mode picker | `ModePicker::new(root, glyphs: [Glyph; 6], selected, on_select, on_aim)`; `set_selected`, `set_preview(&Preview)`, `set_aimable`; `AimEvent` reports the aim while dragging and on release. Six round buttons on a ring around a drawn pickup-pattern preview; the preview disc takes aim drags and keeps its gestures (`components/mode_picker.rs`) | Audio mode |
 | Signal arcs | `SignalArcs::new(root, cx, cy)`, `set_bars(lit)` (0-4 of four concentric arcs, innermost first) (`components/wifi.rs`) | Wi-Fi |

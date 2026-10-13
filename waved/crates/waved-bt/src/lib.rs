@@ -369,7 +369,13 @@ impl BtService {
                 info!("{note}");
             }
             for c in &ticked.frames {
-                self.send(&c.frame());
+                let frame = c.frame();
+                // The start-up sequence and the 5 s poll: the command byte
+                // only (the device pass checks the order).
+                if frame.cmd != command::id::GET_STATUS {
+                    debug!("bt: sends {:#04x}", frame.cmd);
+                }
+                self.send(&frame);
             }
         }
     }

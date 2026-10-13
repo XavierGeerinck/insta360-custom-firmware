@@ -1338,8 +1338,12 @@ HPF → EQ → MBAGC → limiter → volume ── hw:0,1 (speaker) + AEC refere
   `playback_open`, `mic_active`, `capture_frames`, `playback_frames`,
   `capture_xruns`, `playback_xruns`, `speaker_drops`, `mic_drops`,
   `open_failures`. Log lines start with `bt-downstream` / `bt-uplink`.
-- **Not done:** the phone's volume reports (`0xD5`) do not change the Wave's
-  volume; the dongle's audio bits (5, 6) are not routed.
+- **The phone's volume** (`0xD5`) sets the Wave's speaker volume while the
+  phone's audio plays, mapped as stock maps it (`waved-bt` `volume`,
+  `BLUETOOTH_PROTOCOL.md` "Volume"); nothing goes back to the phone.
+- **Not done:** the dongle's audio bits (5, 6) are not routed; stock's
+  `0xA5 02` / `0xA5 03` (audio mode, sent as it opens the phone's or the
+  dongle's path) is not sent.
 
 ## Microphone check (milestone 2)
 
