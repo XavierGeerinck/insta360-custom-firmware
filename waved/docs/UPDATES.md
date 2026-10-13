@@ -35,8 +35,9 @@ cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.
 ```
 
 `waved-pack inspect <file.wup> --pubkey <hex>` shows a package's manifest and checks
-its signature. The first build that carries the key has to reach the Wave the old way
-(adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
+its signature. The first build that carries the key has to reach the Wave the old way:
+`deploy/install.sh` over adb (`docs/DISPLAY_HARDWARE.md#deploy`), which also installs the
+current `S60waved` and keeps the Wave's `config.toml`. From then on updates go over the air.
 
 Wave installs a package only if the `S60waved` that will run at the new version's first
 boots has the current fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):

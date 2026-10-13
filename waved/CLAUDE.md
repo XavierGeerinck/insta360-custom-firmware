@@ -38,9 +38,11 @@ WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release --target aarc
     --features "ui,capture-alsa" -p waved
 ```
 
-Then deploy through `/tmp` with the watchdog stopped: `/data` is nearly full and a
-direct `adb push` over the binary can leave the device with none. The full
-procedure (strip, md5 check, swap, watchdog restart) is in
+Then deploy with `deploy/install.sh`: it goes through `/tmp` with the watchdog
+stopped (`/data` is nearly full and a direct `adb push` over the binary can leave
+the device with none), keeps the Wave's `config.toml` (copying it to
+`config.toml.before-<time>` first) and starts the watchdog again. The procedure
+(strip, md5 check, swap, watchdog restart) is in
 [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md#deploy).
 
 For one-off runs with injected env vars, stop the watchdog first and start waved
