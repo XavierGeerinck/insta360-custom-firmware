@@ -14,6 +14,7 @@ pub mod mic_check;
 pub mod playback;
 pub mod processed_frame;
 pub mod recording_mix;
+pub mod repeat_filter;
 pub mod spectrum;
 pub mod stats_collector;
 pub mod stereo_align;
