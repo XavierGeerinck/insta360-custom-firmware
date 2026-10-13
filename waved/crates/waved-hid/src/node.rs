@@ -17,13 +17,21 @@
 //!   (the oldest go first, and none is written more than [`STALE_AFTER`]
 //!   late);
 //! - the first failure of an outage and its end are logged ([`Outage`]),
-//!   nothing in between.
+//!   nothing in between;
+//! - while USB storage holds the node for its switch
+//!   ([`waved_state::GadgetHold`], `StateBus::hid_hold`,
+//!   `docs/USB_STORAGE.md`), the handle is closed, that is confirmed to the
+//!   switch, and nothing opens the node until the hold is lowered: the
+//!   switch unbinds only once every user confirmed, so no read, write or
+//!   poll reaches a `hid.0` that 5.4 `f_hid` freed.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
+
+use waved_state::GadgetHoldUser;
 
 /// After a failure, the node is opened again no sooner than this.
 pub const REOPEN_EVERY: Duration = Duration::from_secs(1);
@@ -36,6 +44,12 @@ pub const STALE_AFTER: Duration = Duration::from_secs(10);
 
 /// How long a read waits before the reader checks the node again.
 pub const READ_WAIT: Duration = Duration::from_secs(1);
+
+/// How often a thread that cannot wait on the hold's channel (the reader,
+/// the PC link's writer) looks at it. With `READ_WAIT` this bounds how long
+/// the switch waits for them (its limit is 3 s, `waved-system`
+/// `usb_storage::HOLD_WAIT`).
+pub const HOLD_CHECK: Duration = Duration::from_millis(200);
 
 /// `/dev/hidg0`, or a fake in the tests.
 pub trait Node {
@@ -131,6 +145,22 @@ pub enum Unavailable {
     Waiting,
     /// The open failed just now (it is tried again in [`REOPEN_EVERY`]).
     OpenFailed(io::Error),
+    /// The USB gadget switch holds the node: the handle is closed and
+    /// nothing is opened until the hold is lowered.
+    Held,
+}
+
+/// What [`Reopening::hold`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hold {
+    /// No hold: use the node as usual.
+    Free,
+    /// A hold began: the handle is closed and that is confirmed (log it).
+    Began,
+    /// Still held.
+    Held,
+    /// The hold ended (log it): the node may be opened again, at once.
+    Ended,
 }
 
 /// How [`Reopening::get`] came by its handle.
@@ -144,22 +174,70 @@ pub enum Opened {
     Replaced,
 }
 
-/// A node's handle, opened again after errors and gadget switches.
+/// A node's handle, opened again after errors and gadget switches, and
+/// closed while the gadget switch holds the node.
 pub struct Reopening<N: Node> {
     node: N,
     handle: Option<N::Handle>,
     retry_at: Option<Instant>,
     every: Duration,
+    /// This user's side of the switch's hold; declared after `handle`, so a
+    /// dropped user is unregistered only once its file is closed.
+    hold: Option<GadgetHoldUser>,
+    /// The last [`Reopening::hold`] found the node held.
+    held: bool,
 }
 
 impl<N: Node> Reopening<N> {
     pub fn new(node: N, every: Duration) -> Self {
-        Self { node, handle: None, retry_at: None, every }
+        Self { node, handle: None, retry_at: None, every, hold: None, held: false }
+    }
+
+    /// Follow the USB gadget switch's hold (`None`: no switch to follow).
+    pub fn with_hold(mut self, hold: Option<GadgetHoldUser>) -> Self {
+        self.hold = hold;
+        self
+    }
+
+    /// Look at the switch's hold. While it is raised the handle is closed
+    /// and then confirmed (so the switch may unbind). Call it before using
+    /// the handle and whenever the hold may have changed.
+    pub fn hold(&mut self) -> Hold {
+        if self.close_if_held() {
+            let began = !std::mem::replace(&mut self.held, true);
+            return if began { Hold::Began } else { Hold::Held };
+        }
+        if std::mem::replace(&mut self.held, false) {
+            // The gadget is bound again: a new node, no back-off.
+            self.retry_at = None;
+            return Hold::Ended;
+        }
+        Hold::Free
+    }
+
+    /// Whether the switch holds the node now.
+    pub fn is_held(&self) -> bool {
+        self.hold.as_ref().is_some_and(|user| user.held().is_some())
+    }
+
+    /// Held: close the handle, then confirm that for this raise.
+    fn close_if_held(&mut self) -> bool {
+        let Some(generation) = self.hold.as_ref().and_then(GadgetHoldUser::held) else {
+            return false;
+        };
+        self.handle = None;
+        if let Some(user) = &self.hold {
+            user.confirm(generation);
+        }
+        true
     }
 
     /// The handle to use now: the open one while the path still names its
-    /// node, else a new open when one is due.
+    /// node, else a new open when one is due. Never while held.
     pub fn get(&mut self, now: Instant) -> Result<(&mut N::Handle, Opened), Unavailable> {
+        if self.close_if_held() {
+            return Err(Unavailable::Held);
+        }
         let mut opened = Opened::Already;
         if self.handle.as_ref().is_some_and(|h| !h.is_current()) {
             self.handle = None;
@@ -304,6 +382,8 @@ pub(crate) mod fake {
         /// Bumped by every bind: handles from before are on the old node.
         pub generation: u32,
         pub opens: u32,
+        /// Handles open now (on any node).
+        pub open_handles: u32,
         /// Every write that went through, with the node it went to.
         pub written: Vec<(u32, Vec<u8>)>,
         /// The current node fails its writes with this errno.
@@ -344,6 +424,9 @@ pub(crate) mod fake {
         pub fn opens(&self) -> u32 {
             self.state().opens
         }
+        pub fn open_handles(&self) -> u32 {
+            self.state().open_handles
+        }
         /// The reports written to the node of `generation`.
         pub fn written_to(&self, generation: u32) -> Vec<Vec<u8>> {
             self.state().written.iter().filter(|(g, _)| *g == generation).map(|(_, r)| r.clone()).collect()
@@ -363,7 +446,14 @@ pub(crate) mod fake {
             if !s.present {
                 return Err(io::Error::from_raw_os_error(libc::ENOENT));
             }
+            s.open_handles += 1;
             Ok(FakeHandle { node: Arc::clone(&self.0), generation: s.generation })
+        }
+    }
+
+    impl Drop for FakeHandle {
+        fn drop(&mut self) {
+            self.node.lock().unwrap().open_handles -= 1;
         }
     }
 
@@ -490,6 +580,70 @@ mod tests {
         assert_eq!(p.drop_stale(t0 + STALE_AFTER + Duration::from_millis(1)), 2);
         assert_eq!(p.pop(), Some(3));
         assert!(p.is_empty());
+    }
+
+    use waved_state::GadgetHold;
+
+    #[test]
+    fn a_hold_closes_the_handle_confirms_and_opens_nothing_until_it_is_lowered() {
+        let node = FakeNode::present();
+        let hold = GadgetHold::new();
+        let mut r = Reopening::new(node.clone(), REOPEN_EVERY).with_hold(Some(hold.register("keys")));
+        let t0 = Instant::now();
+        assert_eq!(r.hold(), Hold::Free);
+        r.get(t0).unwrap();
+        assert_eq!(node.open_handles(), 1);
+
+        hold.raise();
+        assert_eq!(hold.waiting_for(), ["keys"], "it still has its file");
+        assert_eq!(r.hold(), Hold::Began);
+        assert_eq!(node.open_handles(), 0, "closed before it confirmed");
+        assert!(hold.all_closed());
+        assert_eq!(r.hold(), Hold::Held);
+        assert!(matches!(r.get(t0 + 10 * REOPEN_EVERY), Err(Unavailable::Held)));
+        assert!(r.is_held());
+        assert_eq!(node.opens(), 1, "no open while held");
+
+        hold.lower();
+        assert_eq!(r.hold(), Hold::Ended);
+        assert!(!r.is_held());
+        assert_eq!(r.get(t0).unwrap().1, Opened::Fresh, "opened at once, no back-off");
+        assert_eq!(node.open_handles(), 1);
+        assert_eq!(r.hold(), Hold::Free);
+    }
+
+    #[test]
+    fn a_hold_raised_after_the_check_is_confirmed_only_once_the_handle_is_closed() {
+        let node = FakeNode::present();
+        let hold = GadgetHold::new();
+        let mut r = Reopening::new(node.clone(), REOPEN_EVERY).with_hold(Some(hold.register("reader")));
+        let t0 = Instant::now();
+        assert_eq!(r.hold(), Hold::Free);
+        hold.raise();
+        // The user checked before the raise and uses the node now: the
+        // switch must keep waiting.
+        let _ = r.open_handle();
+        assert_eq!(hold.waiting_for(), ["reader"]);
+        // `get` checks the hold itself.
+        assert!(matches!(r.get(t0), Err(Unavailable::Held)));
+        assert_eq!(node.open_handles(), 0);
+        assert!(hold.all_closed());
+        assert_eq!(r.hold(), Hold::Began, "the start of the hold is still reported once");
+    }
+
+    #[test]
+    fn a_hold_also_closes_a_handle_that_is_backing_off() {
+        let node = FakeNode::present();
+        let hold = GadgetHold::new();
+        let mut r = Reopening::new(node.clone(), REOPEN_EVERY).with_hold(Some(hold.register("pclink")));
+        let t0 = Instant::now();
+        r.get(t0).unwrap();
+        r.failed(t0);
+        hold.raise();
+        assert_eq!(r.hold(), Hold::Began);
+        hold.lower();
+        assert_eq!(r.hold(), Hold::Ended);
+        assert_eq!(r.retry_at(), None, "the node is new after the switch: no back-off");
     }
 
     #[test]

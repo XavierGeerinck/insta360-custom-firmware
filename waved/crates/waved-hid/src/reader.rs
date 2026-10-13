@@ -14,7 +14,9 @@ use tracing::{debug, info, warn};
 
 use waved_state::AudioState;
 
-use crate::node::{DevNode, Handle, Node, Opened, Outage, Reopening, Unavailable, READ_WAIT, REOPEN_EVERY};
+use crate::node::{
+    DevNode, Handle, Hold, Node, Opened, Outage, Reopening, Unavailable, HOLD_CHECK, READ_WAIT, REOPEN_EVERY,
+};
 use crate::stats::HidStats;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +96,9 @@ pub enum Turn {
     Idle,
     /// No node to read: wait this long, then turn again.
     Down(Duration),
+    /// USB storage holds the node for its gadget switch: the handle is
+    /// closed; look again in `HOLD_CHECK`.
+    Held,
 }
 
 /// The reader thread's loop, one turn at a time.
@@ -120,8 +125,28 @@ impl<N: Node> ReadLoop<N> {
         }
     }
 
+    /// Follow USB storage's hold on the node.
+    pub fn with_hold(mut self, hold: Option<waved_state::GadgetHoldUser>) -> Self {
+        self.node = self.node.with_hold(hold);
+        self
+    }
+
     /// One read, or the wait before the next try while there is no node.
+    /// Before each read the hold is looked at: a raised one closes the
+    /// handle (confirmed to the switch) instead.
     pub fn turn(&mut self, now: Instant, buf: &mut [u8]) -> Turn {
+        match self.node.hold() {
+            Hold::Free => {}
+            Hold::Began => {
+                info!("hid-reader: USB is switching; {} closed until it is back", self.device);
+                return Turn::Held;
+            }
+            Hold::Held => return Turn::Held,
+            Hold::Ended => {
+                info!("hid-reader: the USB switch is over; reading {} again", self.device);
+                self.verify = true;
+            }
+        }
         let trusted = !self.verify && self.node.is_open();
         let got = if trusted {
             self.node.open_handle().map(|h| (h, Opened::Already)).ok_or(Unavailable::Waiting)
@@ -141,6 +166,7 @@ impl<N: Node> ReadLoop<N> {
                 h
             }
             Err(Unavailable::Waiting) => return Turn::Down(self.node.wait(now)),
+            Err(Unavailable::Held) => return Turn::Held,
             Err(Unavailable::OpenFailed(e)) => {
                 let what = format!("cannot open {} for read: {e}", self.device);
                 self.failed(what);
@@ -186,6 +212,9 @@ impl<N: Node> ReadLoop<N> {
 #[derive(Debug, Clone)]
 pub struct HidReaderConfig {
     pub device: String,
+    /// USB storage's hold on the node (`StateBus::hid_hold`); `None`: no
+    /// gadget switch to follow.
+    pub hold: Option<waved_state::GadgetHold>,
 }
 
 pub struct HidReader;
@@ -210,8 +239,11 @@ impl HidReader {
         stats: Arc<HidStats>,
         vendor_tx: Option<std::sync::mpsc::Sender<Vec<u8>>>,
     ) {
+        // Registered before the thread runs: a switch from now on waits for it.
+        let hold = cfg.hold.as_ref().map(|hold| hold.register("the HID reader"));
         std::thread::spawn(move || {
-            let mut reader = ReadLoop::new(DevNode::reader(&cfg.device), &cfg.device, REOPEN_EVERY);
+            let mut reader =
+                ReadLoop::new(DevNode::reader(&cfg.device), &cfg.device, REOPEN_EVERY).with_hold(hold);
             let mut buf = [0u8; 64];
             loop {
                 match reader.turn(Instant::now(), &mut buf) {
@@ -228,6 +260,7 @@ impl HidReader {
                         }
                     },
                     Turn::Idle => {}
+                    Turn::Held => std::thread::sleep(HOLD_CHECK),
                     // Never less than 10 ms: nothing spins while the node is missing.
                     Turn::Down(wait) => std::thread::sleep(wait.max(Duration::from_millis(10))),
                 }
@@ -390,6 +423,66 @@ mod tests {
     }
 
     #[test]
+    fn a_hold_closes_the_reader_until_it_ends_then_the_new_node_is_read() {
+        let node = FakeNode::present();
+        node.state().reads.push_back(Read::Report(vec![0x05, 0x01]));
+        let hold = waved_state::GadgetHold::new();
+        let mut r = read_loop(&node).with_hold(Some(hold.register("reader")));
+        let mut buf = [0u8; 64];
+        let t0 = Instant::now();
+        // Reports flowing: the reader trusts its handle between reads.
+        assert_eq!(r.turn(t0, &mut buf), Turn::Report(2));
+        hold.raise();
+        assert_eq!(hold.waiting_for(), ["reader"]);
+        assert_eq!(r.turn(t0, &mut buf), Turn::Held);
+        assert_eq!(node.open_handles(), 0, "closed, not read");
+        assert!(hold.all_closed());
+        node.unbind();
+        assert_eq!(r.turn(t0, &mut buf), Turn::Held);
+        node.bind();
+        assert_eq!(r.turn(t0, &mut buf), Turn::Held, "bound again, but still held");
+        assert_eq!(node.opens(), 1);
+        hold.lower();
+        node.state().reads.push_back(Read::Report(vec![0x07, 0x01]));
+        assert_eq!(r.turn(t0, &mut buf), Turn::Report(2), "no back-off after the hold");
+        assert_eq!(&buf[..2], &[0x07, 0x01]);
+    }
+
+    #[test]
+    fn the_reader_thread_confirms_a_hold_within_its_read_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hidg0");
+        std::fs::write(&path, [0x05, 0x01]).unwrap();
+        let (tx, rx) = watch::channel(AudioState::default());
+        let hold = waved_state::GadgetHold::new();
+        HidReader::spawn(
+            HidReaderConfig { device: path.to_string_lossy().into_owned(), hold: Some(hold.clone()) },
+            Arc::new(tx),
+            HidStats::new(),
+        );
+        assert_eq!(hold.users(), 1, "registered before the thread runs");
+        let wait_until = |what: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + 2 * READ_WAIT + HOLD_CHECK;
+            while !what() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            what()
+        };
+        assert!(wait_until(&|| rx.borrow().call_off_hook));
+        let raised = std::time::Instant::now();
+        hold.raise();
+        assert!(wait_until(&|| hold.all_closed()), "confirmed");
+        assert!(raised.elapsed() <= READ_WAIT + HOLD_CHECK + std::time::Duration::from_millis(300));
+        // While held, the node is not read.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, [0x07, 0x01]).unwrap();
+        std::thread::sleep(2 * HOLD_CHECK);
+        assert!(!rx.borrow().call_ringing);
+        hold.lower();
+        assert!(wait_until(&|| rx.borrow().call_ringing), "read after the hold");
+    }
+
+    #[test]
     fn the_reader_reads_the_new_node_after_a_gadget_switch() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("hidg0");
@@ -397,7 +490,7 @@ mod tests {
         let (tx, rx) = watch::channel(AudioState::default());
         let stats = HidStats::new();
         HidReader::spawn(
-            HidReaderConfig { device: path.to_string_lossy().into_owned() },
+            HidReaderConfig { device: path.to_string_lossy().into_owned(), hold: None },
             Arc::new(tx),
             Arc::clone(&stats),
         );

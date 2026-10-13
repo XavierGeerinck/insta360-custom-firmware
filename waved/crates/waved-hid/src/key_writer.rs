@@ -2,16 +2,20 @@
 //! press and a release report to `/dev/hidg0`, through a [`Reopening`]
 //! handle, so it never stops for good: a failed open or write closes the
 //! handle and the keys wait (bounded, `node::Pending`) for the node to come
-//! back, tried once a second (`docs/USB_STORAGE.md`).
+//! back, tried once a second (`docs/USB_STORAGE.md`). While USB storage
+//! holds the node for its gadget switch the handle is closed and the keys
+//! wait the same way (`node::Hold`).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
+use waved_state::{GadgetHoldSignal, GadgetHoldUser};
 
 use crate::events::HidEvent;
-use crate::node::{Handle, Node, Opened, Outage, Pending, Reopening, Unavailable, STALE_AFTER};
+use crate::node::{Handle, Hold, Node, Opened, Outage, Pending, Reopening, Unavailable, STALE_AFTER};
 use crate::report;
 use crate::stats::HidStats;
 
@@ -28,6 +32,8 @@ pub struct KeyWriter<N: Node> {
     /// The key whose press went out and whose release has not, since when.
     half: Option<(Instant, HidEvent)>,
     outage: Outage,
+    /// The hold's changes, until `HidService::run_with` takes them.
+    hold_signal: Option<watch::Receiver<GadgetHoldSignal>>,
 }
 
 impl<N: Node> KeyWriter<N> {
@@ -42,15 +48,49 @@ impl<N: Node> KeyWriter<N> {
             pending: Pending::new(KEYS_WAITING, STALE_AFTER),
             half: None,
             outage: Outage::default(),
+            hold_signal: None,
+        }
+    }
+
+    /// Follow USB storage's hold on the node (`HidService::run_with` wakes
+    /// on its changes).
+    pub fn with_hold(mut self, hold: Option<GadgetHoldUser>) -> Self {
+        self.hold_signal = hold.as_ref().map(GadgetHoldUser::subscribe);
+        self.node = self.node.with_hold(hold);
+        self
+    }
+
+    /// The hold's changes, to wake on (taken once).
+    pub fn take_hold_signal(&mut self) -> Option<watch::Receiver<GadgetHoldSignal>> {
+        self.hold_signal.take()
+    }
+
+    /// Look at the hold: while it is raised the handle is closed (and that
+    /// confirmed). True while held.
+    pub fn check_hold(&mut self) -> bool {
+        match self.node.hold() {
+            Hold::Free => false,
+            Hold::Began => {
+                info!("hid: USB is switching; {} closed, keys wait until it is back", self.device);
+                true
+            }
+            Hold::Held => true,
+            Hold::Ended => {
+                info!("hid: the USB switch is over; writing to {} again", self.device);
+                false
+            }
         }
     }
 
     /// Open the node at start, so the stats say whether it is there.
     pub fn open_at_start(&mut self) {
+        if self.check_hold() {
+            return;
+        }
         match self.node.get(Instant::now()) {
             Ok(_) => self.stats.device_present.store(true, Ordering::Relaxed),
             Err(Unavailable::OpenFailed(e)) => self.failed(format!("cannot open {}: {e}", self.device)),
-            Err(Unavailable::Waiting) => {}
+            Err(Unavailable::Waiting | Unavailable::Held) => {}
         }
     }
 
@@ -62,16 +102,21 @@ impl<N: Node> KeyWriter<N> {
         }
     }
 
-    /// When to try the node again, while keys wait for it.
+    /// When to try the node again, while keys wait for it. Never while the
+    /// node is held: the hold's end wakes the writer.
     pub fn retry_at(&self) -> Option<Instant> {
-        if self.half.is_none() && self.pending.is_empty() {
+        if (self.half.is_none() && self.pending.is_empty()) || self.node.is_held() {
             return None;
         }
         Some(self.node.retry_at().unwrap_or_else(Instant::now))
     }
 
-    /// Write the waiting keys in order, until the node fails or is not due.
+    /// Write the waiting keys in order, until the node fails, is not due or
+    /// is held.
     pub async fn flush(&mut self) {
+        if self.check_hold() {
+            return;
+        }
         loop {
             let now = Instant::now();
             if self.half.is_some_and(|(t, _)| now.saturating_duration_since(t) > STALE_AFTER) {
@@ -96,7 +141,7 @@ impl<N: Node> KeyWriter<N> {
                     }
                     h
                 }
-                Err(Unavailable::Waiting) => return,
+                Err(Unavailable::Waiting | Unavailable::Held) => return,
                 Err(Unavailable::OpenFailed(e)) => {
                     self.stats.write_errors.fetch_add(1, Ordering::Relaxed);
                     self.failed(format!("cannot open {}: {e}", self.device));
@@ -237,6 +282,48 @@ mod tests {
         let at = w.retry_at().unwrap();
         let wait = at.saturating_duration_since(Instant::now());
         assert!(wait > Duration::from_millis(900) && wait <= REOPEN_EVERY, "{wait:?}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_hold_closes_the_idle_writer_and_keys_wait_for_its_end() {
+        let node = FakeNode::present();
+        let hold = waved_state::GadgetHold::new();
+        let (w, stats) = writer(&node, REOPEN_EVERY);
+        let mut w = w.with_hold(Some(hold.register("keys")));
+        w.open_at_start();
+        assert_eq!(node.open_handles(), 1);
+
+        hold.raise();
+        assert_eq!(hold.waiting_for(), ["keys"]);
+        assert!(w.check_hold());
+        assert_eq!(node.open_handles(), 0);
+        assert!(hold.all_closed());
+        w.push(LOUDER);
+        w.flush().await;
+        assert_eq!(node.opens(), 1, "nothing opened while held");
+        assert_eq!(w.retry_at(), None, "no wake-ups while held: the hold's end wakes it");
+        assert_eq!(stats.write_errors.load(Ordering::Relaxed), 0, "a hold is not a failure");
+
+        // The switch, then the hold ends.
+        node.unbind();
+        node.bind();
+        hold.lower();
+        assert!(!w.check_hold());
+        w.flush().await;
+        assert_eq!(node.written_to(1), reports(&[LOUDER]));
+        assert!(stats.device_present.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_writer_that_starts_during_a_hold_opens_nothing() {
+        let node = FakeNode::present();
+        let hold = waved_state::GadgetHold::new();
+        hold.raise();
+        let (w, _) = writer(&node, REOPEN_EVERY);
+        let mut w = w.with_hold(Some(hold.register("keys")));
+        w.open_at_start();
+        assert_eq!(node.opens(), 0);
+        assert!(hold.all_closed());
     }
 
     #[tokio::test(flavor = "current_thread")]
