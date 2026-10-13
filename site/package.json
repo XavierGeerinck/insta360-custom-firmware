@@ -10,7 +10,7 @@
     "dev": "npm run sync && astro dev",
     "build": "npm run sync && astro build && node scripts/check-dist-links.mjs",
     "preview": "astro preview",
-    "test": "node --test scripts/test/"
+    "test": "node --test scripts/test/*.test.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.6",
