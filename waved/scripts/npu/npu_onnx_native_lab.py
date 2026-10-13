@@ -840,7 +840,14 @@ def _inventory(manifest, root: str) -> dict:
 
 
 def _system_manifest(manifest):
-    return replace(manifest, required_artifacts=dict(SYSTEM_HASHES))
+    return replace(
+        manifest,
+        required_artifacts={
+            path: digest
+            for path, digest in manifest.required_artifacts.items()
+            if not path.startswith("/tmp/")
+        },
+    )
 
 
 def _snapshot(transport, manifest, execute: bool = False) -> dict:
@@ -978,7 +985,8 @@ def _cleanup(
     projected_before = {
         **before,
         "artifact_hashes": {
-            path: before.get("artifact_hashes", {}).get(path) for path in SYSTEM_HASHES
+            path: before.get("artifact_hashes", {}).get(path)
+            for path in baseline.required_artifacts
         },
     }
     stage_tools.align_cleanup_diagnostics(transport, projected_before, system_before)

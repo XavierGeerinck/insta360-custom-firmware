@@ -1,4 +1,4 @@
-"""Optional host integrity checks against retained PoC 17 qualification packages."""
+"""Optional host integrity checks against retained native qualification packages."""
 
 import os
 import shutil
@@ -19,6 +19,16 @@ import npu_onnx_native_lab as lab
 class QualifiedPackageIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.packages = Path(os.environ["WAVE_ONNX_QUALIFIED_PACKAGES"])
+        self.controls = tuple(
+            os.environ.get("WAVE_ONNX_QUALIFIED_CONTROLS", "17a1,17a2,17b1,17b2").split(
+                ","
+            )
+        )
+        if not self.controls or any(
+            control not in {"17a1", "17a2", "17b1", "17b2", "18a", "18b"}
+            for control in self.controls
+        ):
+            self.fail("unknown qualified control selection")
 
     def test_four_real_strict_sessions_load_without_cpu_session_or_transport(self):
         lab._host()
@@ -35,7 +45,7 @@ class QualifiedPackageIntegrationTests(unittest.TestCase):
                 side_effect=AssertionError("strict loading created a CPU session"),
             ) as cpu,
         ):
-            for control in ("17a1", "17a2", "17b1", "17b2"):
+            for control in self.controls:
                 with self.subTest(control=control):
                     package = lab.load_package(
                         self.packages / control, require_qualification=True
@@ -56,7 +66,7 @@ class QualifiedPackageIntegrationTests(unittest.TestCase):
             cpu_factory.assert_not_called()
 
     def test_changed_real_artifacts_refuse_before_cpu_session_or_transport(self):
-        source = self.packages / "17a1"
+        source = self.packages / self.controls[0]
         qualification = lab._json(source / "qualification.json")
         stage_input = "evidence/" + qualification["run_id"] + "-stage/input.bin"
         artifacts = (
@@ -71,6 +81,12 @@ class QualifiedPackageIntegrationTests(unittest.TestCase):
             "evidence/qualification/cleanup.json",
             stage_input,
         )
+        if (source / "qualification-independent-output.bin").exists():
+            artifacts += (
+                "qualification-independent-output.bin",
+                "qualification-cpu-output.bin",
+                "evidence/qualification/numerical-comparison.json",
+            )
         with (
             mock.patch.object(lab.npu_lab, "AdbTransport") as transport,
             mock.patch(

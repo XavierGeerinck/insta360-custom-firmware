@@ -147,6 +147,7 @@ class ExecutionPolicy:
     input_values: tuple[int, ...]
     output_values: tuple[int, ...]
     execution_re: re.Pattern[str]
+    expected_iterations: int = 1
 
 
 POC6_POLICY = ExecutionPolicy(
@@ -448,7 +449,7 @@ def load_manifest(
         expected["input"] != list(policy.input_values)
         or expected["output"] != list(policy.output_values)
         or expected["bytes"] != len(policy.output_values)
-        or expected["iterations"] != 1
+        or expected["iterations"] != policy.expected_iterations
     ):
         raise ExecutionManifestError(
             "expected result differs from fixed PoC 6 policy"
@@ -678,7 +679,7 @@ def parse_result(
     result = {
         "identity": identity,
         "mode": "execute-once",
-        "iterations": 1,
+        "iterations": manifest.policy.expected_iterations,
         "input": list(manifest.policy.input_values),
         "output": list(manifest.policy.output_values),
         "bytes": len(manifest.policy.output_values),
