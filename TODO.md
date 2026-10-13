@@ -351,7 +351,7 @@ Rules for the parallel milestones:
 
 ## G — USB storage
 
-- [ ] **G1 Mass-storage mode** (M) — reworked after the device pass (2026-10-13) and host-tested; **device pass pending**. The drive next to adb doesn't work on this controller, so waved now runs stock's own `S89usbgadget uac_hid_msc` switch at runtime (verified live by hand, v3): **adb is off while storage is on**, audio and HID stay. The boot patch no longer links the drive (and removes an old G1 step).
+- [ ] **G1 Mass-storage mode** (M) — reworked after the device pass (2026-10-13) and host-tested; **device pass pending**. The drive next to adb doesn't work on this controller, so waved now runs stock's own `S89usbgadget uac_hid_msc` switch at runtime (verified live by hand, v3): **adb is off while storage is on**, audio stays; waved's HID (keys to the computer, PC link, call LEDs) pauses while it lasts. Nothing unbinds while waved has a file on `/dev/hidg0` or `hw:1` (5.4 `f_hid` use-after-free, `f_uac2` unbind waits for the card's files): the gadget holds, `USB_STORAGE.md`. The boot patch no longer links the drive (and removes an old G1 step).
   Plan: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md` (R1–R4); design, measurements and
   device-pass checklist: `waved/docs/USB_STORAGE.md`.
   - [x] The recordings volume as a drive: unmount first, then stock's switch (unbind, adbd off,

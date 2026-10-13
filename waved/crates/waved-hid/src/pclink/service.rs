@@ -1,17 +1,22 @@
 //! Runs the PC link: an engine thread fed by `HidReader::spawn_with_vendor`,
 //! and a writer thread that owns the PC-link writes to `/dev/hidg0` (the
 //! consumer / telephony writer keeps its own handle; f_hid serialises them).
-//! The writer opens the node again after errors and gadget switches
-//! (`crate::node`).
+//! The writer opens the node again after errors and gadget switches, and
+//! closes it while USB storage holds it for a switch (`crate::node`).
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
-use waved_state::{AudioState, BatteryState, Command, MeetingState, SettingsState, StateBus, SystemState, WifiState};
+use waved_state::{
+    AudioState, BatteryState, Command, GadgetHold, GadgetHoldUser, MeetingState, SettingsState, StateBus, SystemState,
+    WifiState,
+};
 
-use crate::node::{DevNode, Handle, Node, Opened, Pending, Reopening, Unavailable, REOPEN_EVERY, STALE_AFTER};
+use crate::node::{
+    DevNode, Handle, Hold, Node, Opened, Pending, Reopening, Unavailable, HOLD_CHECK, REOPEN_EVERY, STALE_AFTER,
+};
 use super::handler::{Context, PcLinkHost, PinVerifier};
 use super::link::{Output, PcLink};
 use super::snapshot::Snapshot;
@@ -26,6 +31,9 @@ pub const WRITE_QUEUE: usize = 512;
 pub struct PcLinkConfig {
     /// `/dev/hidg0`.
     pub device: String,
+    /// USB storage's hold on the node (`StateBus::hid_hold`); `None`: no
+    /// gadget switch to follow.
+    pub hold: Option<GadgetHold>,
 }
 
 /// The on-device PIN prompt (K2's PIN screen): the link sends `()` on
@@ -86,9 +94,11 @@ pub fn spawn(
 ) {
     let (write_tx, write_rx) = mpsc::sync_channel(WRITE_QUEUE);
     let device = cfg.device.clone();
+    // Registered before the thread runs: a switch from now on waits for it.
+    let hold = cfg.hold.as_ref().map(|hold| hold.register("the PC link writer"));
     std::thread::Builder::new()
         .name("pclink-write".into())
-        .spawn(move || run_writer(device, write_rx))
+        .spawn(move || run_writer_on(DevNode::writer(&device), &device, REOPEN_EVERY, write_rx, hold))
         .expect("spawn pclink writer");
     std::thread::Builder::new()
         .name("pclink".into())
@@ -281,7 +291,7 @@ pub const REPORTS_WAITING: usize = 64;
 /// The writer loop: one 64-byte report per write to `device`. Returns when
 /// `rx` disconnects.
 pub fn run_writer(device: String, rx: Receiver<Report>) {
-    run_writer_on(DevNode::writer(&device), &device, REOPEN_EVERY, rx)
+    run_writer_on(DevNode::writer(&device), &device, REOPEN_EVERY, rx, None)
 }
 
 /// `run_writer` on any node. Before each write it checks that the path
@@ -289,17 +299,46 @@ pub fn run_writer(device: String, rx: Receiver<Report>) {
 /// error it closes it and opens again no sooner than `every` later. Reports
 /// that wait for the node meanwhile are kept (`REPORTS_WAITING`, oldest
 /// first, none written more than `node::STALE_AFTER` late) and go out once
-/// it opens.
-pub fn run_writer_on<N: Node>(node: N, device: &str, every: Duration, rx: Receiver<Report>) {
-    let mut node = Reopening::new(node, every);
+/// it opens. With `hold` (USB storage's, `node::Hold`) it looks at the hold
+/// at least every `HOLD_CHECK`, idle or not: while raised the node is
+/// closed (confirmed to the switch) and the reports wait the same way.
+pub fn run_writer_on<N: Node>(
+    node: N,
+    device: &str,
+    every: Duration,
+    rx: Receiver<Report>,
+    hold: Option<GadgetHoldUser>,
+) {
+    let follow_hold = hold.is_some();
+    let mut node = Reopening::new(node, every).with_hold(hold);
     let mut pending: Pending<Report> = Pending::new(REPORTS_WAITING, STALE_AFTER);
     let mut failures = FailureLog::default();
     loop {
-        // While reports wait for the node, wake for its next try.
-        let next = if pending.is_empty() {
-            rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        let held = match node.hold() {
+            Hold::Free => false,
+            Hold::Began => {
+                info!("pclink: USB is switching; {device} closed, replies wait until it is back");
+                true
+            }
+            Hold::Held => true,
+            Hold::Ended => {
+                info!("pclink: the USB switch is over; writing to {device} again");
+                false
+            }
+        };
+        // While reports wait for the node, wake for its next try; with a
+        // hold to follow, at least every HOLD_CHECK.
+        let wait = if held {
+            Some(HOLD_CHECK)
+        } else if pending.is_empty() {
+            follow_hold.then_some(HOLD_CHECK)
         } else {
-            rx.recv_timeout(node.wait(Instant::now()))
+            let wait = node.wait(Instant::now());
+            Some(if follow_hold { wait.min(HOLD_CHECK) } else { wait })
+        };
+        let next = match wait {
+            Some(wait) => rx.recv_timeout(wait),
+            None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
         };
         match next {
             Ok(report) => {
@@ -318,7 +357,7 @@ pub fn run_writer_on<N: Node>(node: N, device: &str, every: Duration, rx: Receiv
                     }
                     h
                 }
-                Err(Unavailable::Waiting) => break,
+                Err(Unavailable::Waiting | Unavailable::Held) => break,
                 Err(Unavailable::OpenFailed(e)) => {
                     if let Some(line) = failures.failed(now, &format!("cannot open {device}: {e}")) {
                         warn!("{line}");
@@ -517,20 +556,28 @@ mod tests {
         let device = "/nonexistent/hidg0".to_string();
         let (pclink_tx, pclink_rx) = std::sync::mpsc::channel();
         HidReader::spawn_with_vendor(
-            HidReaderConfig { device: device.clone() },
+            HidReaderConfig { device: device.clone(), hold: Some(bus.hid_hold.clone()) },
             std::sync::Arc::clone(&bus.audio),
             std::sync::Arc::clone(&hid_stats),
             Some(pclink_tx),
         );
         spawn(
-            PcLinkConfig { device },
+            PcLinkConfig { device, hold: Some(bus.hid_hold.clone()) },
             pclink_rx,
             PcLinkBus::from_bus(&bus),
             Box::new(DenyAllPins),
             Box::new(NoClock),
             None,
         );
+        assert_eq!(bus.hid_hold.users(), 2, "the reader and the PC link's writer");
         std::thread::sleep(Duration::from_millis(50));
+        // With no device they hold no file: both confirm a hold at once.
+        bus.hid_hold.raise();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !bus.hid_hold.all_closed() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(bus.hid_hold.all_closed(), "waiting for {:?}", bus.hid_hold.waiting_for());
     }
 
     #[test]
@@ -601,7 +648,7 @@ mod tests {
         let node = crate::node::fake::FakeNode::default();
         let (tx, rx) = mpsc::sync_channel(WRITE_QUEUE);
         let n = node.clone();
-        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(50), rx));
+        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(50), rx, None));
         let extra = 5;
         for i in 0..(REPORTS_WAITING + extra) as u8 {
             tx.send(numbered(i)).unwrap();
@@ -623,7 +670,7 @@ mod tests {
         node.state().write_errno = Some(libc::ESHUTDOWN);
         let (tx, rx) = mpsc::sync_channel(4);
         let n = node.clone();
-        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(20), rx));
+        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(20), rx, None));
         tx.send(numbered(1)).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         node.unbind();
@@ -633,6 +680,43 @@ mod tests {
         assert_eq!(written(&node, 1, 2).len(), 2);
         drop(tx);
         writer.join().unwrap();
+    }
+
+    #[test]
+    fn the_idle_writer_closes_the_node_for_a_hold_and_its_replies_wait_for_the_end() {
+        use crate::node::HOLD_CHECK;
+        let node = crate::node::fake::FakeNode::present();
+        let hold = waved_state::GadgetHold::new();
+        let (tx, rx) = mpsc::sync_channel(4);
+        let n = node.clone();
+        let user = hold.register("pclink");
+        let writer =
+            std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(20), rx, Some(user)));
+        tx.send(numbered(1)).unwrap();
+        assert_eq!(written(&node, 0, 1).len(), 1);
+        assert_eq!(node.open_handles(), 1);
+
+        // Idle in its wait for replies: the hold must still reach it.
+        let raised = Instant::now();
+        hold.raise();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !hold.all_closed() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(hold.all_closed(), "confirmed");
+        assert!(raised.elapsed() <= HOLD_CHECK + Duration::from_millis(200), "{:?}", raised.elapsed());
+        assert_eq!(node.open_handles(), 0);
+        tx.send(numbered(2)).unwrap();
+        std::thread::sleep(2 * HOLD_CHECK);
+        assert_eq!(node.opens(), 1, "nothing opened while held");
+
+        node.unbind();
+        node.bind();
+        hold.lower();
+        assert_eq!(written(&node, 1, 1), vec![numbered(2).to_vec()], "the reply waited for the hold's end");
+        drop(tx);
+        writer.join().unwrap();
+        assert_eq!(hold.users(), 0, "a writer that ends is not waited for");
     }
 
     #[test]

@@ -33,6 +33,9 @@ pub struct HidService;
 pub struct HidServiceConfig {
     pub device: String,
     pub press_release_gap_ms: u64,
+    /// USB storage's hold on the node (`StateBus::hid_hold`); `None`: no
+    /// gadget switch to follow.
+    pub hold: Option<waved_state::GadgetHold>,
 }
 
 impl HidService {
@@ -42,7 +45,8 @@ impl HidService {
     /// `/dev/hidg0`. A failed open or write never stops it: the keys wait
     /// for the node, which is opened again once a second
     /// (`key_writer::KeyWriter`; the gadget switch of USB storage replaces
-    /// the node).
+    /// the node). While USB storage holds the node (`cfg.hold`) the handle
+    /// is closed and the keys wait.
     pub async fn run(
         cfg: HidServiceConfig,
         bus_rx: tokio::sync::broadcast::Receiver<waved_state::DeviceEvent>,
@@ -55,7 +59,8 @@ impl HidService {
             std::time::Duration::from_millis(cfg.press_release_gap_ms),
             std::sync::Arc::clone(&stats),
             node::REOPEN_EVERY,
-        );
+        )
+        .with_hold(cfg.hold.as_ref().map(|hold| hold.register("the HID key writer")));
         Self::run_with(keys, bus_rx, events_rx, stats).await
     }
 
@@ -76,6 +81,9 @@ impl HidService {
         stats: std::sync::Arc<stats::HidStats>,
     ) {
         info!("hid_srv started");
+        // USB storage's hold wakes the writer by itself: an idle writer must
+        // close the node too.
+        let mut hold_rx = keys.take_hold_signal();
         keys.open_at_start();
 
         // MCU sends button-down then button-up as separate frames; debounce
@@ -125,8 +133,24 @@ impl HidService {
                     }
                 },
                 _ = tokio::time::sleep_until(wake), if retry.is_some() => keys.flush().await,
+                changed = hold_changed(&mut hold_rx), if hold_rx.is_some() => {
+                    if changed {
+                        keys.check_hold();
+                        keys.flush().await;
+                    } else {
+                        hold_rx = None;
+                    }
+                }
             }
         }
+    }
+}
+
+/// The next change of USB storage's hold; false once its sender is gone.
+async fn hold_changed(rx: &mut Option<tokio::sync::watch::Receiver<waved_state::GadgetHoldSignal>>) -> bool {
+    match rx {
+        Some(rx) => rx.changed().await.is_ok(),
+        None => std::future::pending().await,
     }
 }
 
@@ -150,6 +174,7 @@ mod integ_tests {
         let cfg = HidServiceConfig {
             device: path.to_string_lossy().into_owned(),
             press_release_gap_ms: 1,
+            hold: None,
         };
         let stats = stats::HidStats::new();
         tokio::spawn(HidService::run(cfg, btn_rx, ev_rx, std::sync::Arc::clone(&stats)));
@@ -178,6 +203,7 @@ mod integ_tests {
         let cfg = HidServiceConfig {
             device: path.to_string_lossy().into_owned(),
             press_release_gap_ms: 1,
+            hold: None,
         };
         let stats = stats::HidStats::new();
         tokio::spawn(HidService::run(cfg, btn_rx, ev_rx, std::sync::Arc::clone(&stats)));
@@ -212,7 +238,7 @@ mod integ_tests {
         std::fs::File::create(&path).unwrap();
         let (_btn_tx, btn_rx) = broadcast::channel::<waved_state::DeviceEvent>(1);
         let (ev_tx, ev_rx) = mpsc::channel(16);
-        let cfg = HidServiceConfig { device: path.to_string_lossy().into_owned(), press_release_gap_ms: 1 };
+        let cfg = HidServiceConfig { device: path.to_string_lossy().into_owned(), press_release_gap_ms: 1, hold: None };
         let stats = stats::HidStats::new();
         tokio::spawn(HidService::run(cfg, btn_rx, ev_rx, std::sync::Arc::clone(&stats)));
 
@@ -242,13 +268,75 @@ mod integ_tests {
         assert!(stats.device_present.load(std::sync::atomic::Ordering::Relaxed));
     }
 
+    /// Polls `what` until it holds (or 2 s pass).
+    async fn eventually(what: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !what() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        what()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_key_service_closes_the_node_for_a_hold_and_writes_after_it() {
+        use crate::node::fake::FakeNode;
+        let node = FakeNode::present();
+        let hold = waved_state::GadgetHold::new();
+        let stats = stats::HidStats::new();
+        let keys = key_writer::KeyWriter::new(
+            node.clone(),
+            "/dev/hidg0",
+            Duration::ZERO,
+            std::sync::Arc::clone(&stats),
+            node::REOPEN_EVERY,
+        )
+        .with_hold(Some(hold.register("keys")));
+        let (_btn_tx, btn_rx) = broadcast::channel::<waved_state::DeviceEvent>(1);
+        let (ev_tx, ev_rx) = mpsc::channel(16);
+        tokio::spawn(HidService::run_with(keys, btn_rx, ev_rx, stats));
+        assert!(eventually(|| node.open_handles() == 1).await, "opened at start");
+
+        // No key is sent: the hold alone wakes it.
+        hold.raise();
+        assert!(eventually(|| hold.all_closed()).await, "confirmed");
+        assert_eq!(node.open_handles(), 0);
+        ev_tx.send(events::HidEvent::ConsumerMute).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(node.opens(), 1, "the key waits, nothing opened while held");
+
+        node.unbind();
+        node.bind();
+        hold.lower();
+        let (press, release) = report::event_to_press_release(events::HidEvent::ConsumerMute);
+        assert!(eventually(|| node.written_to(1) == [press.to_vec(), release.to_vec()]).await);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_configured_hold_reaches_the_key_writer() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("hidg0");
+        std::fs::File::create(&path).unwrap();
+        let hold = waved_state::GadgetHold::new();
+        let (_btn_tx, btn_rx) = broadcast::channel::<waved_state::DeviceEvent>(1);
+        let (_ev_tx, ev_rx) = mpsc::channel::<events::HidEvent>(16);
+        let cfg = HidServiceConfig {
+            device: path.to_string_lossy().into_owned(),
+            press_release_gap_ms: 1,
+            hold: Some(hold.clone()),
+        };
+        tokio::spawn(HidService::run(cfg, btn_rx, ev_rx, stats::HidStats::new()));
+        assert!(eventually(|| hold.users() == 1).await);
+        hold.raise();
+        assert!(eventually(|| hold.all_closed()).await);
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn a_key_reaches_a_node_that_was_missing_at_start() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("hidg0");
         let (_btn_tx, btn_rx) = broadcast::channel::<waved_state::DeviceEvent>(1);
         let (ev_tx, ev_rx) = mpsc::channel(16);
-        let cfg = HidServiceConfig { device: path.to_string_lossy().into_owned(), press_release_gap_ms: 1 };
+        let cfg = HidServiceConfig { device: path.to_string_lossy().into_owned(), press_release_gap_ms: 1, hold: None };
         let stats = stats::HidStats::new();
         tokio::spawn(HidService::run(cfg, btn_rx, ev_rx, std::sync::Arc::clone(&stats)));
         tokio::time::sleep(Duration::from_millis(50)).await;

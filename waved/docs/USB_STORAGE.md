@@ -121,8 +121,11 @@ removes it when it finds it (either earlier version) and keeps its other steps
 
 Still to measure (device pass below): v3 with the real volume (an empty LUN
 was tested), whether macOS locks the medium, the computer's eject, a pulled
-cable, a waved restart in storage mode, and that waved's own USB handles come
-back by themselves (below).
+cable, a waved restart in storage mode, that waved's own USB handles are
+closed before each unbind and come back by themselves (below), and a clean
+kernel log after every switch. Measurement 3 was made by hand; whether waved
+was running with its `hw:1` and `/dev/hidg0` handles open then is not
+recorded.
 
 ## What waved does
 
@@ -141,11 +144,16 @@ switch; the computer keeps Wave's microphone and speaker.
    drive function: "USB storage isn't available"); with no configured computer
    (`/sys/class/udc/*/state`); with `/mnt/udisk` not mounted. A medium in the
    unlinked drive (stock's `msc_init` loads `/dev/udisk` at boot; the computer
-   never sees it) is emptied first. Then: phase Starting, `StopPlayback`, 1 s
-   for an upload or playback that just began to open its file, `sync`, the
-   unmount note (`/tmp/waved-usb-storage.unmounted`, the `/proc/mounts` line),
+   never sees it) is emptied first. Then: phase Starting, `StopPlayback`,
+   **waved's USB handles held** (both holds raised: every user of
+   `/dev/hidg0` and `hw:1` closes its file and confirms it, below), 1 s for
+   an upload or playback that just began to open its file, then up to 3 s
+   more until every user confirmed (**one that does not: "USB storage isn't
+   available", nothing changed, the holds lowered**; nothing unbinds while
+   waved has a file on the gadget), `sync`, the unmount note
+   (`/tmp/waved-usb-storage.unmounted`, the `/proc/mounts` line),
    `umount /mnt/udisk` (no lazy unmount: busy → "Recordings in use, try again",
-   note removed, nothing changed, adb untouched).
+   note removed, nothing changed, adb untouched, the holds lowered).
 2. **The switch** (`enter_storage`): the normal mode is read (UDC, the
    configuration string, which of `ffs.adb`, `acm.0`, `hid.0` are linked) and
    written to `/tmp/waved-usb-storage.gadget` before anything changes; then
@@ -153,12 +161,19 @@ switch; the computer keeps Wave's microphone and speaker.
    eject only empties a removable LUN; it is the kernel default for `lun.0`),
    `/dev/udisk` → `lun.0/file` (read back), configuration `msc`, link
    `mass_storage.usb0`, configuration `hid`, link `hid.0`, 2 s, bind, `UDC`
-   read back. Then up to 10 s for the computer to reach `configured`.
+   read back. Then up to 10 s for the computer to reach `configured`; then the
+   `hw:1` hold is lowered (the UAC upstream opens the new card: the computer
+   keeps Wave's microphone and speaker). The `/dev/hidg0` hold stays up.
    - **The bind fails, or no computer in 10 s**: straight back to normal USB
      (the way back, 6), then the volume is checked and mounted, and the status
      says "USB storage isn't available".
 3. **On.** The takeover screen; the meeting service starts no take, deletes
    nothing, the player plays nothing and the upload worker waits. No adb.
+   **No HID while it lasts** (`/dev/hidg0` stays closed, decision below):
+   Wave's keys do not reach the computer (Louder/Quieter, mute; each waits at
+   most 10 s, then is dropped), the Wave Controller app (PC link) gets no
+   replies, and call LEDs from the computer are not read. All of it comes
+   back with normal USB. Audio over USB keeps working.
 4. **Stop** (the screen's "Stop USB storage", confirmed). First `"\n"` →
    `lun.0/file` **while still bound**: if the computer locked the medium,
    f_mass_storage answers EBUSY: "Eject Wave on the computer first", storage
@@ -169,7 +184,13 @@ switch; the computer keeps Wave's microphone and speaker.
    pulled**: the UDC state is neither `configured` nor `suspended` for 3 polls
    (also a gadget that fell off the bus, as in measurement 1): the way back. A
    sleeping computer (`suspended`) keeps its drive.
-6. **The way back** (`leave_storage`), to the noted normal mode: unbind (this
+6. **The way back** (`leave_storage`), to the noted normal mode. First the
+   `hw:1` hold is raised again and every user confirmed (the UAC upstream
+   does within a frame, about 21 ms; `/dev/hidg0` has been closed since the
+   start), at most 3 s: **one that does not close: USB is not switched**
+   ("Wave stays in storage mode until it restarts" in the log), the holds
+   are lowered, and 7's rules decide about the volume (a drive that still
+   holds the partition is never mounted). Then: unbind (this
    ends the computer's hold on the drive), `killall -9 adbd` (waits up to 2 s
    for it to go), unlink `ffs.adb`, `acm.0`, `mass_storage.usb0`, `hid.0`,
    empty `lun.0/file` (read back empty), then for what was linked, in stock's
@@ -178,7 +199,11 @@ switch; the computer keeps Wave's microphone and speaker.
    was; 4 s (FunctionFS binds only once adbd wrote its descriptors); bind,
    `UDC` read back; the gadget note removed. Tried 3 times, 2 s apart; each try
    stops adbd before it starts one. If adbd does not start, `ffs.adb` stays
-   unlinked so audio and HID still bind (adb then needs a reboot).
+   unlinked so audio and HID still bind (adb then needs a reboot). Once normal
+   USB is back: up to 10 s for the computer to reach `configured` (none: a
+   pulled cable; it gives up), and only then are both holds lowered: keys,
+   the PC link, call LEDs and the microphone come back. Normal USB that did
+   not come back: the holds are lowered at once.
    - Only what was linked comes back: a unit without adb in its normal mode
      (stock's `start`, release lockdown, `docs/SECURITY.md`) does not get it.
    - **adbd** is started with busybox `start-stop-daemon -S -b -o -x
@@ -217,6 +242,11 @@ switch; the computer keeps Wave's microphone and speaker.
      normal USB first**, as the note says (without one, Wave's boot mode:
      audio, adb, HID). The unbind ends the computer's hold, so this always
      takes the drive back; the computer may say it was not ejected properly.
+     The new waved's HID and UAC users opened the storage-mode nodes at
+     start-up: both holds are raised and confirmed first, as in 6. One that
+     does not close in 3 s: USB is not switched, the volume stays unmounted
+     (phase Stopping, "Recordings unavailable, restart Wave"); a waved
+     restart or a reboot tries again with fresh handles.
    - Then, with the volume unmounted and the LUN empty: if the unmount note is
      there, it checks and mounts the volume as the note says; after a switch it
      mounts it anyway (the boot's mount without a note). **Without either** (a
@@ -264,6 +294,46 @@ kernel would not stop either: the LUN opens the partition without `O_EXCL`, and
 - **The start-up `soft_connect` re-plug is gone** (it was off by default and
   never proven on `crgudc2`): the unbind does what it was for.
 
+### Decisions: waved's USB handles and the switch (2026-10-13)
+
+- **No unbind while waved has a file on `/dev/hidg0` or `hw:1`.** Before
+  every unbind (the way in, the way back, a start-up reclaim) waved-system
+  raises the holds (`waved_state::GadgetHold`, `StateBus::hid_hold` and
+  `uac_hold`) and waits until every registered user confirmed, for this
+  raise, that it closed its file. Kernel reasons below. Cost if wrong (the
+  kernel would have coped): a switch takes up to ~1 s longer (the HID reader
+  confirms after its 1 s read).
+- **3 s for the confirmations, then no unbind.** Longer than the HID
+  reader's 1 s read plus its 200 ms look at the hold; the key writer wakes
+  on the hold at once, the PC link writer within 200 ms, the UAC upstream
+  within a frame (~21 ms). On the way in that is "USB storage isn't
+  available" with nothing changed. On the way back and in a start-up
+  reclaim USB is left in storage mode until Wave restarts (a reboot, or a
+  waved restart with fresh handles), and a drive that still holds the
+  partition keeps the recordings unmounted. Cost if wrong (a user that is
+  merely slow): a refused start, or a unit that needs a restart to leave
+  storage mode, instead of a possible kernel oops or a hung unbind.
+- **`/dev/hidg0` stays held for the whole storage session**; stock's
+  `uac_hid_msc` keeps `hid.0` linked, but closing HID once, before the way
+  in, means the way back never waits for a HID user that may be stuck in a
+  write (f_hid's write blocks while the computer does not read the IN
+  endpoint, e.g. asleep). Cost if wrong (HID was safe to use in storage
+  mode): Wave's keys to the computer, the Wave Controller app (PC link) and
+  call LEDs pause while storage is on.
+- **`hw:1` is held only around each unbind and bind**, so the computer keeps
+  Wave's microphone and speaker during storage mode. **Only the UAC upstream
+  is on that hold**: the downstream bridge and the mixer poll close their
+  handles by themselves on the card's disconnect (below), and the downstream
+  could not confirm anyway while the computer plays nothing (its blocking
+  read returns only then). Cost if wrong (one of them keeps its handle after
+  all): the unbind waits for it, uninterruptibly; in the worst case Wave
+  hangs in the switch until a power cycle.
+- **The holds are lowered only once the gadget is bound and `configured`
+  again** (at most 10 s; none: a pulled cable, then they are lowered
+  anyway), or at once when normal USB did not come back. Cost if wrong:
+  after a pulled cable the recordings are mounted back up to 10 s later
+  than before.
+
 ### Kernel behaviour this relies on (Linux 5.4 `f_mass_storage`)
 
 From the 5.4 source (`drivers/usb/gadget/function/f_mass_storage.c`,
@@ -288,25 +358,73 @@ From the 5.4 source (`drivers/usb/gadget/function/f_mass_storage.c`,
   always empty it, and why Stop tries the unload while still bound.
 - 5.4 has no `forced_eject`.
 
+### Kernel behaviour: waved's files on the gadget (Linux 5.4 `f_hid`, `f_uac2`)
+
+From the 5.4 source (`drivers/usb/gadget/function/f_hid.c`, `u_audio.c`,
+`sound/core/init.c`); the vendor tree of this unit was not checked, so the
+device pass confirms (`dmesg`, checklist below).
+
+- **`f_hid` frees `hid.0` under open files.** `/dev/hidg0` is the function's
+  char device; the unbind removes it and unlinking the function frees its
+  `struct f_hidg`, while an open file still points to it. A `read`, `write`
+  or `poll` on that file (or one already waiting in it) then touches freed
+  kernel memory: a possible oops or panic. Only `close` is safe (it does not
+  touch the function). Hence `/dev/hidg0` is closed, and that confirmed,
+  before every unbind.
+- **`f_uac2` waits for every file on its card.** The unbind runs
+  `g_audio_cleanup` → `snd_card_free`, which disconnects the card (open files
+  get ALSA's disconnected file operations: calls fail with `ENODEV`/`EBADFD`,
+  `poll` reports an error, PCM sleepers are woken; no use-after-free) and
+  then **waits, uninterruptibly, until every file on the card is closed**
+  (later kernels free the card when its last file closes instead). So
+  `echo none > UDC` returns only once waved closed its `hw:1` handles:
+  - the downstream bridge (`hw:1,0` capture): its blocking read is woken
+    with `EBADFD`, and it drops the PCM before its 1 s back-off;
+  - the mixer poll (`hw:1` control): its next 50 ms tick fails (`ENODEV`)
+    and drops the mixer; the state mirror opens a mixer per change and
+    closes it at once;
+  - **the upstream (`hw:1,0` playback)** keeps its prepared PCM open and
+    untouched while the computer does not read the microphone, so it would
+    never notice the disconnect and the unbind would wait for good. It is
+    on the `hw:1` hold: it looks at it on every processed frame, closes the
+    PCM, then confirms (`waved-audio` `uac_hold`).
+  An unbind waved does not make (`S89usbgadget` by hand) has no hold: with
+  waved running, stop it first.
+
 ### waved's own USB handles across the switch (check in the device pass)
 
 The unbind takes the gadget's functions down and the bind brings them up new,
 on the way in and again on the way back: f_uac2's ALSA card (`hw:1`) is freed
 and a new one created, and `/dev/hidg0` belongs to a new `hid.0` (the old one
-went with its link). Every waved handle on them comes back by itself, tried
-once a second, each outage logged once (its first failure and its end): the
-UAC bridges reopen `hw:1,0` on error; the mixer poll (`waved-audio`
-`mixer_poll`, Mac volume and mute → Wave) drops the old card's mixer when its
-events fail (ENODEV), opens `hw:1` again, writes Wave's volume and mute into
-the new card (it starts at the kernel's defaults) and only then reads it, so
-the defaults are never taken for the Mac's; the HID key writer, the reader
-(call LEDs, the Wave Controller's requests) and the PC link's writer
-(`waved-hid` `node`) check before using their handle that `/dev/hidg0` is
-still the node they opened (device and inode; a read waits at most 1 s), open
-it again when not or after an error, and keep keys and replies that wait for
-it (bounded, oldest dropped first, none sent more than 10 s late). The check
-comes before the error because Linux 5.4 `f_hid` frees `hid.0` under open
-files: a read or write on the old node may never return.
+went with its link). **Before each unbind waved closes what it has on them**
+(the holds, decisions and kernel behaviour above):
+
+| Handle | Hold | Closes | Wakes for the hold |
+|---|---|---|---|
+| HID key writer (`/dev/hidg0`, keys to the computer) | `hid_hold`, whole session | on the hold | its channel, at once |
+| HID reader (`/dev/hidg0`, call LEDs, the Wave Controller's requests) | `hid_hold`, whole session | on the hold | after its read (≤ 1 s), then every 200 ms |
+| PC link writer (`/dev/hidg0`, the Wave Controller's replies) | `hid_hold`, whole session | on the hold | every 200 ms, idle or not |
+| UAC upstream (`hw:1,0` playback, the microphone) | `hw:1` hold, each switch | on the hold | every processed frame (~21 ms) |
+| UAC downstream (`hw:1,0` capture, the speaker) | none | the disconnect wakes its read (`EBADFD`) | – |
+| Mixer poll (`hw:1` control, Mac volume and mute) | none | its next 50 ms tick fails (`ENODEV`) | – |
+
+While held, a user opens nothing; keys and replies wait in their bounded
+queues (oldest dropped first, none sent more than 10 s late: after a whole
+storage session they are dropped). Each hold's start and end is logged once
+per user (`hid:`, `hid-reader:`, `pclink:`, `uac-upstream:` lines), and
+`usb storage:` logs when the handles are closed and when they may open again.
+
+After the bind every handle comes back by itself, tried once a second, each
+outage logged once (its first failure and its end): the UAC bridges reopen
+`hw:1,0` on error; the mixer poll (`waved-audio` `mixer_poll`, Mac volume and
+mute → Wave) drops the old card's mixer when its events fail (ENODEV), opens
+`hw:1` again, writes Wave's volume and mute into the new card (it starts at
+the kernel's defaults) and only then reads it, so the defaults are never taken
+for the Mac's; the HID key writer, the reader and the PC link's writer
+(`waved-hid` `node`) also check before using their handle that `/dev/hidg0`
+is still the node they opened (device and inode; a read waits at most 1 s),
+open it again when not or after an error. That check is the fallback for a
+switch waved did not make; waved's own switches never get that far.
 
 Still open: the upload worker does not look at `/proc/mounts`: at boot, before
 stock's `udisk_fix` mounts the volume, an upload could find its file missing
@@ -323,6 +441,15 @@ quotes). **adb is gone while storage mode is on**: read
 must run under the watchdog (or `setsid`), never from an `adb shell` the
 switch kills.
 
+**The kernel log after every switch** (each step below, once adb is back):
+`adb shell 'dmesg | grep -inE "oops|BUG|KASAN|use-after-free|Unable to handle|Internal error|hung_task|blocked for more than|Call trace"'`
+must show no line that was not there in 0 (a hit is the f_hid use-after-free
+or an unbind waiting on a `hw:1` file, "Kernel behaviour: waved's files on the
+gadget"); note any hit here with the lines around it. Also: `grep "usb
+storage:" /data/waved/waved.log` has, per switch, "waved's USB handles are
+closed for the switch" before the switch and "may open again" after it, and
+never "did not close its USB handle".
+
 0. **Before.** Deploy waved (`docs/DISPLAY_HARDWARE.md#deploy`). If the unit
    ever got the old G1 boot step (`adb shell grep -c waved_g1_
    /etc/init.d/S89usbgadget` not 0), run the new
@@ -331,11 +458,15 @@ switch kills.
    sh /w/test-patch-stock-usbgadget.sh`), check the count is 0, reboot. Record
    the normal mode: `adb shell 'cat $G/UDC; ls -l $G/configs/amlogic.1/; cat
    $G/configs/amlogic.1/strings/0x409/configuration; cat $L/file $L/removable;
-   pidof adbd; grep udisk /proc/mounts; cat /sys/class/udc/*/state'`.
+   pidof adbd; grep udisk /proc/mounts; cat /sys/class/udc/*/state'`, and
+   the kernel log's hits for the grep above (normally none).
 1. **The real volume, ejected in Finder.** System → USB storage. Expect the
    takeover ("Starting", then "USB storage is on" within ~10 s), `adb devices`
    empty, "Wave Files" on the Mac desktop, Wave still in Audio MIDI Setup.
-   Copy a recording from the drive to the Mac and a small file (`g1.txt`)
+   While it is on: music from the Mac plays through Wave and the Mac hears
+   Wave's microphone; Wave's Louder/Quieter do **not** move the Mac's volume
+   and the Wave Controller app gets no answers (HID is held for the session,
+   expected). Copy a recording from the drive to the Mac and a small file (`g1.txt`)
    onto it. Eject in Finder. Expect the takeover to leave by itself within
    ~15 s and "USB storage stopped"; `adb devices` lists Wave again. Then:
    `adb shell 'ls /mnt/udisk/g1.txt; grep udisk /proc/mounts; cat $G/UDC; ls
@@ -349,33 +480,45 @@ switch kills.
    - the Mac's volume keys (or its menu-bar slider) change Wave's speaker
      volume and F10 mutes it, as they did before the session;
    - Wave's Louder/Quieter move the Mac's volume (one Mac step per press, no
-     ping-pong back);
+     ping-pong back), and no press from during the session arrives late;
    - the Wave Controller app connects and answers (PC link), e.g. it shows
      Wave's volume and a change there reaches Wave;
-   - `grep -E "uac-control|hid|pclink" /data/waved/waved.log | tail -30`: per
-     switch at most one failure line and one "is back"/"again"/"new node" line
-     each for the mixer, the key writer, the reader and the PC link, no line
-     repeating every second.
+   - `grep -E "uac-control|uac-upstream|uac-downstream|hid|pclink"
+     /data/waved/waved.log | tail -40`: the key writer (`hid:`), the reader
+     (`hid-reader:`) and the PC link (`pclink:`) log "USB is switching ...
+     closed" once when storage starts and "the USB switch is over" once when
+     it ends, and **no failure line** (they were closed before each unbind);
+     the upstream logs the same pair around each of the two switches; the
+     mixer and the downstream at most one failure line and one "is back"/
+     "the host is playing" line per switch; no line repeating every second.
    If one stays dead, note it here with its log lines; `killall waved` (the
    watchdog restarts it) is the workaround.
 2. **Stop without ejecting.** Start, wait for the drive, Stop USB storage →
    Stop. If macOS locked the medium: "Eject Wave on the computer first" and the
    screen stays; eject in Finder and it leaves. If not: storage stops and the
    Mac says "Disk Not Ejected Properly". Note which one here. adb comes back.
-3. **Cable pull.** Start, then unplug the cable. Wait 15 s (3 s to notice, the
-   way back, the check), plug back in: `adb devices` lists Wave, no drive in
-   Finder, audio works, and the log has "no computer for 3 s", "normal USB is
-   back", "checked /dev/udisk", "off, recordings mounted on Wave".
+3. **Cable pull.** Start, then unplug the cable. Wait 25 s (3 s to notice, the
+   way back, up to 10 s for a computer before the USB handles open again, the
+   check), plug back in: `adb devices` lists Wave, no drive in Finder, audio,
+   Wave's keys and the Wave Controller app work, and the log has "no computer
+   for 3 s", "waved's USB handles are closed for the switch", "normal USB is
+   back", "no computer 10 s after the switch; waved's USB handles open again
+   anyway", "may open again", "checked /dev/udisk", "off, recordings mounted
+   on Wave".
 4. **waved restart in storage mode.** adb is down during it, so arm the kill
    first: `adb shell 'setsid sh -c "sleep 40; killall waved" </dev/null
    >/dev/null 2>&1 &'`, then start storage within 40 s and wait. After the
    watchdog restart (~3 s) the Mac loses the drive (maybe "not ejected
    properly"), adb comes back, and the log has "USB was left in storage mode;
-   back to normal USB first" and "reclaimed, recordings mounted". Files shows
+   back to normal USB first", "waved's USB handles are closed for the switch"
+   (the new waved's HID and UAC users had opened the storage-mode nodes) and
+   "reclaimed, recordings mounted". Files shows
    every recording (not Damaged). Optional: a kill timed into a way back (eject,
    then the kill a few seconds later) shows the same.
 5. **Large copy.** ≥ 500 MB from the drive while music plays on the Mac
-   through Wave; `/tmp/audio_stats.json` (`xruns`, `uac`) afterwards.
+   through Wave and the Mac records Wave's microphone (the upstream reopened
+   `hw:1` after the switch); `/tmp/audio_stats.json` (`xruns`, `uac`)
+   afterwards.
 6. **Mac sleep.** Start, close the lid 30 s, open: the drive is still there.
 7. **Refusals.** While recording: "Stop the recording first". Cable out:
    "Connect a computer first". With an `adb shell` sitting in `cd /mnt/udisk`:

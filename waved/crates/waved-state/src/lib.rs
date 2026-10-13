@@ -742,6 +742,184 @@ pub enum UsbStorageProblem {
     NotMounted,
 }
 
+/// The USB gadget switch's hold on waved's files on a gadget device
+/// (`docs/USB_STORAGE.md`). waved-system's `usb_storage` raises it before
+/// any unbind and unbinds only once every registered user confirmed, for
+/// this raise, that it closed its file; while held, a user keeps no file on
+/// the device and opens none. Two on the bus (`StateBus`):
+///
+/// - `hid_hold`, `/dev/hidg0` (waved-hid's key writer, reader and PC link
+///   writer): Linux 5.4 `f_hid` frees `hid.0` at the unbind even while
+///   files are open on it, and a read, write or poll on such a file then
+///   touches freed kernel memory. Raised for the whole storage session.
+/// - `uac_hold`, the UAC card `hw:1` (waved-audio's upstream, which may sit
+///   on an idle PCM it never touches): the f_uac2 unbind (5.4
+///   `g_audio_cleanup` → `snd_card_free`) waits until every file on the card
+///   is closed, so a file nobody closes blocks `echo none > UDC` for good.
+///   Raised only around each unbind and bind.
+///
+/// The signal (held, generation) wakes users through a `watch` channel;
+/// their confirmations are kept apart and wake nobody.
+#[derive(Clone, Default)]
+pub struct GadgetHold {
+    inner: Arc<GadgetHoldInner>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GadgetHoldSignal {
+    /// Raised: no user may have the device open.
+    pub held: bool,
+    /// Bumped by every raise of a lowered hold. A confirmation counts only
+    /// for the generation it was given for.
+    pub generation: u64,
+}
+
+struct GadgetHoldInner {
+    signal: watch::Sender<GadgetHoldSignal>,
+    users: std::sync::Mutex<GadgetHoldUsers>,
+}
+
+impl Default for GadgetHoldInner {
+    fn default() -> Self {
+        Self {
+            signal: watch::channel(GadgetHoldSignal::default()).0,
+            users: std::sync::Mutex::new(GadgetHoldUsers::default()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct GadgetHoldUsers {
+    next_id: u64,
+    /// (id, name, the latest generation it confirmed it has no file for).
+    list: Vec<(u64, &'static str, u64)>,
+}
+
+impl GadgetHoldInner {
+    fn users(&self) -> std::sync::MutexGuard<'_, GadgetHoldUsers> {
+        self.users.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl std::fmt::Debug for GadgetHold {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let signal = self.signal();
+        f.debug_struct("GadgetHold")
+            .field("held", &signal.held)
+            .field("generation", &signal.generation)
+            .field("users", &self.users())
+            .finish()
+    }
+}
+
+impl GadgetHold {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A user of the device; the switch waits for each until it is dropped.
+    /// A new user has no file yet: it counts as closed for a hold that is
+    /// already raised (it must check the hold before it opens the node).
+    pub fn register(&self, name: &'static str) -> GadgetHoldUser {
+        let mut users = self.inner.users();
+        let id = users.next_id;
+        users.next_id += 1;
+        let generation = self.inner.signal.borrow().generation;
+        users.list.push((id, name, generation));
+        GadgetHoldUser { hold: self.clone(), id }
+    }
+
+    /// Raise the hold; returns its generation. Raising a raised hold keeps
+    /// it (and the confirmations it has).
+    pub fn raise(&self) -> u64 {
+        self.inner.signal.send_if_modified(|signal| {
+            if signal.held {
+                return false;
+            }
+            signal.held = true;
+            signal.generation += 1;
+            true
+        });
+        self.inner.signal.borrow().generation
+    }
+
+    /// Lower the hold: the users may open the node again.
+    pub fn lower(&self) {
+        self.inner.signal.send_if_modified(|signal| std::mem::replace(&mut signal.held, false));
+    }
+
+    pub fn signal(&self) -> GadgetHoldSignal {
+        *self.inner.signal.borrow()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<GadgetHoldSignal> {
+        self.inner.signal.subscribe()
+    }
+
+    /// Registered users.
+    pub fn users(&self) -> usize {
+        self.inner.users().list.len()
+    }
+
+    /// The users that have not confirmed the current generation yet, in the
+    /// order they registered.
+    pub fn waiting_for(&self) -> Vec<&'static str> {
+        let generation = self.signal().generation;
+        self.inner
+            .users()
+            .list
+            .iter()
+            .filter(|(_, _, confirmed)| *confirmed < generation)
+            .map(|(_, name, _)| *name)
+            .collect()
+    }
+
+    /// Held, and every user confirmed it closed the node: safe to unbind.
+    pub fn all_closed(&self) -> bool {
+        self.signal().held && self.waiting_for().is_empty()
+    }
+}
+
+/// One user's side of the [`GadgetHold`]. Dropping it unregisters the user.
+pub struct GadgetHoldUser {
+    hold: GadgetHold,
+    id: u64,
+}
+
+impl GadgetHoldUser {
+    /// `Some(generation)` while the hold is raised.
+    pub fn held(&self) -> Option<u64> {
+        let signal = self.hold.signal();
+        signal.held.then_some(signal.generation)
+    }
+
+    /// The user closed its file (and opens none) for the hold of
+    /// `generation`. Give only a generation `held` returned, after closing.
+    pub fn confirm(&self, generation: u64) {
+        let mut users = self.hold.inner.users();
+        if let Some(user) = users.list.iter_mut().find(|(id, _, _)| *id == self.id) {
+            user.2 = user.2.max(generation);
+        }
+    }
+
+    /// Wakes on every raise and lower.
+    pub fn subscribe(&self) -> watch::Receiver<GadgetHoldSignal> {
+        self.hold.subscribe()
+    }
+}
+
+impl Drop for GadgetHoldUser {
+    fn drop(&mut self) {
+        self.hold.inner.users().list.retain(|(id, _, _)| *id != self.id);
+    }
+}
+
+impl std::fmt::Debug for GadgetHoldUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GadgetHoldUser").field("id", &self.id).finish()
+    }
+}
+
 // --- Discrete Event Types (broadcast channel) ---
 
 #[derive(Clone, Debug, PartialEq)]
@@ -960,6 +1138,13 @@ pub struct StateBus {
     /// consumes it on that edge and sends no `ConsumerMute`. Sentinel `-1`
     /// = none.
     pub pending_speaker_mute: Arc<AtomicI32>,
+    /// The USB gadget switch's hold on `/dev/hidg0` (waved-system
+    /// `usb_storage` raises it for the whole storage session, waved-hid's
+    /// users close the node for it).
+    pub hid_hold: GadgetHold,
+    /// The USB gadget switch's hold on the UAC card `hw:1` (raised around
+    /// each unbind and bind only; waved-audio's upstream closes its PCM).
+    pub uac_hold: GadgetHold,
 }
 
 impl Default for StateBus {
@@ -1006,6 +1191,8 @@ impl StateBus {
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
             pending_speaker_mute: Arc::new(AtomicI32::new(-1)),
+            hid_hold: GadgetHold::new(),
+            uac_hold: GadgetHold::new(),
         }
     }
 }
@@ -1576,5 +1763,107 @@ mod tests {
         let mut bt = BluetoothState::default();
         bt.call = active;
         assert!(!format!("{bt:?}").contains("470"));
+    }
+
+    #[test]
+    fn the_gadget_holds_start_lowered_with_no_users_and_apart() {
+        let bus = StateBus::new();
+        for hold in [&bus.hid_hold, &bus.uac_hold] {
+            assert_eq!(hold.signal(), GadgetHoldSignal { held: false, generation: 0 });
+            assert_eq!(hold.users(), 0);
+            assert!(!hold.all_closed(), "nothing is held");
+        }
+        bus.hid_hold.raise();
+        assert!(!bus.uac_hold.signal().held, "two holds, raised and lowered on their own");
+    }
+
+    #[test]
+    fn a_raise_waits_for_every_user_to_confirm_it_closed_the_node() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let reader = hold.register("reader");
+        assert_eq!(keys.held(), None);
+        let generation = hold.raise();
+        assert_eq!(keys.held(), Some(generation));
+        assert_eq!(hold.waiting_for(), ["keys", "reader"]);
+        assert!(!hold.all_closed());
+        keys.confirm(generation);
+        assert_eq!(hold.waiting_for(), ["reader"]);
+        reader.confirm(generation);
+        assert!(hold.waiting_for().is_empty());
+        assert!(hold.all_closed());
+        hold.lower();
+        assert_eq!(reader.held(), None);
+        assert!(!hold.all_closed());
+    }
+
+    #[test]
+    fn a_confirm_counts_only_for_the_hold_it_was_given_for() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let first = hold.raise();
+        keys.confirm(first);
+        hold.lower();
+        // Lowered: the user may have opened the node again since.
+        let second = hold.raise();
+        assert!(second > first);
+        assert_eq!(hold.waiting_for(), ["keys"]);
+        keys.confirm(first);
+        assert_eq!(hold.waiting_for(), ["keys"], "a stale confirm");
+        keys.confirm(second);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn raising_a_raised_hold_keeps_its_confirms() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let generation = hold.raise();
+        keys.confirm(generation);
+        assert_eq!(hold.raise(), generation);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn a_user_registered_during_a_hold_has_no_file_yet_and_counts_as_closed() {
+        let hold = GadgetHold::new();
+        let generation = hold.raise();
+        let late = hold.register("late");
+        assert_eq!(late.held(), Some(generation), "it must not open the node");
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn a_user_that_is_gone_is_not_waited_for() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let stuck = hold.register("stuck");
+        let generation = hold.raise();
+        keys.confirm(generation);
+        assert_eq!(hold.waiting_for(), ["stuck"]);
+        drop(stuck);
+        assert_eq!(hold.users(), 1);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn users_are_woken_by_a_raise_and_a_lower_but_not_by_confirms() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let mut signal = keys.subscribe();
+        signal.borrow_and_update();
+        let generation = hold.raise();
+        assert!(signal.has_changed().unwrap());
+        assert_eq!(*signal.borrow_and_update(), GadgetHoldSignal { held: true, generation });
+        keys.confirm(generation);
+        hold.raise();
+        assert!(!signal.has_changed().unwrap(), "confirms and a second raise wake nobody");
+        hold.lower();
+        assert!(signal.has_changed().unwrap());
+        assert!(!signal.borrow_and_update().held);
+        let clone = hold.clone();
+        clone.raise();
+        assert!(hold.signal().held, "clones share the hold");
+        assert!(format!("{hold:?}").contains("held: true"));
     }
 }

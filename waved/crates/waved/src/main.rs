@@ -508,6 +508,8 @@ async fn run_async(
                     sample_rate: 48_000,
                     period_frames: uac_cfg.period_frames,
                     buffer_periods: uac_cfg.buffer_periods,
+                    // USB storage's switch: the PCM closes before an unbind.
+                    hold: Some(bus.uac_hold.clone()),
                 };
                 let upstream = waved_audio::uac::upstream::UacUpstreamSink::spawn(
                     upstream_cfg,
@@ -601,6 +603,8 @@ async fn run_async(
             let svc_cfg = waved_hid::HidServiceConfig {
                 device: hid_cfg.device.clone(),
                 press_release_gap_ms: hid_cfg.press_release_gap_ms,
+                // USB storage's switch: /dev/hidg0 closes before an unbind.
+                hold: Some(bus.hid_hold.clone()),
             };
             tokio::spawn({
                 let stats = Arc::clone(&hid_stats);
@@ -611,13 +615,19 @@ async fn run_async(
             // report 0x03 (Wave Controller, TODO J) goes to the PC link.
             let (pclink_tx, pclink_rx) = std::sync::mpsc::channel();
             waved_hid::reader::HidReader::spawn_with_vendor(
-                waved_hid::reader::HidReaderConfig { device: hid_cfg.device.clone() },
+                waved_hid::reader::HidReaderConfig {
+                    device: hid_cfg.device.clone(),
+                    hold: Some(bus.hid_hold.clone()),
+                },
                 Arc::clone(&bus.audio),
                 Arc::clone(&hid_stats),
                 Some(pclink_tx),
             );
             waved_hid::pclink::service::spawn(
-                waved_hid::pclink::service::PcLinkConfig { device: hid_cfg.device.clone() },
+                waved_hid::pclink::service::PcLinkConfig {
+                    device: hid_cfg.device.clone(),
+                    hold: Some(bus.hid_hold.clone()),
+                },
                 pclink_rx,
                 waved_hid::pclink::service::PcLinkBus::from_bus(&bus),
                 // The app's PIN goes through the same check as the keypad. No
@@ -806,7 +816,9 @@ async fn run_async(
             bus.commands.clone(),
         )
         // No start while a firmware update installs (it restarts Wave).
-        .with_ota(bus.ota.subscribe());
+        .with_ota(bus.ota.subscribe())
+        // No unbind while waved has a file on /dev/hidg0 or hw:1.
+        .with_holds(bus.hid_hold.clone(), bus.uac_hold.clone());
         let reclaimed = tokio::task::block_in_place(|| usb_storage.reclaim_at_start());
         if reclaimed != waved_system::usb_storage::Reclaim::Nothing {
             warn!("usb storage at start-up: {reclaimed:?}");

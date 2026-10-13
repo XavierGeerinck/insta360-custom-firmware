@@ -20,6 +20,7 @@ pub mod repeat_filter;
 pub mod spectrum;
 pub mod stats_collector;
 pub mod stereo_align;
+pub mod uac_hold;
 pub mod uplink_voice;
 
 #[cfg(feature = "simulate")]
