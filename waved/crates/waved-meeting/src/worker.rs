@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Notify};
 use tracing::{error, info, warn};
 use waved_config::{ApiConfig, StorageConfig};
-use waved_state::{DeviceEvent, MeetingState, WifiState};
+use waved_state::{DeviceEvent, MeetingState, UsbStorageState, WifiState};
 
 pub struct UploadWorker {
     pool: SqlitePool,
@@ -21,6 +21,9 @@ pub struct UploadWorker {
     meeting_tx: Arc<watch::Sender<MeetingState>>,
     events_tx: broadcast::Sender<DeviceEvent>,
     wake: Arc<Notify>,
+    /// USB storage (G1): no upload while the computer has the recordings
+    /// volume. An upload then would find the file gone and mark it missing.
+    usb_storage: Option<watch::Receiver<UsbStorageState>>,
 }
 
 pub struct WorkerSettings {
@@ -49,7 +52,18 @@ impl UploadWorker {
             meeting_tx,
             events_tx,
             wake,
+            usb_storage: None,
         }
+    }
+
+    /// Wait while USB storage has the recordings volume (G1).
+    pub fn with_usb_storage(mut self, usb_storage: Option<watch::Receiver<UsbStorageState>>) -> Self {
+        self.usb_storage = usb_storage;
+        self
+    }
+
+    fn recordings_away(&self) -> bool {
+        crate::recordings_away(self.usb_storage.as_ref())
     }
 
     pub async fn run(self, mut wifi_rx: watch::Receiver<WifiState>) {
@@ -79,6 +93,11 @@ impl UploadWorker {
                         return;
                     }
                 }
+            }
+
+            if self.recordings_away() {
+                self.refresh_counts().await;
+                continue;
             }
 
             if !wifi_rx.borrow().connected || self.api.endpoint.trim().is_empty() {
@@ -112,7 +131,7 @@ impl UploadWorker {
             }
 
             loop {
-                if !wifi_rx.borrow().connected {
+                if !wifi_rx.borrow().connected || self.recordings_away() {
                     break;
                 }
                 let candidate = match db::claim_next_upload(&self.pool, self.api.retry_max).await {
