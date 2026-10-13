@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use super::biquad::{
     Biquad, BiquadCoeffs,
-    design_high_shelf, design_low_shelf, design_peaking_eq,
+    design_butterworth_hpf, design_butterworth_lpf, design_first_order_high_shelf,
+    design_first_order_low_shelf, design_high_shelf, design_low_shelf, design_peaking_eq,
+    design_stock_peaking,
 };
 
 /// Number of EQ bands per channel.
@@ -13,6 +15,9 @@ pub const N_BANDS: usize = 4;
 /// Number of channels (always stereo on this hardware).
 pub const N_CHANNELS: usize = 2;
 
+/// `Peaking`, `LowShelf` and `HighShelf` are the RBJ cookbook forms. The
+/// rest are stock's `bva::asp::asp_iir_eq_init` types (`preset.rs` maps the
+/// JSON codes; `docs/AUDIO_HARDWARE.md` "Stock speaker tuning").
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BiquadKind {
@@ -20,6 +25,21 @@ pub enum BiquadKind {
     Peaking,
     LowShelf,
     HighShelf,
+    /// Stock type 0: peaking with stock's Q convention.
+    StockPeaking,
+    /// Stock type 1: first-order low shelf (Q unused).
+    LowShelf1,
+    /// Stock type 2: first-order high shelf (Q unused).
+    HighShelf1,
+    /// Stock type 3: Butterworth low-pass (gain and Q unused).
+    LowPass,
+    /// Stock type 4: Butterworth high-pass (gain and Q unused).
+    HighPass,
+}
+
+/// True when any band of `params` changes the signal.
+pub fn is_active(params: &[[BiquadParams; N_BANDS]; N_CHANNELS]) -> bool {
+    params.iter().flatten().any(|p| p.kind != BiquadKind::Bypass)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -47,6 +67,11 @@ impl BiquadParams {
             BiquadKind::Peaking   => design_peaking_eq(self.center_freq_hz, self.gain_db, self.q, sample_rate_hz),
             BiquadKind::LowShelf  => design_low_shelf(self.center_freq_hz, self.gain_db, self.q, sample_rate_hz),
             BiquadKind::HighShelf => design_high_shelf(self.center_freq_hz, self.gain_db, self.q, sample_rate_hz),
+            BiquadKind::StockPeaking => design_stock_peaking(self.center_freq_hz, self.gain_db, self.q, sample_rate_hz),
+            BiquadKind::LowShelf1 => design_first_order_low_shelf(self.center_freq_hz, self.gain_db, sample_rate_hz),
+            BiquadKind::HighShelf1 => design_first_order_high_shelf(self.center_freq_hz, self.gain_db, sample_rate_hz),
+            BiquadKind::LowPass => design_butterworth_lpf(self.center_freq_hz, sample_rate_hz),
+            BiquadKind::HighPass => design_butterworth_hpf(self.center_freq_hz, sample_rate_hz),
         }
     }
 }
@@ -106,6 +131,48 @@ mod tests {
 
     fn flat() -> [[BiquadParams; N_BANDS]; N_CHANNELS] {
         [[BiquadParams::BYPASS; N_BANDS]; N_CHANNELS]
+    }
+
+    #[test]
+    fn stock_kinds_use_the_decoded_designers() {
+        use super::super::biquad::{
+            design_butterworth_hpf, design_butterworth_lpf, design_first_order_high_shelf,
+            design_first_order_low_shelf, design_stock_peaking,
+        };
+        let p = |kind| BiquadParams { kind, center_freq_hz: 500.0, gain_db: 4.0, q: 0.7 };
+        let fs = 48_000.0;
+        assert_eq!(p(BiquadKind::StockPeaking).coeffs(fs), design_stock_peaking(500.0, 4.0, 0.7, fs));
+        assert_eq!(p(BiquadKind::LowShelf1).coeffs(fs), design_first_order_low_shelf(500.0, 4.0, fs));
+        assert_eq!(p(BiquadKind::HighShelf1).coeffs(fs), design_first_order_high_shelf(500.0, 4.0, fs));
+        assert_eq!(p(BiquadKind::LowPass).coeffs(fs), design_butterworth_lpf(500.0, fs));
+        assert_eq!(p(BiquadKind::HighPass).coeffs(fs), design_butterworth_hpf(500.0, fs));
+    }
+
+    #[test]
+    fn biquad_kinds_round_trip_through_json() {
+        for kind in [
+            BiquadKind::Bypass,
+            BiquadKind::Peaking,
+            BiquadKind::LowShelf,
+            BiquadKind::HighShelf,
+            BiquadKind::StockPeaking,
+            BiquadKind::LowShelf1,
+            BiquadKind::HighShelf1,
+            BiquadKind::LowPass,
+            BiquadKind::HighPass,
+        ] {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(serde_json::from_str::<BiquadKind>(&json).unwrap(), kind, "{json}");
+        }
+        assert_eq!(serde_json::to_string(&BiquadKind::StockPeaking).unwrap(), "\"stock_peaking\"");
+    }
+
+    #[test]
+    fn eq_reports_whether_it_does_anything() {
+        let mut params = flat();
+        assert!(!is_active(&params));
+        params[1][2] = BiquadParams { kind: BiquadKind::HighPass, center_freq_hz: 100.0, gain_db: 0.0, q: 0.7 };
+        assert!(is_active(&params));
     }
 
     #[test]

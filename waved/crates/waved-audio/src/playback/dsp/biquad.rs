@@ -132,6 +132,44 @@ pub fn design_peaking_eq(center_hz: f32, gain_db: f32, q: f32, sample_rate_hz: f
     }
 }
 
+/// Stock's peaking filter (`bva::asp::asp_iir_eq_init` type 0, libbva_audio.so
+/// 0x2a8cc): the bilinear transform of
+/// `H(s) = (s² + (G/Q)·s + 1) / (s² + s/Q + 1)`, `G = 10^(gain/20)`. Same
+/// centre gain as RBJ, but Q sits unscaled in the denominator, which makes it
+/// the RBJ peaking filter with `Q·10^(−gain/40)`: cuts narrower and boosts
+/// wider than RBJ at the same nominal Q.
+pub fn design_stock_peaking(center_hz: f32, gain_db: f32, q: f32, sample_rate_hz: f32) -> BiquadCoeffs {
+    design_peaking_eq(center_hz, gain_db, q * 10.0_f32.powf(-gain_db / 40.0), sample_rate_hz)
+}
+
+/// First-order low shelf (`asp_iir_eq_init` type 1, 0x2a6d4): `gain_db` at
+/// DC, unity at Nyquist, corner at `corner_hz`. Stock ignores Q here.
+pub fn design_first_order_low_shelf(corner_hz: f32, gain_db: f32, sample_rate_hz: f32) -> BiquadCoeffs {
+    let k = (std::f32::consts::PI * corner_hz / sample_rate_hz).tan();
+    let g = 10.0_f32.powf(gain_db / 20.0);
+    BiquadCoeffs {
+        b0: (g * k + 1.0) / (k + 1.0),
+        b1: (g * k - 1.0) / (k + 1.0),
+        b2: 0.0,
+        a1: (k - 1.0) / (k + 1.0),
+        a2: 0.0,
+    }
+}
+
+/// First-order high shelf (`asp_iir_eq_init` type 2, 0x2a76c): unity at DC,
+/// `gain_db` at Nyquist, corner at `corner_hz`. Stock ignores Q here.
+pub fn design_first_order_high_shelf(corner_hz: f32, gain_db: f32, sample_rate_hz: f32) -> BiquadCoeffs {
+    let k = (std::f32::consts::PI * corner_hz / sample_rate_hz).tan();
+    let g = 10.0_f32.powf(gain_db / 20.0);
+    BiquadCoeffs {
+        b0: (k + g) / (k + 1.0),
+        b1: (k - g) / (k + 1.0),
+        b2: 0.0,
+        a1: (k - 1.0) / (k + 1.0),
+        a2: 0.0,
+    }
+}
+
 /// RBJ low shelf.
 pub fn design_low_shelf(corner_hz: f32, gain_db: f32, q: f32, sample_rate_hz: f32) -> BiquadCoeffs {
     let a = 10.0_f32.powf(gain_db / 40.0);
@@ -185,6 +223,111 @@ pub fn design_high_shelf(corner_hz: f32, gain_db: f32, q: f32, sample_rate_hz: f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// |H(e^jw)| in dB, straight from the coefficients.
+    fn mag_db(c: BiquadCoeffs, freq_hz: f64, sample_rate_hz: f64) -> f64 {
+        let w = 2.0 * std::f64::consts::PI * freq_hz / sample_rate_hz;
+        let (c1, s1) = (w.cos(), -w.sin());
+        let (c2, s2) = ((2.0 * w).cos(), -(2.0 * w).sin());
+        let num_re = c.b0 as f64 + c.b1 as f64 * c1 + c.b2 as f64 * c2;
+        let num_im = c.b1 as f64 * s1 + c.b2 as f64 * s2;
+        let den_re = 1.0 + c.a1 as f64 * c1 + c.a2 as f64 * c2;
+        let den_im = c.a1 as f64 * s1 + c.a2 as f64 * s2;
+        10.0 * ((num_re * num_re + num_im * num_im) / (den_re * den_re + den_im * den_im)).log10()
+    }
+
+    fn assert_coeffs_close(got: BiquadCoeffs, want: [f64; 5], what: &str) {
+        let got = [got.b0, got.b1, got.b2, got.a1, got.a2];
+        for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+            assert!(
+                (*g as f64 - w).abs() < 1e-5,
+                "{what}: coefficient {i} got {g}, want {w}"
+            );
+        }
+    }
+
+    /// `bva::asp::asp_iir_eq_init` type 0 (libbva_audio.so 0x2a8cc), written
+    /// out in f64 exactly as decoded: C = 1/tan(πf/fs), G = 10^(g/20),
+    /// H(s) = (s² + (G/Q)s + 1) / (s² + s/Q + 1).
+    fn decoded_stock_peaking(f: f64, g: f64, q: f64, fs: f64) -> [f64; 5] {
+        let c = 1.0 / (std::f64::consts::PI * f / fs).tan();
+        let gain = 10f64.powf(g / 20.0);
+        let a0 = 1.0 + c * c + c / q;
+        [
+            (1.0 + c * c + gain * c / q) / a0,
+            2.0 * (1.0 - c * c) / a0,
+            (1.0 + c * c - gain * c / q) / a0,
+            2.0 * (1.0 - c * c) / a0,
+            (1.0 + c * c - c / q) / a0,
+        ]
+    }
+
+    #[test]
+    fn stock_peaking_matches_the_decoded_formula() {
+        // The four filters of dynamic_eq_config_2.json and the 90 Hz one of
+        // dynamic_eq_config.json.
+        for (f, g, q) in [
+            (150.0, -6.0, 1.0),
+            (800.0, 2.0, 2.0),
+            (400.0, -5.0, 1.5),
+            (3500.0, 5.0, 2.0),
+            (90.0, -6.0, 2.0),
+        ] {
+            let got = design_stock_peaking(f as f32, g as f32, q as f32, 48_000.0);
+            assert_coeffs_close(got, decoded_stock_peaking(f, g, q, 48_000.0), &format!("{f} Hz"));
+            let at_center = mag_db(got, f, 48_000.0);
+            assert!((at_center - g).abs() < 0.01, "{f} Hz: {at_center:.3} dB at the centre, want {g}");
+        }
+    }
+
+    #[test]
+    fn stock_peaking_differs_from_rbj_with_the_same_q() {
+        // Same centre gain, different width: stock's cut is narrower than
+        // RBJ's at the same nominal Q (the denominator keeps Q unscaled).
+        let stock = design_stock_peaking(400.0, -5.0, 1.5, 48_000.0);
+        let rbj = design_peaking_eq(400.0, -5.0, 1.5, 48_000.0);
+        let stock_off = mag_db(stock, 250.0, 48_000.0);
+        let rbj_off = mag_db(rbj, 250.0, 48_000.0);
+        assert!(stock_off > rbj_off + 0.5, "stock {stock_off:.2} dB vs RBJ {rbj_off:.2} dB at 250 Hz");
+    }
+
+    #[test]
+    fn first_order_low_shelf_matches_decoded_formula_and_gains() {
+        // Type 1 (0x2a6d4): K = tan(πf/fs), G = 10^(g/20).
+        let (f, g, fs) = (200.0_f64, 6.0_f64, 48_000.0_f64);
+        let k = (std::f64::consts::PI * f / fs).tan();
+        let gain = 10f64.powf(g / 20.0);
+        let want = [(gain * k + 1.0) / (k + 1.0), (gain * k - 1.0) / (k + 1.0), 0.0, (k - 1.0) / (k + 1.0), 0.0];
+        let got = design_first_order_low_shelf(f as f32, g as f32, fs as f32);
+        assert_coeffs_close(got, want, "low shelf");
+        assert!((mag_db(got, 5.0, fs) - g).abs() < 0.05, "DC gain");
+        assert!(mag_db(got, 23_000.0, fs).abs() < 0.05, "Nyquist gain");
+    }
+
+    #[test]
+    fn first_order_high_shelf_matches_decoded_formula_and_gains() {
+        // Type 2 (0x2a76c).
+        let (f, g, fs) = (8000.0_f64, 5.0_f64, 48_000.0_f64);
+        let k = (std::f64::consts::PI * f / fs).tan();
+        let gain = 10f64.powf(g / 20.0);
+        let want = [(k + gain) / (k + 1.0), (k - gain) / (k + 1.0), 0.0, (k - 1.0) / (k + 1.0), 0.0];
+        let got = design_first_order_high_shelf(f as f32, g as f32, fs as f32);
+        assert_coeffs_close(got, want, "high shelf");
+        assert!(mag_db(got, 5.0, fs).abs() < 0.05, "DC gain");
+        assert!((mag_db(got, 23_999.0, fs) - g).abs() < 0.05, "Nyquist gain");
+    }
+
+    #[test]
+    fn butterworth_designs_are_3_db_down_at_the_corner() {
+        // Types 3 and 4 (0x2a804, 0x2a620) are bilinear Butterworth sections,
+        // which is what the RBJ cookbook forms with Q = 1/√2 are.
+        let lpf = design_butterworth_lpf(1000.0, 48_000.0);
+        let hpf = design_butterworth_hpf(150.0, 48_000.0);
+        assert!((mag_db(lpf, 1000.0, 48_000.0) + 3.01).abs() < 0.05);
+        assert!((mag_db(hpf, 150.0, 48_000.0) + 3.01).abs() < 0.05);
+        assert!(mag_db(lpf, 100.0, 48_000.0).abs() < 0.05);
+        assert!(mag_db(hpf, 2000.0, 48_000.0).abs() < 0.05);
+    }
 
     #[test]
     fn unity_biquad_is_passthrough() {
