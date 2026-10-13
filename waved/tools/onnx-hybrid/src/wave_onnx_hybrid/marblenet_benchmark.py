@@ -19,7 +19,7 @@ _REPOSITORY = Path(__file__).resolve().parents[5]
 _TEMPLATE_PATH = (
     _REPOSITORY / "waved/tools/npu-compiler/marblenet/benchmark_fp16_graph.cc.in"
 )
-_TEMPLATE_SHA256 = "7f10f1b9f500863c384ca8b295dce9d34222ff07b90663b08732e209b68bdb90"
+_TEMPLATE_SHA256 = "bf8abce2f1213fc98d3757ad831027f17a2ceb30fca5a111bd97fc46aaf77468"
 _ORT_HEADER_PATH = (
     _REPOSITORY
     / "artifacts/npu/build/poc15a/onnxruntime-v1.15.1/include/onnxruntime_c_api.h"

@@ -784,4 +784,3 @@ int main(int argc, char** argv) {
     for (const uint8_t byte : observed) std::printf("%02x", static_cast<unsigned int>(byte));
     std::puts(" cleanup=0"); std::fflush(stdout); return 0;
 }
-
