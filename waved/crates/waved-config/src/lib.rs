@@ -144,6 +144,12 @@ pub struct SecurityConfig {
     /// Let a signed package install an older (or the same) version. Set by
     /// hand in config.toml only: the setup page does not offer it.
     pub ota_allow_downgrade: bool,
+    /// Opt-in release lockdown (K1, `docs/SECURITY.md`). Default off so a
+    /// development unit never loses access. When on, the documented, opt-in
+    /// `/etc` overlay step keeps adb off (or authenticated) at boot; waved
+    /// itself never disables adb. Turn it back off here or on the setup page
+    /// (reachable over Wi-Fi without adb) — the way back.
+    pub release_lockdown: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -229,6 +235,14 @@ impl WavedConfig {
         info!("saved config to {}", path.display());
         Ok(kept)
     }
+}
+
+/// Whether the device is in release lockdown (K1, `docs/SECURITY.md`). The
+/// documented, opt-in `/etc` overlay step reads this to keep adb off (or
+/// authenticated) at boot. Default off: a development unit never loses access,
+/// and waved itself never disables adb.
+pub fn release_lockdown_active(config: &WavedConfig) -> bool {
+    config.security.release_lockdown
 }
 
 fn backup_path(path: &Path) -> PathBuf {
@@ -380,6 +394,27 @@ servers = ["pool.ntp.org"]
     fn default_toml_matches_default_model() {
         let parsed = WavedConfig::parse(include_str!("../../../config/default.toml")).unwrap();
         assert_eq!(parsed, WavedConfig::default());
+    }
+
+    #[test]
+    fn release_lockdown_is_off_by_default_and_round_trips() {
+        // K1: a development unit never loses access, so the default is off.
+        assert!(!SecurityConfig::default().release_lockdown);
+        assert!(!release_lockdown_active(&WavedConfig::default()));
+
+        // A legacy file with no release_lockdown key still loads and stays off.
+        let legacy = WavedConfig::parse(&legacy(true, "omni")).unwrap();
+        assert!(!release_lockdown_active(&legacy));
+
+        // Turning it on is valid and survives a save/load round-trip.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut on = WavedConfig::default();
+        on.security.release_lockdown = true;
+        assert!(validate_config(&on).is_ok());
+        on.save(&path).unwrap();
+        let loaded = WavedConfig::load(&path).unwrap();
+        assert!(release_lockdown_active(&loaded));
     }
 
     #[test]

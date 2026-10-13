@@ -323,6 +323,14 @@ static FIELD_SPECS: &[FieldSpec] = &[
         required: false,
     },
     FieldSpec {
+        path: "security.release_lockdown",
+        section: Section::Advanced,
+        label: "Release lockdown",
+        help: "Keeps developer access (adb) off at boot. Leave off on development units. This page can turn it back off without adb.",
+        kind: FieldKind::Boolean,
+        required: false,
+    },
+    FieldSpec {
         path: "ntp.servers",
         section: Section::Advanced,
         label: "Time servers",
@@ -486,6 +494,11 @@ pub fn apply_form(
         &submission.values,
         "security.ota_server",
         &mut next.security.ota_server,
+    );
+    bool_value(
+        &submission.values,
+        "security.release_lockdown",
+        &mut next.security.release_lockdown,
     );
     if let Some(value) = submission.values.get("ntp.servers") {
         next.ntp.servers = value
@@ -652,6 +665,7 @@ mod tests {
             "storage.minimum_free_mb",
             "security.device_password",
             "security.ota_server",
+            "security.release_lockdown",
             "ntp.servers",
         ];
         assert_eq!(
@@ -661,6 +675,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
+    }
+
+    #[test]
+    fn release_lockdown_is_a_setup_page_switch_both_ways() {
+        // K1 way back: the setup page can turn release lockdown on and off
+        // without adb. Default is off.
+        let current = WavedConfig::default();
+        assert!(!current.security.release_lockdown);
+
+        let mut on = FormSubmission::default();
+        on.values
+            .insert("security.release_lockdown".into(), "true".into());
+        let enabled = apply_form(&current, &on).unwrap();
+        assert!(enabled.security.release_lockdown);
+
+        let mut off = FormSubmission::default();
+        off.values
+            .insert("security.release_lockdown".into(), "false".into());
+        let disabled = apply_form(&enabled, &off).unwrap();
+        assert!(!disabled.security.release_lockdown);
     }
 
     #[test]

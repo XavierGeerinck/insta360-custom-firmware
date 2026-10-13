@@ -286,6 +286,7 @@ fn value(config: &WavedConfig, path: &str) -> String {
         "storage.minimum_free_mb" => config.storage.minimum_free_mb.to_string(),
         "security.device_password" => String::new(),
         "security.ota_server" => config.security.ota_server.clone(),
+        "security.release_lockdown" => config.security.release_lockdown.to_string(),
         "ntp.servers" => config.ntp.servers.join("\n"),
         "display.brightness_pct" => config.display.brightness_pct.to_string(),
         "display.dim_after_s" => config.display.dim_after_s.to_string(),
