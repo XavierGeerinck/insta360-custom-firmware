@@ -1,8 +1,9 @@
 //! Runs the PC link: an engine thread fed by `HidReader::spawn_with_vendor`,
 //! and a writer thread that owns the PC-link writes to `/dev/hidg0` (the
 //! consumer / telephony writer keeps its own handle; f_hid serialises them).
+//! The writer opens the node again after errors and gadget switches
+//! (`crate::node`).
 
-use std::io::Write;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,7 @@ use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 use waved_state::{AudioState, BatteryState, Command, MeetingState, SettingsState, StateBus, SystemState, WifiState};
 
+use crate::node::{DevNode, Handle, Node, Opened, Pending, Reopening, Unavailable, REOPEN_EVERY, STALE_AFTER};
 use super::handler::{Context, PcLinkHost, PinVerifier};
 use super::link::{Output, PcLink};
 use super::snapshot::Snapshot;
@@ -72,7 +74,8 @@ impl PcLinkBus {
 
 /// Start the PC link. `vendor_rx` is the channel given to
 /// `HidReader::spawn_with_vendor`. Returns at once; the threads run until
-/// the reader's sender is dropped.
+/// the reader's sender is dropped (the reader keeps it for the process
+/// lifetime).
 pub fn spawn(
     cfg: PcLinkConfig,
     vendor_rx: Receiver<Vec<u8>>,
@@ -271,38 +274,72 @@ impl FailureLog {
     }
 }
 
-/// The writer loop: one 64-byte report per write; reopens `device` after an
-/// error. Returns when `rx` disconnects.
+/// Reports waiting for the node (it failed or went away); beyond this the
+/// oldest go.
+pub const REPORTS_WAITING: usize = 64;
+
+/// The writer loop: one 64-byte report per write to `device`. Returns when
+/// `rx` disconnects.
 pub fn run_writer(device: String, rx: Receiver<Report>) {
-    const RETRY: Duration = Duration::from_secs(1);
-    let mut file: Option<std::fs::File> = None;
-    let mut next_open = Instant::now();
+    run_writer_on(DevNode::writer(&device), &device, REOPEN_EVERY, rx)
+}
+
+/// `run_writer` on any node. Before each write it checks that the path
+/// still names the node it opened (a gadget switch replaces it); after an
+/// error it closes it and opens again no sooner than `every` later. Reports
+/// that wait for the node meanwhile are kept (`REPORTS_WAITING`, oldest
+/// first, none written more than `node::STALE_AFTER` late) and go out once
+/// it opens.
+pub fn run_writer_on<N: Node>(node: N, device: &str, every: Duration, rx: Receiver<Report>) {
+    let mut node = Reopening::new(node, every);
+    let mut pending: Pending<Report> = Pending::new(REPORTS_WAITING, STALE_AFTER);
     let mut failures = FailureLog::default();
-    for report in rx {
-        if file.is_none() && Instant::now() >= next_open {
-            match std::fs::OpenOptions::new().write(true).open(&device) {
-                Ok(f) => file = Some(f),
-                Err(e) => {
-                    if let Some(line) = failures.failed(Instant::now(), &format!("cannot open {device}: {e}")) {
+    loop {
+        // While reports wait for the node, wake for its next try.
+        let next = if pending.is_empty() {
+            rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+        } else {
+            rx.recv_timeout(node.wait(Instant::now()))
+        };
+        match next {
+            Ok(report) => {
+                pending.push(Instant::now(), report);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+        let now = Instant::now();
+        pending.drop_stale(now);
+        while let Some(report) = pending.front() {
+            let h = match node.get(now) {
+                Ok((h, opened)) => {
+                    if opened == Opened::Replaced {
+                        info!("pclink: {device} is a new node (the gadget was switched); writing to it");
+                    }
+                    h
+                }
+                Err(Unavailable::Waiting) => break,
+                Err(Unavailable::OpenFailed(e)) => {
+                    if let Some(line) = failures.failed(now, &format!("cannot open {device}: {e}")) {
                         warn!("{line}");
                     }
-                    next_open = Instant::now() + RETRY;
+                    break;
                 }
-            }
-        }
-        let Some(f) = file.as_mut() else { continue };
-        match f.write_all(&report) {
-            Ok(()) => {
-                if let Some(line) = failures.succeeded() {
-                    info!("{line}");
+            };
+            match h.write_report(report) {
+                Ok(()) => {
+                    pending.pop();
+                    if let Some(line) = failures.succeeded() {
+                        info!("{line}");
+                    }
                 }
-            }
-            Err(e) => {
-                if let Some(line) = failures.failed(Instant::now(), &format!("write to {device} failed: {e}")) {
-                    warn!("{line}");
+                Err(e) => {
+                    node.failed(now);
+                    if let Some(line) = failures.failed(now, &format!("write to {device} failed: {e}")) {
+                        warn!("{line}");
+                    }
+                    break;
                 }
-                file = None;
-                next_open = Instant::now() + RETRY;
             }
         }
     }
@@ -470,9 +507,10 @@ mod tests {
     }
 
     /// The exact calls `crates/waved/src/main.rs` makes (the binary can't be
-    /// built on macOS); with no device both threads wind down on their own.
+    /// built on macOS). With no device the reader tries it once a second and
+    /// the PC link waits for it; the threads outlive the test.
     #[test]
-    fn the_main_rs_wiring_type_checks_and_stops_without_a_device() {
+    fn the_main_rs_wiring_type_checks_without_a_device() {
         use crate::reader::{HidReader, HidReaderConfig};
         let bus = std::sync::Arc::new(StateBus::new());
         let hid_stats = crate::stats::HidStats::new();
@@ -540,6 +578,95 @@ mod tests {
         assert_eq!(log.succeeded().as_deref(), Some("pclink: writing again after 62 failures"));
         assert_eq!(log.succeeded(), None);
         assert!(log.failed(at(62), "write to hidg0 failed: EIO").is_some(), "a new run of failures shows at once");
+    }
+
+    /// Waits until the fake node of `generation` holds `n` reports.
+    fn written(node: &crate::node::fake::FakeNode, generation: u32, n: usize) -> Vec<Vec<u8>> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while node.written_to(generation).len() < n && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        node.written_to(generation)
+    }
+
+    fn numbered(i: u8) -> Report {
+        let mut r = [0u8; REPORT_LEN];
+        r[0] = 0x03;
+        r[2] = i;
+        r
+    }
+
+    #[test]
+    fn replies_wait_for_a_missing_node_bounded_and_go_out_in_order() {
+        let node = crate::node::fake::FakeNode::default();
+        let (tx, rx) = mpsc::sync_channel(WRITE_QUEUE);
+        let n = node.clone();
+        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(50), rx));
+        let extra = 5;
+        for i in 0..(REPORTS_WAITING + extra) as u8 {
+            tx.send(numbered(i)).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(120));
+        let tries = node.opens();
+        assert!((1..=4).contains(&tries), "{tries} opens in 120 ms with a 50 ms back-off");
+        node.bind();
+        let got = written(&node, 1, REPORTS_WAITING);
+        let want: Vec<Vec<u8>> = (extra..REPORTS_WAITING + extra).map(|i| numbered(i as u8).to_vec()).collect();
+        assert_eq!(got, want, "the newest REPORTS_WAITING, in order");
+        drop(tx);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn a_failed_write_is_retried_on_the_node_that_comes_back() {
+        let node = crate::node::fake::FakeNode::present();
+        node.state().write_errno = Some(libc::ESHUTDOWN);
+        let (tx, rx) = mpsc::sync_channel(4);
+        let n = node.clone();
+        let writer = std::thread::spawn(move || run_writer_on(n, "hidg0", Duration::from_millis(20), rx));
+        tx.send(numbered(1)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        node.unbind();
+        node.bind();
+        assert_eq!(written(&node, 1, 1), vec![numbered(1).to_vec()]);
+        tx.send(numbered(2)).unwrap();
+        assert_eq!(written(&node, 1, 2).len(), 2);
+        drop(tx);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn the_writer_writes_to_the_new_node_after_a_gadget_switch() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hidg0");
+        std::fs::File::create(&path).unwrap();
+        let (tx, rx) = mpsc::sync_channel(4);
+        let p = path.to_string_lossy().into_owned();
+        std::thread::spawn(move || run_writer(p, rx));
+        let holds = |n: usize| {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while std::fs::read(&path).map_or(0, |b| b.len()) < n && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::fs::read(&path).map_or(0, |b| b.len())
+        };
+        let mut r = [0u8; REPORT_LEN];
+        r[..2].copy_from_slice(&[0x03, 0xEF]);
+        tx.send(r).unwrap();
+        assert_eq!(holds(REPORT_LEN), REPORT_LEN);
+
+        // The switch: a new node at the same path.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::File::create(&path).unwrap();
+        tx.send(r).unwrap();
+        assert_eq!(holds(REPORT_LEN), REPORT_LEN, "the reply goes to the new node");
+
+        // A reply while the node is missing waits for the next one.
+        std::fs::remove_file(&path).unwrap();
+        tx.send(r).unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        std::fs::File::create(&path).unwrap();
+        assert_eq!(holds(REPORT_LEN), REPORT_LEN, "the reply waited for the node");
     }
 
     #[test]
