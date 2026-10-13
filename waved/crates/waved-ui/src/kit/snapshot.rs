@@ -3,8 +3,8 @@
 use crate::kit::dispatch::Message;
 use waved_state::{
     AudioState, BatteryState, BluetoothState, FilesState, McuState, MeetingState, OtaState,
-    PlaybackState, ProvisioningState, SettingsState, StateBus, SystemState, WifiState,
-    CLOCK_VALID_AFTER_UNIX_S,
+    PlaybackState, ProvisioningState, SettingsState, StateBus, SystemState, UsbStorageState,
+    WifiState, CLOCK_VALID_AFTER_UNIX_S,
 };
 
 /// The message in the status slot. The runtime keeps it, so it survives a
@@ -59,6 +59,8 @@ pub struct UiSnapshot {
     pub system: SystemState,
     /// Firmware updates (waved-update).
     pub ota: OtaState,
+    /// USB storage (waved-system, G1).
+    pub usb_storage: UsbStorageState,
     /// Wall clock, seconds since the Unix epoch.
     pub now_unix_s: i64,
     /// Monotonic milliseconds for UI timers (messages, gauge, hold to stop).
@@ -101,6 +103,7 @@ impl UiSnapshot {
             playback: bus.playback.borrow().clone(),
             system,
             ota: bus.ota.borrow().clone(),
+            usb_storage: bus.usb_storage.borrow().clone(),
             now_unix_s,
             now_ms,
             clock,

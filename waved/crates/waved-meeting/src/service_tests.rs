@@ -5,7 +5,10 @@
 use super::*;
 use std::time::Duration;
 use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
-use waved_state::{AudioMode, AudioState, FilesState, SettingsState, UploadMode, WifiState};
+use waved_state::{
+    AudioMode, AudioState, FilesState, SettingsState, UploadMode, UsbStoragePhase,
+    UsbStorageState, WifiState,
+};
 
 pub(crate) fn quiet_config(upload_mode: UploadMode) -> WavedConfig {
     let mut config = WavedConfig::default();
@@ -56,6 +59,8 @@ pub(crate) struct Rig {
     pub db_path: PathBuf,
     pub recordings_dir: PathBuf,
     pub files: Arc<watch::Sender<FilesState>>,
+    /// USB storage (G1); Off unless a test hands the volume to the computer.
+    pub usb_storage: watch::Sender<UsbStorageState>,
     _tmp: tempfile::TempDir,
 }
 
@@ -84,6 +89,7 @@ pub(crate) async fn start_rig_in(
     let integrity = Arc::new(RecordingIntegrity::default());
     let (integrity_tx, integrity_rx) = mpsc::unbounded_channel();
     let files = Arc::new(watch::channel(FilesState::default()).0);
+    let (usb_storage, usb_storage_rx) = watch::channel(UsbStorageState::default());
     let service = MeetingService::new_with_integrity(
         config,
         db_path.to_str().unwrap(),
@@ -103,7 +109,8 @@ pub(crate) async fn start_rig_in(
         settings: settings_rx,
         audio: audio_rx,
     })
-    .with_files_publisher(Arc::clone(&files));
+    .with_files_publisher(Arc::clone(&files))
+    .with_usb_storage(usb_storage_rx);
     let (commands, commands_rx) = broadcast::channel(32);
     let (wifi, wifi_rx) = watch::channel(WifiState::default());
     tokio::spawn(service.run(commands_rx, wifi_rx));
@@ -120,6 +127,7 @@ pub(crate) async fn start_rig_in(
         db_path,
         recordings_dir,
         files,
+        usb_storage,
         _tmp: tmp,
     }
 }
@@ -1386,4 +1394,51 @@ async fn a_stuck_files_refresh_never_holds_up_the_take() {
     rig.stop().await;
     assert_eq!(rig.status(take).await.as_deref(), Some("local_only"));
     assert_eq!(rig.wav_samples(take), 60 * 480);
+}
+
+#[tokio::test]
+async fn no_take_starts_while_usb_storage_has_the_volume() {
+    let rig = start_rig(
+        quiet_config(UploadMode::LocalOnly),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    rig.usb_storage.send_modify(|s| s.phase = UsbStoragePhase::On);
+    rig.send(Command::StartRecording);
+    // The test runtime is single-threaded: the service handles the command
+    // while this test sleeps.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!rig.meeting.borrow().recording, "the computer has the volume");
+    assert_eq!(
+        std::fs::read_dir(&rig.recordings_dir).unwrap().count(),
+        0,
+        "nothing written where the volume was"
+    );
+    rig.usb_storage.send_modify(|s| s.phase = UsbStoragePhase::Off);
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
+}
+
+#[tokio::test]
+async fn a_recording_deleted_on_the_computer_shows_as_missing_once_the_volume_is_back() {
+    let rig = start_rig(
+        quiet_config(UploadMode::LocalOnly),
+        settings_for(UploadMode::LocalOnly),
+    )
+    .await;
+    let id = rig.start().await;
+    rig.feed(5, 0.1).await;
+    rig.stop().await;
+    rig.usb_storage.send_modify(|s| s.phase = UsbStoragePhase::On);
+    std::fs::remove_dir_all(rig.dir(id)).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        rig.status(id).await.as_deref(),
+        Some("local_only"),
+        "nothing is reconciled while the volume is away"
+    );
+    rig.usb_storage.send_modify(|s| s.phase = UsbStoragePhase::Off);
+    rig.wait_status(id, Some("missing_artifact")).await;
 }

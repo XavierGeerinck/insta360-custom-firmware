@@ -13,5 +13,6 @@ mod service;
 pub mod tones;
 pub mod tz;
 pub mod usb;
+pub mod usb_storage;
 
 pub use service::SystemService;

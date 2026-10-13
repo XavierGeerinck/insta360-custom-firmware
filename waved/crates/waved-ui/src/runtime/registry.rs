@@ -6,11 +6,11 @@ use crate::kit::screen::Screen;
 use crate::screens_v2::{
     about, ambient, audio_mode, bluetooth, boot, call, confirm, datetime, decision, display,
     file_detail, files, first_run, home, menu, mic_height, noise, ota, pin, powering_off,
-    recording, system, upload_mode, uploads, volume, wifi, wifi_setup,
+    recording, system, upload_mode, uploads, usb_storage, volume, wifi, wifi_setup,
 };
 
-/// The screen for `route`, or `None` for a milestone 3 route, which the
-/// runtime backs out of.
+/// The screen for `route`. `None` would be a route with no screen yet, which
+/// the runtime backs out of; every route has one since G1.
 pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
     let screen: Box<dyn Screen> = match route {
         Route::Boot => Box::new(boot::BootScreen::default()),
@@ -43,8 +43,7 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::Update => Box::new(ota::UpdateScreen::default()),
         Route::Bluetooth => Box::new(bluetooth::BluetoothScreen::default()),
         Route::IncomingCall => Box::new(call::CallScreen::default()),
-        // Milestone 3: USB storage has no screen yet.
-        Route::UsbStorage => return None,
+        Route::UsbStorage => Box::new(usb_storage::UsbStorageScreen::default()),
     };
     Some(screen)
 }
@@ -103,6 +102,7 @@ mod tests {
             Route::Update,
             Route::Bluetooth,
             Route::IncomingCall,
+            Route::UsbStorage,
         ]
     }
 
@@ -198,8 +198,13 @@ mod tests {
     }
 
     #[test]
-    fn milestone_3_routes_have_no_screen_yet() {
-        assert!(screen_for(&Route::UsbStorage).is_none());
+    fn usb_storage_builds_with_its_way_out() {
+        let mut snap = fixture();
+        snap.usb_storage.phase = waved_state::UsbStoragePhase::On;
+        build(&Route::UsbStorage, &snap, |root| {
+            assert!(shows_text(root, usb_storage::STOP));
+            assert_targets_ok(root);
+        });
     }
 
     #[test]

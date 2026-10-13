@@ -81,13 +81,13 @@ impl Route {
             | Route::TimeZone
             | Route::About
             | Route::Update
-            | Route::UsbStorage
-            | Route::Confirm(
-                ConfirmKind::FactoryReset
-                | ConfirmKind::StopUsbStorage
-                | ConfirmKind::TurnOffPin,
-            ) => Some(Route::System),
+            | Route::Confirm(ConfirmKind::FactoryReset | ConfirmKind::TurnOffPin) => {
+                Some(Route::System)
+            }
             // Power off stays open: the power key's long press must always work.
+            // USB storage is started from System, so its PIN guards that; the
+            // takeover and stopping stay open (G1): pulling the cable stops it
+            // anyway.
             _ => None,
         }
     }
@@ -146,9 +146,7 @@ mod tests {
             (Route::DateTime, Route::System),
             (Route::About, Route::System),
             (Route::Update, Route::System),
-            (Route::UsbStorage, Route::System),
             (Route::Confirm(ConfirmKind::FactoryReset), Route::System),
-            (Route::Confirm(ConfirmKind::StopUsbStorage), Route::System),
             (Route::Confirm(ConfirmKind::TurnOffPin), Route::System),
             (Route::TimeZone, Route::System),
             (Route::DimAfter, Route::System),
@@ -169,6 +167,8 @@ mod tests {
             Route::Pin(Box::new(Route::Files)),
             Route::Resting,
             Route::IncomingCall,
+            Route::UsbStorage,
+            Route::Confirm(ConfirmKind::StopUsbStorage),
         ] {
             assert_eq!(open.guarded_by(), None, "{open:?}");
         }

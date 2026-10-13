@@ -33,7 +33,7 @@ use waved_audio::processed_frame::ProcessedAudioFrame;
 use waved_config::{UploadMode, WavedConfig};
 use waved_state::{
     AudioState, Command, DeviceEvent, FilesState, MeetingState, PendingDecision,
-    RecordingIntegrityFault, SettingsState, WifiState,
+    RecordingIntegrityFault, SettingsState, UsbStorageState, WifiState,
 };
 
 pub struct MeetingService {
@@ -67,10 +67,30 @@ pub struct MeetingService {
     /// The take the auto-Keep kept last, and when: a Discard that lost the
     /// race to it still deletes it.
     auto_kept: Option<(Uuid, tokio::time::Instant)>,
+    /// USB storage (G1): while the computer has the recordings volume, no
+    /// take starts, nothing uploads and Files is not republished.
+    usb_storage: Option<watch::Receiver<UsbStorageState>>,
 }
 
 /// How long after the auto-Keep a Discard of that take still counts.
 const DISCARD_AFTER_AUTO_KEEP: Duration = Duration::from_secs(2);
+
+/// USB storage has the recordings volume, or is handing it over (G1).
+pub(crate) fn recordings_away(usb_storage: Option<&watch::Receiver<UsbStorageState>>) -> bool {
+    usb_storage.is_some_and(|rx| rx.borrow().recordings_away())
+}
+
+/// Waits for USB storage to change and returns whether the volume is away
+/// now. Never returns without a receiver, or once its sender is gone.
+async fn usb_storage_changed(rx: &mut Option<watch::Receiver<UsbStorageState>>) -> bool {
+    let Some(rx) = rx.as_mut() else {
+        return std::future::pending().await;
+    };
+    if rx.changed().await.is_err() {
+        return std::future::pending().await;
+    }
+    rx.borrow_and_update().recordings_away()
+}
 
 pub struct MeetingPipelineInputs {
     pub audio_rx: mpsc::Receiver<ProcessedAudioFrame>,
@@ -390,6 +410,7 @@ impl MeetingService {
             files: None,
             files_refresh: Arc::new(Notify::new()),
             auto_kept: None,
+            usb_storage: None,
         })
     }
 
@@ -415,9 +436,26 @@ impl MeetingService {
         self
     }
 
+    /// Follow USB storage (G1): while the computer has the recordings volume,
+    /// StartRecording is refused, the upload worker waits and Files keeps its
+    /// last list; when the volume is back, the recordings are reconciled again.
+    pub fn with_usb_storage(mut self, usb_storage: watch::Receiver<UsbStorageState>) -> Self {
+        self.usb_storage = Some(usb_storage);
+        self
+    }
+
+    /// The recordings volume is with the computer, or being handed over.
+    fn recordings_away(&self) -> bool {
+        recordings_away(self.usb_storage.as_ref())
+    }
+
     /// Republish the Files list. The list is built off the loop, so this
-    /// returns at once.
+    /// returns at once. Not while the volume is away: its sizes and free space
+    /// would read as zero.
     fn publish_files(&self) {
+        if self.recordings_away() {
+            return;
+        }
         if let Some(files) = self.files.as_ref() {
             files.request();
         }
@@ -448,6 +486,24 @@ impl MeetingService {
         info!("no answer to \"Send this recording?\" for {id}; keeping it on Wave");
         self.handle_save_recording(id).await;
         self.auto_kept = Some((id, tokio::time::Instant::now()));
+    }
+
+    /// The recordings volume is mounted again after USB storage (G1). The
+    /// computer may have deleted or added recordings: reconcile as at boot,
+    /// recheck the storage limits and republish Files.
+    async fn recordings_back(&self) {
+        info!("recordings volume back from USB storage; reconciling");
+        if let Err(error) = reconcile::run(&self.pool, &self.recordings_dir).await {
+            warn!("recording reconciliation after USB storage failed: {error}");
+        }
+        retention::enforce(
+            &self.pool,
+            &self.recordings_dir,
+            &self.config.storage,
+            &self.meeting_tx,
+        )
+        .await;
+        self.publish_files();
     }
 
     fn live_audio_mode(&self) -> String {
@@ -483,8 +539,11 @@ impl MeetingService {
             Arc::clone(&self.meeting_tx),
             self.events_tx.clone(),
             Arc::clone(&upload_wake),
-        );
+        )
+        .with_usb_storage(self.usb_storage.clone());
         let _upload_task = tokio::spawn(upload_worker.run(wifi_rx.clone()));
+        let mut usb_storage_rx = self.usb_storage.clone();
+        let mut volume_away = self.recordings_away();
 
         // Post-DSP mono samples kept around for the pre-record splice.
         // See docs/superpowers/specs/2026-05-22-prebuffer-design.md.
@@ -616,12 +675,23 @@ impl MeetingService {
                 _ = files_refresh.notified(), if self.files.is_some() => {
                     self.publish_files();
                 }
+                away = usb_storage_changed(&mut usb_storage_rx) => {
+                    if volume_away && !away {
+                        self.recordings_back().await;
+                        upload_wake.notify_one();
+                    }
+                    volume_away = away;
+                }
                 cmd_result = cmd_rx.recv() => {
                     match cmd_result {
                         Ok(cmd) => {
                             let refresh_files = changes_files(&cmd);
                             match cmd {
                                 Command::StartRecording => {
+                                    if self.recordings_away() {
+                                        warn!("recording start blocked: USB storage has the recordings volume");
+                                        continue;
+                                    }
                                     if let Some(fault) =
                                         self.meeting_tx.borrow().recording_blocked_reason
                                     {

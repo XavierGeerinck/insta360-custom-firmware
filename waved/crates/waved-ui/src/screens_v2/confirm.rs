@@ -118,8 +118,9 @@ pub fn outcome(kind: ConfirmKind) -> Outcome {
             then: Some(Route::WifiSetup),
             message: None,
         },
-        // G1 (milestone 3) adds Command::StopUsbStorage and sends it here.
-        ConfirmKind::StopUsbStorage => done(None, None),
+        // Back to the USB storage screen, which shows Stopping, then leaves
+        // when the volume is back or says to eject on the computer first.
+        ConfirmKind::StopUsbStorage => done(Some(Command::StopUsbStorage), None),
         ConfirmKind::TurnOffPin => done(
             Some(Command::ClearDevicePin),
             Some(Message::new(Severity::Success, copy::PIN_OFF)),
@@ -319,6 +320,24 @@ mod tests {
                     UiEvent::Show(Message::new(Severity::Success, copy::DELETED))
                 ]
             );
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn stopping_usb_storage_sends_stop_and_goes_back_to_its_screen() {
+        let next = outcome(ConfirmKind::StopUsbStorage);
+        assert_eq!(next.command, Some(Command::StopUsbStorage));
+        assert_eq!((next.backs, next.then), (1, None));
+        assert!(next.message.is_none(), "the takeover shows the outcome");
+        lvgl(|lv| {
+            let (mut f, screen, root) = build(ConfirmKind::StopUsbStorage, &snap(), lv);
+            assert_golden("screen_confirm_stop_usb_storage", &lv.render());
+            lv.click(screen.row.as_ref().unwrap().obj(0)); // Cancel
+            assert!(f.commands().is_empty());
+            lv.click(screen.row.as_ref().unwrap().obj(1)); // Stop
+            assert!(matches!(f.commands().as_slice(), [Command::StopUsbStorage]));
+            assert_eq!(f.events(), vec![UiEvent::Back, UiEvent::Back]);
             assert_targets_ok(root);
         });
     }
