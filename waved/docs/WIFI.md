@@ -124,6 +124,16 @@ Idle → Scanning → ApActive{ssid,passphrase,url} → Connecting{ssid} → Con
    reconnects. A controlled process restart applies one consistent
    configuration snapshot and triggers the pending webhook setup test.
 
+**Security review (K1/K3):** the AP is bounded — `PROV_TIMEOUT = 300 s` wraps
+the whole session in `provision()`, so the radio returns to STA after five
+minutes even if nobody submits the form (also on cancel). The passphrase is a
+fresh `gen_passphrase()` per session (credential rotation): a captured handshake
+is worthless once the session ends. `hostapd.conf` is written `0600` to `/tmp`
+and removed on teardown, and the passphrase is never logged. The per-session
+CSRF token gates `/save` and `/save-connect`; a missing or wrong token is
+rejected with `400` and writes nothing. Secrets are write-only on the form and
+bodies are bounded to 32 KiB. See the tests in `crates/waved-provision/src/`.
+
 Webhook configuration and its multipart contract are documented in
 [`docs/WEBHOOKS.md`](WEBHOOKS.md).
 

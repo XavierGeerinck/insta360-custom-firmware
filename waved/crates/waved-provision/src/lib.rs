@@ -694,6 +694,57 @@ mod tests {
     }
 
     #[test]
+    fn the_setup_ap_times_out_within_a_bounded_window() {
+        // K3: the AP must shut itself off after a bounded time even if nobody
+        // ever submits the form. provision() wraps the whole session in this.
+        assert!(PROV_TIMEOUT <= Duration::from_secs(600));
+        assert!(PROV_TIMEOUT >= Duration::from_secs(30));
+    }
+
+    #[test]
+    fn each_session_gets_a_fresh_passphrase() {
+        // K3: credential rotation. A brute force on one session's handshake is
+        // worthless next session.
+        let passphrases: BTreeSet<String> = (0..64).map(|_| gen_passphrase()).collect();
+        assert!(
+            passphrases.len() >= 63,
+            "passphrases should be fresh each session, got {} distinct of 64",
+            passphrases.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bad_csrf_token_is_rejected_and_saves_nothing() {
+        // K3: the per-session CSRF token gates both final actions. A missing or
+        // wrong token must be refused, with nothing written to config.toml.
+        for body in [
+            "ssid=Home&psk=password123&device.name=Hijack", // no csrf at all
+            "csrf=wrong&ssid=Home&psk=password123&device.name=Hijack", // wrong csrf
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            WavedConfig::default().save(&path).unwrap();
+            let before = std::fs::read_to_string(&path).unwrap();
+            let service = ProvisioningService::new(Arc::new(StateBus::new()), "mac".into(), &path);
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+
+            let response = tokio::select! {
+                _ = service.serve(listener, &[], "csrf-session", WavedConfig::default()) => {
+                    panic!("a bad CSRF must not complete the save: {body}")
+                }
+                response = post(addr, "/save-connect", body) => response,
+            };
+            assert!(response.starts_with("HTTP/1.1 400"), "{body}: {response}");
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                before,
+                "{body}: config must be untouched"
+            );
+        }
+    }
+
+    #[test]
     fn state_is_retained_without_watch_receiver() {
         let service = service_without_watch_receivers();
         assert_eq!(service.bus.provisioning.receiver_count(), 0);
