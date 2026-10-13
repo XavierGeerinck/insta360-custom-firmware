@@ -687,6 +687,59 @@ impl OtaPhase {
     }
 }
 
+/// USB storage (G1, `docs/USB_STORAGE.md`), published by waved-system's
+/// `usb_storage` service: the computer opens the recordings volume as a drive.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsbStorageState {
+    pub phase: UsbStoragePhase,
+}
+
+impl UsbStorageState {
+    /// The recordings volume is not mounted on Wave, or is being handed over:
+    /// nothing may record, upload, play or delete there.
+    pub fn recordings_away(&self) -> bool {
+        self.phase != UsbStoragePhase::Off
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsbStoragePhase {
+    /// The recordings volume is mounted on Wave (normal use).
+    #[default]
+    Off,
+    /// Unmounting the volume to hand it to the computer.
+    Starting,
+    /// The computer has the volume as a drive.
+    On,
+    /// Taking the volume back: unloading, checking and mounting it.
+    Stopping,
+}
+
+impl UsbStoragePhase {
+    /// The USB storage screen owns the display (G1).
+    pub fn takes_over_screen(self) -> bool {
+        self != Self::Off
+    }
+}
+
+/// Why USB storage did not start or stop (`DeviceEvent::UsbStorageProblem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbStorageProblem {
+    /// Start refused: a recording is running, paused, finishing or awaiting a decision.
+    Recording,
+    /// Start refused: no computer has the USB connection configured.
+    NoComputer,
+    /// Start refused: the gadget has no removable drive linked
+    /// (`scripts/patch-stock-usbgadget.sh` not applied).
+    Unavailable,
+    /// Start failed: something has a file open on the recordings volume.
+    Busy,
+    /// Stop refused: the computer still holds the drive; eject it there first.
+    EjectFirst,
+    /// The volume could not be mounted on Wave again.
+    NotMounted,
+}
+
 // --- Discrete Event Types (broadcast channel) ---
 
 #[derive(Clone, Debug, PartialEq)]
@@ -709,6 +762,8 @@ pub enum DeviceEvent {
     },
     LowBattery(u8),
     MotorObstruction,
+    /// USB storage did not start or stop (G1); the UI says why.
+    UsbStorageProblem(UsbStorageProblem),
     /// The power key was pressed (waved-system power_key reader).
     PowerKey(PowerKeyPress),
 }
@@ -829,6 +884,12 @@ pub enum Command {
     // --- System ---
     /// Erase config, recordings, Wi-Fi and Bluetooth pairings, then restart.
     FactoryReset,
+    /// Hand the recordings volume to the computer as a USB drive (G1).
+    /// Refused while recording or with no computer connected.
+    StartUsbStorage,
+    /// Take the recordings volume back from the computer (G1). Refused while
+    /// the computer still holds the drive.
+    StopUsbStorage,
     // --- Updates (waved-update) ---
     /// Ask the update server now instead of waiting for the next check.
     CheckForUpdate,
@@ -871,6 +932,8 @@ pub struct StateBus {
     pub system: Arc<watch::Sender<SystemState>>,
     /// Firmware updates (waved-update).
     pub ota: Arc<watch::Sender<OtaState>>,
+    /// USB storage (waved-system, G1).
+    pub usb_storage: Arc<watch::Sender<UsbStorageState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
     /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
@@ -904,6 +967,7 @@ impl StateBus {
         let (playback_tx, _) = watch::channel(PlaybackState::default());
         let (system_tx, _) = watch::channel(SystemState::default());
         let (ota_tx, _) = watch::channel(OtaState::default());
+        let (usb_storage_tx, _) = watch::channel(UsbStorageState::default());
         let (events_tx, _) = broadcast::channel(64);
         let (commands_tx, _) = broadcast::channel(64);
 
@@ -921,6 +985,7 @@ impl StateBus {
             playback: Arc::new(playback_tx),
             system: Arc::new(system_tx),
             ota: Arc::new(ota_tx),
+            usb_storage: Arc::new(usb_storage_tx),
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
@@ -1431,6 +1496,31 @@ mod tests {
             Command::BtStopPairing,
         ];
         assert_eq!(commands.clone().len(), 5);
+    }
+
+    #[test]
+    fn usb_storage_starts_off_with_the_recordings_on_wave() {
+        let bus = StateBus::new();
+        assert_eq!(bus.usb_storage.borrow().phase, UsbStoragePhase::Off);
+        assert!(!bus.usb_storage.borrow().recordings_away());
+        let commands = [Command::StartUsbStorage, Command::StopUsbStorage];
+        assert_ne!(commands[0], commands[1]);
+        let event = DeviceEvent::UsbStorageProblem(UsbStorageProblem::EjectFirst);
+        assert_eq!(event.clone(), event);
+    }
+
+    #[test]
+    fn every_usb_storage_phase_but_off_keeps_the_recordings_away() {
+        for phase in [
+            UsbStoragePhase::Starting,
+            UsbStoragePhase::On,
+            UsbStoragePhase::Stopping,
+        ] {
+            let state = UsbStorageState { phase };
+            assert!(state.recordings_away(), "{phase:?}");
+            assert!(phase.takes_over_screen(), "{phase:?}");
+        }
+        assert!(!UsbStoragePhase::Off.takes_over_screen());
     }
 
     #[test]
