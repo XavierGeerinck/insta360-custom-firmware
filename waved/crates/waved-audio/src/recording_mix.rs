@@ -3,9 +3,9 @@
 //! The uplink cancels whatever the Wave's speaker plays, which is right for
 //! the call (the far end must not hear itself) but left meeting recordings
 //! with only the room's side (device pass, 2026-10-12). The recording now
-//! adds what the computer sent to the speaker, as it was sent: before the
-//! speaker EQ and volume, so the remote side does not follow the volume
-//! knob.
+//! adds what the computer (USB) and a phone (Bluetooth, `crate::bt_audio`)
+//! sent to the speaker, as it was sent: before the speaker EQ and volume, so
+//! the remote side does not follow the volume knob.
 //!
 //! The far end arrives from the playback thread one period at a time. The
 //! echo canceller's reference keeps only the freshest period, which is fine

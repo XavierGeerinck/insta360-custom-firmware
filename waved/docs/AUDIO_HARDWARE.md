@@ -1103,6 +1103,67 @@ from the mics. Two consequences, both fixed on 2026-10-12:
   queued, not taken freshest-first like the AEC reference, so every sample
   is written once. The call uplink is unchanged.
 
+## Bluetooth audio (I2)
+
+Built 2026-10-13, not yet run on the device (checklist at the end of
+`docs/superpowers/plans/2026-10-13-m3-i2-bt-audio.md`). The Telink module's
+audio is on **TDM-A, `hw:0,0`: 48 kHz, 2 ch, S16_LE both ways, the SoC is the
+clock master** (`docs/BLUETOOTH_PROTOCOL.md`). With a phone playing,
+`arecord -D hw:0,0` alone recorded the music (2026-10-13).
+`crates/waved-audio/src/bt_audio/` routes it, driven by `BluetoothState` on
+`bus.bt` (`0xB2` bits from `waved-bt`):
+
+```
+phone_audio (bit 1)                     call_audio (bit 2)
+hw:0,0c ── bt-downstream                ProcessedAudioFrame (post-AEC mono)
+            │ re-chunk to the speaker       │ bt-uplink: mono on both slots,
+            │ period, 1 silent period       │ UAC2 cushion at each (re)start
+            ▼ first                         ▼
+PlaybackService::play_phone             hw:0,0p
+            │
+host period (USB) + phone period ── far-end tap (recordings)
+            │ + local playback (Files, tones)
+            ▼
+HPF → EQ → MBAGC → limiter → volume ── hw:0,1 (speaker) + AEC reference
+```
+
+- **USB and Bluetooth mix.** The phone has its own queue in
+  `PlaybackService` and is added to the host's period with a saturating add,
+  like local playback; neither source takes precedence. macOS keeps the UAC2
+  stream open with zeros when nothing plays, so stock's "current source keeps
+  the speaker" rule would lock the phone out. Two loud sources at once can
+  clip before the limiter (same caveat as local playback).
+- **Recordings** get the phone as the far end: the far-end tap now carries
+  host + phone (still before local playback, the DSP and the volume), so a
+  meeting recorded during a Bluetooth call has both sides, exactly like a USB
+  call. Phone music during a recording is in it too, as Mac music is.
+- **Echo.** The phone's audio goes through the same DSP and volume as USB
+  audio and reaches the post-volume AEC reference; the direction estimate's
+  "far end dominates" guard covers it too.
+- **Uplink to the phone** is the frame the USB microphone gets, after AEC,
+  residual echo, voice EQ, make-up gain, NS, mic gain/mute and the limiter,
+  but always the mono signal on both slots (HFP is mono; the Stereo pair
+  would lose half the image if the module reads one slot).
+- **Device handling** follows the USB bridges: SCHED_FIFO 18, failed opens
+  retried about once a second and logged once until the failure changes
+  (`crate::repeat_filter`), xruns counted and recovered with `prepare`
+  (capture restarted), a speaker period dropped while the phone queue is
+  `buffer_periods` deep. TDM-A and TDM-B both run from the SoC, so drift
+  (drops, or gaps when the queue runs dry) should not occur; a long session
+  on the device has to confirm it.
+- **Config** (optional `bt` block in `/etc/waved-audio-config.json`):
+  `enabled` (true), `device` (`hw:0,0`), `period_frames` (1024),
+  `buffer_periods` (4), `playback_clock` (false). `playback_clock: true` also
+  opens `hw:0,0` playback whenever phone audio plays (silence outside a call),
+  for the case where TDM-A capture needs the playback side for its clocks.
+  The open refuses any rate but 48 kHz.
+- **Stats**: `bt_audio` in `/tmp/audio_stats.json`: `speaker_active`,
+  `playback_open`, `mic_active`, `capture_frames`, `playback_frames`,
+  `capture_xruns`, `playback_xruns`, `speaker_drops`, `mic_drops`,
+  `open_failures`. Log lines start with `bt-downstream` / `bt-uplink`.
+- **Not done:** the phone's volume reports (`0xD5`) do not change the Wave's
+  volume; the dongle's audio bits (5, 6) are not routed.
+
 ## Microphone check (milestone 2)
 
 `waved-audio/src/mic_check.rs` watches raw, pre-mute frames in 3 s windows at start-up.

@@ -358,6 +358,24 @@ the USB HID side, not this link. The call state above is what drives it.
   **[code] [inferred]** for the link between the two. Nothing sends the
   Wave's volume to the phone in 1.2.2.6. **[code]**
 
+**In waved** (`crates/waved-audio/src/bt_audio/`, built 2026-10-13, not yet
+run on the device; details in `AUDIO_HARDWARE.md` "Bluetooth audio (I2)"):
+
+- **Bit 1 (`phone_audio`)** opens `hw:0,0` capture and feeds the speaker path
+  (`PlaybackService::play_phone`): Wave volume and mute, EQ, limiter, the
+  echo canceller's reference, and the far end in recordings. The bit clearing
+  closes it.
+- **Bit 2 (`call_audio`)** opens `hw:0,0` playback and writes the processed
+  uplink (the USB microphone's signal, mono on both slots).
+- **USB and Bluetooth mix; neither takes precedence** (unlike stock). macOS
+  keeps the UAC2 stream open and sends zeros when nothing plays, so "the
+  current source keeps the speaker" would lock the phone out.
+- Periods are 1024 frames × 4 (config `bt` block), not stock's 480/960.
+- `bt.playback_clock: true` also runs playback (silence) during music, in case
+  TDM-A capture needs it; off by default because `arecord` alone worked.
+- The phone's volume (`0xD5`) is not mapped; dongle bits 5 and 6 are not
+  routed.
+
 ## Firmware: `BT.bin` and `DONGLE.bin` (TODO F6)
 
 ### What the blobs are **[file]**
@@ -535,18 +553,18 @@ module's flash.
 
 ### I2: Audio routing (`waved-audio`)
 
-- **`BtBridge`**, modelled on `UacBridge`:
-  - Downstream: read `hw:0,0` capture (2 ch S16 at 48 kHz, 480-frame
-    periods) and feed `PlaybackService::play_batch`. The far end then lands in
-    the post-DSP AEC reference tap automatically, as UAC audio already does.
-  - Upstream: take processed mono frames, duplicate them to 2 ch and write
-    them to `hw:0,0` playback (960-frame periods).
-- **Start and stop** on the `0xB2` bits: bit 1 starts downstream, bit 2
-  upstream.
-- **Arbitration:** follow stock's one-source-at-a-time rule against UAC. A
-  call should win over USB playback; that is a product decision.
-- **Measure:** ERLE with phone audio on the speaker, plus the latency of
-  `hw:0,0`.
+Built as `bt_audio` (plan: `docs/superpowers/plans/2026-10-13-m3-i2-bt-audio.md`,
+which ends with the device-pass checklist):
+
+- Downstream: `hw:0,0` capture → `PlaybackService::play_phone` (its own queue,
+  not `play_batch`: sharing the host's queue made the two take turns and
+  crackle, as the tones did). The far end lands in the post-DSP AEC reference
+  and in recordings.
+- Uplink: processed mono frames, duplicated to 2 ch, → `hw:0,0` playback.
+- Start and stop on the `0xB2` bits: bit 1 downstream, bit 2 uplink.
+- Arbitration: **mix**, not stock's one source at a time (see Audio (I2)).
+- Still to measure on the device: ERLE with phone audio on the speaker, and
+  the latency of `hw:0,0`.
 
 ### I3: Calls
 

@@ -556,7 +556,8 @@ impl AudioService {
     /// Publish `AudioState.host_listening` from this probe on every frame
     /// ("Computer is listening" on Home).
     /// Mix the far end of a call into recordings (`recording_mix`): `rx`
-    /// carries the host's playback periods, `channels` their interleaving.
+    /// carries the far end's periods (USB host + Bluetooth phone,
+    /// `PlaybackService::subscribe_far_end`), `channels` their interleaving.
     /// The far end is held back by the uplink's latency at the time of the
     /// call, so it lines up with the room (an NR change later shifts it by a
     /// few tens of ms, which a conversation does not notice).
