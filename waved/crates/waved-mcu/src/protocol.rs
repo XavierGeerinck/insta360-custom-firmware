@@ -12,6 +12,7 @@ pub const NOTIFY: u32 = 101;
 
 /// `mcu_control` / `mcu_notify` command numbers waved uses.
 pub mod cmd {
+    pub const LED_CTRL: u32 = 1;
     pub const MOTOR_CTRL: u32 = 3;
     pub const MOTOR_CHECK: u32 = 4;
     pub const POWER_CTRL: u32 = 5;
@@ -216,6 +217,29 @@ pub fn charging_on() -> Outgoing {
 pub fn all_shutdown() -> Outgoing {
     control(cmd::POWER_CTRL, &[0, 4])
 }
+
+/// What the status LEDs show: stock's `__mcu_led_ctrl_t` (docs/MCU_PROTOCOL.md,
+/// "Status LEDs"). The values are stock's, from its event table (`leds.rs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LedCtrl {
+    /// 0 steady, 1 blink, 2 pulse (gradient), 3 chase (race), 4 progress,
+    /// 5 hue change, 6 rise, 7 fall.
+    pub pattern: u8,
+    /// Brightness for steady (0 = 100 % .. 4 = 0 %), speed for blink and
+    /// pulse (0 = 1 Hz, 1 = 3 Hz), direction for chase.
+    pub sub: u8,
+    /// How many of the 12 LEDs.
+    pub leds: u8,
+    /// 0 red, 1 green, 2 blue, 3 cyan, 4 yellow, 5 white, 6 orange.
+    pub colour: u8,
+    /// Stock's `target` (15 for most, 3 for the error blinks); meaning unknown.
+    pub target: u8,
+}
+
+/// LED_CTRL (cmd 1, no sub-command): stock's 8 bytes, the last 3 reserved.
+pub fn led_ctrl(led: LedCtrl) -> Outgoing {
+    control(cmd::LED_CTRL, &[led.pattern, led.sub, led.leds, led.colour, led.target, 0, 0, 0])
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +304,23 @@ mod tests {
         assert_eq!(&wire(&all_shutdown())[10..16], &hex("05 00 00 00 00 04")[..]);
         assert_eq!(&wire(&charging_on())[10..16], &hex("07 00 00 00 02 01")[..]);
         assert_eq!(&wire(&motor_state_query())[10..15], &hex("04 00 00 00 02")[..]);
+    }
+
+    #[test]
+    fn led_ctrl_is_cmd_1_with_stocks_eight_bytes() {
+        // `mcu_led_ctrl` (1.2.2.6 85254): `mcu_ctrl_cmd_send(1, &led_ctrl, 8)`, the
+        // bytes `__mcu_led_ctrl_t`: pattern, sub-pattern, LED count, colour, target, res[3].
+        // IDLE: LIGHT, 100 %, 12 LEDs, green, target 15; trailing zeros trimmed.
+        let idle = led_ctrl(LedCtrl { pattern: 0, sub: 0, leds: 12, colour: 1, target: 15 });
+        assert_eq!(idle.payload.len(), 36);
+        assert_eq!(&idle.payload[..12], &[1, 0, 0, 0, 0, 0, 12, 1, 15, 0, 0, 0]);
+        assert_eq!(&wire(&idle)[..19], &hex("FD 09 00 00 00 00 00 64 00 00 01 00 00 00 00 00 0C 01 0F")[..]);
+        assert_eq!(notify_cmd(&parse_wire(&idle)), None, "a control, not a notify");
+    }
+
+    fn parse_wire(out: &Outgoing) -> Message {
+        let mut parser = Parser::default();
+        wire(out).into_iter().find_map(|b| parser.feed(b)).unwrap()
     }
 
     #[test]

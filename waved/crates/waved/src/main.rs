@@ -116,6 +116,13 @@ fn main() {
                     Arc::clone(&bus.mcu),
                     bus.events.clone(),
                 );
+                // Status LEDs as stock drives them (F4); WAVED_LEDS=0 leaves them alone.
+                let svc = if waved_mcu::leds_enabled() {
+                    svc.with_leds(waved_mcu::LedSources::from_bus(&bus))
+                } else {
+                    info!("WAVED_LEDS=0: leaving the status LEDs alone");
+                    svc
+                };
                 let cmd_rx = bus.commands.subscribe();
                 std::thread::Builder::new()
                     .name("mcu-srv".into())
@@ -134,6 +141,7 @@ fn main() {
             Arc::clone(&bus.mcu),
             bus.events.clone(),
         );
+        let sim_mcu = sim_mcu.with_leds(waved_mcu::LedSources::from_bus(&bus));
         let mcu_cmd_rx = bus.commands.subscribe();
         std::thread::Builder::new()
             .name("sim-mcu".into())

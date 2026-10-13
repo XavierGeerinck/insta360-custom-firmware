@@ -272,10 +272,11 @@ Rules for the parallel milestones:
 
 ## F — Hardware
 
-- [ ] **F1 Physical volume buttons** (M)
-  - Find the real input path. It isn't `ttyS1`, `event0` or `event1`, see
-    `waved/docs/AUDIO_HARDWARE.md:648`.
-  - Wire the buttons to the speaker volume.
+- [x] **F1 Physical volume buttons** (M) — **not on this hardware** (stock 1.2.2.6, 2026-10-13):
+  the power key on the MCU is the Wave's only key; the device tree's mute / vol+ / vol- keys
+  belong to a disabled reference-board node, and stock sets the volume on the screen only
+  (`waved/docs/MCU_PROTOCOL.md` "Physical controls"). Nothing to wire. Device pass: confirm by
+  looking (`waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md`).
 - [ ] **F2 Battery** (S) — host side done 2026-10-12; left: the device checks in
   `waved/docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md` ("Device-pass checklist").
   - Level, voltage, temperature and charging now come from the MCU's heartbeats on
@@ -289,7 +290,14 @@ Rules for the parallel milestones:
   - Host side done 2026-10-12: `waved-mcu/src/lift.rs` (move, start height, motor reports,
     polling, blocked / obstructed) and a frame-level MCU simulator (`simulate.rs`) that the
     tests and the `simulate` build run against. Device checks: the plan above, "F3 Motor".
-- [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
+- [ ] **F4 LEDs** (S) — host side done 2026-10-13; left: the device checks in
+  `waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md` ("Device-pass checklist").
+  - Stock drives a 12-LED ring through the MCU (LED_CTRL, cmd 1; a BCT3236 driver in `MCU.bin`)
+    from a fixed event table; waved now does the same (`waved-mcu/src/leds.rs`,
+    `waved/docs/MCU_PROTOCOL.md` "Status LEDs"). Not yet seen on the device: whether the ring is
+    fitted on this unit, where it shows, and whether the MCU answers LED_CTRL.
+  - Stock shows nothing for charging. Not followed yet: screen asleep (half brightness, needs the
+    screen state on the bus), USB disk mode (blue, with the USB storage work).
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
 - [x] **F7 Power key through the MCU** (M) — done 2026-10-12: the key arrives on the

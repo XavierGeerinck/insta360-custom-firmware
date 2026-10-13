@@ -19,7 +19,7 @@ from on-device measurement and are hard to rederive.
 | Stock UI assets / home screen | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md), [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md) (reference only) |
 | Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
 | System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
-| MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, power off) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
+| MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, status LEDs, power off; no volume buttons exist) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
 | Bluetooth module (`/dev/ttyS1` 921600, Telink; audio on TDM-A `hw:0,0`; `BT.bin`/`DONGLE.bin`) | [`docs/BLUETOOTH_PROTOCOL.md`](docs/BLUETOOTH_PROTOCOL.md) |
 | Updates (signed packages, server, fall-back in `S60waved`, back to stock) | [`docs/UPDATES.md`](docs/UPDATES.md) |
 | Wave Controller app ("PC Link", vendor HID report 0x03, MAVLink) | [`docs/WAVE_CONTROLLER_PROTOCOL.md`](docs/WAVE_CONTROLLER_PROTOCOL.md) |

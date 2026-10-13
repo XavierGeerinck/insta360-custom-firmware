@@ -83,6 +83,8 @@ struct Sim {
     start_height: Option<u8>,
     power_cut: bool,
     received: Vec<Outgoing>,
+    /// Every LED_CTRL: pattern, sub-pattern, LED count, colour, target.
+    leds: Vec<[u8; 5]>,
 }
 
 /// The MCU end of the link, behind `Transport`.
@@ -109,6 +111,7 @@ impl SimMcu {
                 start_height: None,
                 power_cut: false,
                 received: Vec::new(),
+                leds: Vec::new(),
             }),
         }
     }
@@ -145,6 +148,11 @@ impl SimMcu {
     /// ALL_SHUTDOWN arrived: the MCU would cut the power now.
     pub fn power_cut(&self) -> bool {
         self.sim.lock().unwrap().power_cut
+    }
+
+    /// Every LED_CTRL waved sent: pattern, sub-pattern, LED count, colour, target.
+    pub fn leds(&self) -> Vec<[u8; 5]> {
+        self.sim.lock().unwrap().leds.clone()
     }
 
     /// Every command waved sent, heartbeat replies excluded.
@@ -233,6 +241,10 @@ impl Sim {
         let sub = out.payload[4];
         if command == cmd::MOTOR_CTRL && sub == 4 {
             self.start_height = Some(out.payload[5]);
+        }
+        if command == cmd::LED_CTRL {
+            let p = &out.payload[4..9];
+            self.leds.push([p[0], p[1], p[2], p[3], p[4]]);
         }
         if command == cmd::MOTOR_CHECK {
             // A motor-state query: the reply carries the state.
@@ -357,6 +369,12 @@ impl SimMcuService {
         (Self { service, events_tx, button_rx }, SimMcuHandle { button_tx, mcu })
     }
 
+    /// Drive the status LEDs (`McuService::with_leds`).
+    pub fn with_leds(mut self, sources: crate::LedSources) -> Self {
+        self.service = self.service.with_leds(sources);
+        self
+    }
+
     /// Runs the MCU service until the command channel closes; simulated
     /// volume buttons go out as `DeviceEvent::ButtonPress`.
     pub fn run(self, cmd_rx: broadcast::Receiver<Command>) {
@@ -389,14 +407,23 @@ mod tests {
     }
 
     fn rig() -> Rig {
+        rig_with(SimConfig { heartbeat_ms: 200, mm_per_s: 100, start_mm: 40, battery_level: 64 }, false)
+    }
+
+    /// The service with the status LEDs on.
+    fn rig_with_leds() -> Rig {
+        rig_with(SimConfig { heartbeat_ms: 200, mm_per_s: 100, start_mm: 40, battery_level: 64 }, true)
+    }
+
+    fn rig_with(config: SimConfig, leds: bool) -> Rig {
         let bus = StateBus::new();
-        let config = SimConfig { heartbeat_ms: 200, mm_per_s: 100, start_mm: 40, battery_level: 64 };
         let (service, handle) = SimMcuService::with_config(
             config,
             Arc::clone(&bus.battery),
             Arc::clone(&bus.mcu),
             bus.events.clone(),
         );
+        let service = if leds { service.with_leds(crate::LedSources::from_bus(&bus)) } else { service };
         let cmd_rx = bus.commands.subscribe();
         let thread = std::thread::spawn(move || service.run(cmd_rx));
         Rig { bus, mcu: Arc::clone(handle.mcu()), thread: Some(thread) }
@@ -418,6 +445,66 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+    }
+
+    impl Rig {
+        /// Waits until the simulated MCU has received `count` LED_CTRL frames.
+        fn wait_leds(&self, count: usize) -> Vec<[u8; 5]> {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                let leds = self.mcu.leds();
+                if leds.len() >= count {
+                    return leds;
+                }
+                assert!(Instant::now() < deadline, "timed out waiting for {count} LED frames: {leds:?}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    const IDLE_LED: [u8; 5] = [0, 0, 12, 1, 15];
+    const MUTE_LED: [u8; 5] = [0, 0, 12, 0, 15];
+
+    #[test]
+    fn the_status_leds_follow_the_mic_mute() {
+        let rig = rig_with_leds();
+        assert_eq!(rig.wait_leds(1), [IDLE_LED], "IDLE at start");
+        rig.bus.audio.send_modify(|a| a.mic_muted = true);
+        assert_eq!(rig.wait_leds(2)[1], MUTE_LED);
+        rig.bus.audio.send_modify(|a| a.mic_muted = false);
+        // MIC_UNMUTE (green for 1 s), then IDLE; the simulated MCU answers every
+        // frame, so nothing is resent.
+        assert_eq!(rig.wait_leds(4), [IDLE_LED, MUTE_LED, IDLE_LED, IDLE_LED]);
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(rig.mcu.leds().len(), 4);
+    }
+
+    #[test]
+    fn power_off_shows_its_pattern_before_the_power_is_cut() {
+        let rig = rig_with_leds();
+        rig.wait_leds(1);
+        rig.send(Command::PowerOff);
+        assert_eq!(rig.wait_leds(2)[1], [7, 1, 12, 1, 15], "SHUTDOWN: green fall");
+        rig.send(Command::PowerOffNow);
+        rig.wait_for("power off sent", |s| s.power_off == PowerOffPhase::Sent);
+        assert!(rig.mcu.power_cut());
+    }
+
+    #[test]
+    fn a_low_battery_pulses_the_ring_yellow() {
+        let config = SimConfig { heartbeat_ms: 100, mm_per_s: 100, start_mm: 40, battery_level: 9 };
+        let rig = rig_with(config, true);
+        let leds = rig.wait_leds(2);
+        assert_eq!(leds[1], [2, 0, 12, 4, 15], "BATTERY_20_PERCENT: yellow pulse");
+    }
+
+    #[test]
+    fn without_leds_no_led_ctrl_is_sent() {
+        let rig = rig();
+        rig.bus.audio.send_modify(|a| a.mic_muted = true);
+        rig.send(Command::SetMotorPosition(MotorPosition::High));
+        rig.wait_for("idle at high", |s| s.lift == LiftState::Idle && s.motor_position == MotorPosition::High);
+        assert!(rig.mcu.leds().is_empty());
     }
 
     impl Drop for Rig {
