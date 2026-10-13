@@ -1,20 +1,21 @@
 # waved-mcu
 
-UART link to the Wave's MCU (motor, and in theory battery, buttons and USB).
+The link to the Wave's MCU: `/dev/ttyS4` at 115200, MAVLink v2. The protocol, the stock
+behaviour it copies and what is verified on the device are in
+[`docs/MCU_PROTOCOL.md`](../../docs/MCU_PROTOCOL.md).
 
-## What the device actually sends (device pass, 2026-10-06)
+| Module | What it does |
+|--------|--------------|
+| `mavlink.rs`, `protocol.rs` | Framing; decoding the MCU's messages; the commands waved sends |
+| `handler.rs` | Heartbeat replies, the battery (stock's glitch filter), the power key as `DeviceEvent::PowerKey` |
+| `lift.rs` | Mic height: moves, start height, motor reports, resends |
+| `power_off.rs` | Stock's power-off sequence |
+| `leds.rs` | The status LEDs: stock's event table and scheduler, which waved states raise which event, LED_CTRL resends (`McuService::with_leds`; `WAVED_LEDS=0` leaves them alone) |
+| `link.rs` | The serial port |
+| `simulate.rs` | `SimMcu`, a frame-level MCU for the host tests and the `simulate` build |
 
-With `RUST_LOG=info,waved_mcu=debug`, 25 s of normal running logged **no MCU
-frames at all**: no battery (0x10–0x1F), no USB (0x50/0x51), no unknown ids.
-The battery and USB frame ids in `lib.rs` are guesses that never matched.
+The Wave has no volume buttons: the power key is its only key (`docs/MCU_PROTOCOL.md`,
+"Physical controls"). `ButtonType::VolumeUp/Down` and `SimMcuHandle::press_button` are left
+from an earlier guess and carry no device traffic.
 
-Consequences, handled elsewhere:
-- `BatteryState` stays at its default (level 0, voltage 0). The UI treats
-  voltage 0 as "no reading" and hides the battery
-  (`waved-ui` `status::battery_reading`, `screens_v2/messages.rs`).
-- `McuState.usb_connected` comes from the USB device controller instead
-  (`waved-system/src/usb.rs`, `/sys/class/udc/*/state == "configured"`).
-
-The stock firmware's MCU event names (`mcu_evt_handle`, `BTN_CLICK`, …) are in
-`crates/waved-system/README.md` (power key). See also the 0x4B heartbeat note
-in the project memory: corrupted heartbeats were once misread as buttons.
+Tests: `cargo test -p waved-mcu --lib` and `cargo test -p waved-mcu --lib --features simulate`.
