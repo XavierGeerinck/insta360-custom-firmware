@@ -175,6 +175,7 @@ pub struct Scheduler {
     active: Vec<Active>,
     shown: Option<LedEvent>,
     shown_ms: u64,
+    shown_leds: u8,
     /// Stock's `last_led_dev`; it starts at 0 (red).
     last_colour: u8,
     meeting: bool,
@@ -197,6 +198,7 @@ impl Scheduler {
             active: vec![Active { event: LedEvent::Idle, since_ms: 0, order: 0, leds: LED_COUNT }],
             shown: None,
             shown_ms: 0,
+            shown_leds: 0,
             last_colour: colour::RED,
             meeting: false,
             frozen: false,
@@ -220,9 +222,16 @@ impl Scheduler {
     /// yet: `12 × volume / 100` LEDs (`devstatus_event_set`).
     pub fn volume(&mut self, percent: u16, now_ms: u64) {
         self.activate(LedEvent::SpeakerVolume, true, now_ms);
-        let leds = (u32::from(percent) * u32::from(LED_COUNT) / 100).min(u32::from(LED_COUNT)) as u8;
+        let percent = u32::from(percent.min(100));
+        let leds = (percent * u32::from(LED_COUNT) / 100) as u8;
         if let Some(active) = self.active.last_mut() {
             active.leds = leds;
+        }
+        // Unlike stock, IDLE shows the volume too (the owner's choice,
+        // 2026-10-13), rounded up so any sound lights an LED.
+        let idle_leds = (percent * u32::from(LED_COUNT)).div_ceil(100) as u8;
+        if let Some(idle) = self.active.iter_mut().find(|a| a.event == LedEvent::Idle) {
+            idle.leds = idle_leds;
         }
     }
 
@@ -272,7 +281,8 @@ impl Scheduler {
         }
         let top = self.active.iter().max_by_key(|a| (entry(a.event).priority, a.order))?;
         let changing = matches!(top.event, LedEvent::SpeakerVolume | LedEvent::Ota);
-        if self.shown == Some(top.event) && !(changing && requests.contains(&top.event)) {
+        let same_leds = self.shown_leds == top.leds;
+        if self.shown == Some(top.event) && same_leds && !(changing && requests.contains(&top.event)) {
             return None;
         }
         let (event, leds) = (top.event, top.leds);
@@ -288,6 +298,7 @@ impl Scheduler {
         };
         self.shown = Some(event);
         self.shown_ms = now_ms;
+        self.shown_leds = leds;
         Some((event, LedCtrl { pattern: row.pattern, sub: row.sub, leds, colour, target: row.target }))
     }
 }
@@ -637,6 +648,20 @@ mod tests {
         let mut s = Scheduler::new();
         assert_eq!(s.tick(0), Some((LedEvent::Idle, ctrl(0, 0, 12, colour::GREEN, 15))));
         assert_eq!(s.tick(50), None, "shown once");
+    }
+
+    #[test]
+    fn idle_shows_the_volume_level() {
+        // The owner's choice (2026-10-13): the green ring always shows the
+        // volume, never a full bar. Rounded up, so any sound lights an LED.
+        let mut s = started();
+        s.speaker_volume(50, 100);
+        assert_eq!(s.tick(700), Some((LedEvent::Idle, ctrl(0, 0, 6, colour::GREEN, 15))));
+        s.speaker_volume(5, 1_000);
+        assert_eq!(s.tick(1_600), Some((LedEvent::Idle, ctrl(0, 0, 1, colour::GREEN, 15))));
+        s.speaker_volume(0, 2_000);
+        assert_eq!(s.tick(2_600), Some((LedEvent::Idle, ctrl(0, 0, 0, colour::GREEN, 15))));
+        assert_eq!(s.tick(2_700), None, "shown once");
     }
 
     #[test]
