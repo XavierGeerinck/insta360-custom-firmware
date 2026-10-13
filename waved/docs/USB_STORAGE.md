@@ -79,6 +79,33 @@ Each mode change re-enumerates: `all_disable` writes `none` to `UDC`, unlinks ad
   check after the PC wrote it**), else `umount -f` and `udisk_fix`. `exit_udisk_mode` (E:107500)
   rescans the files and restarts the firmware download; audio comes back to USB after 2 s.
 
+## Measured on the device (2026-10-13): the composite with adb does not work
+
+Two live tests on the running gadget, with `/etc/init.d/S89usbgadget` left
+stock (a power cycle restores everything), BusyBox 1.32, kernel 5.4.242:
+
+1. **UAC2 + HID + adb + mass storage** (the design below): the gadget binds and
+   the Mac enumerates it, but when the host sets the mass-storage interface the
+   controller times out enabling its endpoint (`crg_issue_command time out,
+   cmd_control: 0x41` in `crg_udc_ep_enable`, from `fsg_main_thread`
+   `do_set_interface`), adbd's FunctionFS closes, the gadget unregisters and
+   `UDC` reads empty. Unlinking the drive and binding again brought adb back
+   (`crg_rewrite_udc_for_error` in the log).
+2. **UAC2 + HID + mass storage, adb unlinked** (stock's `uac_hid_msc` set,
+   which stock uses for Wave Controller updates): during the 20 s window the
+   Mac's USB and audio lists did not show the Wave at all, and putting
+   `ffs.adb` back and binding did not bring the gadget or adb back; only a
+   power cycle did. Removing `ffs.adb` from a bound configuration and re-adding
+   it while adbd runs is not a safe runtime move on this controller.
+
+So the boot patch (`scripts/patch-stock-usbgadget.sh`, step 3) must **not** be
+applied: its bind check would catch case 1 at boot, but the design cannot work.
+Until G1 is reworked, waved's USB storage row says "USB storage isn't
+available" (no drive linked), which is safe. Next design to try: stock's own
+mode switch (`S89usbgadget uac_msc` / `uac_hid_msc`, which re-runs stock's
+whole gadget setup including adbd on the way back), tested live first with an
+automatic return to the normal mode, as above.
+
 ## What waved does instead
 
 **Swap the medium, never the gadget.** `scripts/patch-stock-usbgadget.sh` links
