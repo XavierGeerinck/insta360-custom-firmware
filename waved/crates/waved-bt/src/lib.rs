@@ -29,7 +29,7 @@ use state::{Applied, Tracker};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace, warn, Level};
 use waved_state::{BluetoothState, DeviceEvent};
 use waved_uart::UartMux;
 
@@ -132,19 +132,56 @@ impl BtService {
 }
 
 fn log_event(event: &Event) {
+    match log_line(event) {
+        Some((Level::INFO, line)) => info!("{line}"),
+        Some((Level::DEBUG, line)) => debug!("{line}"),
+        Some((_, line)) => trace!("{line}"),
+        None => {}
+    }
+}
+
+/// The log line for a module event, and its level. No info or debug line
+/// carries a phone's name, its MAC or a number: those reach the state (and
+/// the screen) only. Module log lines (`0xF0`) can name the phone, so they
+/// stay at trace. The phone book is never logged.
+fn log_line(event: &Event) -> Option<(Level, String)> {
+    let info = |line: String| Some((Level::INFO, line));
+    let debug = |line: String| Some((Level::DEBUG, line));
+    let trace = |line: String| Some((Level::TRACE, line));
     match event {
-        Event::Version(v) if !v.is_empty() => info!("bt module firmware {v}"),
-        Event::BuildTime(t) if !t.is_empty() => info!("bt module built {t}"),
-        Event::Name(n) => info!("bt module name {n:?}"),
-        // Never log the caller's number.
-        Event::CallNumber(_) => info!("bt: call ringing"),
-        Event::CallCleared => info!("bt: call number cleared"),
-        Event::Phone(e) => info!("bt: phone event {e:?}"),
-        Event::ConnectRequest { name, .. } => info!("bt: {name:?} asks to connect"),
-        Event::WorkStatus { status, .. } => debug!("bt work status {:#04x}", status.0),
-        Event::Log(line) => debug!("bt module log: {line}"),
-        Event::Other { cmd, data } => trace!("bt frame {cmd:#04x} {data:02x?}"),
-        other => debug!("bt: {other:?}"),
+        Event::Version(v) if !v.is_empty() => info(format!("bt module firmware {v}")),
+        Event::BuildTime(t) if !t.is_empty() => info(format!("bt module built {t}")),
+        // The module's own advertised name, not a phone's.
+        Event::Name(n) => info(format!("bt module name {n:?}")),
+        Event::CallNumber(_) => info("bt: call ringing".into()),
+        Event::CallCleared => info("bt: call number cleared".into()),
+        Event::Phone(e) => info(format!("bt: phone event {e:?}")),
+        Event::ConnectRequest { .. } => info("bt: a phone asks to connect".into()),
+        Event::DeviceDisconnected { .. } => info("bt: a phone dropped".into()),
+        Event::PhoneMac(_) => debug("bt: phone MAC received".into()),
+        Event::WorkStatus { status, .. } => debug(format!("bt work status {:#04x}", status.0)),
+        Event::Heartbeat { phone } => trace(format!(
+            "bt heartbeat{}",
+            if phone.is_some() { " naming the phone" } else { "" }
+        )),
+        Event::Log(line) => trace(format!("bt module log: {line}")),
+        Event::PhoneBookEntry => None,
+        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x} {data:02x?}")),
+        // The rest carries no phone's name, MAC or number: signal levels,
+        // volumes, the dongle, versions, OTA and the module's own MAC.
+        other @ (Event::Status { .. }
+        | Event::LinkReport { .. }
+        | Event::PhoneVolume { .. }
+        | Event::ModuleInfo { .. }
+        | Event::Version(_)
+        | Event::BuildTime(_)
+        | Event::AudioModeSwitched(_)
+        | Event::DongleControl { .. }
+        | Event::DongleVersion(_)
+        | Event::DongleBuildTime(_)
+        | Event::FlashSaved
+        | Event::Done(_)
+        | Event::Ota(_)) => debug(format!("bt: {other:?}")),
     }
 }
 
@@ -181,6 +218,103 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         let frame = from_uart(parsed[0].as_ref().expect("checksum as stock")).unwrap();
         assert_eq!(frame, Frame::request(0xB3, &[7, 1, 1]));
+    }
+
+    mod logs {
+        use super::super::log_line;
+        use crate::event::{decode, Event, Link, Phone, PhoneEvent, WorkStatus};
+        use crate::frame::Frame;
+        use tracing::Level;
+
+        const NAME: &str = "Xavier's iPhone";
+        const NUMBER: &str = "+32470123456";
+        const MAC: [u8; 6] = [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57];
+
+        /// Every way a MAC, a phone's name or a number could show up in a line.
+        fn leaks(line: &str) -> Vec<String> {
+            let hex_lower: Vec<String> = MAC.iter().map(|b| format!("{b:02x}")).collect();
+            let hex_upper: Vec<String> = MAC.iter().map(|b| format!("{b:02X}")).collect();
+            let decimal: Vec<String> = MAC.iter().map(|b| b.to_string()).collect();
+            let needles = [
+                NAME.to_string(),
+                "iPhone".to_string(),
+                NUMBER.to_string(),
+                "470123456".to_string(),
+                hex_lower.join(":"),
+                hex_upper.join(":"),
+                hex_lower.join(""),
+                hex_upper.join(""),
+                hex_upper.join(" "),
+                decimal.join(", "),
+                "ba:ad".to_string(),
+                "BA AD".to_string(),
+                "186, 173".to_string(),
+            ];
+            needles.into_iter().filter(|n| line.contains(n.as_str())).collect()
+        }
+
+        fn phone() -> Option<Phone> {
+            Some(Phone { name: NAME.into(), mac: Some(MAC) })
+        }
+
+        /// Events that carry a phone's name, MAC or a number.
+        fn personal() -> Vec<Event> {
+            let mut log = b"\x01app_set_bt_last_addr A1B2C3D4E557 name ".to_vec();
+            log.extend_from_slice(NAME.as_bytes());
+            vec![
+                Event::WorkStatus { status: WorkStatus(0x01), phone: phone() },
+                Event::Heartbeat { phone: phone() },
+                Event::CallNumber(NUMBER.into()),
+                Event::ConnectRequest { mac: MAC, name: NAME.into() },
+                Event::DeviceDisconnected { mac: MAC },
+                Event::PhoneMac(MAC),
+                decode(&Frame::request(0xF0, &log)),
+                Event::Other { cmd: 0x42, data: NUMBER.as_bytes().to_vec() },
+            ]
+        }
+
+        #[test]
+        fn no_info_or_debug_line_names_a_phone_or_a_number() {
+            for event in personal() {
+                if let Some((level, line)) = log_line(&event) {
+                    if level != Level::TRACE {
+                        assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn module_logs_are_trace_only() {
+            let line = decode(&Frame::request(0xF0, b"\x01BT set pairing mode by user"));
+            assert_eq!(log_line(&line).map(|(level, _)| level), Some(Level::TRACE));
+            let raw = decode(&Frame::request(0xF0, &[0x02, 0xE4, 0x7F]));
+            assert_eq!(log_line(&raw).map(|(level, _)| level), Some(Level::TRACE));
+        }
+
+        #[test]
+        fn the_phone_book_is_never_logged() {
+            let entry = decode(&Frame::request(0xB0, b"\x01\0\0\0\x06+32470\x03A\0n\0n\0"));
+            assert_eq!(entry, Event::PhoneBookEntry);
+            assert_eq!(log_line(&entry), None);
+        }
+
+        #[test]
+        fn calls_and_connections_still_show_at_info() {
+            let level = |e: Event| log_line(&e).map(|(level, _)| level);
+            assert_eq!(level(Event::CallNumber(NUMBER.into())), Some(Level::INFO));
+            assert_eq!(level(Event::CallCleared), Some(Level::INFO));
+            assert_eq!(level(Event::Phone(PhoneEvent::CallActive)), Some(Level::INFO));
+            assert_eq!(level(Event::ConnectRequest { mac: MAC, name: NAME.into() }), Some(Level::INFO));
+            assert_eq!(level(Event::DeviceDisconnected { mac: MAC }), Some(Level::INFO));
+            assert_eq!(level(Event::Version("0.0.0.28".into())), Some(Level::INFO));
+            // The module's own name is no phone's: it may show.
+            let (_, line) = log_line(&Event::Name("Insta360 Wave BT 0A1B2C".into())).unwrap();
+            assert!(line.contains("Insta360 Wave BT 0A1B2C"));
+            // Link reports carry signal levels only.
+            let report = Event::LinkReport { dongle: Link::Absent, phone: Link::Connected(-48), counters: None };
+            assert_eq!(level(report), Some(Level::DEBUG));
+        }
     }
 
     #[test]

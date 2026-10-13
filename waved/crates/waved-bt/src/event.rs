@@ -152,8 +152,13 @@ pub enum Event {
     /// `Button` or `PtaMode` (stock waits for these).
     Done(u8),
     Ota(OtaReply),
-    /// `0xF0`: the module's own log line.
+    /// `0xF0`: the module's own log line. It can name the phone and its MAC
+    /// (`app_set_bt_last_addr`), so it is logged at trace only.
     Log(String),
+    /// `0xB0`: one phone-book contact (PBAP), pushed by the module right
+    /// after a phone connects. Dropped unread: it carries nothing, so no
+    /// contact can reach a log or the state (TODO "Not planned").
+    PhoneBookEntry,
     /// Echoes of our requests and anything not decoded.
     Other { cmd: u8, data: Vec<u8> },
 }
@@ -195,7 +200,8 @@ pub fn decode(frame: &Frame) -> Event {
         id::DEVICE_DISCONNECTED => mac_at(d, 0).map(|mac| Event::DeviceDisconnected { mac }),
         id::MODULE_INFO if d.len() > 9 => mac_at(d, 0).map(|mac| Event::ModuleInfo { mac }),
         id::NAME if !d.is_empty() => Some(Event::Name(text(&d[1..d.len().min(1 + crate::command::NAME_LEN)]))),
-        id::PHONE_MAC => mac_at(d, 1).map(Event::PhoneMac),
+        id::PHONE_MAC => phone_mac(d).map(Event::PhoneMac),
+        id::PHONE_BOOK_ENTRY => Some(Event::PhoneBookEntry),
         id::GET_VERSION => Some(Event::Version(text(d.get(1..).unwrap_or(&[])))),
         id::GET_BUILD_TIME => Some(Event::BuildTime(text(d.get(1..).unwrap_or(&[])))),
         id::AUDIO_MODE_SWITCHED => d.get(1).map(|&m| Event::AudioModeSwitched(m)),
@@ -293,6 +299,15 @@ fn connect_request(d: &[u8]) -> Option<Event> {
     let n = usize::from(*d.get(at)?);
     let name = text(d.get(at + 1..at + 1 + n)?);
     Some(Event::ConnectRequest { mac, name })
+}
+
+/// `0xC8`: `[?] [6] mac[6]`, as the device sent it (2026-10-13). Stock reads
+/// the MAC from byte 1, which lands on the length byte.
+fn phone_mac(d: &[u8]) -> Option<Mac> {
+    match d {
+        [_, 6, mac @ ..] => mac_at(mac, 0),
+        _ => None,
+    }
 }
 
 /// `0xFE` = no dongle; otherwise text after the first byte.
@@ -472,10 +487,29 @@ mod tests {
         assert_eq!(ev(0xC6, &name), Event::Name("Insta360 Wave BT 0A1B2C".into()));
         assert_eq!(ev(0xC6, b"\0Wave\0\0\0"), Event::Name("Wave".into()));
 
-        let mut pm = vec![0x06];
-        pm.extend_from_slice(&MAC);
-        assert_eq!(ev(0xC8, &pm), Event::PhoneMac(MAC));
         assert_eq!(ev(0xE1, &MAC), Event::DeviceDisconnected { mac: MAC });
+    }
+
+    #[test]
+    fn phone_mac_follows_a_length_byte() {
+        // Device 2026-10-13: for `app_set_bt_last_addr A1B2C3D4E557` the reply
+        // carried one byte, then 06 (the MAC's length), then the MAC. Reading
+        // from byte 1 as stock does gave 06 A1 B2 C3 D4 E5. The leading byte's
+        // value was not recorded; 00 stands in for it.
+        let reply = [0x75, 0x46, 0x09, 0xC8, 0x00, 0x06, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57, 0xFD];
+        assert_eq!(wire(&reply), Event::PhoneMac([0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57]));
+        // The same MAC as 0xE1 reports it, so the two can be matched.
+        assert_eq!(
+            ev(0xE1, &[0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57]),
+            Event::DeviceDisconnected { mac: [0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57] }
+        );
+        // No length byte, or a MAC cut short: not decoded.
+        let mut no_len = vec![0x00];
+        no_len.extend_from_slice(&MAC);
+        assert!(matches!(ev(0xC8, &no_len), Event::Other { .. }));
+        assert!(matches!(ev(0xC8, &[0x00, 0x06, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5]), Event::Other { .. }));
+        // Our own request echoed.
+        assert!(matches!(ev(0xC8, &[]), Event::Other { .. }));
     }
 
     #[test]
@@ -517,6 +551,21 @@ mod tests {
         assert_eq!(ev(0xA1, &[0]), Event::Ota(OtaReply::Crc { ok: false }));
         assert_eq!(ev(0xDE, &[0]), Event::Ota(OtaReply::Crc { ok: true }));
         assert_eq!(ev(0xA2, &[0]), Event::Ota(OtaReply::Reset));
+    }
+
+    #[test]
+    fn phone_book_entries_carry_nothing() {
+        // Seen on the device 2026-10-13 right after an iPhone connected: one
+        // contact per frame (index, length, number in ASCII, name in UTF-16LE).
+        // The fixture is made up: "+32470" and "Ann".
+        let entry = [
+            0x75, 0x45, 0x13, 0xB0, 0x01, 0x00, 0x00, 0x00, 0x06, b'+', b'3', b'2', b'4', b'7',
+            b'0', 0x03, b'A', 0x00, b'n', 0x00, b'n', 0x00, 0x15,
+        ];
+        assert_eq!(wire(&entry), Event::PhoneBookEntry);
+        // Whatever its length: nothing of it may reach an Event (and so a log).
+        assert_eq!(ev(0xB0, &[]), Event::PhoneBookEntry);
+        assert_eq!(ev(0xB0, b"anything"), Event::PhoneBookEntry);
     }
 
     #[test]

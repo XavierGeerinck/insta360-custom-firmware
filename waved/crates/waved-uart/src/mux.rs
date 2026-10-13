@@ -144,7 +144,7 @@ fn handle_byte(
     if let Some(result) = parser.feed(byte) {
         match result {
             Ok(frame) => {
-                trace!("parsed frame: {:?} target={:?}", frame.data, frame.target);
+                trace!("{}", describe(&frame));
                 let tx = match frame.target {
                     FrameTarget::Bluetooth => bt_tx,
                     FrameTarget::Mcu => mcu_tx,
@@ -162,6 +162,20 @@ fn handle_byte(
     Ok(())
 }
 
+/// A frame for the trace log: its command byte and length, never its bytes.
+/// The Bluetooth module sends the phone book, caller numbers and the phone's
+/// name and MAC on this port.
+fn describe(frame: &Frame) -> String {
+    match frame.data.split_first() {
+        Some((cmd, rest)) => format!(
+            "parsed frame: cmd {cmd:#04x}, {} data bytes, target {:?}",
+            rest.len(),
+            frame.target
+        ),
+        None => format!("parsed frame: empty, target {:?}", frame.target),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +184,23 @@ mod tests {
         let (bt_tx, bt_rx) = bounded::<Frame>(16);
         let (mcu_tx, mcu_rx) = bounded::<Frame>(16);
         (bt_tx, bt_rx, mcu_tx, mcu_rx)
+    }
+
+    #[test]
+    fn the_trace_line_never_prints_a_payload() {
+        // ttyS1 carries the phone book (0xB0), caller numbers (0xB1) and the
+        // phone's name and MAC (docs/BLUETOOTH_PROTOCOL.md): log the command
+        // byte and the length only.
+        let frame = Frame {
+            header: [0x75, 0x45],
+            target: FrameTarget::Bluetooth,
+            data: vec![0xB1, b'+', b'3', b'2', b'4', b'7', b'0'],
+        };
+        let line = describe(&frame);
+        assert_eq!(line, "parsed frame: cmd 0xb1, 6 data bytes, target Bluetooth");
+        assert!(!line.contains("43") && !line.contains("+32"), "{line}");
+        let empty = Frame { header: [0x75, 0x45], target: FrameTarget::Bluetooth, data: vec![] };
+        assert_eq!(describe(&empty), "parsed frame: empty, target Bluetooth");
     }
 
     #[test]
