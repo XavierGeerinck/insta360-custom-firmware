@@ -54,6 +54,7 @@ pub struct WavedConfig {
     pub storage: StorageConfig,
     pub security: SecurityConfig,
     pub ntp: NtpConfig,
+    pub bluetooth: BluetoothConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -150,6 +151,15 @@ pub struct SecurityConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct NtpConfig {
     pub servers: Vec<String>,
+}
+
+/// The Bluetooth module (`waved-bt`, docs/BLUETOOTH_PROTOCOL.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BluetoothConfig {
+    /// Stock's Bluetooth switch (`INSUTIL_CFG2_BT_IS_OPEN`): `OpenBt` at
+    /// start when on, `CloseBt` when off. Changed from the Bluetooth screen.
+    pub enabled: bool,
 }
 
 impl WavedConfig {
@@ -251,7 +261,14 @@ impl Default for WavedConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             ntp: NtpConfig::default(),
+            bluetooth: BluetoothConfig::default(),
         }
+    }
+}
+
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self { enabled: true }
     }
 }
 
@@ -585,6 +602,26 @@ device_password = "4821"
             WavedConfig::parse(&moving).is_err(),
             "moving is not a height"
         );
+    }
+
+    #[test]
+    fn bluetooth_is_on_unless_switched_off() {
+        // Stock keeps its switch as INSUTIL_CFG2_BT_IS_OPEN; older waved
+        // files have no [bluetooth] section and keep Bluetooth on.
+        assert!(WavedConfig::default().bluetooth.enabled);
+        let older = WavedConfig::parse(&v2_with("tones", "enabled = true")).unwrap();
+        assert!(older.bluetooth.enabled);
+        let off = WavedConfig::parse(&v2_with("bluetooth", "enabled = false")).unwrap();
+        assert!(!off.bluetooth.enabled);
+        assert_eq!(off.device.name, "Board room", "the rest still loads");
+        assert!(
+            WavedConfig::parse(&v2_with("bluetooth", "auto_pair = true")).is_err(),
+            "unknown fields stay errors"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        off.save(&path).unwrap();
+        assert!(!WavedConfig::load(&path).unwrap().bluetooth.enabled);
     }
 
     #[test]

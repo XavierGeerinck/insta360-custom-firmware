@@ -49,3 +49,6 @@ ota_allow_downgrade = false
 
 [ntp]
 servers = ["pool.ntp.org", "time.google.com"]
+
+[bluetooth]
+enabled = true

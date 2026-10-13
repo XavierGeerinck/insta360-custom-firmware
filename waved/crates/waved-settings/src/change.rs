@@ -23,6 +23,8 @@ pub enum Change {
     BeamAim(f32),
     /// The chosen Mic height; waved-mcu moves the lift for the same command.
     MicHeight(MotorPosition),
+    /// The Bluetooth switch; waved-bt applies it for the same command.
+    Bluetooth(bool),
 }
 
 impl Change {
@@ -47,6 +49,7 @@ impl Change {
             Command::SetBeamAim(degrees) => Change::BeamAim(wrap_beam_aim(*degrees)?),
             Command::SetMotorPosition(MotorPosition::Moving) => return None,
             Command::SetMotorPosition(height) => Change::MicHeight(*height),
+            Command::SetBluetooth(on) => Change::Bluetooth(*on),
             _ => return None,
         })
     }
@@ -71,6 +74,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::MicVolume(value) => config.audio.mic_volume = *value,
         Change::BeamAim(degrees) => config.audio.beam_aim_deg = *degrees,
         Change::MicHeight(height) => config.device.mic_height = *height,
+        Change::Bluetooth(on) => config.bluetooth.enabled = *on,
     }
 }
 
@@ -93,7 +97,9 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         | Change::NrLevel(_)
         | Change::SpeakerVolume(_)
         | Change::MicVolume(_)
-        | Change::BeamAim(_) => {}
+        | Change::BeamAim(_)
+        // waved-bt owns the live switch (BluetoothState::bt_on).
+        | Change::Bluetooth(_) => {}
     }
 }
 
@@ -174,6 +180,23 @@ mod tests {
         apply_to_settings(&mut settings, &change);
         assert_eq!(config.device.mic_height, MotorPosition::Low);
         assert_eq!(settings.mic_height, MotorPosition::Low);
+        assert!(waved_config::validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn the_bluetooth_switch_is_kept_in_config_only() {
+        // waved-bt owns the live switch (`BluetoothState::bt_on`); the
+        // settings service only persists it for the next start.
+        let change = Change::from_command(&Command::SetBluetooth(false));
+        assert_eq!(change, Some(Change::Bluetooth(false)));
+        let mut config = WavedConfig::default();
+        let mut settings = SettingsState::default();
+        apply_to_config(&mut config, &change.unwrap());
+        apply_to_settings(&mut settings, &Change::Bluetooth(false));
+        assert!(!config.bluetooth.enabled);
+        assert_eq!(settings, SettingsState::default());
+        apply_to_config(&mut config, &Change::Bluetooth(true));
+        assert!(config.bluetooth.enabled);
         assert!(waved_config::validate_config(&config).is_ok());
     }
 
