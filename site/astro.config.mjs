@@ -14,6 +14,8 @@ const VALIDATOR_EXCLUDES = [];
 export default defineConfig({
 	site: SITE,
 	base: BASE,
+	// mermaid's bundle is large by nature; this is its chunk, not ours.
+	vite: { build: { chunkSizeWarningLimit: 2500 } },
 	integrations: [
 		// Must come before starlight() so it sees the Markdown first.
 		mermaid(),
@@ -25,6 +27,9 @@ export default defineConfig({
 			// Hand-written pages; synced pages carry their own editUrl.
 			editLink: { baseUrl: `${REPO_URL}/edit/${BRANCH}/site/` },
 			lastUpdated: false,
+			// src/content/docs/404.md is our 404 page. Starlight's own /404 route would
+			// collide with it (a build warning), so the docs route renders it instead.
+			disable404Route: true,
 			plugins: [starlightLinksValidator({ exclude: VALIDATOR_EXCLUDES })],
 			sidebar,
 		}),

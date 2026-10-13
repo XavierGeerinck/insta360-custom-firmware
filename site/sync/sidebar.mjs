@@ -18,7 +18,7 @@ export const sidebar = [
 			{ label: 'Device access & extraction', collapsed: true, items: group('research-access') },
 			{ label: 'Analysis reports', collapsed: true, items: group('research-analysis') },
 			{ label: 'Stock UI', collapsed: true, items: group('research-stock-ui') },
-			{ label: 'NPU research', collapsed: true, items: [{ autogenerate: { directory: 'research/npu' } }] },
+			{ label: 'NPU research', collapsed: true, items: [{ autogenerate: { directory: 'research/npu', collapsed: true } }] },
 		],
 	},
 	{ label: 'Development', items: ['dev/building', 'dev/testing', 'dev/structure', 'dev/contributing'] },

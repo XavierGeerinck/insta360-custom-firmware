@@ -18,11 +18,14 @@ const ASSETS = path.join(SITE_DIR, 'public/repo-assets');
 const SCREENS_OUT = path.join(SITE_DIR, 'src/assets/screens');
 const SCREENS_IN = path.join(REPO_ROOT, 'waved/crates/waved-ui/golden');
 
+// Expand first: a manifest entry that names a missing file throws here, before
+// anything below deletes the last good output.
+const pages = expandEntries(entries, REPO_ROOT);
+
 for (const dir of ['guides', 'reference', 'research']) fs.rmSync(path.join(CONTENT, dir), { recursive: true, force: true });
 fs.rmSync(ASSETS, { recursive: true, force: true });
 fs.rmSync(SCREENS_OUT, { recursive: true, force: true });
 
-const pages = expandEntries(entries, REPO_ROOT);
 const urlBySource = new Map(pages.map((p) => [p.source, `${BASE}/${p.slug}/`]));
 const warnings = [];
 
