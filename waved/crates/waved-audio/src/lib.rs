@@ -1,6 +1,7 @@
 pub mod aec;
 pub mod audio_config;
 pub mod beam;
+pub mod bt_audio;
 pub mod callbacks;
 pub mod capture;
 pub mod cushion;
