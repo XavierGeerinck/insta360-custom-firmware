@@ -1,6 +1,7 @@
 pub mod aec;
 pub mod audio_config;
 pub mod beam;
+pub mod bt_audio;
 pub mod callbacks;
 pub mod capture;
 pub mod cushion;
@@ -14,6 +15,7 @@ pub mod mic_check;
 pub mod playback;
 pub mod processed_frame;
 pub mod recording_mix;
+pub mod repeat_filter;
 pub mod spectrum;
 pub mod stats_collector;
 pub mod stereo_align;
@@ -554,7 +556,8 @@ impl AudioService {
     /// Publish `AudioState.host_listening` from this probe on every frame
     /// ("Computer is listening" on Home).
     /// Mix the far end of a call into recordings (`recording_mix`): `rx`
-    /// carries the host's playback periods, `channels` their interleaving.
+    /// carries the far end's periods (USB host + Bluetooth phone,
+    /// `PlaybackService::subscribe_far_end`), `channels` their interleaving.
     /// The far end is held back by the uplink's latency at the time of the
     /// call, so it lines up with the room (an NR change later shifts it by a
     /// few tens of ms, which a conversation does not notice).

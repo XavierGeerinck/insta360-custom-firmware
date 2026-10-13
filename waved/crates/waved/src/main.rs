@@ -330,6 +330,9 @@ async fn run_async(
 
         let mut hid_stats_handle: Option<Arc<waved_hid::stats::HidStats>> = None;
 
+        // I2: Bluetooth phone audio counters (`bt_audio` in the stats).
+        let mut bt_audio_stats_handle: Option<Arc<waved_audio::bt_audio::BtAudioStats>> = None;
+
         let (source, alignment) = if cfg.reference_enabled() {
             match tokio::task::block_in_place(|| {
                 open_retrying("ALSA dual stream", ALSA_OPEN_TRIES, ALSA_OPEN_RETRY, || {
@@ -498,6 +501,26 @@ async fn run_async(
                 tracing::info!("uac: disabled by config");
             }
 
+            // I2: Bluetooth phone audio on TDM-A (hw:0,0). Phone → speaker
+            // while BluetoothState::phone_audio, mixed with USB audio; the
+            // processed uplink → phone while call_audio.
+            let bt_cfg = cfg.bt.clone().unwrap_or_default();
+            if bt_cfg.enabled {
+                let bt_stats = waved_audio::bt_audio::BtAudioStats::new();
+                match waved_audio::bt_audio::alsa::spawn(
+                    bt_cfg,
+                    Arc::clone(&playback),
+                    audio_svc.subscribe_processed(),
+                    bus.bt.subscribe(),
+                    Arc::clone(&bt_stats),
+                ) {
+                    Ok(()) => bt_audio_stats_handle = Some(bt_stats),
+                    Err(e) => tracing::error!("bt: phone audio paths failed to start: {e}"),
+                }
+            } else {
+                tracing::info!("bt: phone audio disabled by config");
+            }
+
             tokio::spawn(test_tone_handler(Arc::clone(&playback)));
             tokio::spawn(file_play_handler(Arc::clone(&playback)));
             // Keep one Arc alive for process lifetime — the playback thread
@@ -603,6 +626,7 @@ async fn run_async(
             #[cfg(feature = "capture-alsa")]
             uac_stats_handle,
             hid_stats_handle,
+            bt_audio_stats_handle,
         ));
 
         let stats_c = Arc::clone(&capture_stats);

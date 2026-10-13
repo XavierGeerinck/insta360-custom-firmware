@@ -191,6 +191,19 @@ impl ProcessedAudioFrame {
             }
         }
     }
+
+    /// Interleaved S16 with the mono uplink on each of `channels`, whatever
+    /// the beam mode: what the Bluetooth module gets during a call
+    /// (`crate::bt_audio`).
+    pub fn mono_interleaved_i16(&self, channels: usize, out: &mut Vec<i16>) {
+        let channels = channels.max(1);
+        out.clear();
+        out.reserve(self.mic_mono_f32.len() * channels);
+        for &m in &self.mic_mono_f32 {
+            let s = to_uplink_i16(m);
+            out.extend(std::iter::repeat_n(s, channels));
+        }
+    }
 }
 
 /// Convert i16 → f32 scaled to [-1.0, 1.0]. Division by 32768.0 — not 32767 —
@@ -508,5 +521,19 @@ mod tests {
         let stereo = mono.with_stereo(vec![1.5, 0.0, -1.5], vec![-0.5, 0.5, 0.0]);
         stereo.uplink_interleaved_i16(&mut out);
         assert_eq!(out, vec![32_767, -16_383, 0, 16_383, -32_767, 0]);
+    }
+
+    #[test]
+    fn the_phone_gets_the_mono_uplink_on_every_channel_even_in_stereo() {
+        // A call is mono (HFP): the Stereo pair would leave half the image
+        // out if the module reads one slot.
+        let frame = AudioFrame::mic_only(vec![0; 3], 1, 48_000, 0);
+        let mono = ProcessedAudioFrame::from_raw(&frame, &[0, 16_384, -16_384], &[0, 0, 0])
+            .with_stereo(vec![1.5, 0.0, -1.5], vec![-0.5, 0.5, 0.0]);
+        let mut out = vec![7; 2];
+        mono.mono_interleaved_i16(2, &mut out);
+        assert_eq!(out, vec![0, 0, 16_383, 16_383, -16_383, -16_383]);
+        mono.mono_interleaved_i16(1, &mut out);
+        assert_eq!(out, vec![0, 16_383, -16_383]);
     }
 }

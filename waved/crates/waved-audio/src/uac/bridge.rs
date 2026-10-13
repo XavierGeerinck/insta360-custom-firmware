@@ -16,6 +16,7 @@ use alsa::{Direction, ValueOr};
 use tracing::{debug, info, warn};
 
 use crate::playback::PlaybackService;
+use crate::repeat_filter::RepeatFilter;
 use super::UacStats;
 
 #[derive(Debug, Clone)]
@@ -78,30 +79,6 @@ fn run_downstream(
         }
         // Either ALSA closed or open failed — back off and retry.
         std::thread::sleep(Duration::from_secs(1));
-    }
-}
-
-/// Keeps a failure that repeats on every retry from filling the log. While
-/// the host is attached but not playing, `f_uac2` fails each read with EIO,
-/// so the loop retries every 3 s for as long as the device stays idle.
-#[derive(Default)]
-struct RepeatFilter {
-    last: Option<String>,
-}
-
-impl RepeatFilter {
-    /// Whether `failure` differs from the one before it.
-    fn is_new(&mut self, failure: &str) -> bool {
-        if self.last.as_deref() == Some(failure) {
-            return false;
-        }
-        self.last = Some(failure.to_owned());
-        true
-    }
-
-    /// Forget the last failure; true if there was one.
-    fn clear(&mut self) -> bool {
-        self.last.take().is_some()
     }
 }
 
@@ -179,20 +156,3 @@ fn set_realtime_priority(prio: i32) {
 
 #[cfg(not(target_os = "linux"))]
 fn set_realtime_priority(_prio: i32) {}
-
-#[cfg(test)]
-mod tests {
-    use super::RepeatFilter;
-
-    #[test]
-    fn a_failure_that_repeats_is_reported_once_until_audio_flows_again() {
-        let mut failures = RepeatFilter::default();
-        assert!(failures.is_new("drain stopped: EIO"));
-        assert!(!failures.is_new("drain stopped: EIO"));
-        assert!(!failures.is_new("drain stopped: EIO"));
-        assert!(failures.is_new("open failed: ENODEV"));
-        assert!(failures.clear());
-        assert!(!failures.clear());
-        assert!(failures.is_new("drain stopped: EIO"));
-    }
-}

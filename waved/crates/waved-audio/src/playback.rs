@@ -4,6 +4,8 @@
 //!
 //! Architecture:
 //! - Caller submits audio via [`PlaybackService::play_batch`] (interleaved i16).
+//!   Bluetooth phone audio ([`PlaybackService::play_phone`]) and local
+//!   playback ([`PlaybackService::play_local`]) are mixed into the same period.
 //! - A dedicated std::thread at SCHED_FIFO drains the mpsc, writes to ALSA,
 //!   and pushes the same samples on a broadcast so capture can pair them with
 //!   mic frames.
@@ -53,6 +55,9 @@ pub enum PlaybackError {
     Invalid(String),
     #[error("playback thread stopped")]
     Stopped,
+    /// The queue is full; the period was not taken (the caller drops it).
+    #[error("playback queue full")]
+    Full,
 }
 
 #[derive(Debug, Default)]
@@ -86,6 +91,9 @@ pub struct PlaybackService {
     cmd_tx: mpsc::Sender<Vec<i16>>,
     /// Local playback (recordings), mixed with the host stream each period.
     local_tx: mpsc::Sender<Vec<i16>>,
+    /// Bluetooth phone audio (`crate::bt_audio`), mixed with the host stream
+    /// each period and part of the far end.
+    phone_tx: mpsc::Sender<Vec<i16>>,
     preset_tx: mpsc::Sender<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     far_tx: broadcast::Sender<Vec<i16>>,
@@ -119,6 +127,24 @@ impl PlaybackService {
         self.local_tx.max_capacity() - self.local_tx.capacity()
     }
 
+    /// Submit one period of Bluetooth phone audio (`crate::bt_audio`). It is
+    /// mixed with the host's period (USB and Bluetooth play at once), goes
+    /// through the speaker DSP, the volume and the echo canceller's
+    /// reference, and is part of the far end recordings carry.
+    /// `Err(Full)` when the queue is full, `Err(Stopped)` once the playback
+    /// loop is gone.
+    pub fn play_phone(&self, samples: Vec<i16>) -> Result<(), PlaybackError> {
+        self.phone_tx.try_send(samples).map_err(|e| match e {
+            mpsc::error::TrySendError::Full(_) => PlaybackError::Full,
+            mpsc::error::TrySendError::Closed(_) => PlaybackError::Stopped,
+        })
+    }
+
+    /// Phone periods queued and not played yet.
+    pub fn phone_queue_depth(&self) -> usize {
+        self.phone_tx.max_capacity() - self.phone_tx.capacity()
+    }
+
     /// Submit a preset switch. Drops silently if the playback thread has exited.
     pub fn set_preset(&self, preset: crate::playback::preset::PlaybackPreset) {
         let _ = self.preset_tx.try_send(preset);
@@ -130,9 +156,10 @@ impl PlaybackService {
         self.ref_tx.subscribe()
     }
 
-    /// Subscribe to the far end: every period the host sent (silence when it
-    /// sent none), as sent, before local playback, the speaker DSP and the
-    /// volume. Recordings mix it in (`crate::recording_mix`).
+    /// Subscribe to the far end: every period the host and the phone sent,
+    /// mixed (silence when neither sent one), as sent, before local playback,
+    /// the speaker DSP and the volume. Recordings mix it in
+    /// (`crate::recording_mix`).
     pub fn subscribe_far_end(&self) -> broadcast::Receiver<Vec<i16>> {
         self.far_tx.subscribe()
     }
@@ -164,6 +191,7 @@ pub fn run_playback_loop<S: PlaybackSink>(
     mut sink: S,
     mut cmd_rx: mpsc::Receiver<Vec<i16>>,
     mut local_rx: mpsc::Receiver<Vec<i16>>,
+    mut phone_rx: mpsc::Receiver<Vec<i16>>,
     mut preset_rx: mpsc::Receiver<crate::playback::preset::PlaybackPreset>,
     ref_tx: broadcast::Sender<Vec<i16>>,
     far_tx: broadcast::Sender<Vec<i16>>,
@@ -224,7 +252,17 @@ pub fn run_playback_loop<S: PlaybackSink>(
             batch.into_iter().take(period_samples).collect()
         };
 
-        // The far end as the host sent it, for recordings.
+        // Bluetooth phone audio joins the host's period: the two play at
+        // once (no source takes precedence; macOS keeps the USB stream open
+        // with zeros, which would lock the phone out). Same saturating add as
+        // local playback, so both are covered by the DSP, the volume and the
+        // AEC reference, and both are the far end.
+        if let Ok(phone) = phone_rx.try_recv() {
+            mix_into(&mut normalized, &phone);
+            is_silence = false;
+        }
+
+        // The far end (host + phone) as sent, for recordings.
         let _ = far_tx.send(normalized.clone());
 
         // Local playback rides on the same period, before the DSP chain, so
@@ -405,6 +443,7 @@ mod alsa_impl {
         let sink = AlsaPlaybackSink::open(&cfg)?;
         let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(64);
         let (local_tx, local_rx) = mpsc::channel::<Vec<i16>>(8);
+        let (phone_tx, phone_rx) = mpsc::channel::<Vec<i16>>(16);
         let (preset_tx, preset_rx) = mpsc::channel::<crate::playback::preset::PlaybackPreset>(8);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(32);
         let (far_tx, _) = broadcast::channel::<Vec<i16>>(32);
@@ -423,7 +462,7 @@ mod alsa_impl {
             .spawn(move || {
                 super::set_realtime_priority();
                 run_playback_loop(
-                    sink, cmd_rx, local_rx, preset_rx, ref_tx_thread, far_tx_thread, stats_thread,
+                    sink, cmd_rx, local_rx, phone_rx, preset_rx, ref_tx_thread, far_tx_thread, stats_thread,
                     period_samples, sample_rate, initial_preset, dsp_metrics_thread,
                     state_rx,
                 );
@@ -433,6 +472,7 @@ mod alsa_impl {
         Ok(PlaybackService {
             cmd_tx,
             local_tx,
+            phone_tx,
             preset_tx,
             ref_tx,
             far_tx,
@@ -512,6 +552,19 @@ mod tests {
         period_samples: usize,
         channels: u32,
     ) -> MockRun {
+        run_with_mock_phone(stop_after, fail_once, prefill, local_prefill, vec![], period_samples, channels)
+    }
+
+    /// `run_with_mock` with periods queued from the phone (Bluetooth) too.
+    fn run_with_mock_phone(
+        stop_after: usize,
+        fail_once: bool,
+        prefill: Vec<Vec<i16>>,
+        local_prefill: Vec<Vec<i16>>,
+        phone_prefill: Vec<Vec<i16>>,
+        period_samples: usize,
+        channels: u32,
+    ) -> MockRun {
         let written = Arc::new(Mutex::new(Vec::new()));
         let sink = MockSink {
             channels,
@@ -526,6 +579,10 @@ mod tests {
         let (local_tx, local_rx) = mpsc::channel::<Vec<i16>>(8);
         for b in local_prefill {
             local_tx.try_send(b).unwrap();
+        }
+        let (phone_tx, phone_rx) = mpsc::channel::<Vec<i16>>(8);
+        for b in phone_prefill {
+            phone_tx.try_send(b).unwrap();
         }
         let (preset_tx, preset_rx) = mpsc::channel::<PlaybackPreset>(8);
         // Drop preset_tx immediately so no preset switches happen during the test.
@@ -543,7 +600,7 @@ mod tests {
         });
         let handle = std::thread::spawn(move || {
             run_playback_loop(
-                sink, cmd_rx, local_rx, preset_rx, ref_tx, far_tx, stats_thread,
+                sink, cmd_rx, local_rx, phone_rx, preset_rx, ref_tx, far_tx, stats_thread,
                 period_samples, 48_000, PlaybackPreset::Voice,
                 Arc::new(DspMetrics::default()),
                 state_rx,
@@ -554,6 +611,7 @@ mod tests {
         handle.join().unwrap();
         drop(cmd_tx);
         drop(local_tx);
+        drop(phone_tx);
 
         let mut ref_batches = Vec::new();
         while let Ok(b) = ref_rx.try_recv() {
@@ -627,9 +685,11 @@ mod tests {
         let (local_tx, _local_rx) = mpsc::channel::<Vec<i16>>(4);
         let (ref_tx, _) = broadcast::channel::<Vec<i16>>(2);
         let (far_tx, _) = broadcast::channel::<Vec<i16>>(2);
+        let (phone_tx, _phone_rx) = mpsc::channel::<Vec<i16>>(2);
         let svc = PlaybackService {
             cmd_tx: cmd_tx.clone(),
             local_tx: local_tx.clone(),
+            phone_tx,
             preset_tx,
             ref_tx,
             far_tx,
@@ -649,6 +709,79 @@ mod tests {
         assert_eq!(svc.local_queue_depth(), 0);
         svc.play_local(vec![0; 4]).unwrap();
         assert_eq!(svc.local_queue_depth(), 1);
+        assert_eq!(svc.phone_queue_depth(), 0);
+        svc.play_phone(vec![0; 4]).unwrap();
+        assert_eq!(svc.phone_queue_depth(), 1);
+    }
+
+    /// A service whose loop is gone (or never ran): only the senders.
+    fn service_with_phone_queue(capacity: usize) -> (PlaybackService, mpsc::Receiver<Vec<i16>>) {
+        let (cmd_tx, _) = mpsc::channel::<Vec<i16>>(2);
+        let (local_tx, _) = mpsc::channel::<Vec<i16>>(2);
+        let (phone_tx, phone_rx) = mpsc::channel::<Vec<i16>>(capacity);
+        let (preset_tx, _) = mpsc::channel::<PlaybackPreset>(2);
+        let (ref_tx, _) = broadcast::channel::<Vec<i16>>(2);
+        let (far_tx, _) = broadcast::channel::<Vec<i16>>(2);
+        let svc = PlaybackService {
+            cmd_tx,
+            local_tx,
+            phone_tx,
+            preset_tx,
+            ref_tx,
+            far_tx,
+            channels: 2,
+            period_frames: 2,
+            sample_rate: 48_000,
+            stats: Arc::new(PlaybackStats::default()),
+            dsp_metrics: Arc::new(DspMetrics::default()),
+        };
+        (svc, phone_rx)
+    }
+
+    #[test]
+    fn a_full_phone_queue_is_full_and_a_gone_loop_is_stopped() {
+        // The Bluetooth bridge counts a full queue as a drop and stops only
+        // when the playback loop is gone, so the two must differ.
+        let (svc, phone_rx) = service_with_phone_queue(1);
+        svc.play_phone(vec![0; 4]).unwrap();
+        assert!(matches!(svc.play_phone(vec![0; 4]), Err(PlaybackError::Full)));
+        drop(phone_rx);
+        assert!(matches!(svc.play_phone(vec![0; 4]), Err(PlaybackError::Stopped)));
+    }
+
+    #[test]
+    fn phone_audio_mixes_with_the_host_and_is_part_of_the_far_end() {
+        // USB and Bluetooth play at once (I2-1): one period carries both,
+        // and recordings get both as the far end, still without local
+        // playback (Files, tones).
+        let host = vec![1_000i16, -1_000, 2_000, -2_000, 3_000, -3_000, 4_000, -4_000];
+        let phone = vec![100i16, 100, 200, 200, 30_000, 30_000, -300, -300];
+        let (_, _, _, far) = run_with_mock_phone(
+            2, false, vec![host.clone()], vec![vec![500; 8]], vec![phone.clone()], 8, 2,
+        );
+        let mut expected = host.clone();
+        mix_into(&mut expected, &phone);
+        assert_eq!(far[0], expected);
+        assert!(far[1].iter().all(|&s| s == 0), "nothing queued for the next period");
+    }
+
+    #[test]
+    fn phone_audio_plays_without_the_host_and_reaches_the_reference() {
+        // Periods longer than the limiter's 96-frame lookahead, which holds
+        // the first frames back as silence.
+        let phone: Vec<i16> = (0..512).map(|i| if i % 4 < 2 { 8_000 } else { -8_000 }).collect();
+        let periods = vec![phone.clone(); 4];
+        let (batches, stats, ref_batches, far) =
+            run_with_mock_phone(4, false, vec![], vec![], periods, 512, 2);
+        assert_eq!(batches.len(), 4);
+        assert_eq!(far[0], phone, "the phone alone is the far end");
+        assert!(
+            stats.frames_written.load(Ordering::Relaxed) > 0,
+            "phone audio counts as written, not silence"
+        );
+        assert_eq!(stats.frames_silence.load(Ordering::Relaxed), 0);
+        let energy: i64 = ref_batches.iter().flatten().map(|&s| i64::from(s).abs()).sum();
+        assert!(energy > 0, "the echo canceller's reference carries the phone");
     }
 
     #[test]

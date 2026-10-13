@@ -326,6 +326,11 @@ Rules for the parallel milestones:
   - Paired list; connect, disconnect, forget.
   - Name from `device.name`.
 - [ ] **I2 Audio routing** (L) — A2DP/HFP into the pipeline, with the AEC reference tap.
+  - Built on the host 2026-10-13 (`waved-audio` `bt_audio`): `0xB2` bit 1 plays the phone
+    through the speaker chain, mixed with USB audio, into the AEC reference and recordings'
+    far end; bit 2 sends the processed uplink to the phone. `bt_audio` in the audio stats.
+  - Ships after the device pass: checklist in
+    `waved/docs/superpowers/plans/2026-10-13-m3-i2-bt-audio.md`.
 - [ ] **I3 Calls** (M)
   - Incoming-call screen with Answer and Decline.
   - HID hook-switch to the computer.
