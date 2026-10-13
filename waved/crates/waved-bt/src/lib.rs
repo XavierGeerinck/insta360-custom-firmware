@@ -202,7 +202,7 @@ impl Core {
         let mut out = self.control.command(command, now_ms, unix_time, s);
         match command {
             // Stock's call buttons act on the screen at once (`call`).
-            BusCommand::BtAnswerCall if !out.frames.is_empty() => out.changed |= self.calls.answered(s),
+            BusCommand::BtAnswerCall if !out.frames.is_empty() => out.changed |= self.calls.answered(now_ms, s),
             BusCommand::BtDeclineCall if !out.frames.is_empty() => {
                 out.changed |= self.calls.hung_up(now_ms, s)
             }
