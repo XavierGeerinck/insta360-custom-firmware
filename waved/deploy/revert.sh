@@ -1,15 +1,21 @@
 #!/bin/bash
-set -e
+# Put a Wave back on its stock software: remove everything deploy/install.sh
+# and over-the-air updates put on /data. The system partition was never
+# changed, so after a reboot the stock app runs again. Deeper paths back
+# (stock updater, raw restore) are in docs/UPDATES.md, "Paths back".
+set -euo pipefail
+UPPER=/data/overlay/upper
 
-echo "=== Reverting to stock firmware ==="
-adb shell "rm -rf /data/overlay/upper/etc/init.d/S60waved"
-adb shell "rm -rf /data/overlay/upper/etc/init.d/S60pspapp_daemon"
-adb shell "rm -rf /data/overlay/upper/usr/lib/libapplogrs.so"
-# Old and half-written copies an over-the-air update kept: dot names, so rcS's
-# S??* glob never runs them (docs/UPDATES.md).
-adb shell "rm -f /data/overlay/upper/etc/init.d/.S60waved.prev /data/overlay/upper/etc/init.d/.S60waved.new"
-adb shell "rm -f /data/overlay/upper/etc/init.d/.S03splash.prev /data/overlay/upper/etc/init.d/.S03splash.new"
-adb shell "rm -f /data/overlay/upper/etc/.rsyslog.conf.prev /data/overlay/upper/etc/.rsyslog.conf.new"
-adb shell "rm -rf /data/waved"
-echo "=== Done! Reboot to restore stock ==="
-echo "Run: adb reboot"
+[ "$(adb get-state 2>/dev/null || true)" = "device" ] || { echo "ERROR: no Wave found on adb." >&2; exit 1; }
+
+echo "=== Removing waved ==="
+adb shell "rm -f \
+${UPPER}/etc/init.d/S60waved ${UPPER}/etc/init.d/S60pspapp_daemon \
+${UPPER}/etc/init.d/S03splash ${UPPER}/etc/init.d/S89usbgadget \
+${UPPER}/etc/rsyslog.conf ${UPPER}/usr/lib/libapplogrs.so \
+${UPPER}/etc/init.d/.S60waved.prev ${UPPER}/etc/init.d/.S60waved.new \
+${UPPER}/etc/init.d/.S03splash.prev ${UPPER}/etc/init.d/.S03splash.new \
+${UPPER}/etc/.rsyslog.conf.prev ${UPPER}/etc/.rsyslog.conf.new; \
+rm -rf /data/waved"
+echo "=== Done. Reboot the Wave to start the stock app: adb reboot ==="
+echo "After the reboot ADB is off again, as on stock. To turn it on: sudo python3 waved/scripts/enable_adb.py"

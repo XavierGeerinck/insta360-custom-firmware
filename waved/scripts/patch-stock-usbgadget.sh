@@ -5,16 +5,21 @@
 #      Vendor + Telephony_V4 + Consumer report descriptor, so SP#7(d')
 #      (HID Consumer/Telephony control) and future SP#7(a) (Vendor channel)
 #      reach /dev/hidg0.
+#   3. adbd enabled at boot. Stock leaves it commented out and relies on
+#      pspapp to turn ADB on later; under waved pspapp never runs
+#      (docs/GUIDE_DEVICE_ACCESS.md, "Making ADB Survive a pspapp Failure").
 #
 # Idempotent: re-running adds nothing after the first patch. Backs up
-# the original to /data/waved/S89usbgadget.bak.<ts> on first run: never into
-# /etc/init.d, where rcS runs every S??* at boot (docs/AUDIO_HARDWARE.md).
+# the original to $BACKUP_DIR/S89usbgadget.bak.<ts> (default /data/waved) on
+# first run: never into /etc/init.d, where rcS runs every S??* at boot
+# (docs/AUDIO_HARDWARE.md). INIT and BACKUP_DIR can be overridden for tests.
 #
 # After patching, reboot:   adb reboot
 
 set -euo pipefail
 
-INIT=/etc/init.d/S89usbgadget
+INIT="${INIT:-/etc/init.d/S89usbgadget}"
+BACKUP_DIR="${BACKUP_DIR:-/data/waved}"
 
 if [ ! -f "$INIT" ]; then
     echo "FATAL: $INIT not found — wrong device or stock firmware moved it" >&2
@@ -27,14 +32,16 @@ ALREADY_CVOL=0
 grep -q "echo -16384 > functions/uac2.0/p_volume_min" "$INIT" && ALREADY_VOL=1
 grep -q "echo -10240 > functions/uac2.0/c_volume_min" "$INIT" && ALREADY_CVOL=1
 grep -q "mkdir -p functions/hid.0" "$INIT" && ALREADY_HID=1
+ALREADY_ADB=1
+grep -q '^[[:space:]]*#[[:space:]]*adbd_enable[[:space:]]*$' "$INIT" && ALREADY_ADB=0
 
-if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ] && [ "$ALREADY_CVOL" = "1" ]; then
-    echo "already patched (p_volume + c_volume + hid.0)"
+if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ] && [ "$ALREADY_CVOL" = "1" ] && [ "$ALREADY_ADB" = "1" ]; then
+    echo "already patched (p_volume + c_volume + hid.0 + adb at boot)"
     exit 0
 fi
 
-mkdir -p /data/waved
-cp "$INIT" "/data/waved/S89usbgadget.bak.$(date +%s)"
+mkdir -p "$BACKUP_DIR"
+cp "$INIT" "$BACKUP_DIR/S89usbgadget.bak.$(date +%s)"
 
 if [ "$ALREADY_VOL" = "0" ]; then
     sed -i \
@@ -56,6 +63,13 @@ if [ "$ALREADY_CVOL" = "0" ]; then
         -e 's|echo 1 > functions/uac2.0/c_volume_res|echo 256 > functions/uac2.0/c_volume_res|' \
         "$INIT"
     echo "patched UAC2 c_volume range (speaker, host->gadget)"
+fi
+
+# Stock start_usbgadget() has `#adbd_enable` and `# adbd_enable` in its two
+# boot branches. Uncomment both so ADB comes up at every boot without pspapp.
+if [ "$ALREADY_ADB" = "0" ]; then
+    sed -i -e 's/^\([[:space:]]*\)#[[:space:]]*adbd_enable[[:space:]]*$/\1adbd_enable/' "$INIT"
+    echo "patched adbd at boot"
 fi
 
 if [ "$ALREADY_HID" = "0" ]; then
