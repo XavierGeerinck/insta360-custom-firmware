@@ -776,6 +776,28 @@ async fn run_async(
         tokio::spawn(async move { sim_wifi.run(sim_cmds).await });
     }
 
+    // USB storage (G1, docs/USB_STORAGE.md). First take back a drive that a
+    // waved which exited while exported left with the computer, before the
+    // meeting service reconciles the recordings; then serve Start/Stop.
+    #[cfg(not(feature = "simulate"))]
+    {
+        let mut usb_storage = waved_system::usb_storage::UsbStorage::device(
+            Arc::clone(&bus.usb_storage),
+            bus.events.clone(),
+            bus.commands.clone(),
+        );
+        let reclaimed = tokio::task::block_in_place(|| usb_storage.reclaim_at_start());
+        if reclaimed != waved_system::usb_storage::Reclaim::Nothing {
+            warn!("usb storage at start-up: {reclaimed:?}");
+        }
+        let usb_cmd_rx = bus.commands.subscribe();
+        let usb_meeting_rx = bus.meeting.subscribe();
+        std::thread::Builder::new()
+            .name("usb-storage".into())
+            .spawn(move || usb_storage.run(usb_cmd_rx, usb_meeting_rx))
+            .expect("spawn usb-storage");
+    }
+
     // Meeting service. Its task ends once a Shutdown finalized the take,
     // which a power off waits for.
     let mut meeting_task: Option<tokio::task::JoinHandle<()>> = None;
@@ -798,7 +820,9 @@ async fn run_async(
                     settings: bus.settings.subscribe(),
                     audio: bus.audio.subscribe(),
                 })
-                .with_files_publisher(Arc::clone(&bus.files));
+                .with_files_publisher(Arc::clone(&bus.files))
+                // No recording or upload while the computer has the volume (G1).
+                .with_usb_storage(bus.usb_storage.subscribe());
             let meeting_cmd_rx = bus.commands.subscribe();
             let wifi_rx = bus.wifi.subscribe();
             meeting_task = Some(tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await }));
