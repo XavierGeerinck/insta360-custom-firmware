@@ -28,6 +28,9 @@ concurrency:
 
 jobs:
   build:
+    # Development happens in a private repository that also has this file;
+    # only the public one builds and deploys the site.
+    if: github.repository == 'XavierGeerinck/insta360-custom-firmware'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -51,7 +54,7 @@ jobs:
 
   deploy:
     # Only main publishes; a manual run from another branch builds but never deploys.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.repository == 'XavierGeerinck/insta360-custom-firmware' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
