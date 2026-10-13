@@ -39,7 +39,7 @@ its signature. The first build that carries the key has to reach the Wave the ol
 (adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
 
 Wave installs a package only if the `S60waved` that will run at the new version's first
-boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-starts)):
+boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):
 the package's own when it carries one, otherwise the one on the Wave. A Wave whose
 `/etc/init.d/S60waved` came from `main`, or that got only the binary over adb, has none and
 refuses with "Wave can't go back if this update fails". Pack with
@@ -172,7 +172,7 @@ version, and the next install replaces them anyway (step 2 below). After an inst
 holds the new binary and `.waved.prev`, which is the old binary's own inode (a hard link,
 no copy), so the peak is three binaries: the live one, `.waved.prev` and the staged one.
 
-## Install and fall-back ("trial starts")
+## Install and fall-back ("trial boots")
 
 `FsInstaller` (`install.rs`), in this order so a power cut at any point leaves a Wave that
 starts:
@@ -184,7 +184,7 @@ starts:
 2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
    fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
    a save during the trial cannot reach it).
-3. Write `/data/waved/update/trial` (tmp file, fsync, rename) and clear `update/starts`.
+3. Write `/data/waved/update/trial` (tmp file, fsync, rename) and clear the counts.
 4. Replace the deploy files: copy to `.<name>.new` in the same directory, fsync, rename.
 5. Rename the staged binary over `/data/waved/waved`.
 6. `sync`. The service then reboots.
@@ -215,14 +215,19 @@ one saved, and its `.bak` too, and runs on defaults (first-run screen, PIN off, 
 and uploads gone). **Settings changed during a trial are lost on a rollback**: the old
 waved gets the settings it had when the update was installed.
 
-While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) appends a line to
-`update/starts` before every start. On the **fourth** start it moves each `restore` file
-back from its `.<name>.prev` (`${path%/*}/.${path##*/}.prev`), deletes each `remove` file,
-moves `trial` to `update/rolled-back` and starts the old waved. Three starts, because
-`S60waved` SIGTERMs the first waved after every boot at 5 s (display workaround): one start
-always "fails".
+While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) counts **boots**:
+the first start of a boot writes `/tmp/waved-trial-boot` and appends a line to
+`update/boots`; every start appends to `/tmp/waved-trial-starts` (`/tmp` is a tmpfs, empty
+after each boot). At the start of the **third** boot (`MAX_TRIAL_BOOTS` = 2), or after more
+than 10 starts in one boot (`MAX_TRIAL_STARTS_PER_BOOT`, a crash loop), it moves each
+`restore` file back from its `.<name>.prev` (`${path%/*}/.${path##*/}.prev`), deletes each
+`remove` file, moves `trial` to `update/rolled-back` and starts the old waved. Boots, not
+starts, because one boot can take several starts: `S60waved` SIGTERMs the first waved after
+every boot at 5 s (display workaround), and on 2026-10-13 the speaker (`hw:0,1`) was busy for
+the first ~10 s of a boot, so waved exited and restarted three more times (5 starts in one
+boot; a start count of 3 would have rolled back a good update on its first boot).
 
-The new waved **commits** (deletes `trial`, `starts` and `.config.toml.prev`) once it has
+The new waved **commits** (deletes `trial`, the counts and `.config.toml.prev`) once it has
 run 60 s with `AudioState::capture_healthy` true; until then it starts no other update.
 The old waved finds `rolled-back` at its start, reports "Version 0.10.0 didn't start, so
 Wave went back" and adds the version to `update/skip`, which automatic checks pass over; a
@@ -275,7 +280,7 @@ Back (`update_restart_needed` golden).
 | U3 | Unsigned index, signed package | A hostile server can waste a download. |
 | U4 | Version from the binary; downgrades only by the device's own switch | Every release must bump the workspace version. |
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
-| U6 | File-level fall-back in `S60waved`, 3 starts, commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after three power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back after three reboots. |
+| U6 | File-level fall-back in `S60waved`, 2 boots (or 10 starts in one boot), commit after 60 s with capture healthy | A binary that hangs without exiting is rolled back only after two power cycles. A Wave whose microphones fail for unrelated reasons never commits and rolls back on the third boot. |
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
 | U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |

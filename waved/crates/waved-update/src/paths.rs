@@ -50,14 +50,29 @@ impl Paths {
     }
 
     /// Present from just before the new binary is in place until it reports
-    /// healthy. `S60waved` reads it (docs/UPDATES.md, "Trial starts").
+    /// healthy. `S60waved` reads it (docs/UPDATES.md, "Install and fall-back").
     pub fn trial(&self) -> PathBuf {
         self.update_dir().join("trial")
     }
 
-    /// One line per start of a version on trial, written by `S60waved`.
-    pub fn starts(&self) -> PathBuf {
-        self.update_dir().join("starts")
+    /// One line per boot of a version on trial, written by `S60waved`.
+    pub fn boots(&self) -> PathBuf {
+        self.update_dir().join("boots")
+    }
+
+    /// Emptied at every boot (a tmpfs): the guard's per-boot bookkeeping.
+    pub fn run_dir(&self) -> PathBuf {
+        self.at("/tmp")
+    }
+
+    /// Present once this boot has been counted.
+    pub fn boot_mark(&self) -> PathBuf {
+        self.run_dir().join("waved-trial-boot")
+    }
+
+    /// One line per start of the version on trial during this boot.
+    pub fn boot_starts(&self) -> PathBuf {
+        self.run_dir().join("waved-trial-starts")
     }
 
     /// The trial file, moved here by `S60waved` when it went back.

@@ -2,21 +2,36 @@
 
 WAVED_DIR="${WAVED_DIR:-/data/waved}"
 UPDATE_DIR="$WAVED_DIR/update"
-MAX_TRIAL_STARTS=3
+# Emptied at every boot (tmpfs): the per-boot bookkeeping lives here.
+RUN_DIR="${WAVED_RUN_DIR:-/tmp}"
+MAX_TRIAL_BOOTS=2
+MAX_TRIAL_STARTS_PER_BOOT=10
 
 # Update fall-back (docs/UPDATES.md, "Install and fall-back"). While
 # update/trial exists, the version an update installed has not reported
-# healthy yet. Count every start; on the fourth, put each "restore" file back
-# from its old copy, delete each "remove" file, and leave update/rolled-back
-# for the old waved to report. Without a trial file this does nothing.
+# healthy yet. Count boots, not starts: one boot can take several (the first
+# waved is killed after 5 s below, and the speaker can be busy for the first
+# seconds of a boot). Go back at the start of the third boot, or after more
+# than MAX_TRIAL_STARTS_PER_BOOT starts in one boot (a crash loop): put each
+# "restore" file back from its old copy, delete each "remove" file, and leave
+# update/rolled-back for the old waved to report. Without a trial file this
+# does nothing.
 # The old copy of /dir/name is /dir/.name.prev: rcS runs every
 # /etc/init.d/S??* at boot, so a copy must never match that glob.
 update_guard() {
     [ -f "$UPDATE_DIR/trial" ] || return 0
-    echo start >> "$UPDATE_DIR/starts"
-    starts=$(($(wc -l < "$UPDATE_DIR/starts")))
-    [ "$starts" -le "$MAX_TRIAL_STARTS" ] && return 0
-    echo "update not healthy after $MAX_TRIAL_STARTS starts, going back" >> "$WAVED_DIR/waved.log"
+    mkdir -p "$RUN_DIR"
+    if [ ! -f "$RUN_DIR/waved-trial-boot" ]; then
+        : > "$RUN_DIR/waved-trial-boot"
+        echo boot >> "$UPDATE_DIR/boots"
+    fi
+    echo start >> "$RUN_DIR/waved-trial-starts"
+    boots=$(($(wc -l < "$UPDATE_DIR/boots")))
+    starts=$(($(wc -l < "$RUN_DIR/waved-trial-starts")))
+    if [ "$boots" -le "$MAX_TRIAL_BOOTS" ] && [ "$starts" -le "$MAX_TRIAL_STARTS_PER_BOOT" ]; then
+        return 0
+    fi
+    echo "update not healthy (boot $boots, start $starts of this boot), going back" >> "$WAVED_DIR/waved.log"
     while read -r action path; do
         prev="${path%/*}/.${path##*/}.prev"
         case "$action" in
@@ -25,7 +40,7 @@ update_guard() {
         esac
     done < "$UPDATE_DIR/trial"
     mv -f "$UPDATE_DIR/trial" "$UPDATE_DIR/rolled-back"
-    rm -f "$UPDATE_DIR/starts"
+    rm -f "$UPDATE_DIR/boots" "$RUN_DIR/waved-trial-boot" "$RUN_DIR/waved-trial-starts"
     sync
 }
 

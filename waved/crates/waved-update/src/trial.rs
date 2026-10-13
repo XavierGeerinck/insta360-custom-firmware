@@ -1,4 +1,4 @@
-//! Trial starts and the fall-back to the previous version (H1).
+//! Trial boots and the fall-back to the previous version (H1).
 //!
 //! The installer writes `update/trial` just before it renames the new binary
 //! into place. While it exists, `deploy/S60waved` appends a line to
@@ -27,10 +27,14 @@ use crate::format::Target;
 use crate::paths::Paths;
 use crate::version::Version;
 
-/// Starts a version on trial gets before `S60waved` goes back. The first
-/// start after a boot is always killed after 5 s (display workaround), so
-/// three leaves two real tries.
-pub const MAX_TRIAL_STARTS: u32 = 3;
+/// Boots a version on trial gets to report healthy; `S60waved` goes back at
+/// the start of the next one. Boots, not starts: one boot can take several
+/// starts (the first is always killed after 5 s as a display workaround, and
+/// the speaker can be busy for the first seconds; seen 2026-10-13).
+pub const MAX_TRIAL_BOOTS: u32 = 2;
+
+/// Starts within one boot before `S60waved` goes back: a crash loop.
+pub const MAX_TRIAL_STARTS_PER_BOOT: u32 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trial {
@@ -100,10 +104,16 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
 
-/// Start a trial: a fresh start count, then the trial file.
+/// Start a trial: fresh counts, then the trial file.
 pub fn begin(paths: &Paths, trial: &Trial) -> io::Result<()> {
-    remove_if_present(&paths.starts())?;
+    clear_counts(paths)?;
     write_atomic(&paths.trial(), trial.to_text().as_bytes())
+}
+
+fn clear_counts(paths: &Paths) -> io::Result<()> {
+    remove_if_present(&paths.boots())?;
+    remove_if_present(&paths.boot_mark())?;
+    remove_if_present(&paths.boot_starts())
 }
 
 /// The new version is healthy: stop counting. The `.prev` copies stay as the
@@ -112,13 +122,13 @@ pub fn begin(paths: &Paths, trial: &Trial) -> io::Result<()> {
 /// changed since.
 pub fn commit(paths: &Paths) -> io::Result<()> {
     remove_if_present(&paths.trial())?;
-    remove_if_present(&paths.starts())?;
+    clear_counts(paths)?;
     remove_if_present(&Paths::prev(&paths.config()))
 }
 
-/// Starts counted so far for the version on trial.
-pub fn starts(paths: &Paths) -> u32 {
-    fs::read_to_string(paths.starts())
+/// Boots counted so far for the version on trial.
+pub fn boots(paths: &Paths) -> u32 {
+    fs::read_to_string(paths.boots())
         .map(|text| text.lines().count() as u32)
         .unwrap_or(0)
 }
@@ -288,6 +298,11 @@ mod tests {
             fs::read_to_string(self.paths.target(target)).ok()
         }
 
+        /// A power cycle: `/tmp` is a tmpfs and comes back empty.
+        fn reboot(&self) {
+            let _ = fs::remove_dir_all(self.paths.run_dir());
+        }
+
         fn settings(&self) -> Option<String> {
             fs::read_to_string(self.paths.config()).ok()
         }
@@ -299,6 +314,7 @@ mod tests {
                 .arg(&script)
                 .arg("guard")
                 .env("WAVED_DIR", self.paths.waved_dir())
+                .env("WAVED_RUN_DIR", self.paths.run_dir())
                 .output()
                 .unwrap();
             assert!(
@@ -371,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn the_guard_goes_back_on_the_fourth_start_without_a_commit() {
+    fn the_guard_goes_back_on_the_third_boot_without_a_commit() {
         let (device, _trial) = Device::mid_trial();
         let init_d = device.paths.target(Target::S60waved);
         let init_d = init_d.parent().unwrap().to_path_buf();
@@ -382,10 +398,16 @@ mod tests {
             [".S03splash.prev", ".S60waved.prev", "S03splash", "S60waved"]
         );
         assert!(device.paths.waved_dir().join(".waved.prev").exists());
-        for start in 1..=MAX_TRIAL_STARTS {
-            device.guard();
-            assert_eq!(starts(&device.paths), start);
+        // Two boots with a few starts each (the speaker can be busy for the
+        // first seconds of a boot, and the first start is always killed
+        // after 5 s): still the new version.
+        for boot in 1..=MAX_TRIAL_BOOTS {
+            for _ in 0..3 {
+                device.guard();
+            }
+            assert_eq!(boots(&device.paths), boot);
             assert_eq!(device.read(Target::Waved).as_deref(), Some("new waved"));
+            device.reboot();
         }
         device.guard();
         assert_eq!(device.read(Target::Waved).as_deref(), Some("old waved"));
@@ -406,7 +428,7 @@ mod tests {
             "the added file is gone"
         );
         assert!(pending(&device.paths).is_none());
-        assert_eq!(starts(&device.paths), 0);
+        assert_eq!(boots(&device.paths), 0);
 
         // The old waved finds out at its start and reports it once.
         match check_at_start(&device.paths, OLD).unwrap() {
@@ -420,6 +442,35 @@ mod tests {
     }
 
     #[test]
+    fn a_boot_with_many_starts_keeps_the_new_version() {
+        let (device, _trial) = Device::mid_trial();
+        for _ in 0..MAX_TRIAL_STARTS_PER_BOOT {
+            device.guard();
+        }
+        assert_eq!(boots(&device.paths), 1);
+        assert_eq!(device.read(Target::Waved).as_deref(), Some("new waved"));
+    }
+
+    #[test]
+    fn a_crash_loop_goes_back_within_the_boot() {
+        let (device, _trial) = Device::mid_trial();
+        for _ in 0..MAX_TRIAL_STARTS_PER_BOOT {
+            device.guard();
+        }
+        device.guard();
+        assert_eq!(device.read(Target::Waved).as_deref(), Some("old waved"));
+        assert!(pending(&device.paths).is_none());
+    }
+
+    #[test]
+    fn the_guard_limits_match_the_init_script() {
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/S60waved");
+        let text = fs::read_to_string(script).unwrap();
+        assert!(text.contains(&format!("MAX_TRIAL_BOOTS={MAX_TRIAL_BOOTS}\n")));
+        assert!(text.contains(&format!("MAX_TRIAL_STARTS_PER_BOOT={MAX_TRIAL_STARTS_PER_BOOT}\n")));
+    }
+
+    #[test]
     fn the_guard_leaves_a_normal_start_alone() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
@@ -428,7 +479,8 @@ mod tests {
         let device = Device { _dir: dir, paths };
         device.guard();
         device.guard();
-        assert!(!device.paths.starts().exists());
+        assert!(!device.paths.boots().exists());
+        assert!(!device.paths.boot_starts().exists());
         assert_eq!(device.read(Target::Waved).as_deref(), Some("waved"));
     }
 
@@ -438,8 +490,11 @@ mod tests {
         device.guard();
         device.guard();
         commit(&device.paths).unwrap();
-        for _ in 0..5 {
-            device.guard();
+        for _ in 0..3 {
+            for _ in 0..MAX_TRIAL_STARTS_PER_BOOT + 1 {
+                device.guard();
+            }
+            device.reboot();
         }
         assert_eq!(device.read(Target::Waved).as_deref(), Some("new waved"));
     }
