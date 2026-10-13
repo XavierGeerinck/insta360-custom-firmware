@@ -15,6 +15,14 @@
 //! once the drive reads back empty. Neither the kernel's LUN open nor `mount`
 //! would stop a double writer by itself.
 //!
+//! Nothing unbinds while waved has a file on the gadget's devices: before
+//! every unbind the holds (`waved_state::GadgetHold`) are raised and every
+//! user must confirm it closed its file within `HOLD_WAIT`, else USB is not
+//! switched. Linux 5.4 `f_hid` frees `hid.0` under open files (a read, write
+//! or poll on one touches freed kernel memory), and the f_uac2 unbind waits,
+//! uninterruptibly, for every file on `hw:1` to close. `/dev/hidg0` stays
+//! closed for the whole session; `hw:1` only around each unbind and bind.
+//!
 //! Device access sits behind `Gadget` and `Volume`; `device` has the configfs,
 //! adbd and system implementations.
 
@@ -27,7 +35,7 @@ use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use waved_state::{
-    Command, DeviceEvent, MeetingState, OtaState, UsbStoragePhase, UsbStorageProblem,
+    Command, DeviceEvent, GadgetHold, MeetingState, OtaState, UsbStoragePhase, UsbStorageProblem,
     UsbStorageState,
 };
 
@@ -50,6 +58,11 @@ pub const RESTORE_TRIES: u32 = 3;
 const RESTORE_PAUSE: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_secs(1);
 const TICK: Duration = Duration::from_millis(100);
+/// Before an unbind, every user of `/dev/hidg0` and `hw:1` has this long to
+/// confirm it closed its file (`GadgetHold`). Longer than the HID reader's
+/// 1 s read plus its 200 ms look at the hold (waved-hid `node`).
+pub const HOLD_WAIT: Duration = Duration::from_secs(3);
+const HOLD_POLL: Duration = Duration::from_millis(50);
 
 /// What the USB device controller says about the computer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -200,6 +213,10 @@ pub struct UsbStorage {
     gone_polls: u32,
     /// Firmware updates (`with_ota`).
     ota: Option<watch::Receiver<OtaState>>,
+    /// The holds on waved's USB handles (`with_holds`): `/dev/hidg0`
+    /// (raised for the whole session) and `hw:1` (around each switch).
+    hid_hold: Option<GadgetHold>,
+    uac_hold: Option<GadgetHold>,
     sleep: Box<dyn Fn(Duration) + Send>,
 }
 
@@ -221,6 +238,8 @@ impl UsbStorage {
             mount: MountSpec::boot(),
             gone_polls: 0,
             ota: None,
+            hid_hold: None,
+            uac_hold: None,
             sleep: Box::new(std::thread::sleep),
         }
     }
@@ -255,6 +274,66 @@ impl UsbStorage {
         self
     }
 
+    /// Hold waved's USB handles around every unbind (`StateBus::hid_hold`,
+    /// `StateBus::uac_hold`).
+    pub fn with_holds(mut self, hid: GadgetHold, uac: GadgetHold) -> Self {
+        self.hid_hold = Some(hid);
+        self.uac_hold = Some(uac);
+        self
+    }
+
+    fn holds(&self) -> impl Iterator<Item = &GadgetHold> {
+        self.hid_hold.iter().chain(self.uac_hold.iter())
+    }
+
+    /// Raise both holds: waved's users of `/dev/hidg0` and `hw:1` close
+    /// their files and confirm (`await_handles_closed`).
+    fn raise_holds(&self) {
+        for hold in self.holds() {
+            hold.raise();
+        }
+    }
+
+    /// Before any unbind: wait, at most `HOLD_WAIT`, until every user of a
+    /// raised hold confirmed it closed its file. Linux 5.4 `f_hid` frees
+    /// `hid.0` under open files (a read, write or poll on one touches freed
+    /// memory), and the f_uac2 unbind waits for every file on `hw:1` to close.
+    /// An error names who did not confirm: nothing may unbind then.
+    fn await_handles_closed(&self) -> io::Result<()> {
+        let mut waited = Duration::ZERO;
+        loop {
+            let waiting: Vec<&str> = self.holds().flat_map(GadgetHold::waiting_for).collect();
+            if waiting.is_empty() {
+                return Ok(());
+            }
+            if waited >= HOLD_WAIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!(
+                        "{} did not close its USB handle within {} s",
+                        waiting.join(", "),
+                        HOLD_WAIT.as_secs()
+                    ),
+                ));
+            }
+            (self.sleep)(HOLD_POLL);
+            waited += HOLD_POLL;
+        }
+    }
+
+    /// The handles may open again: `hw:1` always, `/dev/hidg0` only once
+    /// storage mode is over (it stays closed for the whole session).
+    fn lower_holds(&self, storage_on: bool) {
+        if let Some(hold) = &self.uac_hold {
+            hold.lower();
+        }
+        if !storage_on {
+            if let Some(hold) = &self.hid_hold {
+                hold.lower();
+            }
+        }
+    }
+
     fn installing_update(&self) -> bool {
         self.ota
             .as_ref()
@@ -280,9 +359,12 @@ impl UsbStorage {
     /// `Command::StartUsbStorage`: hand the volume to the computer. Refused
     /// (nothing changes) while a take is in progress, while a firmware update
     /// installs, with the gadget not in its normal mode, with no computer or
-    /// with the volume not mounted here; a busy volume leaves everything as
-    /// it was. A switch that does not come up goes straight back to normal
-    /// USB and mounts the volume again.
+    /// with the volume not mounted here; a busy volume, or a USB handle of
+    /// waved's that does not close for the switch (`HOLD_WAIT`), leaves
+    /// everything as it was. A switch that does not come up goes straight
+    /// back to normal USB and mounts the volume again. `/dev/hidg0` stays
+    /// closed while storage is on; `hw:1` opens again once the computer
+    /// configured the gadget.
     pub fn start(&mut self, meeting: &MeetingState) {
         if self.phase() != UsbStoragePhase::Off {
             return;
@@ -335,23 +417,33 @@ impl UsbStorage {
 
         self.publish(UsbStoragePhase::Starting);
         let _ = self.commands_tx.send(Command::StopPlayback);
+        // waved's USB handles close while playback lets go of its file.
+        self.raise_holds();
         (self.sleep)(SETTLE);
+        if let Err(error) = self.await_handles_closed() {
+            warn!("usb storage: not started, {error}; USB not switched");
+            self.lower_holds(false);
+            self.publish(UsbStoragePhase::Off);
+            return self.problem(UsbStorageProblem::Unavailable);
+        }
         self.volume.sync();
         // Before the unmount: a waved that dies from here on leaves the note,
         // and the next one mounts the volume again (`reclaim_at_start`).
         if let Err(error) = self.volume.note_unmount(&spec) {
             warn!("usb storage: not started, the unmount cannot be noted: {error}");
+            self.lower_holds(false);
             self.publish(UsbStoragePhase::Off);
             return self.problem(UsbStorageProblem::Unavailable);
         }
         if let Err(error) = self.volume.unmount() {
             info!("usb storage: not started, {MOUNT_POINT} is busy: {error}");
             self.volume.clear_unmount_note();
+            self.lower_holds(false);
             self.publish(UsbStoragePhase::Off);
             return self.problem(UsbStorageProblem::Busy);
         }
         self.mount = spec;
-        info!("usb storage: switching USB to storage mode (adb is off until it ends)");
+        info!("usb storage: switching USB to storage mode (adb and HID are off until it ends)");
         let switched = self
             .gadget
             .enter_storage(&self.partition)
@@ -360,6 +452,8 @@ impl UsbStorage {
             Ok(()) => {
                 info!("usb storage: on, the computer has {}", self.partition);
                 self.gone_polls = 0;
+                // Configured: audio opens the new card; HID stays closed.
+                self.lower_holds(true);
                 self.publish(UsbStoragePhase::On);
             }
             Err(error) => {
@@ -450,7 +544,7 @@ impl UsbStorage {
         let exported = match self.gadget.mode() {
             GadgetMode::Storage => {
                 warn!("usb storage: USB was left in storage mode; back to normal USB first");
-                self.restore_gadget();
+                self.back_to_normal_usb();
                 true
             }
             GadgetMode::Normal | GadgetMode::Unbound | GadgetMode::Unavailable => {
@@ -517,7 +611,7 @@ impl UsbStorage {
     /// mounted while the drive may still hold the partition.
     fn leave(&mut self, announce: bool) -> bool {
         self.publish(UsbStoragePhase::Stopping);
-        self.restore_gadget();
+        self.back_to_normal_usb();
         match self.gadget.loaded() {
             Ok(None) => self.mount_back(announce),
             outcome => {
@@ -531,9 +625,35 @@ impl UsbStorage {
         }
     }
 
+    /// Normal USB again (`restore_gadget`); then waved's USB handles may open
+    /// again, once the computer configured the gadget (or after
+    /// `ENUMERATE_WAIT` without one: a pulled cable), or at once when normal
+    /// USB did not come back. True if it came back.
+    fn back_to_normal_usb(&mut self) -> bool {
+        let restored = self.restore_gadget();
+        if restored && self.holds().any(|hold| hold.users() > 0) {
+            if let Err(error) = self.await_computer() {
+                info!("usb storage: {error}; waved's USB handles open again anyway");
+            }
+        }
+        self.lower_holds(false);
+        restored
+    }
+
     /// Normal USB again, tried `RESTORE_TRIES` times. False if it did not
     /// come back: Wave may then be off USB, adb included, until it restarts.
+    /// Never unbinds before waved's USB handles are closed (HID has been
+    /// since the start; audio closes now): if one stays open, USB stays as
+    /// it is and this is false at once.
     fn restore_gadget(&mut self) -> bool {
+        self.raise_holds();
+        if let Err(error) = self.await_handles_closed() {
+            error!(
+                "usb storage: USB not switched back, {error}; \
+                 Wave stays in storage mode until it restarts"
+            );
+            return false;
+        }
         for attempt in 1..=RESTORE_TRIES {
             match self.gadget.leave_storage() {
                 Ok(()) => {
@@ -673,7 +793,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use uuid::Uuid;
-    use waved_state::{OtaPhase, OtaState, PendingDecision};
+    use waved_state::{GadgetHold, GadgetHoldUser, OtaPhase, OtaState, PendingDecision};
 
     /// One world for both fakes, so they can check the rule this module
     /// exists for: the computer and Wave never both have the volume.
@@ -709,11 +829,47 @@ mod tests {
         /// Pauses taken (`UsbStorage::sleep`).
         pauses: u32,
         log: Vec<String>,
+        /// The holds on `/dev/hidg0` and `hw:1` (shared with the service).
+        hid: GadgetHold,
+        uac: GadgetHold,
+        /// Users that close their file and confirm at the next pause, as the
+        /// real ones do within their wake-up.
+        users: Vec<GadgetHoldUser>,
+        /// Users that never confirm (stuck in a call on the device).
+        stuck: Vec<GadgetHoldUser>,
+        /// The computer after the way back to normal USB.
+        host_after_leave: Option<HostLink>,
+        /// The computer configures the gadget after this many pauses without it.
+        configured_after_pauses: Option<u32>,
+        /// At every pause: (hid held, uac held, the computer).
+        at_pauses: Vec<(bool, bool, HostLink)>,
+        /// (hid held, uac held) when the volume was checked.
+        holds_at_check: Option<(bool, bool)>,
+    }
+
+    impl World {
+        /// A `/dev/hidg0` user (`hid`) or a `hw:1` user that never closes.
+        fn with_stuck(mut self, hid: bool) -> Self {
+            let user = if hid { self.hid.register("the HID reader") } else { self.uac.register("the UAC upstream") };
+            self.stuck.push(user);
+            self
+        }
     }
 
     impl Default for World {
         fn default() -> Self {
+            let hid = GadgetHold::new();
+            let uac = GadgetHold::new();
+            let users = vec![hid.register("the HID key writer"), uac.register("the UAC upstream")];
             Self {
+                hid,
+                uac,
+                users,
+                stuck: Vec::new(),
+                host_after_leave: None,
+                configured_after_pauses: None,
+                at_pauses: Vec::new(),
+                holds_at_check: None,
                 mode: GadgetMode::Normal,
                 lun: None,
                 host: HostLink::Configured,
@@ -743,6 +899,43 @@ mod tests {
         }
     }
 
+    impl World {
+        /// The rule this hold exists for: nothing unbinds while a user may
+        /// still have a file on `/dev/hidg0` or `hw:1`.
+        fn assert_handles_closed(&self) {
+            assert!(
+                self.hid.all_closed() && self.uac.all_closed(),
+                "unbound with a USB handle open: hid {:?}, uac {:?}",
+                self.hid,
+                self.uac
+            );
+        }
+
+        /// One `UsbStorage::sleep`: the users look at the holds, and the
+        /// computer may configure the gadget.
+        fn pause(&mut self) {
+            self.pauses += 1;
+            for user in &self.users {
+                if let Some(generation) = user.held() {
+                    user.confirm(generation);
+                }
+            }
+            let seen = (self.hid.signal().held, self.uac.signal().held, self.host);
+            self.at_pauses.push(seen);
+            if self.host == HostLink::Configured {
+                return;
+            }
+            match self.configured_after_pauses {
+                Some(n) if n <= 1 => {
+                    self.host = HostLink::Configured;
+                    self.configured_after_pauses = None;
+                }
+                Some(n) => self.configured_after_pauses = Some(n - 1),
+                None => {}
+            }
+        }
+    }
+
     type Shared = Arc<Mutex<World>>;
 
     struct FakeGadget(Shared);
@@ -756,6 +949,7 @@ mod tests {
             let mut w = self.0.lock().unwrap();
             w.log.push(format!("enter {partition}"));
             assert!(w.mounted.is_none(), "exported while mounted on Wave");
+            w.assert_handles_closed();
             w.mode = GadgetMode::Storage;
             w.lun = Some(partition.to_string());
             if let Some(host) = w.host_after_enter {
@@ -769,6 +963,10 @@ mod tests {
         fn leave_storage(&mut self) -> io::Result<()> {
             let mut w = self.0.lock().unwrap();
             w.log.push("leave".into());
+            w.assert_handles_closed();
+            if let Some(host) = w.host_after_leave {
+                w.host = host;
+            }
             if w.leave_keeps_lun {
                 return Err(io::Error::other("still bound after none"));
             }
@@ -820,6 +1018,7 @@ mod tests {
             let mut w = self.0.lock().unwrap();
             assert!(w.mounted.is_none(), "checked while mounted");
             w.log.push(format!("check {source}"));
+            w.holds_at_check = Some((w.hid.signal().held, w.uac.signal().held));
             if w.check_times_out {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "stopped after 120 s"));
             }
@@ -860,6 +1059,7 @@ mod tests {
 
     impl Rig {
         fn new(world: World) -> Self {
+            let (hid, uac) = (world.hid.clone(), world.uac.clone());
             let world = Arc::new(Mutex::new(world));
             let state_tx = Arc::new(watch::channel(UsbStorageState::default()).0);
             let state = state_tx.subscribe();
@@ -873,7 +1073,8 @@ mod tests {
                 events_tx,
                 commands_tx,
             )
-            .with_sleep(move |_| pauses.lock().unwrap().pauses += 1);
+            .with_holds(hid, uac)
+            .with_sleep(move |_| pauses.lock().unwrap().pause());
             Self {
                 world,
                 storage,
@@ -1077,9 +1278,11 @@ mod tests {
             ["sync", "unmount", "enter /dev/udisk", "leave", "check /dev/udisk", LIVE]
         );
         assert_eq!(rig.problems(), [UsbStorageProblem::Unavailable]);
+        // Waited for the computer after the switch, and again (bounded)
+        // after the way back before the USB handles may open again.
         let polls = (ENUMERATE_WAIT.as_millis() / ENUMERATE_POLL.as_millis()) as u32;
         let pauses = rig.world().pauses;
-        assert!(pauses >= polls && pauses <= polls + 2, "waited {pauses} pauses, bounded");
+        assert!(pauses >= 2 * polls && pauses <= 2 * polls + 3, "waited {pauses} pauses, bounded");
     }
 
     #[test]
@@ -1475,6 +1678,132 @@ mod tests {
         assert!(rig.log().is_empty());
         assert_eq!(rig.world().note, None);
         assert_eq!(rig.phase(), UsbStoragePhase::Off);
+    }
+
+    // --- The holds on waved's USB handles (/dev/hidg0, hw:1) ---
+
+    fn held(rig: &Rig) -> (bool, bool) {
+        let world = rig.world();
+        (world.hid.signal().held, world.uac.signal().held)
+    }
+
+    #[test]
+    fn start_closes_every_usb_handle_before_the_unbind_and_keeps_hid_closed_while_on() {
+        // FakeGadget::enter_storage asserts that every user confirmed.
+        let mut rig = Rig::new(World::default());
+        rig.storage.start(&idle());
+        assert_eq!(rig.phase(), UsbStoragePhase::On);
+        assert_eq!(rig.log(), ["sync", "unmount", "enter /dev/udisk"]);
+        assert_eq!(held(&rig), (true, false), "HID stays closed, audio runs on the new card");
+    }
+
+    #[test]
+    fn a_usb_handle_that_does_not_close_aborts_the_start_before_anything_changes() {
+        for hid in [true, false] {
+            let mut rig = Rig::new(World::default().with_stuck(hid));
+            rig.storage.start(&idle());
+            assert_eq!(rig.phase(), UsbStoragePhase::Off, "hid {hid}");
+            assert_eq!(rig.problems(), [UsbStorageProblem::Unavailable], "USB storage isn't available");
+            assert!(rig.log().is_empty(), "no unmount, no switch (hid {hid})");
+            assert_eq!(held(&rig), (false, false), "the handles may open again");
+            let world = rig.world();
+            assert_eq!(world.mode, GadgetMode::Normal);
+            assert_eq!(world.mounted, Some(live_mount()));
+            assert_eq!(world.note, None);
+            let bound = (HOLD_WAIT.as_millis() / HOLD_POLL.as_millis()) as u32 + 2;
+            assert!(world.pauses <= bound, "{} pauses: the wait is bounded", world.pauses);
+        }
+    }
+
+    #[test]
+    fn the_hold_wait_is_longer_than_the_hid_readers_read() {
+        // The reader confirms after its read returns (up to 1 s) and its
+        // 200 ms look at the hold.
+        assert!(HOLD_WAIT >= Duration::from_secs(3));
+    }
+
+    #[test]
+    fn a_busy_volume_lowers_the_holds() {
+        let mut rig = Rig::new(World { busy: true, ..World::default() });
+        rig.storage.start(&idle());
+        assert_eq!(rig.problems(), [UsbStorageProblem::Busy]);
+        assert_eq!(held(&rig), (false, false));
+    }
+
+    #[test]
+    fn the_way_back_closes_the_audio_handle_and_lowers_both_holds_once_normal_usb_is_configured() {
+        let mut rig = Rig::on(World::default());
+        {
+            let mut world = rig.world();
+            world.host_after_leave = Some(HostLink::Gone);
+            world.configured_after_pauses = Some(3);
+            world.at_pauses.clear();
+        }
+        rig.storage.stop();
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(held(&rig), (false, false));
+        let world = rig.world();
+        // The audio user confirms at the first pause; after the unbind, the
+        // holds stay up while the computer has not configured normal USB.
+        let after_leave: Vec<_> = world.at_pauses.iter().filter(|(.., host)| *host == HostLink::Gone).collect();
+        assert_eq!(after_leave.len(), 3, "{:?}", world.at_pauses);
+        assert!(after_leave.iter().all(|(hid, uac, _)| *hid && *uac), "{:?}", world.at_pauses);
+        assert_eq!(world.holds_at_check, Some((false, false)), "lowered before the check, not after it");
+    }
+
+    #[test]
+    fn the_holds_are_lowered_after_the_way_back_gives_up_on_the_computer() {
+        // A pulled cable: nobody configures normal USB.
+        let mut rig = Rig::on(World::default());
+        rig.world().host = HostLink::Gone;
+        for _ in 0..GONE_POLLS {
+            rig.storage.poll();
+        }
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(held(&rig), (false, false));
+    }
+
+    #[test]
+    fn a_switch_that_does_not_come_up_lowers_the_holds_after_the_way_back() {
+        let mut rig = Rig::new(World { enter_fails: true, ..World::default() });
+        rig.storage.start(&idle());
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(held(&rig), (false, false));
+    }
+
+    #[test]
+    fn reclaim_closes_the_usb_handles_before_it_unbinds() {
+        // A new waved's users opened the storage-mode nodes at start-up.
+        let mut rig = Rig::new(World {
+            mode: GadgetMode::Storage,
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            note: Some(live_mount()),
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Reclaimed);
+        assert_eq!(rig.log(), ["leave", "check /dev/udisk", LIVE]);
+        assert_eq!(held(&rig), (false, false));
+    }
+
+    #[test]
+    fn reclaim_never_unbinds_while_a_usb_handle_stays_open() {
+        let mut rig = Rig::new(
+            World {
+                mode: GadgetMode::Storage,
+                lun: Some("/dev/mmcblk0p16".into()),
+                mounted: None,
+                note: Some(live_mount()),
+                ..World::default()
+            }
+            .with_stuck(false),
+        );
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::NotMounted);
+        assert!(rig.log().is_empty(), "no unbind, no mount");
+        assert_eq!(rig.phase(), UsbStoragePhase::Stopping, "the recordings stay away");
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted], "restart Wave");
+        assert_eq!(held(&rig), (false, false));
+        assert_eq!(rig.world().mode, GadgetMode::Storage);
     }
 
     #[test]
