@@ -9,10 +9,11 @@
 //!   2-minute pairing window.
 //! - [`ota`]: `BT.bin` / `DONGLE.bin` updates (TODO F6).
 //!
-//! [`BtService`] asks read-only questions at start, answers every frame with
-//! stock's acknowledgement and keeps `BluetoothState`. Given the bus
-//! (`with_commands`) it pairs, disconnects and answers or declines calls. It
-//! does not switch Bluetooth on, rename the module or save its flash.
+//! [`BtService`] asks read-only questions at start, answers every frame the
+//! module repeats (`75 45`) with stock's acknowledgement and keeps
+//! `BluetoothState`. Given the bus (`with_commands`) it pairs, stops pairing,
+//! disconnects and answers or declines calls. It does not switch Bluetooth on
+//! or off, rename the module or save its flash.
 //!
 //! Privacy: the phone book (`0xB0`) is dropped unread, and no info or debug
 //! log line carries a phone's name, MAC or a number (`log_line`).
@@ -163,8 +164,8 @@ impl BtService {
         Self { bt_rx, uart, bt_tx, events_tx, commands: None }
     }
 
-    /// Take `BtPair`, `BtDisconnect`, `BtAnswerCall` and `BtDeclineCall`
-    /// from the bus. Without it the service stays passive.
+    /// Take `BtPair`, `BtStopPairing`, `BtDisconnect`, `BtAnswerCall` and
+    /// `BtDeclineCall` from the bus. Without it the service stays passive.
     pub fn with_commands(mut self, commands: broadcast::Receiver<BusCommand>) -> Self {
         self.commands = Some(commands);
         self
@@ -474,6 +475,7 @@ mod tests {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
             let out = core.command(&BusCommand::BtPair, 0, 0, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
+                "75 45 02 D8 00 DA",
                 "75 45 02 A3 00 A5",
                 "75 45 02 A7 00 A9"
             ]);
@@ -492,6 +494,19 @@ mod tests {
             assert!(h.changed && s.connected && !s.pairing);
             assert_eq!(s.pairing_left_s, 0);
             assert_eq!(h.event, Some(DeviceEvent::BtConnected(String::new())));
+        }
+
+        #[test]
+        fn leaving_the_pairing_screen_ends_the_window() {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            core.command(&BusCommand::BtPair, 0, 0, &mut s);
+            core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
+            let out = core.command(&BusCommand::BtStopPairing, 5_000, 0, &mut s);
+            assert!(out.frames.is_empty(), "no command leaves pairing mode");
+            assert!(out.changed);
+            assert_eq!(s.pairing_left_s, 0);
+            assert!(s.pairing, "the module's own bit 3 stays until it says otherwise");
+            assert!(!core.tick(6_000, &mut s));
         }
 
         #[test]
