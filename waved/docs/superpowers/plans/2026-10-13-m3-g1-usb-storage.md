@@ -47,9 +47,14 @@ recording in progress stay safe.
    3 s. A disconnect clears the computer's lock in `f_mass_storage`, so the unload succeeds. A
    sleeping computer (`suspended`) keeps its drive.
 6. **A waved restart while exported** (crash and watchdog): before the meeting service opens
-   the database, `reclaim_at_start` unloads the LUN. If the computer holds it, it re-plugs the
-   USB connection (`soft_connect`) to release it, then checks and mounts the volume. Without
-   that, reconciliation would mark every recording missing.
+   the database, `reclaim_at_start` unloads the LUN, then checks and mounts the volume. If the
+   computer holds the drive, storage stays on until it ejects it or the cable is pulled (the
+   start-up re-plug is opt-in, decision 10). A volume a previous waved unmounted (the tmpfs
+   unmount note, written before the unmount) is mounted again even with an empty LUN; without a
+   note an unmounted volume is the boot's (`udisk_fix` may still be checking it).
+   *Review 2026-10-13:* the meeting service also reconciles only while `/proc/mounts` shows the
+   volume, and `MissingArtifact` turns back into `LocalOnly` (`Uploaded` if delivered) when both
+   files are there again: a restart or a failed mount marked every recording missing for good.
 7. **The meeting service waits while the volume is away** (`UsbStorageState::recordings_away`):
    no new recording, no uploads (an upload would mark the file missing), and reconciliation
    runs again when the volume is back, so recordings deleted on the computer show as missing.
@@ -58,6 +63,31 @@ recording in progress stay safe.
    still needs the PIN (System).
 9. **Copy:** the mockup's "Audio is off until you stop" is wrong under decision 1. The screen says
    "Your computer can open the recordings. Recording is off until you stop."
+
+Added after the review (2026-10-13):
+
+10. **The start-up re-plug is off** (`WAVED_USB_REPLUG=1` turns it on) until the device pass shows
+    `soft_connect` disconnect/connect on `crgudc2` brings the computer, audio and adb back. When on,
+    `connect` is written up to 3 times until the UDC state shows a computer (5 s each); a re-plug
+    that fails is logged as an error and not tried again. Cost if wrong (it works and stays off):
+    after a crash during USB storage the computer keeps the drive until it ejects it or the cable
+    is pulled; nothing is lost.
+11. **Off only once mounted.** `mount_back` publishes Off only once `/proc/mounts` shows the
+    volume; otherwise the phase stays Stopping (the takeover stays) with "Recordings unavailable,
+    restart Wave". Cost if wrong (a transient mount failure): the user restarts Wave; there is no
+    retry in place.
+12. **No mount after a stopped check.** `fsck.exfat -p` killed at 120 s may have left the volume
+    half repaired: it stays unmounted (as in 11); the next waved checks it again, a reboot mounts
+    it as stock does. Cost if wrong (the check was only slow): the recordings are away until a
+    restart.
+13. **The boot checks the bind.** The patched `start_usbgadget` unlinks the drive and binds again
+    if the gadget did not bind with it (`$G/UDC` empty), logging why in
+    `/tmp/waved-usbgadget.log`. Cost if wrong (the fallback misfires on an adb timing failure):
+    USB storage is unavailable until the next boot; audio and adb stay.
+14. **No delete, play or start during an install.** Delete and Play are refused while the volume
+    is away; a delete that finds the recordings directory missing keeps its claim instead of
+    removing the rows. `StartUsbStorage` is refused while an update installs (Installing,
+    Restarting); the update agent adds the reverse check.
 
 ## State and commands (waved-state, additive)
 
@@ -94,8 +124,19 @@ Run from the Mac with adb. `G=/sys/kernel/config/usb_gadget/amlogic`,
    `adb shell 'ls -l $G/configs/amlogic.1/; for f in file removable ro nofua; do echo $f=$(cat $L/$f); done; cat /sys/class/udc/*/state; ls /sys/class/udc/*/; grep udisk /proc/mounts; ls -l /dev/udisk'`
    (expand `$G`/`$L` by hand inside the single quotes). Expect no `mass_storage.usb0` link yet
    and `file=/dev/...` (stock `msc_init` holds the partition open, unlinked).
-2. **Patch and reboot:** `adb push waved/scripts/patch-stock-usbgadget.sh /tmp/ && adb shell
-   'sh /tmp/patch-stock-usbgadget.sh' && adb reboot`. After boot, repeat step 1: expect the
+2. **Patch and reboot.** On the Mac first: `docker run --rm -v "$PWD/waved/scripts:/w:ro"
+   busybox:1.36 sh /w/test-patch-stock-usbgadget.sh` (all pass). Have the UART console at hand:
+   if the composite does not bind and the fallback fails too, adb is gone until it is fixed there.
+   Then `adb push waved/scripts/patch-stock-usbgadget.sh /tmp/ && adb shell
+   'sh /tmp/patch-stock-usbgadget.sh'`. Before rebooting: `adb shell 'sh -n
+   /etc/init.d/S89usbgadget && ls -A /etc/init.d && ls /data/waved/S89usbgadget.bak.*'` (parses;
+   no `.S89usbgadget.waved-tmp` or backup in `init.d`; a new backup in `/data/waved`). Then
+   `adb reboot`.
+   After boot, first **`adb shell cat /sys/kernel/config/usb_gadget/amlogic/UDC`**: expect
+   `fdd00000.crgudc2`. Then `adb shell cat /tmp/waved-usbgadget.log`: no such file means the gadget
+   bound with the drive; "did not bind with mass_storage.usb0 ... bound without USB storage" means
+   the controller refused the composite (keep the log and its `dmesg` lines, record it in
+   USB_STORAGE.md; USB storage then says "isn't available"). Repeat step 1: expect the
    `mass_storage.usb0` link, `removable=1` and `file=` empty. On the Mac: Wave's mic and speaker
    still listed in Audio MIDI Setup, `adb devices` still lists Wave, nothing new in Finder, and
    `system_profiler SPUSBDataType` shows a mass-storage interface. In Windows (if at hand):
@@ -122,10 +163,28 @@ Run from the Mac with adb. `G=/sys/kernel/config/usb_gadget/amlogic`,
     ("Connect a computer first"); while a file plays in Files (start succeeds, playback
     stops first). With an `adb shell` sitting in `cd /mnt/udisk`: "Recordings in use, try
     again", and nothing changed (`/mnt/udisk` still mounted, `file` empty).
-11. **Restart while exported:** start, then `adb shell killall waved`. After the watchdog
-    restart (~3 s), the log shows `usb storage: reclaimed`, the Mac loses the drive (re-plug),
-    `/mnt/udisk` is mounted, and Files shows every recording (not Damaged).
-12. **PIN:** with a PIN set, System asks for it before USB storage; Stop does not.
+11. **Restart while exported** (re-plug off, the default): start, then `adb shell killall waved`.
+    After the watchdog restart (~3 s): if macOS did not lock the medium, the log shows `usb
+    storage: reclaimed`, the Mac loses the drive, `/mnt/udisk` is mounted. If it did, the log
+    says "start-up re-plug is off", the takeover shows, `grep udisk /proc/mounts` is empty and the
+    log has "the recordings volume is not mounted; reconciliation waits"; eject on the Mac, and the
+    takeover leaves. Either way Files shows every recording (not Damaged).
+12. **Restart while taking the volume back:** start, eject on the Mac, and `adb shell killall
+    waved` while the log shows the check (`fsck.exfat`), or right after the unmount on a start
+    (repeat until one lands). After the restart: `usb storage: a waved before this one took the
+    recordings off Wave; mounting them again`, `/mnt/udisk` mounted, `/tmp/waved-usb-storage.unmounted`
+    gone, Files shows every recording (not Damaged).
+13. **Re-plug (opt-in), only after 1–12 pass:** stop the watchdog, run waved by hand with
+    `WAVED_USB_REPLUG=1` (`waved/CLAUDE.md`, one-off runs), start storage, copy a file so macOS
+    holds the drive, `killall waved`, start it again with the variable. Watch
+    `cat /sys/class/udc/*/state` (expect `not attached`, then `configured` within seconds), Audio
+    MIDI Setup and `adb devices`. If the computer, audio and adb come back every time (3 tries),
+    record it in USB_STORAGE.md and decide whether to turn the re-plug on by default (decision 10).
+    If adb does not come back, re-plug the cable.
+14. **PIN:** with a PIN set, System asks for it before USB storage; Stop does not.
+15. **Undo the patch** (only if it misbehaves): USB_STORAGE.md, "Undo the gadget patch": restore
+    the newest `/data/waved/S89usbgadget.bak.*` through a dot-named file, `grep -c waved_g1_
+    /etc/init.d/S89usbgadget` prints 0, reboot, `cat $G/UDC` is `fdd00000.crgudc2`.
 
 ### Recovering by hand
 
@@ -135,7 +194,9 @@ Run from the Mac with adb. `G=/sys/kernel/config/usb_gadget/amlogic`,
   it on the computer or unplug the cable first.)
 - The gadget is never unbound by waved. If it is anyway (`cat $G/UDC` empty):
   `adb shell 'echo fdd00000.crgudc2 > $G/UDC'` (over UART if adb is gone).
-- Force a re-plug without touching the cable:
+- Force a re-plug without touching the cable (unproven on `crgudc2`; it may leave Wave off USB):
   `echo disconnect > /sys/class/udc/fdd00000.crgudc2/soft_connect; sleep 1; echo connect > /sys/class/udc/fdd00000.crgudc2/soft_connect`.
-- Undo the gadget patch: restore `/data/waved/S89usbgadget.bak.<ts>` over
-  `/etc/init.d/S89usbgadget` and reboot.
+- Undo the gadget patch: restore the newest `/data/waved/S89usbgadget.bak.<ts>` over
+  `/etc/init.d/S89usbgadget` through a dot-named file (exact commands in USB_STORAGE.md,
+  "Recovering by hand"), check `grep -c waved_g1_ /etc/init.d/S89usbgadget` is 0, and reboot.
+  Never under an `S??*` name in `/etc/init.d`: rcS runs it.

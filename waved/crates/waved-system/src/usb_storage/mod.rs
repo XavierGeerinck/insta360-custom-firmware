@@ -133,14 +133,17 @@ pub trait Volume: Send {
 /// What `reclaim_at_start` found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reclaim {
-    /// No medium was loaded: nothing to take back.
+    /// Nothing to take back: no medium was loaded for the computer, and no
+    /// waved left the volume unmounted.
     Nothing,
-    /// A medium was loaded and is unloaded now; the volume is mounted.
+    /// A medium was loaded and is unloaded now, or a waved left the volume
+    /// unmounted; the volume is mounted.
     Reclaimed,
     /// The computer still holds the medium: the volume stays unmounted and
     /// USB storage stays on.
     StillExported,
-    /// Unloaded, but the volume could not be mounted.
+    /// The volume could not be mounted (or its check was stopped): storage
+    /// stays Stopping, so the meeting service keeps away from it.
     NotMounted,
 }
 
