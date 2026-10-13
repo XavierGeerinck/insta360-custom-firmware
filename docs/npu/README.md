@@ -1,12 +1,20 @@
 # Insta360 Wave NPU Research
 
-> **Parked (2026-10-12).** Noise reduction moves to the CPU; this research
-> stops here. The measured case is in
+> **Production integration parked (2026-10-12).** Noise reduction moves to
+> the CPU. The measured case is in
 > [`waved/docs/COMPUTE_HARDWARE.md`](../../waved/docs/COMPUTE_HARDWARE.md#status-parked-2026-10-12):
 > a vendor-compiled 41 M-MAC fp16 model ran 2.8 ms on the NPU against 4.7 ms
 > on the CPU, but 4.5–5.2 ms once its output was copied and converted, and
 > every NPU call costs about 70–90 µs. That section also lists where to resume
 > (E1–E3 compile matrix, vendor toolchain requests, the Khadas v1 probe).
+
+**REA continuation (2026-10-13).** A current stock-CTC control passed, and
+the exact OpenVX NN checker is now statically proven to reject FP32 weight
+tensors when an output tensor is present. Two replacement custom graphs
+now compile and execute on the NN target: FP16 FIR Conv and quantized U8
+FC. Both passed one exact CPU-oracle comparison with unchanged captured
+device health. See the [REA recovery notebook](lab-notebook/2026-10-13-rea-op-dtype-recovery.md)
+and [PoC 16 results](lab-notebook/2026-10-13-poc16-native-fp16-conv-u8-fc.md).
 
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
@@ -38,9 +46,9 @@ The immediate result is concrete:
   for that generated NBG;
 - the live hardware reports EVIS2, subgroup size 4, no stream processor, and
   no VA40 support;
-- general custom models are **not yet unlocked**: Add, MatrixMul, and Conv2d
-  built-ins fail NBG export, and the tested MatrixMul/Conv2d graphs also fail
-  ordinary graph verification before execution;
+- general custom models are **not yet unlocked**: the July Add and FP32
+  MatrixMul/Conv controls failed export or verification. PoC 16 now proves
+  native FP16 Conv and U8 FC, with broader graph coverage still unqualified;
 - the Wave firmware omits the exact `libCLC.so` needed by its embedded
   EVIS/OpenCL source path; a version-adjacent compiler crossed relocation but
   failed its program-object ABI and is permanently quarantined.
@@ -85,8 +93,13 @@ The immediate result is concrete:
   `Multiply -> Add -> Erf` partition, but PoC 14B closed it as a clean
   compiler negative: the exact Wave checker rejects its asymmetric-U8 by
   symmetric-per-channel-I8 Multiply signature before NBG emission. No
-  coefficient differential exists, so semantic affine emission and Conv
-  expansion remain blocked.
+  coefficient differential exists, so semantic affine emission and expansion
+  of that learned model into Conv remain unqualified.
+- PoC 16 recovered the dtype boundary with REA, rebuilt a hash-bound TIM-VX
+  wrapper against the exact device SDK, and exported valid 1,800-byte FP16
+  Conv and 2,056-byte U8 FC NBGs. Both compile logs name the NN target;
+  each model ran once, returning all 32 or 4 oracle bytes exactly. All four
+  temporary staging roots were removed and captured health stayed unchanged.
 
 The detailed program design is in
 [`2026-07-28-wave-npu-reverse-engineering-program-design.md`](../superpowers/specs/2026-07-28-wave-npu-reverse-engineering-program-design.md).
@@ -144,7 +157,7 @@ audio model or ONNX
         │
         └── Wave NPU routes
               ├── exact compiler for general ops — blocked
-              ├── narrow firmware Erf export — proven
+              ├── native Erf / FP16 Conv / U8 FC export — proven
               └── private export-data graph — incomplete
                          │
                          ▼
@@ -164,9 +177,10 @@ audio model or ONNX
 
 The broad compiled-NBG blocker is above the runtime. The host SDK available
 in this repository produces target `0x10000020`, while the Wave requires
-`0x1000000e`. The exact device stack can emit the required target for the
-firmware-provided Erf path, and that NBG executes, but ordinary Add,
-MatrixMul, and Conv2d graphs do not pass the same export/verification gates.
+`0x1000000e`. The exact device stack can emit and execute the required
+target for Erf, FP16 Conv and U8 FC. The earlier Add and FP32 MatrixMul/Conv
+controls failed export or verification, and additional model graphs remain
+unqualified.
 We do not patch a foreign product field because changing an identifier cannot
 make target-dependent kernels and command streams correct for different
 silicon.
@@ -202,10 +216,10 @@ transfer.
 | 2 — NBG corpus and format | Which sections encode target, tensors, operations, constants, and relocation data? | **Passed 2026-07-28** | The strict host parser classifies all 139 configured graphs, agrees with live CTC metadata, and validates 690/690 section checksums. |
 | 3 — Runtime and driver trace | What runtime calls and driver interactions occur for a known graph? | **Passed 2026-07-28** | Two bounded traces have the same 73-call phase-correlated GAL sequence, output digest, loaded paths, driver events, syscall counts, cleanup, and health. |
 | 4 — Firmware v3 audio loader | Does `libmodel_infer.so` provide a useful CPU, OpenCL, or NPU path for audio models? | **Static backend gate passed in PoC 1** | It is classified as a CPU/MNN-style reference; dynamic format/quality characterization remains optional. |
-| 5 — Wave custom-graph compiler | Can exact Wave userspace emit a legitimate target-native custom graph? | **Partial pass 2026-07-28** | Erf emitted an untouched valid NBG; Add/MatrixMul/Conv export and general shader compilation remain blocked. |
+| 5 — Wave custom-graph compiler | Can exact Wave userspace emit a legitimate target-native custom graph? | **Partial pass, extended 2026-10-13** | Erf, FP16 Conv and U8 FC emit valid NBGs. Earlier Add/FP32 MatrixMul/Conv controls and general shader compilation remain blocked. |
 | 6 — First generated-NBG execution | Can that exact generated artifact be imported, run, read back, and cleaned up? | **Passed 2026-07-28** | One zero-input execution passed with unchanged health. |
 | 7 — Nonzero characterization | Does nonzero data traverse the generated graph and overwrite the output buffer correctly? | **Passed 2026-07-28** | `[0,1,2,255] -> [0,1,1,1]` for the U8 Erf graph in one bounded execution. |
-| 8 — Minimal audio-denoiser boundary | Can fixed MatrixMul or Conv2d filtering export or execute through public TIM-VX? | **Closed clean negative 2026-07-28** | Both node families select OpenVX but fail export and direct graph verification before inference. |
+| 8 — Minimal audio-denoiser boundary | Can fixed MatrixMul or Conv2d filtering export or execute through public TIM-VX? | **Closed FP32 negative 2026-07-28** | Both FP32 controls failed export and direct graph verification. PoC 16 separately proves the FP16 FIR Conv. |
 | 9A — Architecture database recovery | What target identity/profile is embedded in the exact architecture libraries? | **Passed host-only 2026-07-28** | Five-key lookup, unique Wave row, revision mask, ABI bounds, strict evidence profile, and explicit unknowns are reproducible. |
 | 9C — Configuration parser recovery | What grammar and target catalog does the available Vivante simulator implement? | **Passed isolated-host gate 2026-07-28** | Five ordered fields, exact catalog, live-revision acceptance, unsafe vendor edge cases, and strict candidate/refusal outputs are reproducible. |
 | 9D — Compiler acquisition/static qualification | Does a trusted public package contain a compatible no-kernel Wave NBG compiler? | **Closed blocked gate 2026-07-28** | Exact vendor Wave config and real parser recovered; the only `VIV_GPU_FILE` consumers are `6.4.18` shader compilers and Acuity's NBG path is an older simulator backend. Zero compiler/device calls. |
@@ -217,6 +231,7 @@ transfer.
 | 13G — Wave CPU/NPU benchmark | What is the same-device cost of the exact U8 `[481]` Erf partition? | **Passed R2 2026-07-29** | 10,000 paired frames were exact; Cortex-A55 was 20.686× faster than NPU `Run()` and 26.137× faster than NPU total by ratio of means. |
 | 14A — Learned affine host contract | Does a finite integer `Multiply -> Add -> Erf` partition retain the denoiser quality gates? | **Passed host-only 2026-07-29** | The U8/per-channel-I8 candidate, six vectors, ONNX graph, CPU oracle, and nine-file package regenerate byte-identically and pass all 1,230-item quality gates; execution remains unapproved. |
 | 14B/C — Affine producer differential | Can exact Wave userspace emit deterministic baseline/weight/bias NBG controls? | **Closed clean negative 2026-07-29** | A1 was rejected at `MULTIPLY` type checking (`ASYM UINT8, SYMM PC INT8`) before NBG emission. Known-equivalent retries were skipped, health and CLC gates held, and PoC 14C has no differential to decode. |
+| 16 — REA-guided native dtype controls | Can FP16 Conv and quantized U8 FC compile and execute on the NN engine? | **Passed 2026-10-13** | Both target-native NBGs pass exact tensor/CRC qualification and one canary-protected CPU-oracle execution; captured health is unchanged and staging is removed. |
 | 9B / 9D continuation — Remaining compiler adapter | Can the missing no-kernel NBG consumer and exact VSINPU compiler path be proven? | Pending, separately gated | Acquire x86-64 no-kernel SDK `>=6.4.22` plus ovxlib `>=1.2.26`, prove its dependency/I/O ABI, then compile one fixed Conv before any NPU signature is approved. |
 | Production integration | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
 

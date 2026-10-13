@@ -8,7 +8,7 @@ AV400 audio platform).
 | Resource | What it is | Stock firmware uses it for | Suitable for waved |
 |----------|------------|----------------------------|--------------------|
 | 4× Cortex-A55 @ up to 2.016 GHz, NEON + `asimddp` + `asimdhp` | CPU complex | Everything the NPU/DSP doesn't handle | AEC, beamforming, DOA, orchestration |
-| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | **Parked 2026-10-12** (see below). One sealed U8 `[481]` Erf partition runs; general models remain compiler-blocked, and measured gains are small |
+| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | **Production integration parked 2026-10-12** (see below). Erf, native FP16 Conv and quantized U8 FC run; general models remain unqualified, and measured gains are small |
 | HiFi-class audio DSP at `/dev/audiodsp0` | 8 MB firmware region, chr dev 272 | Unknown (likely stock AEC / NR / DRC) | Out of scope unless we get Cadence/Tensilica toolchain |
 
 ## Vivante NPU
@@ -23,9 +23,11 @@ measured on the Wave:
 | Stock CTC model, 41 M MACs, fp16, vendor-compiled (PoC 15A) | 4.66 ms, stock ONNX Runtime 1.15.1, default thread pool | 2.79 ms `Run()`; 4.49 ms with output copy, 5.15 ms with fp16→fp32 conversion |
 | U8 `[481]` Erf lookup (PoC 13G) | 3.3 µs | 68 µs `Run()`, 86 µs with copies |
 
-- Even a vendor-compiled model only ties the CPU end to end, and our own
-  compiler path can't build Conv/FC layers for this chip yet (every tested
-  Conv/MatMul was FP32, which the NN engine most likely doesn't take).
+- Even a vendor-compiled model only ties the CPU end to end. The earlier
+  custom Conv/MatMul controls used FP32 weights, which REA now proves this
+  NN checker rejects when an output tensor is present. PoC 16 compiled and
+  ran FP16 Conv and quantized U8 FC; full denoising models and their
+  end-to-end cost remain unqualified.
 - DeepFilterNet's 84 % of a core (8.5 ms per 10 ms hop, tract, fp32) is far
   above its arithmetic: DeepFilterNet3 publishes ≈ 0.35 GMAC per second of
   audio, ≈ 3.5 M per hop, which the rate above puts near 0.4–1.6 ms. The
@@ -33,16 +35,22 @@ measured on the Wave:
 - The NPU earns its keep on large, continuous models (stock ASR,
   diarization, punctuation), which waved doesn't run on the device.
 
-Where to resume, in order, if a reason appears:
+Research continuation and remaining routes:
 
-1. **E1 (host only).** Recover libOpenVX's op × dtype → NN/TP/SH target
-   selection with `waved/scripts/npu/ghidra_abi.py`; it picks E2's cells.
-2. **E2 (compile only, ≤ 6 calls).** The 8C graph with `VIV_VX_DEBUG_LEVEL=1`
-   and `VIV_VX_ENABLE_PRINT_TARGET=1`; FC 481→16 U8 per-tensor with INT32
-   bias; FIR Conv U8; FIR Conv FP16; affine as a 1×1 depthwise Conv; affine
-   as a diagonal FC. Pattern: `tools/npu-compiler/tim_vx_compile_erf_affine.cc`.
-3. **E3.** Only if E2 exports an NBG: one execution against the CPU oracle,
-   then one-weight differentials (`nbg_constant_diff.py`) for the serializer.
+1. **E1 (recovered 2026-10-13).** REA recovered the exact
+   OpenVX FP32-weight rejection and conditional NN/TP format paths. Both
+   firmware Conv/FC admission tables contain FP16/FP16 and asymmetric
+   U8/U8. See
+   the [REA notebook](../../docs/npu/lab-notebook/2026-10-13-rea-op-dtype-recovery.md).
+2. **E2/E3 (two controls passed 2026-10-13).** FP16 FIR Conv `[16,1,1,1]`
+   and U8 FC `16→4` exported native VPMN v2 NBGs for `0x1000000e`;
+   compile logs select `VXNNE_OPERATION_TARGET_NN`. Each ran once with
+   all output bytes matching its CPU oracle, canaries intact and captured
+   health unchanged. See [PoC 16](../../docs/npu/lab-notebook/2026-10-13-poc16-native-fp16-conv-u8-fc.md).
+3. **Remaining model-specific work.** Other shapes, multi-layer graphs,
+   additional operator/dtype pairs and one-weight serializer differentials
+   need separate qualification. The two first-run timings are correctness
+   observations, not performance measurements.
 4. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
    Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
    6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
@@ -126,20 +134,21 @@ audio. See the
 [`PoC 3 trace report`](../../docs/npu/trace/README.md) and
 [`runtime sequence`](../../docs/npu/trace/runtime-sequence.md).
 
-### Custom graph compiler and execution status (validated 2026-07-28)
+### Custom graph compiler and execution status (updated 2026-10-13)
 
-The custom-model boundary is now experimentally split into four distinct
-states:
+The observed custom-model paths have different admission boundaries:
 
 | Operation/path | Node selection | Graph verification | NBG export | Execution |
 |---|---:|---:|---:|---:|
 | Firmware Erf LUT/user kernel | OpenVX pass | Pass | Pass | Pass |
 | Add built-in | OpenVX pass | Not tested | Fail | Not reached |
-| MatrixMul built-in | OpenVX pass | Fail | Fail | Not reached |
-| Conv2d built-in | OpenVX pass | Fail | Fail | Not reached |
+| MatrixMul built-in, FP32 July control | OpenVX pass | Fail | Fail | Not reached |
+| Conv2d built-in, FP32 July control | OpenVX pass | Fail | Fail | Not reached |
+| Conv2d built-in, FP16 PoC 16 | NN target pass | Pass | Pass | Exact 32-byte oracle pass |
+| FullyConnected built-in, asymmetric U8 PoC 16 | NN target pass (optimized to Conv) | Pass | Pass | Exact 4-byte oracle pass |
 | SignalFrame source kernel | CPU fallback after shader failure | Fail | Fail | Not reached |
 
-The successful artifact was generated by repository-controlled TIM-VX source
+The first successful artifact was generated by repository-controlled TIM-VX source
 through the exact Wave stack:
 
 ```text
@@ -250,10 +259,12 @@ ASYM UINT8, SYMM PC INT8
 The pinned checker source has 59 ADD/Multiply pairs and no per-channel pair.
 The failure occurred before backend selection or NBG emission; no graph ran,
 health remained unchanged, and coefficient-only retries were skipped. The
-affine partition and later Conv ladder therefore remain blocked.
+affine partition therefore remains blocked. PoC 16 separately proves a
+native FP16 FIR Conv; expansion of the learned affine model into Conv
+remains unqualified.
 
 This proves the fixed partition and an offline Python/lab hybrid pipeline.
-It does not prove arbitrary ONNX, Conv/MatMul support, full-model NPU
+It does not prove arbitrary ONNX, broader Conv/MatMul coverage, full-model NPU
 residency, or the pending Rust `NpuInfer` service integration and end-to-end
 real-time/thermal qualification.
 
@@ -268,6 +279,7 @@ Full evidence:
 - [PoC 13G CPU/NPU benchmark](../../docs/npu/lab-notebook/2026-07-29-poc13g-wave-cpu-vs-npu.md)
 - [PoC 14A affine host contract](../../docs/npu/lab-notebook/2026-07-29-poc14a-affine-host.md)
 - [PoC 14B compiler negative](../../docs/npu/lab-notebook/2026-07-29-poc14b-affine-compiler-negative.md)
+- [PoC 16 native FP16 Conv and U8 FC](../../docs/npu/lab-notebook/2026-10-13-poc16-native-fp16-conv-u8-fc.md)
 
 ### Offline compiler acquisition status (validated 2026-07-28)
 
@@ -294,7 +306,7 @@ Closed compatibility result:
   `6.4.6:769531` simulator SDK to reach `network_binary.nb`;
 - the native `gen_nbg` input/output and allocation-ownership ABI is not
   completely proven;
-- the fixed Conv compilation remains prohibited.
+- fixed Conv compilation using this unqualified host package remains prohibited.
 
 The next valid acquisition is a dedicated x86-64 Vivante no-kernel SDK
 `>=6.4.22` whose OpenVX/ovxlib NBG path directly consumes `VIV_GPU_FILE`,
@@ -360,8 +372,10 @@ The adjacent English CTC ONNX weight `[512,4999]` and bias `[4999]` do not
 occur under the finite direct/FP16/BF16/transpose/block/lane transform
 registry in admitted NBG sections. The PoC 12A coefficient gate is
 `not-ready`.
-Coefficient packing, NN/TP instruction emission, relocation construction,
-custom Conv generation, and ONNX-to-NBG compilation remain unproven.
+Coefficient packing, NN/TP instruction emission, relocation construction
+and custom Conv generation through an open emitter remain unproven, as
+does general ONNX-to-NBG compilation. PoC 16 later proved native FP16 Conv
+generation through the exact vendor serializer.
 
 See the
 [PoC 12A notebook](../../docs/npu/lab-notebook/2026-07-28-poc12a-open-nbg-serializer.md)
@@ -452,9 +466,10 @@ one of:
    copy; sometimes it ships inside the board support package.
 2. **TIM-VX** (VeriSilicon's open-source tensor interface) plus the exact
    matching `6.4.19:946407` shader/program compiler components. TIM-VX graph
-   construction and one firmware Erf path are proven, but current
-   MatrixMul/Conv2d graphs fail verification and export. An ONNX Runtime or
-   TFLite front end cannot remove that lower compiler/runtime constraint.
+   construction, firmware Erf, native FP16 Conv and quantized U8 FC are
+   proven. The earlier FP32 MatrixMul/Conv controls failed; additional graph
+   coverage and EVIS source compilation remain unqualified. An ONNX Runtime
+   or TFLite front end still needs compatible lowering for each operation.
 3. Continue the bounded serializer-first route. PoC 12A proves exact
    unchanged representation and bounds the writer/load families; PoC 12C
    adds the header checksum and dynamic-I/O table codec. Coefficient packing
@@ -468,11 +483,11 @@ The production target remains a Rust-owned inference wrapper with a CPU
 fallback. General host ONNX admission is proven, but arbitrary ONNX-to-Wave-
 NPU compilation is not. The active research order is:
 
-1. preserve the proven generated-Erf execution as a regression control;
+1. preserve generated Erf, FP16 Conv and U8 FC as numerical controls;
 2. keep the general ONNX path on deterministic CPU fallback;
 3. either obtain an exact compiler route or pass the remaining,
    independently gated serializer coefficient/command-emission milestones;
-4. first construct and validate a fixed Conv control offline;
+4. build a model-specific graph from qualified dtype/operator pairs;
 5. characterize only the operations needed by a tiny spectral-mask model;
 6. keep CPU framing, overlap-add, monitoring, and fallback;
 7. integrate only after quality, deadline, stability, cleanup, and fallback
@@ -965,19 +980,19 @@ but *not* ABI-compatible with 6.4.19 galcore. We either:
 | Path | State | Notes |
 |------|-------|-------|
 | Host AoT compile, device run (OSS stack) | ❌ blocked | Host SDK emits foreign target `0x10000020`; it is a simulator control, not a Wave compiler. |
-| Device-side compile via exact OpenVX/ovxlib | ⚠️ narrow pass | Embedded Erf exported for `0x1000000e`; Add/MatrixMul/Conv2d export failed. |
+| Device-side compile via exact OpenVX/ovxlib | ⚠️ native primitives pass | Erf, FP16 Conv and U8 FC export for `0x1000000e` and execute correctly. Earlier Add/FP32 MatrixMul/Conv controls failed; broader models remain unqualified. |
 | EVIS/OpenCL source-kernel JIT | ❌ blocked | `libovxlib.so` embeds sources, but exact `libCLC.so` is absent; a 6.4.18 candidate is ABI-incompatible and quarantined. |
 | `libnnsdk.so` with chip-native SDK | ❌ NDA | Needs VeriSilicon Acuity Toolkit for VIP9000 — proprietary |
 | TIM-VX evk-board SDKs (A311D, S905D3) | — (untested) | Different NPU IP family from VIP9000 — very unlikely to produce compatible NBGs |
 
-**Updated root cause:** target identity and graph construction are available,
-and firmware-provided sources are embedded rather than entirely absent. What
-is missing is the exact compatible compiler/program package that lowers
-general built-ins or builds those sources into valid Wave kernel objects.
-The failure is version-sensitive: relocation coverage from 6.4.18 was not
-enough for a 6.4.19 compiler ABI.
+**Updated boundary (2026-10-13):** target identity, graph construction and
+native NN export are available for the qualified FP16 Conv/U8 FC controls.
+FP32 weight rejection explains the earlier NN Conv boundary. The exact
+compiler/program package needed for EVIS source JIT is still missing;
+relocation coverage from 6.4.18 was insufficient for the 6.4.19 compiler ABI.
+General model lowering needs further operator and graph qualification.
 
-**Unblocking action is business/external, not technical:**
+**External SDK routes for broader compiler coverage:**
 - Acuity Toolkit license from VeriSilicon (covers archmodel + compiler)
 - Amlogic A113X2 BSP drop (probably includes archmodel + shader source
   tree under Amlogic NDA)

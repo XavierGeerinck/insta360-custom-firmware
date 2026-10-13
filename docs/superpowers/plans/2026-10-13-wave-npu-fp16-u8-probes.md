@@ -44,11 +44,11 @@ new build script under `waved/tools/npu-compiler/`.
 `waved/third_party/device-sdk/lib`, its SHA-256, dependency list and pinned
 container/source provenance. Later native builds consume that exact path.
 
-- [ ] Verify the source commit and SDK hashes, inspect the immutable local
+- [x] Verify the source commit and SDK hashes, inspect the immutable local
   cross image for `cmake`, `ninja` and `aarch64-linux-gnu-g++`.
-- [ ] Build with `TIM_VX_USE_EXTERNAL_OVXLIB=ON`, NBG parser enabled and
+- [x] Build with `TIM_VX_USE_EXTERNAL_OVXLIB=ON`, NBG parser enabled and
   tests/examples disabled; no model/compiler execution occurs on the host.
-- [ ] Inspect ELF architecture, DT_NEEDED and required libc versions; save
+- [x] Inspect ELF architecture, DT_NEEDED and required libc versions; save
   the actual wrapper digest and complete build log.
 
 ### Task 2: Implement fixed compiler and host policies
@@ -62,7 +62,7 @@ the two fixed diagnostic variables. `POLICIES["fp16-conv"]` and
 `POLICIES["u8-fc"]` each supply one `candidate-1`. Reuse
 `load_manifest(policy=...)` and `run_candidate(...)` unchanged.
 
-- [ ] Write refusal tests first, including this fixed environment guard:
+- [x] Write refusal tests first, including this fixed environment guard:
 
   ```python
   data = json.loads(policy.manifest_path.read_text())
@@ -75,13 +75,13 @@ the two fixed diagnostic variables. `POLICIES["fp16-conv"]` and
   and independent oracles `fp16_fir_oracle()` / `u8_fc_oracle()` against the
   spec's bytes. Run the focused unittest module and observe the missing
   implementation failure before adding the policies/oracles.
-- [ ] Adapt the existing Conv compiler lifecycle to FP16 input/weights/
+- [x] Adapt the existing Conv compiler lifecycle to FP16 input/weights/
   output and FP32 bias. Build FC with the specified sparse weight columns
   and quantized INT32 bias. Preserve fixed argument/path/identity/alarm/
   atomic-output behavior; no Run, NBG import or tensor readback API.
-- [ ] Build with `-Wall -Wextra -Werror`, inspect native imports and source
+- [x] Build with `-Wall -Wextra -Werror`, inspect native imports and source
   policy, and write exact hashes into the two manifests.
-- [ ] Run focused new tests and the existing shared compile-harness tests.
+- [x] Run focused new tests and the existing shared compile-harness tests.
 
 ### Task 3: Compile, qualify and execute
 
@@ -93,17 +93,17 @@ under `docs/npu/lab-notebook/` and existing NPU status references.
 and SHA-256, or a recorded clean negative. Only validated artifacts feed
 the one-shot execution runner and fixed oracle.
 
-- [ ] Stage only absent fixed files; verify their hashes/modes. Capture
+- [x] Stage only absent fixed files; verify their hashes/modes. Capture
   preflight, compile FP16 Conv once and inspect raw result/postflight.
-- [ ] If health is unchanged, compile the independent U8 FC once and
+- [x] If health is unchanged, compile the independent U8 FC once and
   inspect raw result/postflight. Do not rerun rejected candidates.
-- [ ] For each exported NBG, validate target, dimensions, dtype, size and
+- [x] For each exported NBG, validate target, dimensions, dtype, size and
   section CRCs with `nbg_format.parse_nbg`. Build/hash-bind a fixed NBG
   runner and initialize output to a canary. Execute once with its frozen
   input and compare every returned byte with the independent oracle.
-- [ ] Preserve envelopes and raw logs, clean only known staged artifacts,
+- [x] Preserve envelopes and raw logs, clean only known staged artifacts,
   verify final state, update the notebook and supported conclusions.
-- [ ] Have an independent reviewer inspect probe and host boundaries;
+- [x] Have an independent reviewer inspect probe and host boundaries;
   fix meaningful issues and rerun the affected host checks before completion.
 
 ## Execution record
@@ -111,3 +111,28 @@ the one-shot execution runner and fixed oracle.
 Owner approved the full probe chain with `go`; no repeated approval is
 needed for its already-described compile and qualified execution steps.
 The design and implementation choices are reviewable in these files.
+
+Completed 2026-10-13. Both models exported native VPMN v2 NBGs for
+`0x1000000e` with explicit NN target logs, then executed exactly once with
+all 32 FP16 or 4 U8 output bytes matching the independent CPU oracles.
+All four staging roots were removed; captured boot, parameters, system
+hashes, service identities and health remained unchanged. Implementation:
+`e541da012a266f3f3670f31931749793e08bacb0`. Full evidence is in
+[PoC 16](../../npu/lab-notebook/2026-10-13-poc16-native-fp16-conv-u8-fc.md).
+
+Implementation adjustments supported by inspection and review:
+
+- The pinned toolchain supplied Make and no Ninja; the runtime build used
+  Unix Makefiles with source/SDK read-only and networking disabled.
+- The shared compile harness required a small change to accept each fixed
+  policy's diagnostic environment. The execution harness was generalized
+  from four-byte output to the policy's exact output length, preserving old
+  Erf behavior, and checks PoC 16 service identities during execution.
+- Review tightened both offline runners to seed device output after Compile
+  and retain the alarm through teardown before any live execution.
+- Cleanup acquired a tested bounded diagnostic-window fallback after busy
+  Wi-Fi logs rotated the short baseline window; it still rejects missing
+  markers or new faults. Refused cleanup attempts performed no deletion or
+  native run.
+- Independent native/host boundary review passed after corrections; the
+  relevant 94 host tests and both native policy verifiers passed.

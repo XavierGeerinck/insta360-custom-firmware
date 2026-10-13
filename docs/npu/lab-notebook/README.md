@@ -49,6 +49,14 @@ compiler constraint, not a failed research session.
 
 ## Completed records
 
+- [`2026-10-13-poc16-native-fp16-conv-u8-fc.md`](2026-10-13-poc16-native-fp16-conv-u8-fc.md)
+  — native FP16 Conv and quantized U8 FC compile/export to the NN target,
+  strict NBG qualification, and one exact CPU-oracle execution each, with
+  unchanged captured health and all disposable staging removed.
+- [`2026-10-13-rea-op-dtype-recovery.md`](2026-10-13-rea-op-dtype-recovery.md)
+  — REA recovery of the exact OpenVX FP32-weight rejection, conditional
+  FP16/U8 and NN/TP target paths, firmware Conv/FC dtype tables, and a
+  successful current stock-CTC control; the resulting probes passed PoC 16.
 - [`2026-07-28-poc0-reproducible-lab.md`](2026-07-28-poc0-reproducible-lab.md)
   — two live, allowlisted stock-CTC controls and unchanged-state evidence.
 - [`2026-07-28-poc1-runtime-abi.md`](2026-07-28-poc1-runtime-abi.md)
