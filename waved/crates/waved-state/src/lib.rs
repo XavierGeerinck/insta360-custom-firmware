@@ -252,6 +252,55 @@ pub struct BluetoothState {
     pub phone_audio: bool,
     /// Phone audio runs both ways, microphone too: a call (`0xB2` bit 2).
     pub call_audio: bool,
+    /// The name phones see in their Bluetooth list (the module's own,
+    /// `Insta360 Wave BT <six hex digits>`); empty until the module says.
+    pub advertised_name: String,
+    /// Seconds left in Wave's 2-minute pairing window after `BtPair`; 0 when
+    /// Wave is not pairing. It ends early when a phone connects or the module
+    /// leaves pairing mode.
+    pub pairing_left_s: u16,
+    /// A phone call through the module (I3). Its number is never logged.
+    pub call: BtCall,
+}
+
+/// A phone call through the Bluetooth module (I3). Only the number is known,
+/// never a contact name (no phone book, TODO "Not planned"). `Debug` never
+/// prints the number.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub enum BtCall {
+    #[default]
+    Idle,
+    /// `0xB1` brought a number: the phone rings.
+    Ringing { number: String },
+    /// `0xD1 00`: the call is up.
+    Active { number: String },
+}
+
+impl BtCall {
+    pub fn number(&self) -> Option<&str> {
+        match self {
+            BtCall::Idle => None,
+            BtCall::Ringing { number } | BtCall::Active { number } => Some(number),
+        }
+    }
+
+    pub fn is_ringing(&self) -> bool {
+        matches!(self, BtCall::Ringing { .. })
+    }
+
+    pub fn is_active(&self) -> bool {
+        matches!(self, BtCall::Active { .. })
+    }
+}
+
+impl std::fmt::Debug for BtCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            BtCall::Idle => "Idle",
+            BtCall::Ringing { .. } => "Ringing { .. }",
+            BtCall::Active { .. } => "Active { .. }",
+        })
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -734,6 +783,16 @@ pub enum Command {
     /// Download (if needed) and install the newest version now. Also the
     /// failure screen's Retry.
     InstallUpdate,
+    // --- Bluetooth (waved-bt, I1 / I3) ---
+    /// Make Wave visible to a new phone for two minutes: drop the connected
+    /// phone, then pairing mode (stock "Connect a new device").
+    BtPair,
+    /// Drop the connected phone.
+    BtDisconnect,
+    /// Answer the ringing call (button event 3).
+    BtAnswerCall,
+    /// Decline the ringing call or hang up the active one (button event 0).
+    BtDeclineCall,
 }
 
 // --- State Bus ---
@@ -1263,5 +1322,40 @@ mod tests {
         assert!(!failed.in_progress());
         // Installed, waiting for the user: nothing runs, nothing to watch.
         assert!(!OtaPhase::RestartNeeded.in_progress());
+    }
+
+    #[test]
+    fn bluetooth_starts_idle_with_no_call_and_no_pairing() {
+        let bus = StateBus::new();
+        let bt = bus.bt.borrow().clone();
+        assert_eq!(bt.call, BtCall::Idle);
+        assert_eq!(bt.pairing_left_s, 0);
+        assert!(bt.advertised_name.is_empty());
+        let commands = [
+            Command::BtPair,
+            Command::BtDisconnect,
+            Command::BtAnswerCall,
+            Command::BtDeclineCall,
+        ];
+        assert_eq!(commands.clone().len(), 4);
+    }
+
+    #[test]
+    fn a_call_knows_its_number_but_never_prints_it() {
+        let ringing = BtCall::Ringing { number: "+32470123456".into() };
+        let active = BtCall::Active { number: "+32470123456".into() };
+        assert_eq!(ringing.number(), Some("+32470123456"));
+        assert_eq!(active.number(), Some("+32470123456"));
+        assert_eq!(BtCall::Idle.number(), None);
+        assert!(ringing.is_ringing() && !ringing.is_active());
+        assert!(active.is_active() && !active.is_ringing());
+        for call in [&ringing, &active] {
+            let shown = format!("{call:?}");
+            assert!(!shown.contains("470"), "{shown}");
+        }
+        assert_eq!(format!("{ringing:?}"), "Ringing { .. }");
+        let mut bt = BluetoothState::default();
+        bt.call = active;
+        assert!(!format!("{bt:?}").contains("470"));
     }
 }
