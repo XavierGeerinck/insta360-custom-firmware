@@ -9,23 +9,50 @@
 #      the configuration as a removable drive with no medium. waved loads
 #      /dev/udisk into it only after unmounting /mnt/udisk, so the gadget
 #      never has to be unbound to switch modes and audio, HID and adb stay.
+#      The boot checks the bind (UDC set): if the gadget does not bind with
+#      the drive, it unlinks it and binds again without it, so a composite
+#      this controller cannot take never leaves Wave off USB (adb included).
+#      Why goes to the console and /tmp/waved-usbgadget.log.
 #
 # Idempotent: re-running adds nothing after the first patch. Backs up
-# the original to /data/waved/S89usbgadget.bak.<ts> on first run: never into
-# /etc/init.d, where rcS runs every S??* at boot (docs/AUDIO_HARDWARE.md).
-# INIT and BACKUP_DIR can be overridden to try it on a copy.
+# the original to /data/waved/S89usbgadget.bak.<ts> on each patching run:
+# never into /etc/init.d, where rcS runs every S??* at boot
+# (docs/AUDIO_HARDWARE.md). Each change is written to a dot-named file next
+# to S89 (rcS never runs it), made executable, synced, then renamed over
+# S89, so a power cut leaves either the old or the new script, executable.
+# INIT and BACKUP_DIR can be overridden to try it on a copy
+# (scripts/test-patch-stock-usbgadget.sh does).
 #
 # After patching, reboot:   adb reboot
+# Then check the bind:      adb shell cat /sys/kernel/config/usb_gadget/amlogic/UDC
+# Undo: docs/USB_STORAGE.md, "Recovering by hand".
 
 set -euo pipefail
 
 INIT=${INIT:-/etc/init.d/S89usbgadget}
 BACKUP_DIR=${BACKUP_DIR:-/data/waved}
+TMP="$(dirname "$INIT")/.$(basename "$INIT").waved-tmp"
+BLOCK=$(mktemp)
+trap 'rm -f "$TMP" "$BLOCK"' EXIT
 
 if [ ! -f "$INIT" ]; then
     echo "FATAL: $INIT not found — wrong device or stock firmware moved it" >&2
     exit 1
 fi
+
+# Put $TMP in place of $INIT. It must parse; it is executable before the
+# rename (a cut between the two would leave a script rcS cannot run: no USB);
+# the rename is atomic, and sync makes both durable.
+replace_init() {
+    if ! sh -n "$TMP"; then
+        echo "FATAL: the patched script does not parse; $INIT left as it was" >&2
+        exit 1
+    fi
+    chmod 755 "$TMP"
+    sync
+    mv -f "$TMP" "$INIT"
+    sync
+}
 
 ALREADY_VOL=0
 ALREADY_HID=0
@@ -34,7 +61,14 @@ ALREADY_MSC=0
 grep -q "echo -16384 > functions/uac2.0/p_volume_min" "$INIT" && ALREADY_VOL=1
 grep -q "echo -10240 > functions/uac2.0/c_volume_min" "$INIT" && ALREADY_CVOL=1
 grep -q "mkdir -p functions/hid.0" "$INIT" && ALREADY_HID=1
-grep -q "waved G1: USB storage" "$INIT" && ALREADY_MSC=1
+grep -q "^waved_g1_check_bind()" "$INIT" && ALREADY_MSC=1
+
+if [ "$ALREADY_MSC" = "0" ] && grep -q "waved G1: USB storage" "$INIT"; then
+    # The first version linked the drive without checking the bind.
+    echo "FATAL: $INIT has an older USB storage patch. Restore the newest" >&2
+    echo "  $BACKUP_DIR/S89usbgadget.bak.* from before it, then run this again." >&2
+    exit 1
+fi
 
 if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ] && [ "$ALREADY_CVOL" = "1" ] \
     && [ "$ALREADY_MSC" = "1" ]; then
@@ -44,12 +78,14 @@ fi
 
 mkdir -p "$BACKUP_DIR"
 cp "$INIT" "$BACKUP_DIR/S89usbgadget.bak.$(date +%s)"
+rm -f "$TMP"
 
 if [ "$ALREADY_VOL" = "0" ]; then
-    sed -i \
+    sed \
         -e 's|echo -100 > functions/uac2.0/p_volume_min|echo -16384 > functions/uac2.0/p_volume_min|' \
         -e 's|echo 1 > functions/uac2.0/p_volume_res|echo 256 > functions/uac2.0/p_volume_res|' \
-        "$INIT"
+        "$INIT" > "$TMP"
+    replace_init
     echo "patched UAC2 p_volume range (mic, gadget->host)"
 fi
 
@@ -60,10 +96,11 @@ fi
 # PCM Capture Volume (which we then read in uac/control.rs as the
 # host-side speaker volume; see docs/AUDIO_HARDWARE.md).
 if [ "$ALREADY_CVOL" = "0" ]; then
-    sed -i \
+    sed \
         -e 's|echo -100 > functions/uac2.0/c_volume_min|echo -10240 > functions/uac2.0/c_volume_min|' \
         -e 's|echo 1 > functions/uac2.0/c_volume_res|echo 256 > functions/uac2.0/c_volume_res|' \
-        "$INIT"
+        "$INIT" > "$TMP"
+    replace_init
     echo "patched UAC2 c_volume range (speaker, host->gadget)"
 fi
 
@@ -83,42 +120,96 @@ if [ "$ALREADY_HID" = "0" ]; then
             inserted = 1
         }
         { print }
-    ' "$INIT" > "${INIT}.tmp" && mv "${INIT}.tmp" "$INIT"
-    chmod +x "$INIT"
+    ' "$INIT" > "$TMP"
+    replace_init
     echo "patched HID gadget (hid.0)"
 fi
 
 if [ "$ALREADY_MSC" = "0" ]; then
-    # Into start_usbgadget only (not the OTA mode), right before it binds the
-    # UDC. Stock's msc_init has loaded /dev/udisk into lun.0 by then; empty it
-    # before the link, or the computer would mount the volume Wave has mounted.
-    awk '
-        BEGIN { in_start = 0; inserted = 0 }
-        /start_usbgadget\(\)[[:space:]]*\{/ { in_start = 1 }
-        in_start && !inserted && /^[[:space:]]*usb_flash[[:space:]]*$/ {
-            print "\t\t# waved G1: USB storage (docs/USB_STORAGE.md). A removable drive with no"
-            print "\t\t# medium; waved loads /dev/udisk only after unmounting /mnt/udisk."
-            print "\t\tif [ -d /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0 ]; then"
-            print "\t\t\techo > /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0/lun.0/file"
-            print "\t\t\techo 1 > /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0/lun.0/removable"
-            print "\t\t\tln -s /sys/kernel/config/usb_gadget/amlogic/functions/mass_storage.usb0 /sys/kernel/config/usb_gadget/amlogic/configs/amlogic.1/mass_storage.usb0"
-            print "\t\tfi"
-            inserted = 1
+    # The functions go right before start_usbgadget; its bind (usb_flash, in
+    # start_usbgadget only, not the OTA mode) becomes link, bind, check.
+    # Stock's msc_init has loaded /dev/udisk into lun.0 by then; the link step
+    # empties it first, or the computer would mount the volume Wave has mounted.
+    cat > "$BLOCK" <<'EOF'
+# >>> waved G1: USB storage (docs/USB_STORAGE.md), by patch-stock-usbgadget.sh.
+# A removable drive with no medium, linked next to the other functions; waved
+# loads /dev/udisk only after unmounting /mnt/udisk. If the gadget does not
+# bind with it, the drive is unlinked and the gadget bound again without it,
+# so audio, HID and adb stay. What happened: /tmp/waved-usbgadget.log.
+WAVED_G1_GADGET=${WAVED_G1_GADGET:-/sys/kernel/config/usb_gadget/amlogic}
+WAVED_G1_LOG=${WAVED_G1_LOG:-/tmp/waved-usbgadget.log}
+WAVED_G1_CONSOLE=${WAVED_G1_CONSOLE:-/dev/console}
+
+waved_g1_say()
+{
+    echo "USB:{waved G1} $*" >> "$WAVED_G1_CONSOLE" 2>/dev/null
+    echo "$(date) $*" >> "$WAVED_G1_LOG" 2>/dev/null
+}
+
+waved_g1_bound()
+{
+    [ -n "$(cat "$WAVED_G1_GADGET/UDC" 2>/dev/null)" ]
+}
+
+waved_g1_link_drive()
+{
+    waved_g1_msc=$WAVED_G1_GADGET/functions/mass_storage.usb0
+    [ -d "$waved_g1_msc" ] || return 0
+    echo > "$waved_g1_msc/lun.0/file"
+    echo 1 > "$waved_g1_msc/lun.0/removable"
+    ln -s "$waved_g1_msc" "$WAVED_G1_GADGET/configs/amlogic.1/mass_storage.usb0"
+}
+
+waved_g1_check_bind()
+{
+    waved_g1_link=$WAVED_G1_GADGET/configs/amlogic.1/mass_storage.usb0
+    waved_g1_bound && return 0
+    if [ ! -L "$waved_g1_link" ]; then
+        waved_g1_say "the gadget did not bind (no USB storage drive linked)"
+        return 0
+    fi
+    waved_g1_say "the gadget did not bind with mass_storage.usb0; binding again without it"
+    dmesg 2>/dev/null | tail -n 20 >> "$WAVED_G1_LOG" 2>/dev/null
+    rm -f "$waved_g1_link"
+    usb_flash
+    if waved_g1_bound; then
+        waved_g1_say "bound without USB storage; waved says USB storage isn't available"
+    else
+        waved_g1_say "the gadget did not bind without mass_storage.usb0 either"
+    fi
+}
+# <<< waved G1
+EOF
+    awk -v block="$BLOCK" '
+        BEGIN { in_start = 0; done = 0 }
+        /^[[:space:]]*(function[[:space:]]+)?start_usbgadget[[:space:]]*\(\)/ {
+            while ((getline line < block) > 0) print line
+            close(block)
+            print ""
+            in_start = 1
         }
+        in_start && !done && /^[[:space:]]*usb_flash[[:space:]]*$/ {
+            indent = $0
+            sub(/usb_flash.*/, "", indent)
+            print indent "waved_g1_link_drive"
+            print
+            print indent "waved_g1_check_bind"
+            done = 1
+            next
+        }
+        in_start && /^}/ { in_start = 0 }
         { print }
-        END { if (!inserted) exit 3 }
-    ' "$INIT" > "${INIT}.tmp" || {
-        rm -f "${INIT}.tmp"
+        END { if (!done) exit 3 }
+    ' "$INIT" > "$TMP" || {
         echo "FATAL: start_usbgadget has no usb_flash line; mass_storage.usb0 not linked" >&2
         exit 1
     }
-    mv "${INIT}.tmp" "$INIT"
-    chmod +x "$INIT"
-    echo "patched USB storage drive (mass_storage.usb0, removable, no medium)"
+    replace_init
+    echo "patched USB storage drive (mass_storage.usb0, removable, no medium, bind checked)"
 fi
 
 echo
-grep -n "p_volume_min\|p_volume_max\|p_volume_res\|functions/hid.0\|mass_storage.usb0 /sys" "$INIT" || true
+grep -n "p_volume_min\|p_volume_max\|p_volume_res\|functions/hid.0\|waved_g1_" "$INIT" || true
 
 echo
 echo "reboot the device for the new gadget config to take effect:"
