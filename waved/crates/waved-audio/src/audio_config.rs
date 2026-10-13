@@ -38,6 +38,10 @@ pub struct AudioConfig {
     pub uac: Option<UacConfig>,
     #[serde(default)]
     pub hid: Option<HidConfig>,
+    /// Bluetooth phone audio on TDM-A (`crate::bt_audio`). Absent: the
+    /// defaults (on, `hw:0,0`).
+    #[serde(default)]
+    pub bt: Option<BtAudioConfig>,
     /// Conferencing echo-control tuning. This is device DSP calibration,
     /// separate from user-facing noise reduction and microphone volume.
     #[serde(default)]
@@ -185,6 +189,51 @@ impl Default for UacConfig {
             buffer_periods: default_uac_periods(),
             mixer_card: default_uac_mixer_card(),
             host_mute_target: HostMuteTarget::default(),
+        }
+    }
+}
+
+/// Bluetooth phone audio (`crate::bt_audio`, I2): the Telink module's TDM-A
+/// link, 48 kHz, 2 ch, S16_LE both ways.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct BtAudioConfig {
+    #[serde(default = "default_bt_enabled")]
+    pub enabled: bool,
+    /// Capture (phone → speaker) and playback (microphone → phone).
+    #[serde(default = "default_bt_device")]
+    pub device: String,
+    /// ALSA period in frames, both directions. Stock used 480 for capture.
+    #[serde(default = "default_bt_period")]
+    pub period_frames: usize,
+    #[serde(default = "default_bt_periods")]
+    pub buffer_periods: u32,
+    /// Keep `hw:0,0` playback running (silence outside a call) whenever
+    /// phone audio plays, in case TDM-A capture needs it for its clocks.
+    #[serde(default)]
+    pub playback_clock: bool,
+}
+
+fn default_bt_enabled() -> bool {
+    true
+}
+fn default_bt_device() -> String {
+    "hw:0,0".to_string()
+}
+fn default_bt_period() -> usize {
+    1024
+}
+fn default_bt_periods() -> u32 {
+    4
+}
+
+impl Default for BtAudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_bt_enabled(),
+            device: default_bt_device(),
+            period_frames: default_bt_period(),
+            buffer_periods: default_bt_periods(),
+            playback_clock: false,
         }
     }
 }
@@ -439,6 +488,17 @@ impl AudioConfig {
                 return Err(ConfigError::Invalid(
                     "uac device strings must be non-empty".into(),
                 ));
+            }
+        }
+        if let Some(bt) = &self.bt {
+            if bt.period_frames == 0 {
+                return Err(ConfigError::Invalid("bt.period_frames must be > 0".into()));
+            }
+            if bt.buffer_periods < 2 {
+                return Err(ConfigError::Invalid("bt.buffer_periods must be >= 2".into()));
+            }
+            if bt.device.is_empty() {
+                return Err(ConfigError::Invalid("bt.device must be non-empty".into()));
             }
         }
         Ok(())
@@ -798,6 +858,61 @@ mod tests {
         assert_eq!(d.period_frames, 1024);
         assert_eq!(d.buffer_periods, 4);
         assert_eq!(d.mixer_card, "hw:1");
+    }
+
+    fn with_bt(bt: &str) -> String {
+        format!(
+            r#"{{
+            "version": 5,
+            "capture": {{
+                "mic_device": "hw:0,2",
+                "mic_channels": 8,
+                "mic_sample_rate": 48000,
+                "mic_format": "S32_LE"
+            }},
+            "period_frames": 1024,
+            "buffer_periods": 8,
+            "bt": {bt}
+        }}"#
+        )
+    }
+
+    #[test]
+    fn bt_audio_defaults_to_tdm_a_and_is_on() {
+        let d = BtAudioConfig::default();
+        assert!(d.enabled);
+        assert_eq!(d.device, "hw:0,0");
+        assert_eq!(d.period_frames, 1024);
+        assert_eq!(d.buffer_periods, 4);
+        assert!(!d.playback_clock, "capture alone worked with arecord (2026-10-13)");
+        assert!(AudioConfig::default_embedded().bt.is_none(), "absent: main uses the default");
+        let cfg = AudioConfig::from_json(&with_bt("{}")).expect("an empty bt block parses");
+        assert_eq!(cfg.bt, Some(d));
+    }
+
+    #[test]
+    fn bt_audio_overrides_parse() {
+        let cfg = AudioConfig::from_json(&with_bt(
+            r#"{"enabled": false, "device": "hw:0,4", "period_frames": 480, "buffer_periods": 8, "playback_clock": true}"#,
+        ))
+        .expect("parses");
+        let bt = cfg.bt.unwrap();
+        assert!(!bt.enabled && bt.playback_clock);
+        assert_eq!((bt.device.as_str(), bt.period_frames, bt.buffer_periods), ("hw:0,4", 480, 8));
+    }
+
+    #[test]
+    fn bt_audio_rejects_bad_values() {
+        for bad in [
+            r#"{"period_frames": 0}"#,
+            r#"{"buffer_periods": 1}"#,
+            r#"{"device": ""}"#,
+        ] {
+            assert!(
+                matches!(AudioConfig::from_json(&with_bt(bad)), Err(ConfigError::Invalid(_))),
+                "{bad} must be refused"
+            );
+        }
     }
 
     #[test]

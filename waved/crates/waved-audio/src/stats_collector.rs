@@ -75,6 +75,15 @@ pub struct AudioStats {
     pub uac: Option<crate::uac::UacStatsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hid: Option<waved_hid::stats::HidStatsSnapshot>,
+    /// Bluetooth phone audio on TDM-A (`crate::bt_audio`); absent when the
+    /// paths are not running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bt_audio: Option<crate::bt_audio::BtAudioStatsSnapshot>,
+}
+
+/// Attach the Bluetooth audio counters (`None`: not running).
+pub fn with_bt_audio(stats: &mut AudioStats, bt: Option<&crate::bt_audio::BtAudioStats>) {
+    stats.bt_audio = bt.map(|b| b.snapshot());
 }
 
 #[allow(clippy::too_many_arguments)] // tracking issue: collapse into StatsCollectorConfig once SP#7(d') lands
@@ -90,6 +99,7 @@ pub async fn run(
     dsp_metrics: Option<Arc<DspMetrics>>,
     #[cfg(feature = "capture-alsa")] uac_stats: Option<Arc<crate::uac::UacStats>>,
     hid_stats: Option<Arc<waved_hid::stats::HidStats>>,
+    bt_audio_stats: Option<Arc<crate::bt_audio::BtAudioStats>>,
 ) {
     info!("stats_collector running, out={}", out_path.display());
     let mut interval = tokio::time::interval(period);
@@ -128,7 +138,7 @@ pub async fn run(
             _ = interval.tick() => {
                 if let Some(frame) = latest_frame.as_ref() {
                     let state = audio_state_rx.borrow().clone();
-                    let s = compute_stats_with_processed(
+                    let mut s = compute_stats_with_processed(
                         frame, &stats, map_source, last_write_error.clone(), &alignment,
                         latest_post_aec_rms, latest_aec_metrics.clone(),
                         &state, dsp_metrics.as_deref(),
@@ -136,6 +146,7 @@ pub async fn run(
                         uac_stats.as_deref(),
                         hid_stats.as_deref(),
                     );
+                    with_bt_audio(&mut s, bt_audio_stats.as_deref());
                     if let Err(e) = write_atomic(&out_path, &s) {
                         warn!("stats write failed: {e}");
                         last_write_error = Some(format!("{e}"));
@@ -304,6 +315,7 @@ pub fn compute_stats_with_processed(
         #[cfg(feature = "capture-alsa")]
         uac,
         hid,
+        bt_audio: None,
     }
 }
 
@@ -745,6 +757,25 @@ mod tests_hid_wiring {
     }
 
     #[test]
+    fn audio_stats_carry_bt_audio_only_when_wired() {
+        let mut audio = sample_audio_stats();
+        with_bt_audio(&mut audio, None);
+        let json = serde_json::to_value(&audio).unwrap();
+        assert!(json.get("bt_audio").is_none());
+
+        let bt = crate::bt_audio::BtAudioStats::default();
+        bt.speaker_active.store(true, std::sync::atomic::Ordering::Relaxed);
+        bt.capture_frames.fetch_add(48_000, std::sync::atomic::Ordering::Relaxed);
+        bt.capture_xruns.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        with_bt_audio(&mut audio, Some(&bt));
+        let json = serde_json::to_value(&audio).unwrap();
+        assert_eq!(json["bt_audio"]["speaker_active"], true);
+        assert_eq!(json["bt_audio"]["mic_active"], false);
+        assert_eq!(json["bt_audio"]["capture_frames"], 48_000);
+        assert_eq!(json["bt_audio"]["capture_xruns"], 1);
+    }
+
+    #[test]
     fn audio_stats_omits_hid_when_none() {
         let audio = sample_audio_stats();
         let json = serde_json::to_value(&audio).unwrap();
@@ -793,6 +824,7 @@ mod tests_hid_wiring {
             #[cfg(feature = "capture-alsa")]
             uac: None,
             hid: None,
+            bt_audio: None,
         }
     }
 }
