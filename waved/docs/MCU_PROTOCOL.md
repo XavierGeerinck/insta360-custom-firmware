@@ -369,6 +369,39 @@ start height after a power cycle.
 the device pass checks it (`docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md`,
 "Device-pass checklist").
 
+### The status LEDs in waved
+
+`crates/waved-mcu/src/leds.rs` (2026-10-13, not yet seen on the device): stock's table and
+scheduler ("Status LEDs" above) and stock's LED_CTRL bytes, sent from the MCU service loop
+(`McuService::with_leds`, on in `main.rs` unless `WAVED_LEDS=0`). Each LED change logs
+`mcu: led <EVENT> (pattern … sub … leds … colour … target …)`; the first answer (or the first
+3 unanswered tries) logs whether the MCU acknowledges LED_CTRL. LED_CTRL is resent up to 3
+times, 200 ms apart, without a cmd 1 `mcu_notify`; a newer state replaces one still waiting.
+
+| waved state | Event |
+|-------------|-------|
+| Always (the floor) | IDLE |
+| `AudioState::mic_muted` on / off | MIC_MUTE / MIC_UNMUTE |
+| `speaker_volume` or `speaker_muted` changes (any source, not only on-device as stock) | SPEAKER_VOLUME (0 LEDs when muted) |
+| `MeetingState::recording` or `paused` on / off | AI_MEETING / AI_MEETING_EXIT |
+| `BluetoothState::pairing` on / off | BT_BROADCAST |
+| `connected` turns on | BT_PAIR |
+| `call` ringing / active / idle | MEETING_WAIT / MEETING_TALK / both off |
+| `McuState::lift` moving | UPDOWN |
+| `Command::PowerOff`, `PowerOffNow`, or `power_off` InProgress / Sent | SHUTDOWN |
+| `power_off` turns Aborted (obstructed retract) | SHUTDOWN off, EXCEPTION_MOTOR |
+| `OtaPhase::Installing` / `Restarting` (the scheduler then freezes, as stock) | OTA |
+| `Failed` right after installing | EXCEPTION_OTA_FAIL |
+| `FilesState::low_space` turns on | EXCEPTION_STORAGE |
+| `BatteryState::temperature` ≥ 75 °C | TMP_ERR |
+| `DeviceEvent::LowBattery` (below 10 %) / at 5 % or less, once each until charging or 13 % | BATTERY_20_PERCENT / BATTERY_5_PERCENT |
+| `Command::FactoryReset` | RECOVERY |
+
+Not followed: STANDBY (the screen's sleep is not on the bus), USB_MODE (USB disk mode,
+the USB storage work), reverse charging, board / CPU temperature, the camera module. One
+deviation from stock: during the 10 s power-off lock other requests are recorded but not
+shown (stock drops them), so an aborted power off returns to the current state.
+
 ## Open
 
 - Where the status LEDs are and whether this unit has them (`MCU.bin` checks for a missing

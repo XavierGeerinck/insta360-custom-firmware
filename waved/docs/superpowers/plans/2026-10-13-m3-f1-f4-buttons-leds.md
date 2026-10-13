@@ -28,7 +28,7 @@ drives them; wire what exists into waved.
 |---|---|---|
 | L-1 | F1 stops at the finding: no input path to wire, nothing implemented; TODO F1 closed as "not on this hardware". The legacy `ButtonType::VolumeUp/Down` path (waved-hid bridge, `SimMcuHandle::press_button`) is left alone. | If a unit does have keys, a capture on the device would show it; nothing in waved blocks adding them later. |
 | L-2 | LEDs follow stock's scheduler exactly: highest priority wins, the latest activation breaks ties, events with a time limit expire, an unchanged top event is not resent (except the speaker volume and update levels), `KEEP` reuses the last colour, mic unmute while recording is cyan, and nothing else shows for 10 s after the power-off pattern unless the lift is obstructed. Stock's bytes are sent unchanged. | The bytes are stock's; only which state maps to which event is ours (below). |
-| L-3 | State → event mapping: mic mute (red) / unmute (green 1 s); speaker volume or speaker mute change (level on the ring, 500 ms); recording or paused (cyan) / its end (1 s); Bluetooth pairing (blue chase) / a phone connects (green 1 s); a ringing phone call (cyan chase) / a call in progress (cyan); lift moving (cyan pulse); `Command::PowerOff` (green fall); an obstructed power-off retract (yellow blink 3 s); update in progress (blue pulse) / failed (yellow blink 3 s); low space (yellow blink 3 s); battery temperature ≥ 75 °C (yellow blink); low battery ≤ 10 % (yellow pulse 8 s) and ≤ 5 % (red pulse 8 s), once each; `Command::FactoryReset` (cyan pulse 10 s); otherwise IDLE (green). | A wrong mapping shows a wrong colour; no command beyond LED_CTRL. |
+| L-3 | State → event mapping: mic mute (red) / unmute (green 1 s); speaker volume or speaker mute change (level on the ring, 500 ms); recording or paused (cyan) / its end (1 s); Bluetooth pairing (blue chase) / a phone connects (green 1 s); a ringing phone call (cyan chase) / a call in progress (cyan); lift moving (cyan pulse); `Command::PowerOff` (green fall); an obstructed power-off retract (yellow blink 3 s); an update installing (blue pulse; the ring then freezes, as stock) / failing while it installs (yellow blink 3 s); low space (yellow blink 3 s); battery temperature ≥ 75 °C (yellow blink); low battery ≤ 10 % (yellow pulse 8 s) and ≤ 5 % (red pulse 8 s), once each; `Command::FactoryReset` (cyan pulse 10 s); otherwise IDLE (green). | A wrong mapping shows a wrong colour; no command beyond LED_CTRL. |
 | L-4 | Not mapped (no waved state, or never raised by stock): standby at half brightness (screen asleep: no bus state; the UI runtime is a hotspot), USB disk mode (blue, the USB storage workstream), reverse charging, board / CPU temperature, camera module (PUC), boot and AI meeting mic mode (no stock caller), mic error (stock never registers it). **Charging has no LED in stock** (`BATTERY_CHARING` is not in the table). | The ring stays on its last stock-like state in those cases. |
 | L-5 | The speaker-volume level shows for every change, not only on-device ones (stock: `vol_src == 0` only); waved can't tell a host change from a local one at the MCU. | The ring flashes the level when the computer changes the volume. |
 | L-6 | LED_CTRL is resent up to 3 times without a cmd 1 `mcu_notify` (stock: 3 tries, 100 ms); a newer LED state replaces one still waiting. | Two extra frames per change if the MCU never acknowledges LED_CTRL. |
@@ -70,15 +70,17 @@ waved first (`docs/MCU_PROTOCOL.md`, "Tools").
    reads `disabled`.
 
 **F4 LEDs**
-1. Start waved: the log shows `mcu: led IDLE` and one frame `FD .. 64 00 00 01 00 00 00 00 00 00 0C 01 0F`
-   (cmd 1: LIGHT, 100 %, 12 LEDs, GREEN, target 15). Look for a light: where it is (lift, base,
+1. Start waved: the log shows `mcu: led IDLE (pattern 0 sub 0 leds 12 colour 1 target 15)` and the
+   wire carries `FD 09 00 00 <seq> 00 00 64 00 00 01 00 00 00 00 00 0C 01 0F <crc> <crc>` (cmd 1:
+   steady, 100 %, 12 LEDs, green, target 15). Look for a light: where it is (lift, base,
    around the screen), and that it is green. If nothing lights anywhere, note it: the BCT3236 may
    be unfitted on this unit (then set `WAVED_LEDS=0` and record it in `MCU_PROTOCOL.md`).
-2. Record whether the MCU answers LED_CTRL with a cmd 1 `mcu_notify` (`mcu: led` lines show
-   `no reply` after 3 tries otherwise) and what its params carry.
+2. Record whether the MCU answers LED_CTRL: the log shows once either
+   `mcu: led: the MCU answers LED_CTRL (params [..])` or
+   `mcu: led: no reply to LED_CTRL after 3 tries (not logged again)`.
 3. Tap the dial (mic mute): `mcu: led MIC_MUTE`, the ring turns red; tap again: green for 1 s
    (`MIC_UNMUTE`), then back to IDLE.
-4. Louder / Quieter: `mcu: led SPEAKER_VOLUME` with `leds n` = 12 × volume / 100; the ring shows
+4. Louder / Quieter: `mcu: led SPEAKER_VOLUME (… leds n …)` with n = 12 × volume / 100; the ring shows
    that many LEDs for 0.5 s in the last colour; at 0 % or muted none.
 5. Start a recording: cyan (`AI_MEETING`); mute during it: red; unmute: cyan; stop: 1 s cyan
    colour change (`AI_MEETING_EXIT`), then green.
@@ -90,3 +92,7 @@ waved first (`docs/MCU_PROTOCOL.md`, "Tools").
    the lift during the retract: yellow fast blink (`EXCEPTION_MOTOR`) for 3 s.
 9. Note for each pattern what the MCU actually shows (pattern, speed, `target` 3 = three blinks?)
    and fill in the pattern meanings in `MCU_PROTOCOL.md` "Open".
+10. With the SoC off and USB plugged in, note whether the MCU shows anything by itself (stock
+    sends nothing for charging).
+11. Start waved with `WAVED_LEDS=0`: the log shows `WAVED_LEDS=0: leaving the status LEDs alone`
+    and no `mcu: led` line.

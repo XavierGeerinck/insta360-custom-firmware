@@ -289,7 +289,14 @@ Rules for the parallel milestones:
   - Host side done 2026-10-12: `waved-mcu/src/lift.rs` (move, start height, motor reports,
     polling, blocked / obstructed) and a frame-level MCU simulator (`simulate.rs`) that the
     tests and the `simulate` build run against. Device checks: the plan above, "F3 Motor".
-- [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
+- [ ] **F4 LEDs** (S) — host side done 2026-10-13; left: the device checks in
+  `waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md` ("Device-pass checklist").
+  - Stock drives a 12-LED ring through the MCU (LED_CTRL, cmd 1; a BCT3236 driver in `MCU.bin`)
+    from a fixed event table; waved now does the same (`waved-mcu/src/leds.rs`,
+    `waved/docs/MCU_PROTOCOL.md` "Status LEDs"). Not yet seen on the device: whether the ring is
+    fitted on this unit, where it shows, and whether the MCU answers LED_CTRL.
+  - Stock shows nothing for charging. Not followed yet: screen asleep (half brightness, needs the
+    screen state on the bus), USB disk mode (blue, with the USB storage work).
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
 - [x] **F7 Power key through the MCU** (M) — done 2026-10-12: the key arrives on the
