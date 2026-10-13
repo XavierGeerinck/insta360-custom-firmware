@@ -115,9 +115,16 @@ impl UiSnapshot {
         self.now_unix_s + i64::from(self.system.utc_offset_min) * 60
     }
 
-    /// The host signals an active call (HID off-hook).
+    /// The host signals an active call (HID off-hook), or a phone call through
+    /// Bluetooth is up (I3).
     pub fn in_call(&self) -> bool {
-        self.audio.call_off_hook
+        self.audio.call_off_hook || self.bt.call.is_active()
+    }
+
+    /// A phone call through Bluetooth is ringing (I3): the call screen takes
+    /// over and a resting screen wakes.
+    pub fn bt_ringing(&self) -> bool {
+        self.bt.call.is_ringing()
     }
 
     /// The microphone signal goes somewhere: a call, the computer or a recording.
@@ -198,6 +205,20 @@ mod tests {
         assert_eq!(bt.connection_line(), "Bluetooth: iPhone");
         bt.audio.mic_muted = true;
         assert_eq!(bt.connection_line(), "Mic is off");
+    }
+
+    #[test]
+    fn a_bluetooth_call_is_a_call_once_it_is_up() {
+        let mut snap = UiSnapshot::default();
+        snap.bt.connected = true;
+        snap.bt.device_name = "iPhone".into();
+        snap.bt.call = waved_state::BtCall::Ringing { number: "0471".into() };
+        assert!(!snap.in_call(), "ringing is not yet a call");
+        assert!(snap.bt_ringing());
+        snap.bt.call = waved_state::BtCall::Active { number: "0471".into() };
+        assert!(snap.in_call());
+        assert!(!snap.bt_ringing());
+        assert_eq!(snap.connection_line(), "In a call");
     }
 
     #[test]

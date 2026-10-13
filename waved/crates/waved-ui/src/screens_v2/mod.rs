@@ -38,3 +38,7 @@ pub mod files;
 
 // Workstream K: security.
 pub mod pin;
+
+// Workstream I: Bluetooth.
+pub mod bluetooth;
+pub mod call;

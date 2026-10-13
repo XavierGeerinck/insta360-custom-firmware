@@ -1,5 +1,7 @@
 //! Reusable pieces from the component table in `docs/mockups/README.md`.
 
+/// Bluetooth device rows, the icon pill and the call rings (workstream I, I3 / I4).
+pub mod bluetooth;
 pub mod buttons;
 pub mod controls;
 pub mod dial;
