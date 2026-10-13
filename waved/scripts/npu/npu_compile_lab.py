@@ -49,7 +49,7 @@ BOOT_ID_RE = re.compile(
 )
 RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 KERNEL_ALERT_RE = re.compile(
-    r"(warning|error|fault|timeout|timed out|hang|recover|exception|mmu)",
+    r"(warning|error|fault|timeout|timed out|hang|recover|exception|mmu|panic|oops|BUG:)",
     re.IGNORECASE,
 )
 
@@ -702,6 +702,7 @@ def collect_snapshot(transport: Any, manifest: CompileManifest) -> dict[str, Any
             "ps 2>/dev/null | "
             "grep -E '([w]ave-npu-(compile-(add|erf|erf-affine|signal-frame|"
             "audio-denoiser|conv-audio-denoiser|fp16-conv|u8-fc)|"
+            "onnx-(compile|execute)-v1|"
             "query-caps|clc-loader-probe|execute-erf-(zero|nonzero)|"
             "execute-(fp16-conv|u8-fc)|"
             "run-(audio-denoiser|conv-audio-denoiser|"
@@ -806,6 +807,19 @@ def _new_dmesg_lines(
     return list(after[matches[-1] + 1 :]), True
 
 
+def align_native_diagnostics(transport, manifest, before: dict, after: dict) -> None:
+    """Preserve PoC 17's marker when busy logs exceed the short snapshot."""
+    if not manifest.policy.poc_id.startswith("17"):
+        return
+    _, aligned = _new_dmesg_lines(before.get("dmesg_tail", []), after.get("dmesg_tail", []))
+    if aligned or before.get("dmesg_tail") == after.get("dmesg_tail"):
+        return
+    text = _shell_value(transport, "dmesg 2>/dev/null | tail -n 16000",
+                        "expanded native diagnostics", after["errors"])
+    if text is not None:
+        after["dmesg_tail"] = _bounded_lines(text, 16000)
+
+
 def compare_health(
     manifest: CompileManifest,
     before: Mapping[str, Any],
@@ -840,6 +854,15 @@ def compare_health(
     alerts = [line for line in new_lines if KERNEL_ALERT_RE.search(line)]
     if alerts:
         differences.append("new kernel warning/error diagnostics were observed")
+    if manifest.policy.poc_id.startswith("17"):
+        def services(snapshot):
+            return sorted(
+                re.sub(r"\s+", " ", line.strip())
+                for line in snapshot.get("processes", [])
+                if re.search(r"\bwaved\b|S60waved|audioserver|pspapp", line)
+            )
+        if services(before) != services(after):
+            differences.append("service process identities changed")
     return differences, alerts
 
 
@@ -1174,6 +1197,7 @@ def run_candidate(
     _write_text_exclusive(run_directory / "stderr.txt", command_result.stderr)
 
     postflight = collect_snapshot(transport, manifest)
+    align_native_diagnostics(transport, manifest, preflight, postflight)
     _write_json_exclusive(run_directory / "postflight.json", postflight)
     health_differences, kernel_alerts = compare_health(manifest, preflight, postflight)
     envelope["health_differences"] = health_differences

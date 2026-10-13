@@ -750,6 +750,7 @@ def run_once(
     )
 
     postflight = collect_snapshot(transport, manifest)
+    npu_compile_lab.align_native_diagnostics(transport, manifest, preflight, postflight)
     npu_compile_lab._write_json_exclusive(
         run_directory / "postflight.json", postflight
     )
