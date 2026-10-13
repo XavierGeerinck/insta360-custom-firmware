@@ -1,0 +1,77 @@
+#!/bin/sh
+
+WAVED_DIR="${WAVED_DIR:-/data/waved}"
+UPDATE_DIR="$WAVED_DIR/update"
+MAX_TRIAL_STARTS=3
+
+# Update fall-back (docs/UPDATES.md, "Trial starts"). While update/trial
+# exists, the version an update installed has not reported healthy yet.
+# Count every start; on the fourth, put each "restore" file back from its
+# .prev copy, delete each "remove" file, and leave update/rolled-back for the
+# old waved to report. Without a trial file this does nothing.
+update_guard() {
+    [ -f "$UPDATE_DIR/trial" ] || return 0
+    echo start >> "$UPDATE_DIR/starts"
+    starts=$(($(wc -l < "$UPDATE_DIR/starts")))
+    [ "$starts" -le "$MAX_TRIAL_STARTS" ] && return 0
+    echo "update not healthy after $MAX_TRIAL_STARTS starts, going back" >> "$WAVED_DIR/waved.log"
+    while read -r action path; do
+        case "$action" in
+            restore) if [ -f "$path.prev" ]; then mv -f "$path.prev" "$path"; fi ;;
+            remove) rm -f "$path" ;;
+        esac
+    done < "$UPDATE_DIR/trial"
+    mv -f "$UPDATE_DIR/trial" "$UPDATE_DIR/rolled-back"
+    rm -f "$UPDATE_DIR/starts"
+    sync
+}
+
+case "$1" in
+    start)
+        echo "Starting waved..."
+
+        # Apply firewall rules
+        if [ -f /data/waved/iptables.rules ]; then
+            iptables-restore < /data/waved/iptables.rules 2>/dev/null || true
+        fi
+
+        # Ensure directories exist
+        mkdir -p /data/waved
+        mkdir -p /mnt/udisk/recordings
+
+        # Set permissions on config
+        chmod 0600 /data/waved/config.toml 2>/dev/null || true
+
+        # Start waved with watchdog respawn
+        (
+            while true; do
+                # /data is small (the binary alone is ~62 MB of it): keep
+                # one previous log past 2 MB instead of appending forever.
+                if [ "$(wc -c < /data/waved/waved.log 2>/dev/null || echo 0)" -gt 2097152 ]; then
+                    mv /data/waved/waved.log /data/waved/waved.log.1
+                fi
+                update_guard
+                /data/waved/waved >>/data/waved/waved.log 2>&1
+                echo "waved exited ($?), restarting in 3s..." >>/data/waved/waved.log
+                sleep 3
+            done
+        ) &
+
+        # The first waved instance after boot always has a broken display
+        # (fb_ili79400 deferred-I/O not active). Kill it after 5s so the
+        # watchdog restarts it — the second instance works reliably.
+        (sleep 5 && killall -TERM waved) &
+        ;;
+    stop)
+        echo "Stopping waved..."
+        killall waved 2>/dev/null
+        ;;
+    guard)
+        # One pass of the update fall-back, as the watchdog runs it (tests).
+        update_guard
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|guard}"
+        exit 1
+        ;;
+esac

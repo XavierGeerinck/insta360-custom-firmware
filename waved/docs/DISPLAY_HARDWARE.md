@@ -119,7 +119,22 @@ now shows for the bootloader's time plus ~1.5 s. Install: push both files and
 
 `/data` is ~440 MB and nearly full; the stripped binary is ~63 MB. `adb push`
 over the running binary deletes the old file before it fails for space, leaving
-no binary. Deploy through `/tmp` and swap with the watchdog stopped:
+no binary. Deploy through `/tmp` and swap with the watchdog stopped.
+
+`deploy/install.sh` does all of it, for a first install and for an update: after the
+`cross build` below, run it from anywhere. It strips the binary (`llvm-objcopy` from
+`rustup component add llvm-tools`, or `OBJCOPY=...`), pushes it, `S60waved` and
+`iptables.rules` to `/tmp` and checks their md5, copies the Wave's `config.toml` to
+`/data/waved/config.toml.before-<UTC time>` (mode 600) and never replaces it, stops the
+watchdog, waits for waved to exit, swaps the binary (the old one waits in
+`/tmp/waved.old` and goes back if the new one does not fit), installs `S60waved` through a
+dot-named copy and starts the watchdog again. It tests the Wave's files on the Wave and
+checks every step's output, because `adb shell`'s exit status is not reliable. It refuses
+while an over-the-air update is on trial (`/data/waved/update/trial`, `docs/UPDATES.md`).
+On a first install (no `/data/waved/waved`) it writes `config/default.toml` and asks for a
+reboot instead. Host-tested against a fake `adb` (`crates/waved-update/src/install_script.rs`).
+
+By hand, the same steps for the binary alone:
 
 ```bash
 S=$(mktemp -d)

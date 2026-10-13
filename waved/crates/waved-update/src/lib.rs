@@ -18,6 +18,8 @@ pub mod format;
 pub mod gate;
 pub mod index;
 pub mod install;
+#[cfg(test)]
+mod install_script;
 pub mod key;
 pub mod paths;
 pub mod release;

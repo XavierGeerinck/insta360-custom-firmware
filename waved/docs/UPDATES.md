@@ -35,15 +35,17 @@ cargo run -p waved-update --bin waved-pack -- pack --key ~/.config/waved/update.
 ```
 
 `waved-pack inspect <file.wup> --pubkey <hex>` shows a package's manifest and checks
-its signature. The first build that carries the key has to reach the Wave the old way
-(adb, `docs/DISPLAY_HARDWARE.md#deploy`); from then on updates go over the air.
+its signature. The first build that carries the key has to reach the Wave the old way:
+`deploy/install.sh` over adb (`docs/DISPLAY_HARDWARE.md#deploy`), which also installs the
+current `S60waved` and keeps the Wave's `config.toml`. From then on updates go over the air.
 
 Wave installs a package only if the `S60waved` that will run at the new version's first
-boots has the fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):
+boots has the current fall-back (`update_guard`, [below](#install-and-fall-back-trial-boots)):
 the package's own when it carries one, otherwise the one on the Wave. A Wave whose
 `/etc/init.d/S60waved` came from `main`, or that got only the binary over adb, has none and
-refuses with "Wave can't go back if this update fails". Pack with
-`--include deploy/S60waved` (or push it with `deploy/install.sh`) and that Wave updates.
+refuses with "Wave can't go back if this update fails". So does one with an older guard
+from this branch (see step 1 of the install). Pack with `--include deploy/S60waved` (or
+install it with `deploy/install.sh`) and that Wave updates.
 
 `Cross.toml` passes `WAVED_UPDATE_PUBKEY` into the build container. A build without it
 trusts no key: its System row reads "Off" and it can only be replaced over adb.
@@ -147,9 +149,14 @@ setup page.
    first) room on `/data`, then unpacks to `/data/waved/update/staged/` (same filesystem as
    the binary).
 5. **Waits** until Wave is free (`gate.rs`): no recording or pause, no "Send this
-   recording?", no call or ringing, no playback, no Wi-Fi setup, battery ≥ 30 % or USB
-   connected. An automatic install also waits while the computer has the microphone open; a
-   tapped one does not (some apps keep it open all day).
+   recording?", USB storage off (`UsbStorageState::phase` is `Off`: the restart would pull
+   the recordings drive from under the computer, and `Starting`/`Stopping` are mid-handover),
+   no call or ringing on the computer, no phone call through Bluetooth (`BluetoothState::call`
+   ringing or up, or `call_audio` still running), no playback, no Wi-Fi setup, battery ≥ 30 %
+   or USB connected. All of these hold a tapped install too. Only one does not: an automatic
+   install also waits while the computer has the microphone open; a tapped one does not
+   (some apps keep it open all day). Music from a phone (`phone_audio` without
+   `call_audio`) does not hold an install.
 6. **Installs** (`install.rs`, below), shows "Restarting" for a second, then runs
    `/sbin/reboot`. If the reboot fails the update is installed and its trial armed, so
    the phase becomes `RestartNeeded` ("Restart Wave"), not a failure with Retry: the new
@@ -179,8 +186,14 @@ starts:
 
 1. `sh -n` on every staged init script; a syntax error installs nothing. Then the fall-back
    check: the package's `S60waved` if it carries one, else `/etc/init.d/S60waved`, must
-   contain `update_guard`, or nothing is installed (`NoFallBack`; automatic checks then
-   pass over that version, a tapped Retry tries again).
+   contain the current guard's lines (`install.rs`, `GUARD_MARKERS`): `update_guard()`,
+   `MAX_TRIAL_BOOTS=` and the dot-name rule `prev="${path%/*}/.${path##*/}.prev"`.
+   Otherwise nothing is installed (`NoFallBack`; automatic checks then pass over that
+   version, a tapped Retry tries again). `update_guard` alone is not enough: the first
+   guard (f6c0eff) put back `$path.prev`, which this installer no longer writes, and the
+   second (69a673d) counted starts and went back after three, which one good boot can
+   exceed (both kept in `crates/waved-update/testdata/`). Change the markers with the
+   script whenever the trial protocol changes.
 2. Hard-link every file about to be replaced to `.<name>.prev` beside it (copy if linking
    fails), and copy `/data/waved/config.toml` to `.config.toml.prev` (mode 600; a copy, so
    a save during the trial cannot reach it).
@@ -211,8 +224,10 @@ remove /data/waved/splash.fb
 
 `config.toml` is listed like the files the update replaces (`remove` when there was none),
 because every config section denies unknown fields: an older waved rejects a file a newer
-one saved, and its `.bak` too, and runs on defaults (first-run screen, PIN off, API token
-and uploads gone). **Settings changed during a trial are lost on a rollback**: the old
+one saved with a key it does not know, and its `.bak` too, and runs on defaults (first-run
+screen, PIN off, API token and uploads gone). New keys are saved only when they differ
+from their default ([Going back over adb](#going-back-over-adb)), which narrows this but
+does not remove it. **Settings changed during a trial are lost on a rollback**: the old
 waved gets the settings it had when the update was installed.
 
 While it exists, the watchdog loop in `deploy/S60waved` (`update_guard`) counts **boots**:
@@ -266,7 +281,7 @@ Back (`update_restart_needed` golden).
 | signed version or build differs from the index | The update doesn't match the server's list |
 | signed version not allowed | The update is older than this version |
 | no room | Not enough space on Wave |
-| no `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
+| no current `update_guard` in the `S60waved` the trial would boot with | Wave can't go back if this update fails |
 | installer error | The update could not be installed |
 | cut between trial and swap | The update stopped before it finished |
 | new version never committed | Version X didn't start, so Wave went back |
@@ -276,7 +291,7 @@ Back (`update_restart_needed` golden).
 | # | Decision | Cost if wrong |
 |---|---|---|
 | U1 | Own `.wup` format (signed JSON header, gzip files) instead of tar or swupdate's CPIO | Needs `waved-pack inspect` to look inside. |
-| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the `update_guard` check only that the word is there. |
+| U2 | Closed target list: waved and the `deploy/` files; no rootfs, kernel or partitions | Anything else still needs adb. A bad `S60waved` breaks the fall-back itself; `sh -n` catches syntax only, and the guard check only that the current guard's lines are there. |
 | U3 | Unsigned index, signed package | A hostile server can waste a download. |
 | U4 | Version from the binary; downgrades only by the device's own switch | Every release must bump the workspace version. |
 | U5 | Download to `/tmp` (RAM), stage on `/data` | A reboot mid-download starts it over. |
@@ -284,6 +299,10 @@ Back (`update_restart_needed` golden).
 | U7 | Wait until free; manual installs ignore "computer listening" | An app that holds the microphone open blocks automatic installs. |
 | U8 | `/sbin/reboot` after install | Unverified; a failure shows "Restart Wave" with nothing to retry (the trial is already armed) and blocks further installs until Wave restarts. |
 | U9 | Public key from `WAVED_UPDATE_PUBKEY` at build time; `waved-pack` refuses binaries without it | A build made without the key can be replaced only over adb. |
+| U10 | USB storage and Bluetooth phone calls (ringing, up, or call audio) hold every install, tapped ones too; phone music does not | A computer that keeps the drive, or a module state that never clears `call_audio`, holds installs until it does (the update waits; nothing fails). Phone music is cut by the restart. |
+| U11 | The installer accepts only an `S60waved` with the current guard's lines (`GUARD_MARKERS`), not any `update_guard` | A Wave with an older guard refuses every package that does not carry `S60waved` until `deploy/install.sh` (or a package with it) installs the current one. A future guard that changes the protocol must change the markers too, or old Waves accept a package whose guard would not undo it. |
+| U12 | Config keys added since the pre-M3 waved are saved only when not the default; `config/default.toml` has them as comments | A non-default value (table in [Going back over adb](#going-back-over-adb)) still makes an older waved run on defaults. A key added later without the same treatment breaks downgrades again (`PRE_M3_KEYS` test in `waved-config` catches it for defaults). |
+| U13 | `deploy/install.sh` never replaces the Wave's `config.toml` and copies it to `config.toml.before-<time>` first; it refuses while an OTA trial is pending; a first install ends with a reboot, an update restarts the watchdog | The copies pile up on `/data` (a few KB each); delete old ones by hand. A trial that never commits blocks adb installs until it rolls back or `update/trial` is removed by hand. |
 
 ## Device checks
 
@@ -306,6 +325,24 @@ Not verified on a Wave. Before trusting this, a device pass should check:
 7. rustls against the owner's HTTPS server (certificate roots are compiled in by
    reqwest's `rustls-tls`; a self-signed server needs plain HTTP on the LAN, which the
    signature makes safe).
+8. `deploy/install.sh` as an update, the first time (host-tested against a fake `adb`
+   only): before it, note `md5sum /data/waved/config.toml` and `df -h /data /tmp`. Check that
+   the Wave's `adb shell` output is read right (the `echo ready` probe, `\r` stripped), that
+   busybox `ps` shows the watchdog as `/bin/sh /etc/init.d/S60waved start` both after a boot
+   (rcS) and after a `start-stop-daemon` start, that `config.toml` has the same md5 after and
+   `config.toml.before-<time>` is there with mode 600, that `/tmp/waved.old` holds the old
+   binary, and that exactly one waved runs afterwards (`ps | grep -c '[w]aved$'`; one
+   watchdog: `ps | grep -c '[S]60waved start'`).
+9. The guard check against the Wave's own `/etc/init.d/S60waved`: `grep -c
+   'MAX_TRIAL_BOOTS=' /etc/init.d/S60waved`. A Wave whose script predates boot counting
+   refuses a package without `S60waved` ("Wave can't go back if this update fails") until
+   `install.sh` or a package carrying `deploy/S60waved` replaces it.
+10. The gate on the Wave: with an update Ready, a phone call through Bluetooth (ringing,
+    answered, hung up) keeps it Waiting until the call and its audio end; USB storage on
+    holds a tapped Install until the drive is ejected and Wave has the volume back.
+11. Going back: with Mic height Medium, Bluetooth on and lockdown off, install the pre-M3
+    build (`main`, 3cc3707) with `WAVED_BINARY=... deploy/install.sh`; it must start without
+    the first-run screen and with the API endpoint kept. Then install this build again.
 
 ## Device facts used here
 
@@ -316,6 +353,37 @@ Not verified on a Wave. Before trusting this, a device pass should check:
 | A/B: `boot_a/b`, `system_a/b`; slot state in `misc` (AvbABData "AB0": priority, tries, successful_boot); U-Boot `bcb_cmd=…get_valid_slot` | `../backups/partitions/p07_misc.img`, `p04_env.img` (main checkout only) |
 | `/tmp` tmpfs ~1.9 GiB; RAM 3.8 GB | `../docs/REPORT_DEVICE_DUMP.md:26-27`; `../docs/npu/lab-notebook/2026-07-28-poc3-runtime-driver-trace.md:191` |
 | waved lives in `/data/waved`; `S60waved` in the `/etc` overlay; the SquashFS is never modified | `deploy/install.sh` |
+
+## Going back over adb
+
+An older waved goes back on with `deploy/install.sh` (`WAVED_BINARY=<that build>`; its
+`S60waved` is the checkout's). The script keeps the Wave's `config.toml` and copies it to
+`/data/waved/config.toml.before-<UTC time>` before every install, so the settings an older
+waved could read are still there.
+
+Every config section denies unknown fields, so an older waved rejects a `config.toml` with
+a key it does not know (and its `.bak`, which the newer waved may have written too) and
+runs on defaults: first-run screen, PIN off, API token and uploads gone. Its settings
+service does not write over that file; a save on the setup page moves it aside to
+`config.toml.unloadable`. The keys added in milestone 3 (`waved-config`, `PRE_M3_KEYS` test) are saved only
+when they differ from their default, so a Wave that never changed them goes back to the
+pre-M3 waved (`main` at 3cc3707) with its settings. These still break that downgrade:
+
+| Key | Written when |
+|---|---|
+| `device.mic_height` | Mic height set to Low or High (Medium is the default) |
+| `bluetooth.enabled` | Bluetooth switched off |
+| `security.release_lockdown` | release lockdown on (setup page) |
+| `security.ota_allow_downgrade` | set to `true` by hand |
+
+`security.device_password` changed format in milestone 3 (a `pin1$…` record instead of the
+PIN). The pre-M3 waved loads it (any string up to 256 characters) and has no PIN screen,
+so nothing is locked; the newer waved reads the record again when it comes back.
+
+To go back with settings that break it: before installing the older build, remove those
+lines from `/data/waved/config.toml` (watchdog stopped, `docs/DISPLAY_HARDWARE.md#deploy`),
+or afterwards copy a `config.toml.before-<time>` from before the newer install over
+`config.toml` (mode 600) and restart the watchdog.
 
 ## Going back to stock (H4)
 

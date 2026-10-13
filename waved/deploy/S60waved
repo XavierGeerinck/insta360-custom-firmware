@@ -18,6 +18,10 @@ MAX_TRIAL_STARTS_PER_BOOT=10
 # does nothing.
 # The old copy of /dir/name is /dir/.name.prev: rcS runs every
 # /etc/init.d/S??* at boot, so a copy must never match that glob.
+# The updater installs only if this script has the MAX_TRIAL_BOOTS line
+# and the prev="..." line below (crates/waved-update/src/install.rs,
+# GUARD_MARKERS): older guards also had update_guard but put back the wrong
+# copies or counted starts. Change those lines and GUARD_MARKERS together.
 update_guard() {
     [ -f "$UPDATE_DIR/trial" ] || return 0
     mkdir -p "$RUN_DIR"
