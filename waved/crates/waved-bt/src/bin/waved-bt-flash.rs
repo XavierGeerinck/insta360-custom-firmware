@@ -189,6 +189,11 @@ mod tool {
         });
         match result {
             Ok(()) => {
+                if target == Target::Module {
+                    // The new firmware may come up with its own settings:
+                    // the next waved names and configures it again.
+                    let _ = std::fs::remove_file(waved_bt::startup::STAMP_PATH);
+                }
                 println!("done: start waved again; its log shows the new `bt module firmware` and `bt module built`");
                 Ok(())
             }

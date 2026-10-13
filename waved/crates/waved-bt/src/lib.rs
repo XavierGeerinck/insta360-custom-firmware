@@ -14,7 +14,9 @@
 //! - [`ota`]: `BT.bin` / `DONGLE.bin` updates (TODO F6), run only by the
 //!   `waved-bt-flash` tool, never by the service.
 //!
-//! [`BtService`] sends stock's start-up sequence ([`startup`]), answers every
+//! [`BtService`] sends the start-up ([`startup`]: stock's sequence, writing
+//! the module's name, reconnect switch and flash only when they differ, at
+//! most once per boot, noted in [`startup::STAMP_PATH`]), answers every
 //! frame the module repeats (`75 45`) with stock's acknowledgement and keeps
 //! `BluetoothState`. Given the bus (`with_commands`) it switches Bluetooth on
 //! and off, pairs, stops pairing, disconnects and answers or declines calls;
@@ -45,7 +47,7 @@ use control::{Control, Response};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use event::Event;
 use frame::{Frame, Prefix, PREFIX_ACK, PREFIX_LEGACY, PREFIX_REQUEST};
-use startup::Startup;
+use startup::{Stamp, Startup};
 use state::Tracker;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
@@ -98,8 +100,6 @@ struct Core {
     calls: Calls,
     startup: Startup,
     seen: Seen,
-    /// What `SetName` sends, for stock's renaming while the module is unnamed.
-    name: String,
     /// The module has sent something: the line works, polling makes sense.
     heard: bool,
     next_poll_ms: u64,
@@ -129,6 +129,9 @@ struct Ticked {
     frames: Vec<Command>,
     changed: bool,
     note: Option<&'static str>,
+    /// What this boot wrote to the module, to note in [`startup::STAMP_PATH`]
+    /// before `frames` go out.
+    stamp: Option<Stamp>,
 }
 
 /// What the module said that `BluetoothState` does not keep.
@@ -155,11 +158,11 @@ impl Seen {
 }
 
 impl Core {
-    /// Stock's start-up ([`startup`]) and the switch as config has it.
-    /// Returns whether `s` changed.
-    fn start(&mut self, settings: &Settings, s: &mut BluetoothState) -> bool {
-        self.name = settings.name.clone();
-        self.startup = Startup::stock(settings);
+    /// The start-up ([`startup`]) after what `stamp` says this boot already
+    /// wrote to the module, and the switch as config has it. Returns whether
+    /// `s` changed.
+    fn start(&mut self, settings: &Settings, stamp: Stamp, s: &mut BluetoothState) -> bool {
+        self.startup = Startup::new(settings, stamp);
         self.next_poll_ms = STATUS_POLL_MS;
         self.tracker.set_enabled(settings.enabled, s);
         self.calls.set_enabled(settings.enabled);
@@ -219,21 +222,22 @@ impl Core {
     /// The clocks: the start-up sequence, the pairing window, the call and
     /// the 5 s status poll once the module has answered.
     fn tick(&mut self, now_ms: u64, s: &mut BluetoothState) -> Ticked {
-        let mut frames = self.startup.poll(now_ms);
+        let mut frames = self.startup.poll(now_ms, s);
         let window = self.control.tick(now_ms, s);
         let call = self.calls.tick(now_ms, s);
         if self.heard && now_ms >= self.next_poll_ms {
             self.next_poll_ms = now_ms + STATUS_POLL_MS;
             if self.startup.done() {
-                // Stock names the module again while it still has its own
-                // default name (bt_heartbeat_thread 75122-75127).
-                if s.advertised_name.contains(startup::UNNAMED) {
-                    frames.extend([Command::SetName(self.name.clone()), Command::GetName]);
-                }
+                frames.extend(self.startup.rename(s));
                 frames.push(Command::GetStatus);
             }
         }
-        Ticked { frames, changed: window || call.changed, note: call.why }
+        Ticked {
+            frames,
+            changed: window || call.changed,
+            note: call.why,
+            stamp: self.startup.take_stamp(),
+        }
     }
 }
 
@@ -332,7 +336,8 @@ impl BtService {
         let now_ms = || start.elapsed().as_millis() as u64;
         let mut core = Core::default();
         let settings = self.settings.clone();
-        self.bt_tx.send_if_modified(|s| core.start(&settings, s));
+        let stamp = read_stamp();
+        self.bt_tx.send_if_modified(|s| core.start(&settings, stamp, s));
         loop {
             match self.bt_rx.recv_timeout(TICK) {
                 Ok(raw) => self.handle(&raw, now_ms(), &mut core),
@@ -367,6 +372,11 @@ impl BtService {
             });
             if let Some(note) = ticked.note {
                 info!("{note}");
+            }
+            // Noted before the frames go: a waved killed right after them
+            // must not write the module again this boot.
+            if let Some(stamp) = &ticked.stamp {
+                write_stamp(stamp);
             }
             for c in &ticked.frames {
                 let frame = c.frame();
@@ -423,6 +433,21 @@ impl BtService {
                 info!("bt: the phone's volume sets the speaker to {target} %");
             }
         }
+    }
+}
+
+/// What an earlier waved wrote to the module this boot ([`startup::Stamp`]);
+/// nothing when the file is missing (the first start of a boot).
+fn read_stamp() -> Stamp {
+    std::fs::read_to_string(startup::STAMP_PATH)
+        .map(|text| Stamp::parse(&text))
+        .unwrap_or_default()
+}
+
+fn write_stamp(stamp: &Stamp) {
+    if let Err(e) = std::fs::write(startup::STAMP_PATH, stamp.render()) {
+        // The start-up still writes the module at most once per waved run.
+        warn!("bt: cannot note the module's settings in {}: {e}", startup::STAMP_PATH);
     }
 }
 
@@ -739,7 +764,7 @@ mod tests {
     }
 
     mod core {
-        use super::super::{Core, Settings};
+        use super::super::{Core, Settings, Stamp};
         use crate::frame::{Frame, Parser};
         use tracing::Level;
         use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
@@ -765,7 +790,7 @@ mod tests {
         /// The service started with Bluetooth on, as config's default.
         fn started() -> (Core, BluetoothState) {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
-            core.start(&settings(true), &mut s);
+            core.start(&settings(true), Stamp::default(), &mut s);
             (core, s)
         }
 
@@ -929,7 +954,7 @@ mod tests {
     }
 
     mod service {
-        use super::super::{Core, Settings, Ticked, STATUS_POLL_MS};
+        use super::super::{Core, Settings, Stamp, Ticked, STATUS_POLL_MS};
         use crate::call::{CALL_AUDIO_GRACE_MS, RING_TIMEOUT_MS};
         use crate::command::{id, Command};
         use crate::frame::Frame;
@@ -944,41 +969,189 @@ mod tests {
 
         fn start(enabled: bool) -> (Core, BluetoothState) {
             let (mut core, mut s) = (Core::default(), BluetoothState::default());
-            let changed = core.start(&Settings { enabled, name: "Wave Boardroom".into() }, &mut s);
+            let changed = core.start(&Settings { enabled, name: "Wave Boardroom".into() }, Stamp::default(), &mut s);
             assert_eq!(changed, enabled, "bt_on starts false");
             assert_eq!(s.bt_on, enabled);
             (core, s)
         }
 
         /// The start-up as the module answers it at once.
+        /// (An unnamed module, the first start of a boot.)
         fn answered_startup(core: &mut Core, s: &mut BluetoothState) -> Vec<String> {
-            let mut all = hex(&core.tick(0, s).frames);
-            core.frame(&Frame::request(id::NAME_SET, &[0]), 0, s);
-            all.extend(hex(&core.tick(100, s).frames));
-            let mut name = vec![0];
-            name.extend_from_slice(b"Wave Boardroom");
-            core.frame(&Frame::request(id::NAME, &name), 100, s);
-            all.extend(hex(&core.tick(200, s).frames));
+            let mut module = Module::named("Insta360 Wave BT XXXXXX");
+            let mut all = Vec::new();
+            for now in (0..=300).step_by(100) {
+                let frames = core.tick(now, s).frames;
+                module.answer(core, s, &frames, now);
+                all.extend(hex(&frames));
+            }
             all
+        }
+
+        /// The module as the start-up meets it: its name, whether it takes
+        /// `SetName`, a phone already connected.
+        struct Module {
+            name: String,
+            takes_names: bool,
+            connected: bool,
+        }
+
+        impl Module {
+            fn named(name: &str) -> Self {
+                Self { name: name.into(), takes_names: true, connected: false }
+            }
+
+            /// `0x8C` for `SetName` (the name taken when it takes names),
+            /// `0xC6` with its name for `GetName`.
+            fn answer(&mut self, core: &mut Core, s: &mut BluetoothState, sent: &[Command], now: u64) {
+                for c in sent {
+                    match c {
+                        Command::SetName(name) => {
+                            if self.takes_names {
+                                self.name = name.clone();
+                            }
+                            core.frame(&Frame::request(id::NAME_SET, &[0]), now, s);
+                        }
+                        Command::GetName => {
+                            let mut data = vec![0];
+                            data.extend_from_slice(self.name.as_bytes());
+                            core.frame(&Frame::request(id::NAME, &data), now, s);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        /// One waved start against `module` for `ms` of its clock: every
+        /// frame sent, and the stamp it leaves for the next start.
+        fn run_start(settings: &Settings, stamp: Stamp, module: &mut Module, ms: u64) -> (Vec<Command>, Stamp) {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            core.start(settings, stamp.clone(), &mut s);
+            if module.connected {
+                core.frame(&Frame::request(0xB2, &[0x01]), 0, &mut s);
+            }
+            let (mut sent, mut stamp) = (Vec::new(), stamp);
+            for now in (0..=ms).step_by(100) {
+                let t = core.tick(now, &mut s);
+                if let Some(written) = t.stamp {
+                    stamp = written;
+                }
+                module.answer(&mut core, &mut s, &t.frames, now);
+                sent.extend(t.frames);
+            }
+            (sent, stamp)
+        }
+
+        /// What writes the module's settings: the name, the reconnect switch
+        /// and the flash save.
+        fn writes(sent: &[Command]) -> Vec<Command> {
+            sent.iter()
+                .filter(|c| matches!(c, Command::SetName(_) | Command::AutoReconnect(_) | Command::SaveFlash))
+                .cloned()
+                .collect()
+        }
+
+        fn boardroom(enabled: bool) -> Settings {
+            Settings { enabled, name: "Wave Boardroom".into() }
+        }
+
+        #[test]
+        fn a_crash_loop_writes_the_module_once_per_boot() {
+            // S60waved kills the first waved of every boot and restarts any
+            // waved that exits: every start used to send SetName, D8 and
+            // SaveFlash.
+            let mut module = Module::named("Insta360 Wave BT XXXXXX");
+            let mut stamp = Stamp::default();
+            let mut all = Vec::new();
+            for _ in 0..10 {
+                let (sent, left) = run_start(&boardroom(true), stamp, &mut module, 30_000);
+                stamp = left;
+                all.extend(writes(&sent));
+            }
+            assert_eq!(all, [
+                Command::SetName("Wave Boardroom".into()),
+                Command::AutoReconnect(true),
+                Command::SaveFlash
+            ]);
+            assert_eq!(module.name, "Wave Boardroom");
+        }
+
+        #[test]
+        fn a_module_that_keeps_its_default_name_is_renamed_three_times_a_boot() {
+            // Stock renames every 5 s while the name holds XXXXXX, forever.
+            let mut module = Module { takes_names: false, ..Module::named("Insta360 Wave BT XXXXXX") };
+            let mut stamp = Stamp::default();
+            let mut renames = 0;
+            for _ in 0..5 {
+                let (sent, left) = run_start(&boardroom(true), stamp, &mut module, 120_000);
+                stamp = left;
+                renames += sent.iter().filter(|c| matches!(c, Command::SetName(_))).count();
+            }
+            assert_eq!(renames, usize::from(crate::startup::MAX_RENAMES));
+        }
+
+        #[test]
+        fn a_new_device_name_reaches_the_module_once() {
+            let mut module = Module::named("Wave Boardroom");
+            let (sent, stamp) = run_start(&boardroom(true), Stamp::default(), &mut module, 10_000);
+            assert_eq!(writes(&sent), [Command::AutoReconnect(true), Command::SaveFlash], "the name is right");
+            let lobby = Settings { enabled: true, name: "Wave Lobby".into() };
+            let (sent, stamp) = run_start(&lobby, stamp, &mut module, 10_000);
+            assert_eq!(writes(&sent), [Command::SetName("Wave Lobby".into()), Command::SaveFlash]);
+            assert_eq!(module.name, "Wave Lobby");
+            let (sent, _) = run_start(&lobby, stamp, &mut module, 10_000);
+            assert_eq!(writes(&sent), []);
+        }
+
+        #[test]
+        fn a_phone_already_connected_is_not_sent_a_reconnect() {
+            // Stock turns the module's reconnect off (D8 00) as a phone
+            // connects; D8 01 with one connected would only disturb it.
+            let mut module = Module { connected: true, ..Module::named("Wave Boardroom") };
+            let (sent, _) = run_start(&boardroom(true), Stamp::default(), &mut module, 10_000);
+            assert_eq!(writes(&sent), [], "nothing to write");
+            assert!(sent.contains(&Command::GetName) && sent.contains(&Command::PtaMode { wifi: true }));
+        }
+
+        #[test]
+        fn switching_off_during_the_start_up_is_not_undone() {
+            let (mut core, mut s) = start(true);
+            let mut module = Module::named("Wave Boardroom");
+            // The module is slow: the start-up waits for an answer.
+            core.tick(0, &mut s);
+            let out = core.command(&BusCommand::SetBluetooth(false), 500, 0, &mut s);
+            assert_eq!(hex(&out.frames), ["75 45 01 CB CC"]);
+            let mut after = Vec::new();
+            for now in (600..=10_000).step_by(100) {
+                let frames = core.tick(now, &mut s).frames;
+                module.answer(&mut core, &mut s, &frames, now);
+                if now == 600 {
+                    // Its answers to what was sent at 0.
+                    module.answer(&mut core, &mut s, &[Command::SetName("Wave Boardroom".into()), Command::GetName], now);
+                }
+                after.extend(frames);
+            }
+            assert!(!after.contains(&Command::OpenBt), "{after:?}");
+            assert!(!after.contains(&Command::AutoReconnect(true)), "{after:?}");
+            assert!(!s.bt_on);
         }
 
         #[test]
         fn it_starts_like_stock_with_the_device_name() {
             let (mut core, mut s) = start(true);
             let frames = answered_startup(&mut core, &mut s);
-            assert_eq!(
-                frames[0],
+            assert_eq!(frames, [
+                "75 45 02 CC 00 CE", // OpenBt
+                "75 45 01 91 92",    // GetVersion
+                "75 45 01 93 94",    // GetBuildTime
+                "75 45 01 A9 AA",    // GetStatus
+                "75 45 01 C5 C6",    // GetName: "Insta360 Wave BT XXXXXX"
+                // SetName: the device name, NUL-padded to stock's 23 bytes.
                 "75 45 18 8B 57 61 76 65 20 42 6F 61 72 64 72 6F 6F 6D 00 00 00 00 00 00 00 00 00 FB",
-                "SetName: the device name, NUL-padded to stock's 23 bytes"
-            );
-            assert_eq!(&frames[1..], [
-                "75 45 02 CC 00 CE",    // OpenBt
                 "75 45 02 D8 01 DB",    // AutoReconnect on
                 "75 45 02 E0 00 E2",    // SaveFlash
-                "75 45 01 91 92",       // GetVersion
-                "75 45 01 93 94",       // GetBuildTime
-                "75 45 01 A9 AA",       // GetStatus
-                "75 45 01 C5 C6",       // GetName
+                "75 45 01 C5 C6",       // GetName: the new name
                 "75 45 03 EA 01 00 EE", // PtaMode
                 "75 45 01 C7 C8",       // GetPhoneMac
             ]);
@@ -989,7 +1162,9 @@ mod tests {
         fn switched_off_in_config_it_starts_closed() {
             let (mut core, mut s) = start(false);
             let frames = answered_startup(&mut core, &mut s);
-            assert_eq!(&frames[1..3], ["75 45 01 CB CC", "75 45 02 D8 00 DA"]);
+            assert_eq!(frames[0], "75 45 01 CB CC");
+            assert!(frames.contains(&"75 45 02 D8 00 DA".to_string()), "{frames:?}");
+            assert!(!frames.iter().any(|f| f.starts_with("75 45 02 CC")), "never opened");
             // While off a phone the module still reports does not connect.
             let h = core.frame(&Frame::request(0xB2, &[0x03]), 300, &mut s);
             assert!(!s.connected && !s.phone_audio);
