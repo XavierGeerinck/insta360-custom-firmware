@@ -91,11 +91,18 @@ fn main() {
                 let bt_events_tx = bus.events.clone();
                 // Pair, disconnect, answer and decline (I1, I3).
                 let bt_cmd_rx = bus.commands.subscribe();
+                // The Bluetooth switch and the module's name from config;
+                // the phone's volume on the speaker (docs/BLUETOOTH_PROTOCOL.md).
+                let bt_settings =
+                    waved_bt::Settings::new(config.bluetooth.enabled, &config.device.name);
+                let bt_speaker = waved_bt::Speaker::from_bus(&bus);
                 std::thread::Builder::new()
                     .name("bt-srv".into())
                     .spawn(move || {
                         let svc = waved_bt::BtService::new(bt_rx, bt_uart, bt_state_tx, bt_events_tx)
-                            .with_commands(bt_cmd_rx);
+                            .with_commands(bt_cmd_rx)
+                            .with_settings(bt_settings)
+                            .with_speaker(bt_speaker);
                         svc.run();
                     })
                     .expect("failed to spawn bt thread");

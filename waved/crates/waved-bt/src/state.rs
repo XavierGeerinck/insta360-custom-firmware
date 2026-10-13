@@ -1,10 +1,16 @@
 //! Folds decoded module events into `BluetoothState`, the way stock keeps
 //! `BT_CONNECT_STATUS`, the phone's name and MAC (`bt_msg_recv_thread`), plus
-//! the module's own name and the call (`BtCall`: `0xB1` rings, `0xD1 00`
-//! makes it active while a number is known, `0xD1 01`, an empty `0xB1` or the
-//! phone dropping end it).
+//! the module's own name. The call is `call::Calls`'s; a phone that drops
+//! takes it along.
+//!
+//! **Switched off** (stock's Bluetooth switch, `CloseBt`): the phone counts
+//! as gone at once (`bt_ctrl_cmd_send` 74413-74444) and nothing brings it
+//! back until the switch is on: stock ignores `0xB2` bit 0 (75805) and `0xB4`
+//! (76303, 76327) while off. waved also ignores `0xAA` (stock does not,
+//! 75696: on the device the module kept answering `0xAA 01` after `CloseBt`),
+//! the audio bits and the phone's name.
 
-use crate::event::{format_mac, Event, Link, Mac, PhoneEvent};
+use crate::event::{format_mac, Event, Link, Mac};
 use waved_state::{BluetoothState, BtCall, DeviceEvent};
 
 /// What applying one event did.
@@ -24,11 +30,38 @@ const ABSENT_REPORTS: u8 = 3;
 pub struct Tracker {
     phone_mac: Option<Mac>,
     absent_reports: u8,
+    /// Bluetooth is switched off.
+    off: bool,
 }
 
 impl Tracker {
+    /// The Bluetooth switch. Off counts the phone as gone at once (stock
+    /// sets `BT_CONNECT_STATUS` = 1 with `CloseBt`, 74422).
+    pub fn set_enabled(&mut self, on: bool, s: &mut BluetoothState) -> Applied {
+        self.off = !on;
+        self.absent_reports = 0;
+        let mut out = Applied::default();
+        if self.off {
+            set_connected(s, false, &mut out);
+            set_flag(&mut s.phone_audio, false, &mut out);
+            set_flag(&mut s.call_audio, false, &mut out);
+        }
+        out
+    }
+
     pub fn apply(&mut self, event: &Event, s: &mut BluetoothState) -> Applied {
         let mut out = Applied::default();
+        if self.off {
+            // Only the module's own news counts: its name, MAC and pairing
+            // bit. Nothing connects, rings or plays.
+            match event {
+                Event::WorkStatus { status, .. } => set_flag(&mut s.pairing, status.pairing(), &mut out),
+                Event::ModuleInfo { mac } => set_module_mac(s, mac, &mut out),
+                Event::Name(name) => set_advertised_name(s, name, &mut out),
+                _ => {}
+            }
+            return out;
+        }
         match event {
             Event::Status { connected } => set_connected(s, *connected, &mut out),
             Event::WorkStatus { status, phone } => {
@@ -69,45 +102,26 @@ impl Tracker {
                 }
             }
             Event::PhoneMac(mac) => self.phone_mac = Some(*mac),
-            Event::ModuleInfo { mac } => {
-                let mac = format_mac(mac);
-                if s.mac != mac {
-                    s.mac = mac;
-                    out.changed = true;
-                }
-            }
-            Event::Name(name) => {
-                if !name.is_empty() && s.advertised_name != *name {
-                    s.advertised_name = name.clone();
-                    out.changed = true;
-                }
-            }
-            Event::CallNumber(number) => {
-                // A repeat during an active call is not a new ring (call
-                // waiting is not handled).
-                if !s.call.is_active() {
-                    set_call(s, BtCall::Ringing { number: number.clone() }, &mut out);
-                }
-            }
-            Event::CallCleared | Event::Phone(PhoneEvent::CallEnded) => {
-                set_call(s, BtCall::Idle, &mut out)
-            }
-            Event::Phone(PhoneEvent::CallActive) => {
-                // Stock acts on "call up" only while a number is stored.
-                if let BtCall::Ringing { number } = &s.call {
-                    let number = number.clone();
-                    set_call(s, BtCall::Active { number }, &mut out);
-                }
-            }
+            Event::ModuleInfo { mac } => set_module_mac(s, mac, &mut out),
+            Event::Name(name) => set_advertised_name(s, name, &mut out),
             _ => {}
         }
         out
     }
 }
 
-fn set_call(s: &mut BluetoothState, call: BtCall, out: &mut Applied) {
-    if s.call != call {
-        s.call = call;
+fn set_module_mac(s: &mut BluetoothState, mac: &Mac, out: &mut Applied) {
+    let mac = format_mac(mac);
+    if s.mac != mac {
+        s.mac = mac;
+        out.changed = true;
+    }
+}
+
+/// The module's own name; an empty reply keeps what we know.
+fn set_advertised_name(s: &mut BluetoothState, name: &str, out: &mut Applied) {
+    if !name.is_empty() && s.advertised_name != name {
+        s.advertised_name = name.to_string();
         out.changed = true;
     }
 }
@@ -308,84 +322,80 @@ mod tests {
         assert_eq!(s.advertised_name, "Insta360 Wave BT 0A1B2C");
     }
 
-    fn number(n: &str) -> Event {
-        Event::CallNumber(n.into())
-    }
-
-    fn ringing(n: &str) -> BtCall {
-        BtCall::Ringing { number: n.into() }
-    }
-
-    fn active(n: &str) -> BtCall {
-        BtCall::Active { number: n.into() }
-    }
-
-    #[test]
-    fn a_number_rings_and_call_up_makes_it_active() {
-        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
-        t.apply(&Event::Status { connected: true }, &mut s);
-        let a = t.apply(&number("+32470123456"), &mut s);
-        assert!(a.changed);
-        assert_eq!(a.event, None);
-        assert_eq!(s.call, ringing("+32470123456"));
-        // The module repeats it: nothing changes.
-        assert_eq!(t.apply(&number("+32470123456"), &mut s), Applied::default());
-        let a = t.apply(&Event::Phone(PhoneEvent::CallActive), &mut s);
-        assert!(a.changed);
-        assert_eq!(s.call, active("+32470123456"));
-        // A repeated number does not turn an active call back into a ring.
-        assert_eq!(t.apply(&number("+32470123456"), &mut s), Applied::default());
-        assert_eq!(s.call, active("+32470123456"));
-        let a = t.apply(&Event::Phone(PhoneEvent::CallEnded), &mut s);
-        assert!(a.changed);
-        assert_eq!(s.call, BtCall::Idle);
-    }
-
-    #[test]
-    fn call_events_without_a_number_change_nothing() {
-        // Stock acts on 0xD1 00 / 01 only while a number is stored.
-        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
-        assert_eq!(t.apply(&Event::Phone(PhoneEvent::CallActive), &mut s), Applied::default());
-        assert_eq!(t.apply(&Event::Phone(PhoneEvent::CallEnded), &mut s), Applied::default());
-        assert_eq!(t.apply(&Event::CallCleared, &mut s), Applied::default());
-        assert_eq!(t.apply(&Event::Phone(PhoneEvent::RecordStart), &mut s), Applied::default());
-        assert_eq!(s.call, BtCall::Idle);
-    }
-
-    #[test]
-    fn an_empty_number_ends_the_call() {
-        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
-        t.apply(&number("0471"), &mut s);
-        assert!(t.apply(&Event::CallCleared, &mut s).changed);
-        assert_eq!(s.call, BtCall::Idle);
-        t.apply(&number("0471"), &mut s);
-        t.apply(&Event::Phone(PhoneEvent::CallActive), &mut s);
-        t.apply(&Event::CallCleared, &mut s);
-        assert_eq!(s.call, BtCall::Idle);
-    }
-
-    #[test]
-    fn a_new_number_while_ringing_replaces_it() {
-        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
-        t.apply(&number("0471"), &mut s);
-        assert!(t.apply(&number("0472"), &mut s).changed);
-        assert_eq!(s.call, ringing("0472"));
-    }
-
     #[test]
     fn the_phone_dropping_ends_the_call() {
+        // The call itself is call::Calls's; a phone that drops takes it along.
         let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
         t.apply(&Event::WorkStatus { status: WorkStatus(0x07), phone: phone("Pixel") }, &mut s);
-        t.apply(&number("0471"), &mut s);
-        t.apply(&Event::Phone(PhoneEvent::CallActive), &mut s);
+        s.call = BtCall::Active { number: "0471".into() };
         let a = t.apply(&Event::WorkStatus { status: WorkStatus(0x00), phone: None }, &mut s);
         assert_eq!(a.event, Some(DeviceEvent::BtDisconnected));
         assert_eq!(s.call, BtCall::Idle);
 
         t.apply(&Event::Status { connected: true }, &mut s);
-        t.apply(&number("0471"), &mut s);
+        s.call = BtCall::Ringing { number: "0471".into() };
         t.apply(&Event::Status { connected: false }, &mut s);
         assert_eq!(s.call, BtCall::Idle);
+    }
+
+    #[test]
+    fn call_frames_are_not_the_trackers() {
+        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
+        for e in [
+            Event::CallNumber("0471".into()),
+            Event::CallCleared,
+            Event::Phone(crate::event::PhoneEvent::CallActive),
+        ] {
+            assert_eq!(t.apply(&e, &mut s), Applied::default(), "{e:?}");
+        }
+        assert_eq!(s.call, BtCall::Idle);
+    }
+
+    #[test]
+    fn switching_off_drops_the_phone_at_once() {
+        // Stock: CloseBt sets BT_CONNECT_STATUS = 1 at once (74422).
+        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
+        t.apply(&Event::WorkStatus { status: WorkStatus(0x07), phone: phone("Pixel") }, &mut s);
+        s.call = BtCall::Active { number: "0471".into() };
+        let a = t.set_enabled(false, &mut s);
+        assert_eq!(a.event, Some(DeviceEvent::BtDisconnected));
+        assert!(!s.connected && !s.phone_audio && !s.call_audio);
+        assert_eq!(s.call, BtCall::Idle);
+        assert!(s.device_name.is_empty());
+        // Already off: nothing more to say.
+        assert_eq!(t.set_enabled(false, &mut s), Applied::default());
+    }
+
+    #[test]
+    fn while_off_nothing_brings_the_phone_back() {
+        // Stock ignores 0xB2 bit 0 (75805) and 0xB4 (76303, 76327) while
+        // off. waved ignores 0xAA too: on the device the module kept
+        // answering 0xAA 01 after CloseBt (2026-10-13).
+        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
+        t.set_enabled(false, &mut s);
+        for e in [
+            Event::WorkStatus { status: WorkStatus(0x07), phone: phone("Pixel") },
+            Event::Status { connected: true },
+            report(Link::Connected(-40)),
+            Event::Heartbeat { phone: phone("Pixel") },
+            Event::ConnectRequest { mac: MAC, name: "Pixel".into() },
+        ] {
+            let a = t.apply(&e, &mut s);
+            assert_eq!(a.event, None, "{e:?}");
+            assert!(!s.connected && !s.phone_audio && !s.call_audio, "{e:?}");
+            assert!(s.device_name.is_empty(), "{e:?}");
+        }
+        // The module's own news still counts: its name, MAC and pairing bit.
+        t.apply(&Event::Name("Wave Boardroom".into()), &mut s);
+        t.apply(&Event::ModuleInfo { mac: MAC }, &mut s);
+        t.apply(&Event::WorkStatus { status: WorkStatus(0x08), phone: None }, &mut s);
+        assert_eq!(s.advertised_name, "Wave Boardroom");
+        assert_eq!(s.mac, "11:22:33:44:55:66");
+        assert!(s.pairing);
+        // Back on: the module's next report counts again.
+        assert_eq!(t.set_enabled(true, &mut s), Applied::default(), "on changes nothing by itself");
+        let a = t.apply(&Event::Status { connected: true }, &mut s);
+        assert_eq!(a.event, Some(DeviceEvent::BtConnected(String::new())));
     }
 
     #[test]
@@ -410,15 +420,5 @@ mod tests {
             assert!(!s.connected && !s.phone_audio && !s.call_audio, "{name}");
             assert!(s.pairing, "{name}: the module's pairing mode is its own");
         }
-    }
-
-    #[test]
-    fn the_call_audio_bit_alone_starts_no_call() {
-        // In-band ring tones open the audio link while ringing (decision 9).
-        let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
-        t.apply(&number("0471"), &mut s);
-        t.apply(&Event::WorkStatus { status: WorkStatus(0x07), phone: None }, &mut s);
-        assert_eq!(s.call, ringing("0471"));
-        assert!(s.call_audio);
     }
 }

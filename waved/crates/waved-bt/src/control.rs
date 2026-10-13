@@ -11,9 +11,14 @@
 //! Dropping a phone (`BtDisconnect`, `BtPair`) first turns the module's
 //! reconnect to the last phone off (`0xD8 00`), as stock has it whenever a
 //! phone is connected (it sends `0xD8 00` on each connect, 75955).
+//!
+//! The Bluetooth switch (`SetBluetooth`) is stock's: `OpenBt` (`CC 00`,
+//! `bt_open_switch` 79149) or `CloseBt` (`CB`, `bt_close_switch` 79124),
+//! nothing else, no reply awaited. While it is off nothing else is sent:
+//! no pairing, no disconnect, no call buttons.
 
 use crate::command::{ButtonEvent, Command};
-use waved_state::{BluetoothState, BtCall, Command as BusCommand};
+use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
 
 /// How long Wave shows itself as pairing after `BtPair`.
 pub const PAIRING_WINDOW_MS: u64 = 120_000;
@@ -25,6 +30,8 @@ pub struct Response {
     pub frames: Vec<Command>,
     /// `BluetoothState` changed (notify watchers).
     pub changed: bool,
+    /// A connect / disconnect to broadcast (switching off drops the phone).
+    pub event: Option<DeviceEvent>,
 }
 
 impl Response {
@@ -61,6 +68,20 @@ impl Control {
     ) -> Response {
         let button = |event| Command::Button { event, unix_time };
         let mut out = Response::default();
+        if let BusCommand::SetBluetooth(on) = command {
+            if *on != s.bt_on {
+                s.bt_on = *on;
+                out.changed = true;
+                out.frames = vec![if *on { Command::OpenBt } else { Command::CloseBt }];
+                if !*on && self.window.take().is_some() {
+                    set_left(s, 0);
+                }
+            }
+            return out;
+        }
+        if !s.bt_on {
+            return out;
+        }
         match command {
             // Stock's "Connect New Device" (libui 115166), back to back, with
             // the module's reconnect off as stock always has it by then.
@@ -150,6 +171,11 @@ mod tests {
 
     const T: u32 = 0x6720_0000;
 
+    /// Bluetooth switched on, as waved-bt starts with config's default.
+    fn on() -> BluetoothState {
+        BluetoothState { bt_on: true, ..Default::default() }
+    }
+
     fn hex(frames: &[Command]) -> Vec<String> {
         frames
             .iter()
@@ -170,7 +196,7 @@ mod tests {
 
     #[test]
     fn pair_drops_the_phone_then_enters_pairing_for_two_minutes() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         let out = c.command(&BusCommand::BtPair, 1_000, T, &mut s);
         assert_eq!(hex(&out.frames), [RECONNECT_OFF, DISCONNECT, ENTER_PAIRING]);
         assert!(out.changed);
@@ -181,7 +207,7 @@ mod tests {
     fn pairing_another_phone_while_one_is_connected_is_the_same_sequence() {
         // Stock's "Connect New Device" (ui 22184 → bluetooth_set_connect(0),
         // 115166): Disconnect, then EnterPairing.
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         s.connected = true;
         let out = c.command(&BusCommand::BtPair, 0, T, &mut s);
         assert_eq!(hex(&out.frames), [RECONNECT_OFF, DISCONNECT, ENTER_PAIRING]);
@@ -192,7 +218,7 @@ mod tests {
     fn stop_pairing_closes_the_window_and_sends_nothing() {
         // No command leaves pairing mode (stock has none): the window is the
         // host's, and it ends here.
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         c.command(&BusCommand::BtPair, 0, T, &mut s);
         c.tick(20_000, &mut s);
         assert_eq!(s.pairing_left_s, 100);
@@ -211,7 +237,7 @@ mod tests {
     #[test]
     fn a_command_acted_when_it_sent_frames_or_changed_the_state() {
         // The service logs a bus command at info only when it acted.
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         assert!(c.command(&BusCommand::BtDisconnect, 0, T, &mut s).acted());
         assert!(!c.command(&BusCommand::BtAnswerCall, 0, T, &mut s).acted(), "nothing rings");
         assert!(!c.command(&BusCommand::BtStopPairing, 0, T, &mut s).acted(), "no window");
@@ -221,7 +247,7 @@ mod tests {
 
     #[test]
     fn the_window_counts_down_and_ends_after_two_minutes() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         c.command(&BusCommand::BtPair, 1_000, T, &mut s);
         assert!(!c.tick(1_500, &mut s), "still 120 s, rounded up");
         assert!(c.tick(2_000, &mut s));
@@ -238,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_phone_connecting_ends_the_window() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         c.command(&BusCommand::BtPair, 0, T, &mut s);
         assert!(!c.after_event(&mut s));
         s.connected = true;
@@ -252,7 +278,7 @@ mod tests {
     fn the_old_phone_still_connected_does_not_end_it() {
         // Pair while a phone is connected: Disconnect first, so the old phone
         // stays connected for a moment. Only a new connection ends the window.
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         s.connected = true;
         c.command(&BusCommand::BtPair, 0, T, &mut s);
         assert!(!c.after_event(&mut s));
@@ -266,7 +292,7 @@ mod tests {
 
     #[test]
     fn the_module_leaving_pairing_mode_ends_it() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         c.command(&BusCommand::BtPair, 0, T, &mut s);
         // Bit 3 not seen yet: a status without it (the Disconnect) keeps the window.
         assert!(!c.after_event(&mut s));
@@ -280,7 +306,7 @@ mod tests {
 
     #[test]
     fn pairing_again_restarts_the_window() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         c.command(&BusCommand::BtPair, 0, T, &mut s);
         c.tick(60_000, &mut s);
         assert_eq!(s.pairing_left_s, 60);
@@ -290,7 +316,7 @@ mod tests {
 
     #[test]
     fn without_a_window_events_and_ticks_change_nothing() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         s.connected = true;
         s.pairing = true;
         assert!(!c.after_event(&mut s));
@@ -303,7 +329,7 @@ mod tests {
         // Device 2026-10-13: after a bare Disconnect the iPhone was back
         // within a second. Stock never disconnects with the reconnect on: it
         // turns it off as each phone connects.
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         s.connected = true;
         let out = c.command(&BusCommand::BtDisconnect, 0, T, &mut s);
         assert_eq!(hex(&out.frames), [RECONNECT_OFF, DISCONNECT]);
@@ -312,7 +338,7 @@ mod tests {
 
     #[test]
     fn answer_only_while_ringing() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         assert!(send(&mut c, BusCommand::BtAnswerCall, 0, &mut s).is_empty(), "nothing rings");
         s.call = BtCall::Ringing { number: "0471".into() };
         assert_eq!(send(&mut c, BusCommand::BtAnswerCall, 0, &mut s), ["75 45 07 D0 03 00 00 20 67 00 61"]);
@@ -322,7 +348,7 @@ mod tests {
 
     #[test]
     fn decline_while_ringing_and_hang_up_while_active() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         assert!(send(&mut c, BusCommand::BtDeclineCall, 0, &mut s).is_empty(), "no call");
         s.call = BtCall::Ringing { number: "0471".into() };
         assert_eq!(send(&mut c, BusCommand::BtDeclineCall, 0, &mut s), ["75 45 07 D0 00 00 00 20 67 00 5E"]);
@@ -331,8 +357,48 @@ mod tests {
     }
 
     #[test]
+    fn the_switch_sends_stocks_bytes_once() {
+        // bt_open_switch (79149) / bt_close_switch (79124): CC 00 / CB.
+        let (mut c, mut s) = (Control::default(), on());
+        let out = c.command(&BusCommand::SetBluetooth(false), 0, T, &mut s);
+        assert_eq!(hex(&out.frames), ["75 45 01 CB CC"]);
+        assert!(out.changed && !s.bt_on);
+        assert_eq!(c.command(&BusCommand::SetBluetooth(false), 0, T, &mut s), Response::default(), "already off");
+        let out = c.command(&BusCommand::SetBluetooth(true), 0, T, &mut s);
+        assert_eq!(hex(&out.frames), ["75 45 02 CC 00 CE"]);
+        assert!(out.changed && s.bt_on);
+    }
+
+    #[test]
+    fn while_off_nothing_else_is_sent() {
+        let (mut c, mut s) = (Control::default(), on());
+        s.call = BtCall::Ringing { number: "0471".into() };
+        c.command(&BusCommand::SetBluetooth(false), 0, T, &mut s);
+        for command in [
+            BusCommand::BtPair,
+            BusCommand::BtDisconnect,
+            BusCommand::BtAnswerCall,
+            BusCommand::BtDeclineCall,
+            BusCommand::BtStopPairing,
+        ] {
+            assert_eq!(c.command(&command, 0, T, &mut s), Response::default(), "{command:?}");
+        }
+        assert_eq!(s.pairing_left_s, 0);
+    }
+
+    #[test]
+    fn switching_off_ends_the_pairing_window() {
+        let (mut c, mut s) = (Control::default(), on());
+        c.command(&BusCommand::BtPair, 0, T, &mut s);
+        assert_eq!(s.pairing_left_s, 120);
+        c.command(&BusCommand::SetBluetooth(false), 1_000, T, &mut s);
+        assert_eq!(s.pairing_left_s, 0);
+        assert!(!c.tick(2_000, &mut s), "closed");
+    }
+
+    #[test]
     fn other_commands_send_nothing() {
-        let (mut c, mut s) = (Control::default(), BluetoothState::default());
+        let (mut c, mut s) = (Control::default(), on());
         for command in [BusCommand::StartRecording, BusCommand::ToggleMicMute, BusCommand::Shutdown] {
             assert_eq!(c.command(&command, 0, T, &mut s), Response::default(), "{command:?}");
         }

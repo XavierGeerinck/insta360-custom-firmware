@@ -271,6 +271,58 @@ impl SwitchRow {
     }
 }
 
+/// A switch on its own, for a row that is not itself the control (the
+/// Bluetooth screen's device row): the 44 × 26 track of [`SwitchRow`] inside
+/// a transparent [`Switch::W`] × 44 target.
+pub struct Switch {
+    obj: Obj,
+    track: Obj,
+    knob: Obj,
+    on: Rc<Cell<bool>>,
+}
+
+impl Switch {
+    /// The target's width; its height is `MIN_TARGET`.
+    pub const W: i32 = 56;
+
+    pub fn new(parent: Obj, on: bool, on_toggle: impl FnMut(bool) + 'static) -> Self {
+        let obj = Obj::plain(parent)
+            .size(Self::W, MIN_TARGET)
+            .clickable(true);
+        let track = Obj::plain(obj).size(44, 26).radius(13).center();
+        let knob = Obj::plain(track).size(20, 20).round().bg(WHITE);
+        let state = Rc::new(Cell::new(on));
+        paint_switch(track, knob, on);
+        let shared = state.clone();
+        let mut toggle = on_toggle;
+        on_click(obj, move || {
+            let next = !shared.get();
+            shared.set(next);
+            paint_switch(track, knob, next);
+            toggle(next);
+        });
+        Self {
+            obj,
+            track,
+            knob,
+            on: state,
+        }
+    }
+
+    pub fn set_on(&self, on: bool) {
+        self.on.set(on);
+        paint_switch(self.track, self.knob, on);
+    }
+
+    pub fn is_on(&self) -> bool {
+        self.on.get()
+    }
+
+    pub fn obj(&self) -> Obj {
+        self.obj
+    }
+}
+
 fn paint_switch(track: Obj, knob: Obj, on: bool) {
     track.bg(if on { LIVE } else { LINE });
     knob.pos(if on { 21 } else { 3 }, 3);

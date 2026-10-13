@@ -311,6 +311,11 @@ Rules for the parallel milestones:
   splash to `/dev/fb0` (~2 s after power-on instead of ~10–15 s until waved draws).
 - [ ] **F6 Peripheral blobs** (S) — adopt the 1.2.2.6 `BT.bin` and `DONGLE.bin` (MCU is unchanged).
   Note that 1.2.2.6 also changed the root password hash.
+  - [x] Code: stock's send loop (`waved_bt::ota::flash`) and the `waved-bt-flash` tool
+    (`check`, `version`, `flash … --owner-approved`), by hand only, never automatic
+    (host-tested 2026-10-13). Procedure and risks: `waved/docs/BLUETOOTH_PROTOCOL.md`, "Adopting
+    them in waved".
+  - [ ] Device: dry run, then a flash with the owner's approval (checklist T9 in the I1 plan).
 
 ## G — USB storage
 
@@ -347,8 +352,10 @@ Rules for the parallel milestones:
   - [x] Disconnect (`BtDisconnect`).
   - Paired list, connect, forget: not built. The module keeps its pairings and has no
     command to list, connect to or forget a phone; the screen shows the connected phone.
-  - [ ] Name from `device.name`: not done (`SetName`'s accepted lengths unverified; the
-    module names itself `Insta360 Wave BT <serial>`).
+  - [x] Name from `device.name` (`SetName` at start, 23 bytes NUL-padded; empty → stock's
+    name). Check on the device (T4): a shorter name is unverified.
+  - [x] Bluetooth switch (stock's `OpenBt` / `CloseBt`, config `[bluetooth] enabled`) and
+    stock's start-up sequence. Pair another phone asks first.
   - [ ] Measure how long the module stays in pairing mode (no known command ends it).
 - [ ] **I2 Audio routing** (L) — A2DP/HFP into the pipeline, with the AEC reference tap.
   - Built on the host 2026-10-13 (`waved-audio` `bt_audio`): `0xB2` bit 1 plays the phone
@@ -361,6 +368,9 @@ Rules for the parallel milestones:
     also during a recording; "In a call" with Hang up once answered.
   - [ ] HID hook-switch to the computer: not done (USB HID side; needs a telephony report).
   - [x] Phone number only, no phone book (`0xB0` dropped unread, never logged).
+  - [x] A call answered on the phone ends on the Wave too (module log lines, the call audio,
+    a 60 s ring timeout); Answer / Decline act at once. Check on the device (T1).
+  - [x] The phone's volume sets the speaker (`0xD5`, stock's mapping). Check (T2).
 - [x] **I4 Bluetooth screen** (S) — `screens_v2/bluetooth.rs`; Menu row; behind the PIN.
 
 ## J — Wave Controller
