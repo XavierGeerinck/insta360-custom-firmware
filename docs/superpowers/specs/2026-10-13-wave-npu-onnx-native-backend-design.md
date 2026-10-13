@@ -1,7 +1,8 @@
 # Wave NPU ONNX native backend
 
-**State:** Proposed implementation design for the owner's `Go ONNX support`
-request. The ONNX backend is not implemented or qualified by this document.
+**State:** Approved by the owner with `go` on 2026-10-13. Implementation and
+the four bounded device qualification controls below are authorized. The
+ONNX backend is not implemented or qualified merely by this document.
 
 ## Goal
 
