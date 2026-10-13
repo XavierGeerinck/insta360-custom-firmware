@@ -969,8 +969,11 @@ bug. The raw-byte interception in `UartMux` has been removed; unframed bytes
 framed-button slot (`McuService::handle_frame`, cmd `0x40..=0x4F`) remains for
 the simulation/legacy protocol but carries no traffic on real hardware.
 
-If genuine device-side volume buttons are wanted, the real hardware input path
-must be identified first (it is **not** `ttyS1`, `event0`, or `event1`).
+There is no such input path: the Wave has **no volume buttons** (stock 1.2.2.6,
+researched 2026-10-13, `docs/MCU_PROTOCOL.md` "Physical controls"). Its one key
+is the power key on the MCU; the device tree's mute / vol+ / vol- keys belong
+to a disabled reference-board node. The "physical Volume Up button" above was
+something else. Volume is set on the screen (and by the computer or phone).
 
 ### HID control surface (SP#7d)
 

@@ -271,10 +271,11 @@ Rules for the parallel milestones:
 
 ## F — Hardware
 
-- [ ] **F1 Physical volume buttons** (M)
-  - Find the real input path. It isn't `ttyS1`, `event0` or `event1`, see
-    `waved/docs/AUDIO_HARDWARE.md:648`.
-  - Wire the buttons to the speaker volume.
+- [x] **F1 Physical volume buttons** (M) — **not on this hardware** (stock 1.2.2.6, 2026-10-13):
+  the power key on the MCU is the Wave's only key; the device tree's mute / vol+ / vol- keys
+  belong to a disabled reference-board node, and stock sets the volume on the screen only
+  (`waved/docs/MCU_PROTOCOL.md` "Physical controls"). Nothing to wire. Device pass: confirm by
+  looking (`waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md`).
 - [ ] **F2 Battery** (S) — host side done 2026-10-12; left: the device checks in
   `waved/docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md` ("Device-pass checklist").
   - Level, voltage, temperature and charging now come from the MCU's heartbeats on
