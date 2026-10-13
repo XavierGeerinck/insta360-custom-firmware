@@ -15,8 +15,9 @@
 //! disconnects and answers or declines calls. It does not switch Bluetooth on
 //! or off, rename the module or save its flash.
 //!
-//! Privacy: the phone book (`0xB0`) is dropped unread, and no info or debug
-//! log line carries a phone's name, MAC or a number (`log_line`).
+//! Privacy: the phone book (`0xB0`) is dropped unread, and no log line at
+//! any level carries a phone's name, MAC or a number (`log_line`): module log
+//! lines show only as known fixed messages, undecoded frames as their length.
 
 pub mod command;
 pub mod control;
@@ -273,10 +274,60 @@ fn log_event(line: Option<(Level, String)>) {
     }
 }
 
-/// The log line for a module event, and its level. No info or debug line
+/// The module's own fixed messages about pairing, reconnecting and its radio
+/// (strings in its firmware, 0.0.0.28 and 0.0.0.33). A module log line shows
+/// only as the message it starts with, never as received: the rest of a line
+/// can carry the phone's address (`a2dp_snk_disconnect_req addr …`), and
+/// other lines its name and MAC (`app_set_bt_last_addr`).
+const MODULE_MESSAGES: &[&str] = &[
+    "BT set pairing mode by user",
+    "Warning! bt set pairing but bt has been connected",
+    "Warning! bt set pairing while bt is reconnecting",
+    "Warning! bt is reconnecting",
+    "time out ,app_bt_pairing_exit",
+    "app_exit_pairing_handle",
+    "RECONN_START!",
+    "RECONN_CANCEL!",
+    "RECONN_ERROR!",
+    "BT_RECONN_TIMEOUT!",
+    "BT_RECONN_ADDR_ERROR!",
+    "bt stop connback",
+    "app_bt_start_connback_func",
+    "Connback time out !",
+    "Connback error! Page scan",
+    "bt rf close done",
+    "bt rf close",
+    "bt rf open done",
+    "bt rf open",
+    "system_force_disconnect",
+    "app_bt_disconnect error",
+    "a2dp_snk_disconnect_req",
+    "ACL DISCONN CMP, reason",
+    "app_bt_clean_last_dev",
+    "bt clean info",
+    "set pairred_mode_switch3",
+    "delete pairred_mode_switch3",
+];
+
+/// A module log line (`0xF0`): a known message at debug, else its length at
+/// trace (see [`MODULE_MESSAGES`]).
+fn module_log(line: &str) -> (Level, String) {
+    let line = line.trim_start_matches(|c: char| c == '@' || c == '#' || c.is_whitespace());
+    let known = MODULE_MESSAGES
+        .iter()
+        .filter(|message| line.starts_with(**message))
+        .max_by_key(|message| message.len());
+    match known {
+        Some(message) => (Level::DEBUG, format!("bt module: {message}")),
+        None => (Level::TRACE, format!("bt module log line, {} bytes", line.len())),
+    }
+}
+
+/// The log line for a module event, and its level. No line at any level
 /// carries a phone's name, its MAC or a number: those reach the state (and
-/// the screen) only. Module log lines (`0xF0`) can name the phone, so they
-/// stay at trace. The phone book is never logged.
+/// the screen) only. Module log lines (`0xF0`) show only as known messages
+/// ([`MODULE_MESSAGES`]); undecoded frames only as their length. The phone
+/// book is never logged.
 fn log_line(event: &Event) -> Option<(Level, String)> {
     let info = |line: String| Some((Level::INFO, line));
     let debug = |line: String| Some((Level::DEBUG, line));
@@ -297,9 +348,9 @@ fn log_line(event: &Event) -> Option<(Level, String)> {
             "bt heartbeat{}",
             if phone.is_some() { " naming the phone" } else { "" }
         )),
-        Event::Log(line) => trace(format!("bt module log: {line}")),
+        Event::Log(line) => Some(module_log(line)),
         Event::PhoneBookEntry => None,
-        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x} {data:02x?}")),
+        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x}, {} bytes", data.len())),
         // The rest carries no phone's name, MAC or number: signal levels,
         // volumes, the dongle, versions, OTA and the module's own MAC.
         other @ (Event::Status { .. }
@@ -407,22 +458,57 @@ mod tests {
         }
 
         #[test]
-        fn no_info_or_debug_line_names_a_phone_or_a_number() {
-            for event in personal() {
+        fn no_line_at_any_level_names_a_phone_or_a_number() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                decode(&Frame::request(0xF0, &data))
+            };
+            let mut events = personal();
+            events.extend([
+                module_line(&format!("@ app_set_bt_last_addr A1B2C3D4E557 name {NAME}")),
+                // A known message followed by the phone's address: only the
+                // message may show.
+                module_line("a2dp_snk_disconnect_req addr A1B2C3D4E557"),
+                module_line(&format!("RECONN_START! {NAME}")),
+                decode(&Frame::request(0xF0, &[0x02, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57])),
+                Event::Other { cmd: 0xC8, data: vec![0x00, 0x06, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57] },
+            ]);
+            for event in events {
                 if let Some((level, line)) = log_line(&event) {
-                    if level != Level::TRACE {
-                        assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
-                    }
+                    assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
                 }
             }
         }
 
         #[test]
-        fn module_logs_are_trace_only() {
-            let line = decode(&Frame::request(0xF0, b"\x01BT set pairing mode by user"));
-            assert_eq!(log_line(&line).map(|(level, _)| level), Some(Level::TRACE));
+        fn module_messages_about_pairing_and_reconnecting_show_at_debug() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                log_line(&decode(&Frame::request(0xF0, &data)))
+            };
+            let debug = |text: &str| Some((Level::DEBUG, format!("bt module: {text}")));
+            assert_eq!(module_line("BT set pairing mode by user"), debug("BT set pairing mode by user"));
+            assert_eq!(module_line("RECONN_START!"), debug("RECONN_START!"));
+            assert_eq!(module_line("@ bt stop connback\r\n"), debug("bt stop connback"));
+            // The longest match wins.
+            assert_eq!(module_line("bt rf close done"), debug("bt rf close done"));
+            assert_eq!(module_line("bt rf close"), debug("bt rf close"));
+            assert_eq!(module_line("time out ,app_bt_pairing_exit "), debug("time out ,app_bt_pairing_exit"));
+            // Anything else: its length at trace, never its text.
+            assert_eq!(
+                module_line("@ stack_overflow_check_init 0x1234"),
+                Some((Level::TRACE, "bt module log line, 32 bytes".into()))
+            );
             let raw = decode(&Frame::request(0xF0, &[0x02, 0xE4, 0x7F]));
             assert_eq!(log_line(&raw).map(|(level, _)| level), Some(Level::TRACE));
+        }
+
+        #[test]
+        fn an_undecoded_frame_shows_its_length_only() {
+            let other = Event::Other { cmd: 0x42, data: NUMBER.as_bytes().to_vec() };
+            assert_eq!(log_line(&other), Some((Level::TRACE, "bt frame 0x42, 12 bytes".into())));
         }
 
         #[test]
