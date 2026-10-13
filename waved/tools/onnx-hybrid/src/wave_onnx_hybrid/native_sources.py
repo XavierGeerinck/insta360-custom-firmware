@@ -149,6 +149,10 @@ def _definition(value: dict[str, Any]) -> str:
 
 def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
     """Emit one immutable, bounded constructor with actual imported constants."""
+    if isinstance(record, dict) and record.get("profile_id") == "fp16-marblenet-v1":
+        from .marblenet_sources import generate_compile_source as generate_graph
+
+        return generate_graph(record, remote_root)
     root = _root(remote_root, "compile")
     profile = _record(record)
     conv = profile == "fp16-conv-v1"
@@ -219,6 +223,10 @@ def generate_execute_source(
     record: dict[str, Any], remote_root: str, nbg_bytes: int
 ) -> str:
     """Emit one reusable-input runner; host pins the exact NBG and current oracle."""
+    if isinstance(record, dict) and record.get("profile_id") == "fp16-marblenet-v1":
+        from .marblenet_sources import generate_execute_source as generate_graph
+
+        return generate_graph(record, remote_root, nbg_bytes)
     root = _root(remote_root, "execute")
     profile = _record(record)
     if type(nbg_bytes) is not int or not 513 <= nbg_bytes <= 64 * 1024 * 1024:
