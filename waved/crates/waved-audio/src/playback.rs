@@ -25,10 +25,11 @@
 
 pub mod dsp;
 pub mod preset;
+pub mod scene;
 
 use crate::audio_config::SampleFormat;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, Ordering};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
@@ -85,6 +86,75 @@ pub struct DspMetrics {
     /// (`dB × 100`, negative = attenuating). Written by the audio service
     /// after `apply_gain`; 0 when no limiting was needed.
     pub recording_limiter_reduction_db_x100: AtomicI32,
+    /// The preset the playback thread runs: 0 not started, 1 voice, 2 media.
+    active_preset: AtomicU8,
+    /// The speaker scene (`scene::run_scene_follower`): 0 no follower,
+    /// 1 music, 2 meeting.
+    speaker_scene: AtomicU8,
+    /// The preset follows the scene (not pinned).
+    scene_auto: AtomicBool,
+    /// `Set EQ MODE` last written, plus one; 0 = not written or failed.
+    amp_eq_mode: AtomicU8,
+    /// The amp mode follows the scene (not pinned).
+    amp_eq_mode_auto: AtomicBool,
+}
+
+impl DspMetrics {
+    pub fn set_active_preset(&self, preset: crate::playback::preset::PlaybackPreset) {
+        use crate::playback::preset::PlaybackPreset;
+        let v = match preset {
+            PlaybackPreset::Voice => 1,
+            PlaybackPreset::Media => 2,
+        };
+        self.active_preset.store(v, Ordering::Relaxed);
+    }
+
+    pub fn active_preset(&self) -> Option<crate::playback::preset::PlaybackPreset> {
+        use crate::playback::preset::PlaybackPreset;
+        match self.active_preset.load(Ordering::Relaxed) {
+            1 => Some(PlaybackPreset::Voice),
+            2 => Some(PlaybackPreset::Media),
+            _ => None,
+        }
+    }
+
+    pub fn set_scene(&self, scene: scene::SpeakerScene, auto: bool) {
+        let v = match scene {
+            scene::SpeakerScene::Music => 1,
+            scene::SpeakerScene::Meeting => 2,
+        };
+        self.speaker_scene.store(v, Ordering::Relaxed);
+        self.scene_auto.store(auto, Ordering::Relaxed);
+    }
+
+    pub fn scene(&self) -> Option<scene::SpeakerScene> {
+        match self.speaker_scene.load(Ordering::Relaxed) {
+            1 => Some(scene::SpeakerScene::Music),
+            2 => Some(scene::SpeakerScene::Meeting),
+            _ => None,
+        }
+    }
+
+    pub fn scene_auto(&self) -> bool {
+        self.scene_auto.load(Ordering::Relaxed)
+    }
+
+    pub fn set_amp_eq_mode(&self, mode: Option<waved_state::AmpEqMode>, auto: bool) {
+        let v = mode.map_or(0, |m| m.value() as u8 + 1);
+        self.amp_eq_mode.store(v, Ordering::Relaxed);
+        self.amp_eq_mode_auto.store(auto, Ordering::Relaxed);
+    }
+
+    pub fn amp_eq_mode(&self) -> Option<waved_state::AmpEqMode> {
+        match self.amp_eq_mode.load(Ordering::Relaxed) {
+            0 => None,
+            v => waved_state::AmpEqMode::from_value(v as i32 - 1),
+        }
+    }
+
+    pub fn amp_eq_mode_auto(&self) -> bool {
+        self.amp_eq_mode_auto.load(Ordering::Relaxed)
+    }
 }
 
 pub struct PlaybackService {
@@ -184,6 +254,12 @@ impl PlaybackService {
     }
 }
 
+impl scene::PresetSink for PlaybackService {
+    fn set_preset(&self, preset: crate::playback::preset::PlaybackPreset) {
+        PlaybackService::set_preset(self, preset)
+    }
+}
+
 /// Run the playback loop synchronously on the current thread until `cmd_rx`
 /// closes or an unrecoverable ALSA error occurs. Split out from the
 /// spawn site for testability — mock sinks exercise the same loop.
@@ -208,25 +284,21 @@ pub fn run_playback_loop<S: PlaybackSink>(
     let silence: Vec<i16> = vec![0; period_samples];
     info!("playback loop starting: samples/period={period_samples}");
 
-    let mut tuning = tuning_for(initial_preset);
-    let mut chain = PlaybackDspChain::new(
-        tuning.hpf_cutoff_hz,
-        &tuning.eq,
-        tuning.mbagc,
-        tuning.limiter,
-        sample_rate as f32,
-    );
+    let mut active_preset = initial_preset;
+    let mut chain = PlaybackDspChain::new(&tuning_for(active_preset), sample_rate as f32);
+    dsp_metrics.set_active_preset(active_preset);
 
     loop {
-        // Drain any pending preset switches; only the most recent matters.
+        // Drain any pending preset switches; only the most recent matters,
+        // and a switch to the preset already running is no switch.
+        let mut requested = None;
         while let Ok(p) = preset_rx.try_recv() {
-            tuning = tuning_for(p);
-            chain.set_preset(
-                tuning.hpf_cutoff_hz,
-                &tuning.eq,
-                tuning.mbagc,
-                tuning.limiter,
-            );
+            requested = Some(p);
+        }
+        if let Some(p) = requested.filter(|p| *p != active_preset) {
+            chain.set_preset(&tuning_for(p));
+            active_preset = p;
+            dsp_metrics.set_active_preset(p);
             info!("playback preset switched → {:?}", p);
         }
 
@@ -623,6 +695,66 @@ mod tests {
         }
         let final_written = written.lock().unwrap().clone();
         (final_written, stats, ref_batches, far_batches)
+    }
+
+    /// Runs the loop with `presets` queued and a steady host signal; returns
+    /// the written periods and the metrics.
+    fn run_with_presets(presets: &[PlaybackPreset], periods: usize) -> (Vec<Vec<i16>>, Arc<DspMetrics>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = MockSink { channels: 2, written: Arc::clone(&written), stop_after: periods, fail_once: false };
+        let period_samples = 2048;
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Vec<i16>>(16);
+        for _ in 0..periods.min(16) {
+            cmd_tx.try_send(vec![8000; period_samples]).unwrap();
+        }
+        let (_local_tx, local_rx) = mpsc::channel::<Vec<i16>>(1);
+        let (_phone_tx, phone_rx) = mpsc::channel::<Vec<i16>>(1);
+        let (preset_tx, preset_rx) = mpsc::channel::<PlaybackPreset>(8);
+        for p in presets {
+            preset_tx.try_send(*p).unwrap();
+        }
+        let (ref_tx, _ref_rx) = broadcast::channel::<Vec<i16>>(64);
+        let (far_tx, _far_rx) = broadcast::channel::<Vec<i16>>(64);
+        let metrics = Arc::new(DspMetrics::default());
+        let (_state_tx, state_rx) = watch::channel(AudioState {
+            speaker_volume: 100,
+            speaker_muted: false,
+            ..AudioState::default()
+        });
+        let m = Arc::clone(&metrics);
+        std::thread::spawn(move || {
+            run_playback_loop(
+                sink, cmd_rx, local_rx, phone_rx, preset_rx, ref_tx, far_tx,
+                Arc::new(PlaybackStats::default()), period_samples, 48_000, PlaybackPreset::Media, m, state_rx,
+            )
+        })
+        .join()
+        .unwrap();
+        drop(preset_tx);
+        let out = written.lock().unwrap().clone();
+        (out, metrics)
+    }
+
+    #[test]
+    fn media_passes_the_host_signal_untouched_and_is_published() {
+        let (out, metrics) = run_with_presets(&[], 3);
+        assert_eq!(metrics.active_preset(), Some(PlaybackPreset::Media));
+        assert!(out.iter().all(|b| b.iter().all(|&s| s == 8000)), "stock's speaker path: identity");
+    }
+
+    #[test]
+    fn a_switch_to_the_running_preset_does_not_fade() {
+        let (out, metrics) = run_with_presets(&[PlaybackPreset::Media], 2);
+        assert_eq!(metrics.active_preset(), Some(PlaybackPreset::Media));
+        assert!(out[0].iter().all(|&s| s == 8000), "no fade for a same-preset request");
+    }
+
+    #[test]
+    fn a_preset_switch_fades_and_is_published() {
+        let (out, metrics) = run_with_presets(&[PlaybackPreset::Voice], 2);
+        assert_eq!(metrics.active_preset(), Some(PlaybackPreset::Voice));
+        // 5 ms down to silence at the swap.
+        assert_eq!(out[0][2 * 239], 0);
     }
 
     #[test]

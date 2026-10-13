@@ -1,240 +1,370 @@
-//! Orchestrator for the playback DSP chain. Order: HPF → EQ → MBAGC → Limiter.
-//! Input/output is interleaved S16 (the format `PlaybackService` already uses);
-//! conversion to/from f32 happens here.
+//! Orchestrator for the playback DSP chain. Order: HPF → EQ → MBAGC → Limiter,
+//! each stage optional (`PlaybackPresetTuning`). Input/output is interleaved
+//! S16 (the format `PlaybackService` already uses); conversion to/from f32
+//! happens here. With every stage off the chain does not touch the samples.
+//!
+//! A preset switch fades the running chain out, swaps the stages (fresh
+//! filter state) at silence and fades the new chain in, so a switch in the
+//! middle of music or a call does not click. The AEC reference is tapped
+//! after the chain, so it carries the same fade.
 
-use super::eq::{BiquadParams, ParametricEq, N_BANDS, N_CHANNELS};
+use super::eq::{self, ParametricEq, N_CHANNELS};
 use super::hpf::HighPassFilter;
-use super::limiter::{LimiterParams, LookaheadLimiter};
-use super::mbagc::{MbagcParams, MultibandAgc};
+use super::limiter::LookaheadLimiter;
+use super::mbagc::MultibandAgc;
+use crate::playback::preset::PlaybackPresetTuning;
 
-/// Spec §2.8: 5 ms raised-cosine envelope on preset switch to mask the
-/// coefficient discontinuity. At 48 kHz that's 240 frames.
+/// Fade length on each side of a preset switch.
 const PRESET_RAMP_MS: f32 = 5.0;
 
-pub struct PlaybackDspChain {
-    hpf: HighPassFilter,
-    eq: ParametricEq,
-    mbagc: MultibandAgc,
-    limiter: LookaheadLimiter,
-    f32_buf: Vec<f32>,
-    sample_rate_hz: f32,
-    /// Last interleaved output frame (per channel) — captured before each
-    /// `set_preset` so the cosine ramp can crossfade from the held value
-    /// into the new chain's output.
-    last_output: [f32; N_CHANNELS],
-    /// Total frames in the active ramp window (0 when no ramp in progress).
-    ramp_total: usize,
-    /// Frames remaining in the active ramp window. When >0, the next
-    /// process_i16 crossfades `last_output` → new chain output.
-    ramp_remaining: usize,
+/// Where a preset switch is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fade {
+    /// No switch in progress.
+    Idle,
+    /// Fading the old stages out; `pos` frames of the ramp done.
+    Out { pos: usize },
+    /// Fading the new stages in; `pos` frames done, counting `hold` silent
+    /// frames first (the new limiter's look-ahead fill).
+    In { pos: usize, hold: usize },
 }
 
-impl PlaybackDspChain {
-    pub fn new(
-        hpf_cutoff_hz: f32,
-        eq_params: &[[BiquadParams; N_BANDS]; N_CHANNELS],
-        mbagc_params: MbagcParams,
-        limiter_params: LimiterParams,
-        sample_rate_hz: f32,
-    ) -> Self {
+struct Stages {
+    hpf: Option<HighPassFilter>,
+    eq: Option<ParametricEq>,
+    mbagc: MultibandAgc,
+    limiter: Option<LookaheadLimiter>,
+}
+
+impl Stages {
+    fn new(tuning: &PlaybackPresetTuning, sample_rate_hz: f32) -> Self {
         Self {
-            hpf: HighPassFilter::new(N_CHANNELS, hpf_cutoff_hz, sample_rate_hz),
-            eq: ParametricEq::new(eq_params, sample_rate_hz),
-            mbagc: MultibandAgc::new(mbagc_params, sample_rate_hz),
-            limiter: LookaheadLimiter::new(limiter_params, N_CHANNELS, sample_rate_hz),
-            f32_buf: Vec::new(),
-            sample_rate_hz,
-            last_output: [0.0; N_CHANNELS],
-            ramp_total: 0,
-            ramp_remaining: 0,
+            hpf: tuning.hpf_cutoff_hz.map(|hz| HighPassFilter::new(N_CHANNELS, hz, sample_rate_hz)),
+            eq: eq::is_active(&tuning.eq).then(|| ParametricEq::new(&tuning.eq, sample_rate_hz)),
+            mbagc: MultibandAgc::new(tuning.mbagc, sample_rate_hz),
+            limiter: tuning.limiter.map(|p| LookaheadLimiter::new(p, N_CHANNELS, sample_rate_hz)),
         }
     }
 
-    pub fn set_preset(
-        &mut self,
-        hpf_cutoff_hz: f32,
-        eq_params: &[[BiquadParams; N_BANDS]; N_CHANNELS],
-        mbagc_params: MbagcParams,
-        limiter_params: LimiterParams,
-    ) {
-        self.hpf.set_cutoff(hpf_cutoff_hz);
-        self.eq.set_params(eq_params);
-        self.mbagc.set_params(mbagc_params);
-        // Limiter rebuilt from scratch: ceiling/release/lookahead can change.
-        // Discarding the lookahead ring restarts the warm-up window — acceptable
-        // because preset switch is treated as a transition, not a continuous edit.
-        self.limiter = LookaheadLimiter::new(limiter_params, N_CHANNELS, self.sample_rate_hz);
-        // Reset MBAGC envelopes to neutral on switch so stale targets don't bleed.
-        self.mbagc.reset();
-        // Arm the cosine ramp. `last_output` was captured at the end of the
-        // most recent process_i16, so the next batch will crossfade from it
-        // into whatever the new chain produces. The ramp is shorter than a
-        // typical batch (5 ms = 240 frames at 48 kHz; batches are usually
-        // 1024) so it completes inside one call.
-        let ramp = (PRESET_RAMP_MS * 1e-3 * self.sample_rate_hz).round() as usize;
-        self.ramp_total = ramp;
-        self.ramp_remaining = ramp;
+    fn is_identity(&self) -> bool {
+        self.hpf.is_none() && self.eq.is_none() && !self.mbagc.is_enabled() && self.limiter.is_none()
+    }
+
+    /// Frames of silence the limiter emits before its look-ahead is full.
+    fn warm_up_frames(&self) -> usize {
+        self.limiter.as_ref().map_or(0, LookaheadLimiter::lookahead_frames)
+    }
+
+    fn process(&mut self, buf: &mut [f32]) {
+        if let Some(hpf) = &mut self.hpf {
+            hpf.process_interleaved(buf);
+        }
+        if let Some(eq) = &mut self.eq {
+            eq.process_interleaved(buf);
+        }
+        self.mbagc.process_interleaved(buf);
+        if let Some(limiter) = &mut self.limiter {
+            limiter.process_interleaved(buf);
+        }
+    }
+}
+
+pub struct PlaybackDspChain {
+    stages: Stages,
+    /// Tuning waiting for the fade-out to finish.
+    pending: Option<PlaybackPresetTuning>,
+    fade: Fade,
+    ramp_frames: usize,
+    f32_buf: Vec<f32>,
+    sample_rate_hz: f32,
+}
+
+/// Raised cosine, 0 → 1 as `pos` goes 0 → `len`.
+fn rise(pos: usize, len: usize) -> f32 {
+    if len == 0 {
+        return 1.0;
+    }
+    let t = (pos as f32 / len as f32).min(1.0);
+    0.5 - 0.5 * (std::f32::consts::PI * t).cos()
+}
+
+impl PlaybackDspChain {
+    pub fn new(tuning: &PlaybackPresetTuning, sample_rate_hz: f32) -> Self {
+        Self {
+            stages: Stages::new(tuning, sample_rate_hz),
+            pending: None,
+            fade: Fade::Idle,
+            ramp_frames: (PRESET_RAMP_MS * 1e-3 * sample_rate_hz).round() as usize,
+            f32_buf: Vec::new(),
+            sample_rate_hz,
+        }
+    }
+
+    /// Switch to `tuning`: the running stages fade out, then the new ones
+    /// fade in. A switch during a fade-in turns it around at the current
+    /// level; during a fade-out the target is replaced.
+    pub fn set_preset(&mut self, tuning: &PlaybackPresetTuning) {
+        self.pending = Some(tuning.clone());
+        self.fade = match self.fade {
+            Fade::Idle => Fade::Out { pos: 0 },
+            out @ Fade::Out { .. } => out,
+            // Silent hold: swap right away. Rising: continue down from the
+            // same gain (the fade-out is the fade-in mirrored).
+            Fade::In { pos, hold } if pos < hold => Fade::Out { pos: self.ramp_frames },
+            Fade::In { pos, hold } => Fade::Out { pos: self.ramp_frames - (pos - hold).min(self.ramp_frames) },
+        };
+    }
+
+    /// True while a preset switch is fading.
+    pub fn is_switching(&self) -> bool {
+        self.fade != Fade::Idle
     }
 
     pub fn last_mbagc_gain_db(&self) -> [f32; super::mbagc::N_BANDS] {
-        self.mbagc.last_gain_db()
+        self.stages.mbagc.last_gain_db()
     }
 
+    /// 0 when no limiter runs.
     pub fn last_limiter_reduction_db(&self) -> f32 {
-        self.limiter.last_reduction_db()
+        self.stages.limiter.as_ref().map_or(0.0, LookaheadLimiter::last_reduction_db)
     }
 
     /// Process interleaved S16 stereo in place. `buf.len()` must be a multiple of 2.
     pub fn process_i16(&mut self, buf: &mut [i16]) {
-        if buf.is_empty() { return; }
+        if buf.is_empty() || (self.fade == Fade::Idle && self.stages.is_identity()) {
+            return;
+        }
         debug_assert_eq!(buf.len() % N_CHANNELS, 0,
             "buf length must be a multiple of N_CHANNELS");
-        // Resize scratch f32 buffer if needed.
-        if self.f32_buf.len() != buf.len() {
-            self.f32_buf.resize(buf.len(), 0.0);
-        }
-        // Convert i16 → f32 in [-1, 1).
-        for (dst, &src) in self.f32_buf.iter_mut().zip(buf.iter()) {
-            *dst = src as f32 / 32768.0;
-        }
-        // Run the chain.
-        self.hpf.process_interleaved(&mut self.f32_buf);
-        self.eq.process_interleaved(&mut self.f32_buf);
-        self.mbagc.process_interleaved(&mut self.f32_buf);
-        self.limiter.process_interleaved(&mut self.f32_buf);
+        let mut f32_buf = std::mem::take(&mut self.f32_buf);
+        f32_buf.clear();
+        f32_buf.extend(buf.iter().map(|&s| s as f32 / 32768.0));
 
-        // Preset cosine ramp: blend `last_output` → new chain output across
-        // the next `ramp_total` frames. env(t) goes 0→1 as t goes 0→1.
-        if self.ramp_remaining > 0 && self.ramp_total > 0 {
-            let total = self.ramp_total as f32;
-            let n_frames = self.f32_buf.len() / N_CHANNELS;
-            let take = self.ramp_remaining.min(n_frames);
-            let consumed_before = self.ramp_total - self.ramp_remaining;
-            for i in 0..take {
-                let t = (consumed_before + i) as f32 / total;
-                let env = 0.5 - 0.5 * (std::f32::consts::PI * t).cos();
-                let inv = 1.0 - env;
-                for ch in 0..N_CHANNELS {
-                    let idx = i * N_CHANNELS + ch;
-                    self.f32_buf[idx] = inv * self.last_output[ch] + env * self.f32_buf[idx];
+        let n_frames = f32_buf.len() / N_CHANNELS;
+        let mut frame = 0;
+        while frame < n_frames {
+            match self.fade {
+                Fade::Idle => {
+                    self.stages.process(&mut f32_buf[frame * N_CHANNELS..]);
+                    frame = n_frames;
+                }
+                Fade::Out { pos } => {
+                    let take = (self.ramp_frames - pos).min(n_frames - frame);
+                    let span = &mut f32_buf[frame * N_CHANNELS..(frame + take) * N_CHANNELS];
+                    self.stages.process(span);
+                    for (i, f) in span.chunks_exact_mut(N_CHANNELS).enumerate() {
+                        let g = rise(self.ramp_frames - (pos + i + 1), self.ramp_frames);
+                        f.iter_mut().for_each(|s| *s *= g);
+                    }
+                    frame += take;
+                    if pos + take < self.ramp_frames {
+                        self.fade = Fade::Out { pos: pos + take };
+                    } else {
+                        // Silent now: swap in fresh stages.
+                        if let Some(tuning) = self.pending.take() {
+                            self.stages = Stages::new(&tuning, self.sample_rate_hz);
+                        }
+                        self.fade = Fade::In { pos: 0, hold: self.stages.warm_up_frames() };
+                    }
+                }
+                Fade::In { pos, hold } => {
+                    let total = hold + self.ramp_frames;
+                    let take = (total - pos).min(n_frames - frame);
+                    let span = &mut f32_buf[frame * N_CHANNELS..(frame + take) * N_CHANNELS];
+                    self.stages.process(span);
+                    for (i, f) in span.chunks_exact_mut(N_CHANNELS).enumerate() {
+                        let p = pos + i;
+                        let g = if p < hold { 0.0 } else { rise(p - hold + 1, self.ramp_frames) };
+                        f.iter_mut().for_each(|s| *s *= g);
+                    }
+                    frame += take;
+                    self.fade = if pos + take < total { Fade::In { pos: pos + take, hold } } else { Fade::Idle };
                 }
             }
-            self.ramp_remaining -= take;
         }
 
-        // Capture the final frame for the next preset switch's hold value.
-        let n = self.f32_buf.len();
-        if n >= N_CHANNELS {
-            for ch in 0..N_CHANNELS {
-                self.last_output[ch] = self.f32_buf[n - N_CHANNELS + ch];
-            }
+        // Back to S16. Same scale both ways, so a stage set that changes
+        // nothing round-trips exactly; the clamp catches numerical overshoot.
+        for (dst, &src) in buf.iter_mut().zip(f32_buf.iter()) {
+            *dst = (src * 32768.0).round().clamp(-32768.0, 32767.0) as i16;
         }
-
-        // Convert back to S16 with hard clamp. The limiter keeps us in range,
-        // but clamp guards against any final sample > ±1 due to numerical drift.
-        for (dst, &src) in buf.iter_mut().zip(self.f32_buf.iter()) {
-            *dst = (src.clamp(-1.0, 1.0) * 32767.0) as i16;
-        }
+        self.f32_buf = f32_buf;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::playback::dsp::limiter::LimiterParams;
+    use crate::playback::preset::{media_preset, voice_preset};
 
-    fn flat_eq() -> [[BiquadParams; N_BANDS]; N_CHANNELS] {
-        [[BiquadParams::BYPASS; N_BANDS]; N_CHANNELS]
+    const FS: f32 = 48_000.0;
+    /// 5 ms at 48 kHz.
+    const RAMP: usize = 240;
+    const LOOKAHEAD: usize = LimiterParams::DEFAULT.lookahead_samples;
+
+    /// `frames` stereo frames of a constant.
+    fn dc(frames: usize, value: i16) -> Vec<i16> {
+        vec![value; frames * 2]
+    }
+
+    fn sine(frames: usize, freq: f32, amp: f32) -> Vec<i16> {
+        (0..frames)
+            .flat_map(|i| {
+                let v = (amp * (2.0 * std::f32::consts::PI * freq * i as f32 / FS).sin() * 32767.0) as i16;
+                [v, v]
+            })
+            .collect()
+    }
+
+    fn left(buf: &[i16]) -> Vec<i16> {
+        buf.iter().step_by(2).copied().collect()
     }
 
     #[test]
-    fn mid_playback_preset_switch_clears_state() {
-        // Drive the limiter into deep reduction with a hot signal, capture the
-        // post-block reduction, then call set_preset and confirm the rebuild
-        // returns the limiter to a clean reduction_db ~ 0 on the next batch.
-        let mut chain = PlaybackDspChain::new(
-            80.0,
-            &flat_eq(),
-            MbagcParams::PASSTHROUGH,
-            LimiterParams::DEFAULT,
-            48_000.0,
-        );
-        // Hot square wave at ±32767 — drives the limiter to its ceiling.
+    fn media_chain_is_bit_exact() {
+        let mut chain = PlaybackDspChain::new(&media_preset(), FS);
+        let mut buf: Vec<i16> = (0..4096).map(|i| ((i * 7919) % 65536) as u16 as i16).collect();
+        buf[0] = i16::MIN;
+        buf[1] = i16::MAX;
+        let before = buf.clone();
+        chain.process_i16(&mut buf);
+        assert_eq!(buf, before);
+        assert_eq!(chain.last_limiter_reduction_db(), 0.0);
+    }
+
+    #[test]
+    fn s16_round_trip_through_f32_is_exact() {
+        // An active chain whose stages leave this signal alone: a limiter
+        // far above the signal. Past the look-ahead the output is the input,
+        // delayed, sample for sample.
+        let mut tuning = media_preset();
+        tuning.limiter = Some(LimiterParams { ceiling_dbfs: 0.0, ..LimiterParams::DEFAULT });
+        let mut chain = PlaybackDspChain::new(&tuning, FS);
+        let input = sine(2048, 997.0, 0.5);
+        let mut buf = input.clone();
+        chain.process_i16(&mut buf);
+        assert_eq!(&buf[LOOKAHEAD * 2..], &input[..input.len() - LOOKAHEAD * 2]);
+    }
+
+    #[test]
+    fn voice_chain_shapes_the_signal() {
+        let mut chain = PlaybackDspChain::new(voice_preset(), FS);
+        let input = sine(4800, 3500.0, 0.1);
+        let mut buf = input.clone();
+        chain.process_i16(&mut buf);
+        // +5 dB at 3.5 kHz once the filters and the look-ahead settled.
+        let rms = |b: &[i16]| (b.iter().map(|&s| (s as f64).powi(2)).sum::<f64>() / b.len() as f64).sqrt();
+        let gain_db = 20.0 * (rms(&buf[4800..]) / rms(&input[4800..])).log10();
+        assert!((gain_db - 5.0).abs() < 0.5, "got {gain_db:.2} dB at 3.5 kHz");
+    }
+
+    #[test]
+    fn a_switch_fades_out_swaps_at_silence_and_fades_in() {
+        let mut chain = PlaybackDspChain::new(&media_preset(), FS);
+        chain.set_preset(&media_preset());
+        assert!(chain.is_switching());
+        let mut buf = dc(1024, 16384);
+        chain.process_i16(&mut buf);
+        let l = left(&buf);
+        assert!(l[0] > 16300, "starts at full level: {}", l[0]);
+        assert_eq!(l[RAMP - 1], 0, "silent at the swap");
+        for w in l[..RAMP].windows(2) {
+            assert!(w[1] <= w[0], "fade-out must not rise: {w:?}");
+        }
+        for w in l[RAMP..2 * RAMP].windows(2) {
+            assert!(w[1] >= w[0], "fade-in must not fall: {w:?}");
+        }
+        assert!(l[2 * RAMP - 1] >= 16383, "back to full level: {}", l[2 * RAMP - 1]);
+        assert!(l[2 * RAMP..].iter().all(|&s| s == 16384));
+        assert!(!chain.is_switching());
+    }
+
+    #[test]
+    fn a_switch_into_a_limited_tuning_stays_silent_through_the_look_ahead() {
+        let mut chain = PlaybackDspChain::new(&media_preset(), FS);
+        chain.set_preset(voice_preset());
+        let mut buf = sine(2048, 1000.0, 0.3);
+        chain.process_i16(&mut buf);
+        let l = left(&buf);
+        assert!(l[RAMP..RAMP + LOOKAHEAD].iter().all(|&s| s == 0), "limiter fill must be silent");
+        let after = &l[2 * RAMP + LOOKAHEAD..];
+        assert!(after.iter().any(|&s| s.abs() > 5000), "new chain audible after the fade-in");
+    }
+
+    #[test]
+    fn a_switch_during_a_fade_in_turns_around_without_a_jump() {
+        let mut chain = PlaybackDspChain::new(&media_preset(), FS);
+        chain.set_preset(&media_preset());
+        let mut first = dc(RAMP + RAMP / 2, 16384);
+        chain.process_i16(&mut first);
+        let last = *first.last().unwrap();
+        chain.set_preset(&media_preset());
+        let mut second = dc(RAMP, 16384);
+        chain.process_i16(&mut second);
+        let next = second[0];
+        assert!((last - next).abs() < 16384 / 50, "jump from {last} to {next}");
+        assert_eq!(left(&second)[RAMP / 2 - 1], 0, "silent at the swap");
+    }
+
+    #[test]
+    fn output_does_not_depend_on_how_the_stream_is_cut() {
+        let input = sine(4096, 440.0, 0.4);
+        let run = |batch: usize| {
+            let mut chain = PlaybackDspChain::new(voice_preset(), FS);
+            let mut out = Vec::new();
+            for (i, chunk) in input.chunks(batch * 2).enumerate() {
+                if i == 3 {
+                    chain.set_preset(&media_preset());
+                }
+                let mut b = chunk.to_vec();
+                chain.process_i16(&mut b);
+                out.extend(b);
+            }
+            out
+        };
+        // The switch lands at frame 3·batch, so compare cuts that share it.
+        assert_eq!(run(64), {
+            let mut chain = PlaybackDspChain::new(voice_preset(), FS);
+            let mut out = Vec::new();
+            let (head, tail) = input.split_at(3 * 64 * 2);
+            let mut h = head.to_vec();
+            chain.process_i16(&mut h);
+            out.extend(h);
+            chain.set_preset(&media_preset());
+            let mut t = tail.to_vec();
+            chain.process_i16(&mut t);
+            out.extend(t);
+            out
+        });
+    }
+
+    #[test]
+    fn limiter_still_engages_on_a_hot_voice_signal() {
+        let mut chain = PlaybackDspChain::new(voice_preset(), FS);
         let mut hot: Vec<i16> = (0..2048).flat_map(|i| {
             let s = if i % 2 == 0 { 32767 } else { -32767 };
             [s, s]
         }).collect();
         chain.process_i16(&mut hot);
-        let pre_switch_reduction_db = chain.last_limiter_reduction_db();
-        assert!(
-            pre_switch_reduction_db < -0.5,
-            "expected hot signal to engage limiter, got {pre_switch_reduction_db:.2} dB",
-        );
-
-        // Switch presets mid-playback. set_preset rebuilds the limiter from
-        // scratch, which discards the held peak.
-        chain.set_preset(
-            80.0,
-            &flat_eq(),
-            MbagcParams::PASSTHROUGH,
-            LimiterParams::DEFAULT,
-        );
-        // After rebuild, last_reduction_db must reset to 0 immediately —
-        // the new limiter has no history.
-        assert_eq!(
-            chain.last_limiter_reduction_db(), 0.0,
-            "limiter rebuild must zero last_reduction_db",
-        );
-
-        // First batch after switch is during the cosine ramp + limiter
-        // warm-up. Run a soft signal so the limiter doesn't immediately
-        // re-engage, and verify the chain is alive (output amplitude > 0
-        // somewhere past the warm-up window).
-        let amp = 0.05_f32;
-        let mut soft: Vec<i16> = (0..2048).flat_map(|i| {
-            let s = amp * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin();
-            let v = (s * 32767.0) as i16;
-            [v, v]
-        }).collect();
-        chain.process_i16(&mut soft);
-        // Reduction should remain ~0 because the soft signal is well below
-        // the ceiling.
-        assert!(
-            chain.last_limiter_reduction_db().abs() < 0.5,
-            "soft signal post-switch should not engage limiter, got {:.2} dB",
-            chain.last_limiter_reduction_db(),
-        );
-        // Output past the lookahead window must be non-zero (chain is alive).
-        let max_past_warmup = soft.iter().skip(400).map(|&s| s.abs()).max().unwrap_or(0);
-        assert!(max_past_warmup > 100, "chain output looks dead post-switch: {max_past_warmup}");
+        assert!(chain.last_limiter_reduction_db() < -0.5,
+            "expected the limiter to engage, got {:.2} dB", chain.last_limiter_reduction_db());
+        let peak = hot.iter().map(|s| s.unsigned_abs()).max().unwrap();
+        assert!(peak <= 29_300, "ceiling −1 dBFS, got peak {peak}");
     }
 
     #[test]
-    fn passthrough_chain_preserves_low_amplitude_signal() {
-        // EQ flat, MBAGC bypassed, HPF on (80 Hz). 1 kHz signal sits well in
-        // the passband. After the limiter's 96-sample lookahead warm-up,
-        // RMS energy should match the input within a couple of dB.
-        let mut chain = PlaybackDspChain::new(
-            80.0,
-            &flat_eq(),
-            MbagcParams::PASSTHROUGH,
-            LimiterParams::DEFAULT,
-            48_000.0,
-        );
-        let amp = 0.1_f32; // -20 dBFS, well under limiter ceiling
-        let mut buf: Vec<i16> = (0..2048)
-            .flat_map(|i| {
-                let s = amp * (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin();
-                let v = (s * 32767.0) as i16;
-                [v, v]
-            })
-            .collect();
-        chain.process_i16(&mut buf);
-        // Sine RMS at amp=0.1 → -20 dBFS amplitude → -23 dBFS RMS. After warm-up.
-        let rms_squared: f64 = buf[400..].iter().map(|&s| (s as f64).powi(2)).sum::<f64>()
-                             / (buf.len() - 400) as f64;
-        let rms = rms_squared.sqrt() / 32768.0;
-        let rms_db = 20.0 * (rms as f32).log10();
-        assert!(rms_db > -25.0 && rms_db < -21.0,
-                "expected ~-23 dBFS, got {rms_db:.2} dBFS");
+    fn a_switch_replaces_the_limiter() {
+        let mut chain = PlaybackDspChain::new(voice_preset(), FS);
+        let mut hot: Vec<i16> = (0..2048).flat_map(|i| {
+            let s = if i % 2 == 0 { 32767 } else { -32767 };
+            [s, s]
+        }).collect();
+        chain.process_i16(&mut hot);
+        assert!(chain.last_limiter_reduction_db() < -0.5);
+        chain.set_preset(&media_preset());
+        let mut quiet = dc(1024, 100);
+        chain.process_i16(&mut quiet);
+        assert_eq!(chain.last_limiter_reduction_db(), 0.0, "media has no limiter");
     }
 }

@@ -123,6 +123,11 @@ impl MultibandAgc {
         self.last_gain_db = [0.0; N_BANDS];
     }
 
+    /// False when the MBAGC passes samples through.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Returns the most recent per-band gain (dB). Used by stats_collector.
     pub fn last_gain_db(&self) -> [f32; N_BANDS] {
         self.last_gain_db

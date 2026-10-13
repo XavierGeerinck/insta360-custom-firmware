@@ -143,7 +143,7 @@ Priority:
 | AEC and processed USB microphone | **Unknown** | The residual candidate measures 27.0 dB speech ERLE and 36.1 dB final suppression at 100% speaker volume with zero drops. Live-call, sustained-load, total-latency, and same-fixture stock comparison remain. |
 | Beamforming modes and horizontal DOA | **Partial** | Directional modes and GCC-PHAT work; exact stock beam patterns and close/simultaneous-speaker behavior are not yet compared. |
 | Neural noise suppression | **Unknown** | DFN3 works on CPU; stock-vs-Waved speech quality and sustained-load behavior remain unmeasured. |
-| Playback EQ, gain staging, and limiter | **Matched** | Voice EQ matches the recovered stock configuration; media bypass, soft knee, preset ramp, and peak-hold stats are implemented. |
+| Speaker tuning (playback EQ, amp EQ mode) | **Partial** | Stock runs no DSP on the speaker and switches the amplifier's `Set EQ MODE` (2 music, 1 while a mic consumer is active); waved now does the same with speaker scenes (Media = identity, Voice = the stock voice EQ with its switches honoured, no MBAGC). Device listening A/B and ERLE re-measure remain (`docs/superpowers/plans/2026-10-13-speaker-scenes.md`). |
 | Standard UAC2 playback/capture | **Matched** | Generic macOS applications play and record through the device; host-played AEC acceptance passes. |
 | HID consumer and telephony controls | **Matched** | Stock report IDs and UI/MCU bridges are implemented and covered by `scripts/test-hid-control.sh`. |
 | Official Wave Controller vendor controls | **Unknown** | Run the official application against Waved, then capture stock USB control traffic only if a missing control is observed. |

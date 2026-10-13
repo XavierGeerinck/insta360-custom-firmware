@@ -221,6 +221,52 @@ pub enum PlaybackPreset {
     Media,
 }
 
+/// The speaker amplifier's own EQ preset: ALSA card 0 control `Set EQ MODE`
+/// (acm8625s, INTEGER 0..2). Values are stock's `SPEAKER_PA_EQ_MODE`
+/// (`Insta360_Speaker.h`, `docs/AUDIO_HARDWARE.md` "Stock speaker tuning").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmpEqMode {
+    /// 0: stock never selects it.
+    Bypass,
+    /// 1: stock while a microphone consumer is active (a call).
+    Meeting,
+    /// 2: the amplifier's power-on value; stock otherwise.
+    #[default]
+    Music,
+}
+
+impl AmpEqMode {
+    /// The value written to `Set EQ MODE`.
+    pub fn value(self) -> i32 {
+        match self {
+            AmpEqMode::Bypass => 0,
+            AmpEqMode::Meeting => 1,
+            AmpEqMode::Music => 2,
+        }
+    }
+
+    pub fn from_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(AmpEqMode::Bypass),
+            1 => Some(AmpEqMode::Meeting),
+            2 => Some(AmpEqMode::Music),
+            _ => None,
+        }
+    }
+
+    /// `0`/`1`/`2` or `bypass`/`meeting`/`music` (any case, trimmed).
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim().to_ascii_lowercase();
+        match raw.as_str() {
+            "bypass" => Some(AmpEqMode::Bypass),
+            "meeting" => Some(AmpEqMode::Meeting),
+            "music" => Some(AmpEqMode::Music),
+            other => other.parse().ok().and_then(Self::from_value),
+        }
+    }
+}
+
 /// What happens to a recording when it stops. Lives here (not in waved-config)
 /// so state, commands and config share one type.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -692,6 +738,12 @@ pub enum Command {
     SetAudioMode(AudioMode),
     SetNrLevel(NrLevel),
     SetPlaybackPreset(PlaybackPreset),
+    /// Undo a `SetPlaybackPreset` pin: the speaker preset follows the scene
+    /// (music or meeting) again (`waved_audio::playback::scene`).
+    SetPlaybackPresetAuto,
+    /// Pin the speaker amplifier's `Set EQ MODE` (A/B tests); `None` follows
+    /// the scene again.
+    SetAmpEqMode(Option<AmpEqMode>),
     ToggleMicMute,
     ToggleSpeakerMute,
     /// Mute (`true`) or unmute the mic; already in that state = no change.
@@ -1063,6 +1115,41 @@ mod tests {
             cmd,
             Command::SetPlaybackPreset(PlaybackPreset::Media)
         ));
+    }
+
+    #[test]
+    fn amp_eq_mode_values_follow_stock_speaker_pa_eq_mode() {
+        // Insta360_Speaker.h: SPEAKER_PA_EQ_MODE_{BYPASS, MEETING, MUSIC} = 0, 1, 2.
+        assert_eq!(AmpEqMode::Bypass.value(), 0);
+        assert_eq!(AmpEqMode::Meeting.value(), 1);
+        assert_eq!(AmpEqMode::Music.value(), 2);
+        for mode in [AmpEqMode::Bypass, AmpEqMode::Meeting, AmpEqMode::Music] {
+            assert_eq!(AmpEqMode::from_value(mode.value()), Some(mode));
+        }
+        assert_eq!(AmpEqMode::from_value(3), None);
+        assert_eq!(AmpEqMode::from_value(-1), None);
+    }
+
+    #[test]
+    fn amp_eq_mode_parses_numbers_and_names() {
+        assert_eq!(AmpEqMode::parse("0"), Some(AmpEqMode::Bypass));
+        assert_eq!(AmpEqMode::parse(" 1\n"), Some(AmpEqMode::Meeting));
+        assert_eq!(AmpEqMode::parse("2"), Some(AmpEqMode::Music));
+        assert_eq!(AmpEqMode::parse("Bypass"), Some(AmpEqMode::Bypass));
+        assert_eq!(AmpEqMode::parse("meeting"), Some(AmpEqMode::Meeting));
+        assert_eq!(AmpEqMode::parse("MUSIC"), Some(AmpEqMode::Music));
+        assert_eq!(AmpEqMode::parse("3"), None);
+        assert_eq!(AmpEqMode::parse("auto"), None);
+    }
+
+    #[test]
+    fn speaker_scene_override_commands_route() {
+        assert!(matches!(Command::SetPlaybackPresetAuto, Command::SetPlaybackPresetAuto));
+        assert!(matches!(
+            Command::SetAmpEqMode(Some(AmpEqMode::Meeting)),
+            Command::SetAmpEqMode(Some(AmpEqMode::Meeting))
+        ));
+        assert!(matches!(Command::SetAmpEqMode(None), Command::SetAmpEqMode(None)));
     }
 
     #[test]

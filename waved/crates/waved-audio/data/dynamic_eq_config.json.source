@@ -1,0 +1,1 @@
+stock firmware 1.2.2.6 — /etc/dynamic_eq_config.json from the rootfs (firmwares/fw_v1.2.2.6/extracted/rootfs/etc/ in this repo; identical in 1.0.13.6). Stock loads it for the MICROPHONE path (Insta360_EqProccess, bypassed by /etc/audio_config.json insta_eq_en: 0), not the speaker. Vendored as parser test data only (docs/AUDIO_HARDWARE.md "Stock speaker tuning").
