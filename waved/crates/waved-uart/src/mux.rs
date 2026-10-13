@@ -158,17 +158,18 @@ fn handle_byte(
     Ok(())
 }
 
-/// A frame for the trace log: its command byte and length, never its bytes.
-/// The Bluetooth module sends the phone book, caller numbers and the phone's
-/// name and MAC on this port.
+/// A frame for the trace log: its prefix, command byte and length, never its
+/// bytes. The Bluetooth module sends the phone book, caller numbers and the
+/// phone's name and MAC on this port.
 fn describe(frame: &Frame) -> String {
+    let [p0, p1] = frame.header;
     match frame.data.split_first() {
         Some((cmd, rest)) => format!(
-            "parsed frame: cmd {cmd:#04x}, {} data bytes, target {:?}",
+            "parsed frame: {p0:02x} {p1:02x} cmd {cmd:#04x}, {} data bytes, target {:?}",
             rest.len(),
             frame.target
         ),
-        None => format!("parsed frame: empty, target {:?}", frame.target),
+        None => format!("parsed frame: {p0:02x} {p1:02x} empty, target {:?}", frame.target),
     }
 }
 
@@ -222,10 +223,14 @@ mod tests {
             data: vec![0xB1, b'+', b'3', b'2', b'4', b'7', b'0'],
         };
         let line = describe(&frame);
-        assert_eq!(line, "parsed frame: cmd 0xb1, 6 data bytes, target Bluetooth");
+        // The prefix tells the module's repeated frames (75 45) from its
+        // one-shot answers (75 46); it carries nothing personal.
+        assert_eq!(line, "parsed frame: 75 45 cmd 0xb1, 6 data bytes, target Bluetooth");
         assert!(!line.contains("43") && !line.contains("+32"), "{line}");
+        let answer = Frame { header: [0x75, 0x46], target: FrameTarget::Bluetooth, data: vec![0xC5, 0x00] };
+        assert_eq!(describe(&answer), "parsed frame: 75 46 cmd 0xc5, 1 data bytes, target Bluetooth");
         let empty = Frame { header: [0x75, 0x45], target: FrameTarget::Bluetooth, data: vec![] };
-        assert_eq!(describe(&empty), "parsed frame: empty, target Bluetooth");
+        assert_eq!(describe(&empty), "parsed frame: 75 45 empty, target Bluetooth");
     }
 
     #[test]
