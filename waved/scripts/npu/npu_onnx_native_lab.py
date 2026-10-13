@@ -31,7 +31,9 @@ RUNTIME_PROVENANCE_SHA256 = (
 )
 IMAGE = "sha256:a45f1308adfe3fc3b90e329e72d5efe9d743e6cc77017254d28bbba1c689586a"
 TIM_COMMIT = "702715d714277376d7ff466b7b72833ff57564c1"
-ROOT_RE = re.compile(r"/tmp/wave-npu-onnx17-[0-9a-f]{16}-(?:compile|execute)\Z")
+ROOT_RE = re.compile(r"/tmp/wave-npu-onnx(?:17|18)-[0-9a-f]{16}-(?:compile|execute)\Z")
+GRAPH_PROFILE = "fp16-marblenet-v1"
+MAXIMUM_GRAPH_TENSOR_BYTES = 8 * 1024 * 1024
 SYSTEM_HASHES = {
     path: digest
     for path, digest in json.loads(execution.POC7_POLICY.manifest_path.read_text())[
@@ -110,7 +112,43 @@ def remote_root(record: dict, kind: str) -> str:
     digest = record.get("lowering_sha256", "")
     if kind not in ("compile", "execute") or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise NativeLabError("invalid native root identity")
-    return f"/tmp/wave-npu-onnx17-{digest[:16]}-{kind}"
+    poc = "18" if record.get("profile_id") == GRAPH_PROFILE else "17"
+    return f"/tmp/wave-npu-onnx{poc}-{digest[:16]}-{kind}"
+
+
+def _tensor_bytes(record: dict, key: str) -> int:
+    size = record[key]["byte_size"]
+    maximum = (
+        MAXIMUM_GRAPH_TENSOR_BYTES if record.get("profile_id") == GRAPH_PROFILE else 32
+    )
+    if type(size) is not int or not 0 < size <= maximum:
+        raise NativeLabError("native tensor exceeds its profile byte bound")
+    return size
+
+
+def _compare_output(record: dict, expected: bytes, observed: bytes) -> dict:
+    if len(expected) != _tensor_bytes(record, "onnx_output") or len(observed) != len(
+        expected
+    ):
+        raise NativeLabError("native output length differs from its tensor contract")
+    if record.get("profile_id") == GRAPH_PROFILE:
+        _host()
+        from wave_onnx_hybrid.marblenet_graph import validate_graph_output
+
+        try:
+            return validate_graph_output(record, expected, observed)
+        except Exception as error:
+            raise NativeLabError(
+                f"native numerical qualification failed: {error}"
+            ) from error
+    if expected != observed:
+        raise NativeLabError("native output differs from byte-exact CPU oracle")
+    return {
+        "status": "PASS",
+        "comparison": "byte-exact",
+        "reference_sha256": _digest(expected),
+        "observed_sha256": _digest(observed),
+    }
 
 
 def import_package(model_path: Path | str, package_dir: Path | str) -> dict:
@@ -245,7 +283,7 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
             raise NativeLabError("compile envelope does not bind this NBG")
         stdout = _regular(root / "evidence/compile/stdout.txt").decode()
         if _digest(stdout.encode()) != compiled.get("stdout_sha256") or not _nn_target(
-            stdout
+            stdout, allow_tp=record["profile_id"] == GRAPH_PROFILE
         ):
             raise NativeLabError("NN target evidence changed or absent")
         cleanup = _json(root / "evidence/compile/cleanup.json")
@@ -287,7 +325,10 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
         if compile_lab.RUN_ID_RE.fullmatch(qualification["run_id"]) is None:
             raise NativeLabError("qualification run ID is invalid")
         stage_dir = root / "evidence" / (qualification["run_id"] + "-stage")
-        if _regular(stage_dir / "input.bin", 32) != input_bytes:
+        if (
+            _regular(stage_dir / "input.bin", _tensor_bytes(record, "onnx_input"))
+            != input_bytes
+        ):
             raise NativeLabError("qualification input file changed")
         import numpy as np
 
@@ -301,12 +342,36 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
             .copy()
         }
         _, oracle = _cpu_expected(loaded, inputs, verify_onnx_runtime=False)
-        if expected != oracle:
-            raise NativeLabError(
-                "qualification readback differs from current CPU oracle"
+        _compare_output(record, oracle, expected)
+        manifest_reference = expected
+        cpu_output_digest = _digest(expected)
+        if record["profile_id"] == GRAPH_PROFILE:
+            independent_bytes = _regular(
+                root / "qualification-independent-output.bin",
+                _tensor_bytes(record, "onnx_output"),
             )
+            cpu_bytes = _regular(
+                root / "qualification-cpu-output.bin",
+                _tensor_bytes(record, "onnx_output"),
+            )
+            if qualification.get("independent_output_sha256") != _digest(
+                independent_bytes
+            ) or qualification.get("cpu_output_sha256") != _digest(cpu_bytes):
+                raise NativeLabError("retained numerical reference bytes changed")
+            _compare_output(record, oracle, independent_bytes)
+            _compare_output(record, independent_bytes, cpu_bytes)
+            comparison = _compare_output(record, independent_bytes, expected)
+            comparison_path = root / "evidence/qualification/numerical-comparison.json"
+            if (
+                qualification.get("comparison_sha256")
+                != _digest(_regular(comparison_path))
+                or _json(comparison_path) != comparison
+            ):
+                raise NativeLabError("retained native numerical comparison changed")
+            manifest_reference = independent_bytes
+            cpu_output_digest = _digest(cpu_bytes)
         manifest = _execute_manifest(
-            loaded, stage_dir / "input.bin", expected, stage_dir, create=False
+            loaded, stage_dir / "input.bin", manifest_reference, stage_dir, create=False
         )
         if (
             run.get("manifest_sha256") != manifest.sha256
@@ -340,7 +405,7 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
             or cpu_evidence.get("outputs", {})
             .get(record["onnx_output"]["name"], {})
             .get("sha256")
-            != _digest(expected)
+            != cpu_output_digest
         ):
             raise NativeLabError("retained ONNX CPU oracle evidence differs")
         if _digest(_regular(root / "evidence/qualification/output.bin")) != _digest(
@@ -645,9 +710,10 @@ def _tensor_expectation(tensor: dict) -> compile_lab.TensorExpectation:
 def _compile_policy(package: dict) -> npu_op_dtype_lab.DiagnosticCompilePolicy:
     record = package["record"]
     root = remote_root(record, "compile")
+    poc = "18" if record["profile_id"] == GRAPH_PROFILE else "17"
     return npu_op_dtype_lab.DiagnosticCompilePolicy(
-        poc_id="17",
-        experiment="wave-npu-poc17-onnx-compile",
+        poc_id=poc,
+        experiment=f"wave-npu-poc{poc}-onnx-compile",
         operation="OnnxNative",
         manifest_path=Path(package["directory"]) / "compile-manifest.json",
         remote_executable=root + "/bin/wave-npu-onnx-compile-v1",
@@ -962,10 +1028,18 @@ def _cleanup(
     return result
 
 
-def _nn_target(stdout: str) -> bool:
+def _nn_target(stdout: str, allow_tp: bool = False) -> bool:
     lines = [line for line in stdout.splitlines() if "operation target " in line]
-    return bool(lines) and all(
+    targets = (
+        ("VXNNE_OPERATION_TARGET_NN", "VXNNE_OPERATION_TARGET_TP")
+        if allow_tp
+        else ("VXNNE_OPERATION_TARGET_NN",)
+    )
+    return any(
         "operation target VXNNE_OPERATION_TARGET_NN," in line for line in lines
+    ) and all(
+        any(f"operation target {target}," in line for target in targets)
+        for line in lines
     )
 
 
@@ -1019,7 +1093,9 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
         raise NativeLabError(f"native compilation did not pass; evidence: {run_dir}")
     _successful_run(envelope)
     stdout = _regular(run_dir / "stdout.txt").decode()
-    if not _nn_target(stdout):
+    if not _nn_target(
+        stdout, allow_tp=package["record"]["profile_id"] == GRAPH_PROFILE
+    ):
         raise NativeLabError(
             "native compiler did not establish exclusive NN target selection"
         )
@@ -1065,6 +1141,8 @@ def _cpu_expected(
     if any(not np.isfinite(array).all() for array in expected.values()):
         raise NativeLabError("independent oracle output is non-finite")
     output_bytes = expected[output_spec["name"]].tobytes()
+    if len(output_bytes) != _tensor_bytes(package["record"], "onnx_output"):
+        raise NativeLabError("independent oracle output has the wrong length")
     if output_bytes == bytes([0xA5]) * len(output_bytes):
         raise NativeLabError(
             "oracle output equals the output canary; use CPU inference"
@@ -1084,12 +1162,24 @@ def _cpu_expected(
         if set(expected) != set(cpu) or any(
             expected[name].dtype != cpu[name].dtype
             or expected[name].shape != cpu[name].shape
-            or expected[name].tobytes() != cpu[name].tobytes()
             for name in expected
         ):
-            raise NativeLabError("independent oracle differs from ONNX Runtime CPU")
+            raise NativeLabError("ONNX Runtime CPU output tensor contract differs")
+        for name in expected:
+            _compare_output(
+                package["record"], expected[name].tobytes(), cpu[name].tobytes()
+            )
         if evidence_path is not None:
             _write_json(evidence_path, cpu_run.evidence)
+            if package["record"]["profile_id"] == GRAPH_PROFILE:
+                _write(
+                    evidence_path.with_name("qualification-cpu-output.bin"),
+                    cpu[output_spec["name"]].tobytes(),
+                )
+                _write(
+                    evidence_path.with_name("qualification-independent-output.bin"),
+                    output_bytes,
+                )
     return inputs[input_spec["name"]].tobytes(), output_bytes
 
 
@@ -1099,7 +1189,11 @@ def _execute_manifest(
     record = package["record"]
     root = remote_root(record, "execute")
     build = _load_build(package, "execute")
-    input_bytes = _regular(input_path, 32)
+    input_bytes = _regular(input_path, _tensor_bytes(record, "onnx_input"))
+    if len(input_bytes) != _tensor_bytes(record, "onnx_input") or len(
+        expected
+    ) != _tensor_bytes(record, "onnx_output"):
+        raise NativeLabError("execution tensor file length differs from profile")
     artifacts = {
         **SYSTEM_HASHES,
         root + "/bin/wave-npu-onnx-execute-v1": build["binary_sha256"],
@@ -1112,18 +1206,25 @@ def _execute_manifest(
         for path in artifacts
         if path.startswith(root + "/")
     }
-    operation = "fp16-conv" if record["profile_id"] == "fp16-conv-v1" else "u8-fc"
+    numerical = record["profile_id"] == GRAPH_PROFILE
+    operation = (
+        "fp16-marblenet"
+        if numerical
+        else ("fp16-conv" if record["profile_id"] == "fp16-conv-v1" else "u8-fc")
+    )
     result_re = re.compile(
         r"^EXECUTION status=PASS mode=execute-once target=wave operation="
         + operation
         + rf" iterations=1 input_bytes={len(input_bytes)} output_bytes={len(expected)}"
         + r" graph_us=(?P<graph_us>[0-9]+) output_hex=(?P<output_hex>"
-        + expected.hex()
+        + (rf"[0-9a-f]{{{2 * len(expected)}}}" if numerical else expected.hex())
         + r") cleanup=0$"
     )
     policy = execution.ExecutionPolicy(
-        poc_id="17",
-        experiment="wave-npu-poc17-onnx-execute",
+        poc_id="18" if numerical else "17",
+        experiment="wave-npu-poc18-onnx-execute"
+        if numerical
+        else "wave-npu-poc17-onnx-execute",
         manifest_path=run_dir / "execution-manifest.json",
         remote_root=root,
         remote_executable=root + "/bin/wave-npu-onnx-execute-v1",
@@ -1234,13 +1335,33 @@ def execute_package(
         state.get("status") != "present"
         or state.get("bytes") != len(expected)
         or state.get("permissions") != "-r--r--r--"
-        or state.get("sha256") != _digest(expected)
     ):
-        raise NativeLabError("native output file differs from CPU oracle/contract")
+        raise NativeLabError("native output file differs from tensor contract")
     _adb(manifest, "pull", candidate.output, str(directory / "output.bin"))
-    output = _regular(directory / "output.bin", 32)
-    if output != expected or envelope["result"].get("output_hex") != output.hex():
-        raise NativeLabError("readback file differs from execution/oracle bytes")
+    output = _regular(
+        directory / "output.bin", _tensor_bytes(package["record"], "onnx_output")
+    )
+    if (
+        _digest(output) != state.get("sha256")
+        or envelope["result"].get("output_hex") != output.hex()
+    ):
+        raise NativeLabError("readback file differs from captured native execution")
+    try:
+        comparison = _compare_output(package["record"], expected, output)
+    except NativeLabError as error:
+        _write_json(
+            directory / "numerical-comparison.json",
+            {
+                "status": "FAIL",
+                "error": str(error),
+                "reference_sha256": _digest(expected),
+                "observed_sha256": _digest(output),
+            },
+        )
+        _cleanup(manifest, payloads, remote, envelope, directory, execute=True)
+        raise
+    if package["record"]["profile_id"] == GRAPH_PROFILE:
+        _write_json(directory / "numerical-comparison.json", comparison)
     _cleanup(manifest, payloads, remote, envelope, directory, execute=True)
     native_identity = {
         "package_sha256": package["package_sha256"],
@@ -1301,13 +1422,33 @@ def qualify_package(
         "executor_sha256": build["binary_sha256"],
         "run_sha256": _digest(_regular(directory / "run.json")),
         "input_hex": input_bytes.hex(),
-        "output_hex": expected.hex(),
+        "output_hex": result["output_bytes"].hex(),
         "input_sha256": _digest(input_bytes),
-        "output_sha256": _digest(expected),
+        "output_sha256": _digest(result["output_bytes"]),
         "cpu_evidence_sha256": _digest(
             _regular(root / "qualification-cpu-oracle.json")
         ),
     }
+    if package["record"]["profile_id"] == GRAPH_PROFILE:
+        qualification.update(
+            {
+                "independent_output_sha256": _digest(
+                    _regular(
+                        root / "qualification-independent-output.bin",
+                        _tensor_bytes(package["record"], "onnx_output"),
+                    )
+                ),
+                "cpu_output_sha256": _digest(
+                    _regular(
+                        root / "qualification-cpu-output.bin",
+                        _tensor_bytes(package["record"], "onnx_output"),
+                    )
+                ),
+                "comparison_sha256": _digest(
+                    _regular(directory / "numerical-comparison.json")
+                ),
+            }
+        )
     _write_json(root / "qualification.json", qualification)
     return load_package(root, require_qualification=True)
 

@@ -687,6 +687,13 @@ def parse_result(
     if "graph_us" in measured:
         result["graph_us"] = int(measured["graph_us"])
         result["output_hex"] = measured["output_hex"]
+        try:
+            observed = bytes.fromhex(measured["output_hex"])
+        except ValueError as error:
+            raise ExecutionResultError("native output is not hexadecimal") from error
+        if len(observed) != len(manifest.policy.output_values):
+            raise ExecutionResultError("native output byte count differs from policy")
+        result["output"] = list(observed)
     return result
 
 

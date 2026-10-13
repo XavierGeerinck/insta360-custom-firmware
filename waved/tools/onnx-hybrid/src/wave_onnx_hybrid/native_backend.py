@@ -259,7 +259,11 @@ class NativeSession:
                 "native output byte count differs from ONNX contract",
             )
         expected = independent_oracle(record, inputs)[spec["name"]].tobytes(order="C")
-        if payload != expected:
+        if record["profile_id"] == "fp16-marblenet-v1":
+            from .marblenet_graph import validate_graph_output
+
+            validate_graph_output(record, expected, payload)
+        elif payload != expected:
             raise _failure(
                 ErrorCode.NPU_OUTPUT_NUMERICAL_MISMATCH,
                 "native output differs from independent ONNX oracle",
