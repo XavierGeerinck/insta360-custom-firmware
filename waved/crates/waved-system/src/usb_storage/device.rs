@@ -264,6 +264,17 @@ impl Adbd for SystemAdbd {
     }
 }
 
+/// `/proc/<pid>/stat`'s state is Z.
+fn zombie(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join("stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(')')
+                .map(|(_, rest)| rest.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
 /// The configfs gadget (stock `S89usbgadget`'s functions and configuration),
 /// and the UDCs under `/sys/class/udc`.
 pub struct ConfigfsGadget {
@@ -274,17 +285,6 @@ pub struct ConfigfsGadget {
     sleep: Box<dyn Fn(Duration) + Send>,
     /// The normal mode noted on the way in.
     normal: Option<NormalMode>,
-}
-
-/// `/proc/<pid>/stat`'s state is Z.
-fn zombie(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(')')
-                .map(|(_, rest)| rest.trim_start().starts_with('Z'))
-        })
-        .unwrap_or(false)
 }
 
 impl ConfigfsGadget {
