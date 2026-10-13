@@ -1,6 +1,13 @@
-//! Bluetooth (I4, bluetooth.png): the connected phone with Disconnect, or
-//! "Pair a device", which makes Wave visible for two minutes with a countdown
-//! ring and the name to pick on the phone. Behind the PIN (D10, the router).
+//! Bluetooth (I4, bluetooth.png): the connected phone with Disconnect and
+//! "Pair another phone", or "Pair a device", which makes Wave visible for two
+//! minutes with a countdown ring and the name to pick on the phone. Leaving
+//! the screen ends the window (`BtStopPairing`, the runtime's leave
+//! commands). Behind the PIN (D10, the router).
+//!
+//! Disconnect turns the module's reconnect off first, so the phone stays
+//! dropped until it connects again from its own Bluetooth settings. Pair
+//! another phone is stock's "Connect New Device": the same pairing, which
+//! drops the connected phone first.
 //!
 //! The mockup's paired list is left out: the module keeps its pairings itself
 //! and has no command to list, connect to or forget a phone
@@ -24,6 +31,9 @@ use waved_state::{BluetoothState, Command};
 /// bluetooth.png: the first device row and the content pill.
 const ROW: Rect = Rect::new(60, 82, 280, 48);
 const ACTION: Rect = Rect::new(108, 192, 184, 44);
+/// Connected: Disconnect in the mockup's second row, between the phone and
+/// the pairing pill (which keeps its place on every view).
+const DISCONNECT_PILL: Rect = Rect::new(108, 140, 184, 44);
 /// The line under the row while no phone is connected.
 const HINT_Y: i32 = 142;
 const HINT_W: i32 = 280;
@@ -41,9 +51,11 @@ pub const PAIRING_WINDOW_S: u16 = 120;
 /// the six hex digits of the serial).
 pub const NAME_FALLBACK: &str = "Insta360 Wave BT";
 pub const PAIR: &str = "Pair a device";
+pub const PAIR_ANOTHER: &str = "Pair another phone";
 pub const DISCONNECT: &str = "Disconnect";
 pub const NO_PHONE: &str = "No phone connected";
-pub const RECONNECTS: &str = "Phones paired before connect by themselves";
+/// After Disconnect the module no longer reconnects by itself; the phone can.
+pub const RECONNECTS: &str = "Reconnect a phone from its Bluetooth settings";
 pub const PICK_NAME: &str = "Pick this name in your phone's Bluetooth list";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,11 +123,12 @@ fn centered(parent: Obj, font: Font, hex: u32, width: i32, y: i32) -> Obj {
 
 struct Parts {
     subtitle: Obj,
-    /// Not connected and connected: the row and one action.
+    /// Not connected and connected: the row and its actions.
     list: Obj,
     row: DeviceRow,
     hint: Obj,
     pair: Obj,
+    pair_another: Obj,
     disconnect: Obj,
     /// Pairing: the countdown, the name and the instruction.
     pairing: Obj,
@@ -150,7 +163,11 @@ impl Screen for BluetoothScreen {
             dispatch.command(Command::BtPair)
         });
         let dispatch = ctx.dispatch.clone();
-        let disconnect = text_button(list, ACTION, DISCONNECT, move || {
+        let pair_another = icon_button(list, ACTION, icons::BLUETOOTH, PAIR_ANOTHER, move || {
+            dispatch.command(Command::BtPair)
+        });
+        let dispatch = ctx.dispatch.clone();
+        let disconnect = text_button(list, DISCONNECT_PILL, DISCONNECT, move || {
             dispatch.command(Command::BtDisconnect)
         });
 
@@ -171,6 +188,7 @@ impl Screen for BluetoothScreen {
             row,
             hint,
             pair,
+            pair_another,
             disconnect,
             pairing,
             dial,
@@ -207,6 +225,7 @@ impl Screen for BluetoothScreen {
                 });
                 parts.hint.hidden(false);
                 parts.pair.hidden(false);
+                parts.pair_another.hidden(true);
                 parts.disconnect.hidden(true);
             }
             View::Connected { shows_as, phone } => {
@@ -220,6 +239,7 @@ impl Screen for BluetoothScreen {
                 });
                 parts.hint.hidden(true);
                 parts.pair.hidden(true);
+                parts.pair_another.hidden(false);
                 parts.disconnect.hidden(false);
             }
             View::Pairing { name, left_s } => {
@@ -303,8 +323,31 @@ mod tests {
             assert_targets_ok(root);
             assert!(shows_text(root, "iPhone"));
             assert!(shows_text(root, &format!("Shows up as {MODULE}")));
-            lv.click(screen.parts.as_ref().unwrap().disconnect);
+            assert!(shows_text(root, DISCONNECT));
+            assert!(shows_text(root, PAIR_ANOTHER));
+            assert!(!shows_text(root, PAIR), "one pairing action at a time");
+            let parts = screen.parts.as_ref().unwrap();
+            lv.click(parts.disconnect);
             assert_eq!(f.commands(), vec![Command::BtDisconnect]);
+            // Stock's "Connect New Device": the same pairing as with no phone.
+            lv.click(parts.pair_another);
+            assert_eq!(f.commands(), vec![Command::BtPair]);
+            assert!(f.events().is_empty(), "pairing stays on this screen");
+        });
+    }
+
+    #[test]
+    fn the_pairing_actions_fit_their_pills() {
+        lvgl(|_| {
+            // The pill's icon (16 px), its 6 px gap and 12 px each side.
+            for text in [PAIR, PAIR_ANOTHER] {
+                let needs = text_width(text, Font::Body) + 16 + 6 + 2 * 12;
+                assert!(needs <= ACTION.w, "{text:?} needs {needs} of {}", ACTION.w);
+            }
+            let needs = text_width(DISCONNECT, Font::Body) + 2 * 12;
+            assert!(needs <= DISCONNECT_PILL.w);
+            assert!(DISCONNECT_PILL.y >= ROW.y + ROW.h + 8, "below the phone");
+            assert!(DISCONNECT_PILL.y + DISCONNECT_PILL.h + 8 <= ACTION.y, "above pairing");
         });
     }
 
@@ -318,6 +361,9 @@ mod tests {
             assert_golden("screen_bluetooth_idle", &lv.render());
             assert_targets_ok(root);
             assert!(shows_text(root, NO_PHONE));
+            assert!(shows_text(root, RECONNECTS));
+            assert!(!shows_text(root, DISCONNECT));
+            assert!(!shows_text(root, PAIR_ANOTHER));
             lv.click(screen.parts.as_ref().unwrap().pair);
             assert_eq!(f.commands(), vec![Command::BtPair]);
             assert!(f.events().is_empty(), "pairing stays on this screen");
@@ -337,6 +383,8 @@ mod tests {
             assert!(shows_text(root, "1:42"));
             assert!(shows_text(root, PICK_NAME));
             assert!(!shows_text(root, PAIR), "no second pairing while pairing");
+            assert!(!shows_text(root, PAIR_ANOTHER));
+            assert!(!shows_text(root, DISCONNECT));
         });
     }
 
@@ -354,9 +402,11 @@ mod tests {
             screen.update(&connected());
             assert!(shows_text(root, "iPhone"));
             assert!(shows_text(root, DISCONNECT));
+            assert!(shows_text(root, PAIR_ANOTHER));
             assert!(!shows_text(root, "1:59"));
             screen.update(&bt_snap());
             assert!(shows_text(root, NO_PHONE));
+            assert!(!shows_text(root, PAIR_ANOTHER));
             assert_targets_ok(root);
         });
     }
