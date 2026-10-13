@@ -511,6 +511,10 @@ Computed with the stock rule. They are also the unit-test fixtures in
   call (an in-band ring tone opens the audio link while ringing).
   `BtAnswerCall` sends button event 3 only while ringing; `BtDeclineCall` sends
   event 0 while ringing (decline) or active (hang up). Both carry `time(NULL)`.
+- **Disconnects:** whatever says the phone is gone (`0xB2` bit 0 clear,
+  `0xAA 00`, `0xE1` with its MAC, three `0xB4` reports without a phone) also
+  clears the call, `phone_audio` and `call_audio`, so I2 closes `hw:0,0`.
+  `pairing` (bit 3) is the module's own and stays.
 - **Name:** `0xC6` fills `BluetoothState::advertised_name`, which the
   Bluetooth screen shows ("Shows up as …", and large while pairing).
 - **Privacy:** the phone book (`0xB0`) is dropped unread. No info or debug log

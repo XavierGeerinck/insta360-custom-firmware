@@ -136,8 +136,12 @@ fn set_connected(s: &mut BluetoothState, connected: bool, out: &mut Applied) {
         DeviceEvent::BtConnected(s.device_name.clone())
     } else {
         s.device_name.clear();
-        // No phone, no call.
+        // No phone, no call and no phone audio, whichever frame said it
+        // dropped (waved-audio keeps hw:0,0 open while the audio bits are
+        // set). Pairing mode is the module's own and stays.
         s.call = BtCall::Idle;
+        s.phone_audio = false;
+        s.call_audio = false;
         DeviceEvent::BtDisconnected
     });
 }
@@ -382,6 +386,30 @@ mod tests {
         t.apply(&number("0471"), &mut s);
         t.apply(&Event::Status { connected: false }, &mut s);
         assert_eq!(s.call, BtCall::Idle);
+    }
+
+    #[test]
+    fn a_dropped_phone_takes_its_audio_bits_along() {
+        // waved-audio keeps hw:0,0 open while these are set (I2): every path
+        // that decides the phone is gone must clear them, not only an 0xB2.
+        // Pairing mode is the module's, not the phone's: it stays.
+        let drops: [(&str, Vec<Event>); 3] = [
+            ("0xE1", vec![Event::DeviceDisconnected { mac: MAC }]),
+            ("0xAA", vec![Event::Status { connected: false }]),
+            ("0xB4 x3", vec![report(Link::Absent), report(Link::Absent), report(Link::Absent)]),
+        ];
+        for (name, events) in drops {
+            let (mut t, mut s) = (Tracker::default(), BluetoothState::default());
+            t.apply(&Event::WorkStatus { status: WorkStatus(0x0F), phone: phone("Pixel") }, &mut s);
+            assert!(s.connected && s.phone_audio && s.call_audio && s.pairing);
+            let mut last = Applied::default();
+            for e in &events {
+                last = t.apply(e, &mut s);
+            }
+            assert_eq!(last.event, Some(DeviceEvent::BtDisconnected), "{name}");
+            assert!(!s.connected && !s.phone_audio && !s.call_audio, "{name}");
+            assert!(s.pairing, "{name}: the module's pairing mode is its own");
+        }
     }
 
     #[test]
