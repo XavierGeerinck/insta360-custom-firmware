@@ -227,7 +227,7 @@ into an `Event`.
 | `0xA6` | audio mode switched | `[?] [mode]` | `BT_SWITCH_MODE` | **[code]** 75679 |
 | `0xAA` | status | `[connected]`, where 0 = no phone | `BT_CONNECT_STATUS` 1 / 0 | **[code]** 75696 |
 | `0xAE` | PBAP state | `[ready]` | if 1, asks for the phone book | **[code]** 75716 |
-| `0xB0` | phone-book entry | `[?×4] [n] number[n] [m] name[2m]` (UTF-16?) | `add_contact`, saved to `/tmp/PHONE_BOOK.bin` | **[code]** 75722 |
+| `0xB0` | phone-book entry | `[?×4] [n] number[n] [m] name[2m]` (UTF-16LE, seen on the device) | `add_contact`, saved to `/tmp/PHONE_BOOK.bin`. waved drops it unread (`Event::PhoneBookEntry`, carries nothing) and acknowledges it | **[code]** 75722 |
 | `0xB1` | call number | ASCII; empty means the number is gone | `BT_PHONE_COMING_NUM` (plus a name from the phone book) → incoming-call screen | **[code]** 75739, ui 102913 |
 | `0xB2` | work status | `[bits] [?] [n] name[n] [?] [?] mac[6]`; name and MAC only matter when bit 0 is set | `BT_WORK_STAUS` → audio routing. On a new connection: status 0, name, MAC, `AutoReconnect(0)`, `SaveFlash`. Falls through into the `0xD0` handler. | **[code]** 75767-76013 |
 | `0xB3` | heartbeat / connected phone | `[?] [n] name[n] [?] [?] mac[6]` | liveness; stores a changed name or MAC | **[code]** 76014 |
@@ -235,7 +235,7 @@ into an `Event`.
 | `0xBD` | dongle info | `[?] mac[6] sn… uuid… [freq] code[31]`; needs 30 bytes or more | stores DONGLE_MAC, SN, UUID, FREQ and CODE | **[code]** 76351 |
 | `0xC4` | module info | `mac[6] uuid[16] sn[32] [freq]`; needs more than 9 bytes | stores BT_MAC, UUID, SN and FREQ (waved decodes the MAC only) | **[code]** 76754 |
 | `0xC6` | name | `[?] name[23]` | `BT_NAME`, saved | **[code]** 76953 |
-| `0xC8` | phone MAC | `[?] mac[6]` | `BT_DEVICE_PHONE_MAC` | **[code]** 76980 |
+| `0xC8` | phone MAC | `[?] [6] mac[6]` on the device (stock reads `[?] mac[6]`, one byte early) | `BT_DEVICE_PHONE_MAC` | **[code]** 76980, device 2026-10-13 |
 | `0xD0` | button taken | — | ack flag | **[code]** 76008 |
 | `0xD1` | phone event | `[event]`: 0 = call up, 1 = call ended (both only while a number is stored), 2 = start, 3 = restart, 4 = pause, 5 = stop a recording | calling screen; recording control | **[code]** 76991, ui 85228 |
 | `0xD4` | dongle keys | `[?] [?] [speaker mute] [volume] [mic mute]` | mute and volume | **[code]** 77033 |
@@ -300,9 +300,11 @@ the USB HID side, not this link. The call state above is what drives it.
   connected or reconnecting ("Warning! bt set pairing but bt has been
   connected", "…while bt is reconnecting"). **[file]** No command to leave
   pairing mode is known, and the module's own timeout is unknown.
-- **Discoverable when idle:** whether the module is discoverable with no phone
-  connected is unknown. Stock offers no pairing button outside "Connect a new
-  device", so first pairing presumably works out of the box. **[inferred]**
+- **Discoverable when idle:** no. With no phone connected a new phone does not
+  find the module; `Disconnect` then `EnterPairing` makes it discoverable
+  (device, 2026-10-13). Stock sends the two back to back with no wait
+  (`bluetooth_set_connect(0)`, ui 115208; `bluetooth_set_connect(1)` sends
+  `EnterPairing` alone).
 - **Paired devices:** the module keeps the link keys itself
   (`app_write_stored_linkkey`, `flash_clear_last_dev_func`, "linkkey change,
   clean old services"). **[file]** The protocol has no command to list,
@@ -502,21 +504,46 @@ Computed with the stock rule. They are also the unit-test fixtures in
 | `frame.rs` | framing and the parser |
 | `command.rs` | host commands and acknowledgements |
 | `event.rs` | decodes module frames |
-| `state.rs` | folds events into `BluetoothState` and `BtConnected` / `BtDisconnected` |
+| `state.rs` | folds events into `BluetoothState` (the phone, the module's name, the call) and `BtConnected` / `BtDisconnected` |
+| `control.rs` | bus commands → frames; the 2-minute pairing window |
 | `ota.rs` | firmware images and OTA packets |
 
-`BtService` keeps its constructor and still runs on the `waved-uart` mux. It
-is passive:
+`BtService` keeps its constructor and runs on the `waved-uart` mux at 921600.
+`main.rs` hands it the bus with `.with_commands(bus.commands.subscribe())`.
 
-- at start it sends only `GetVersion`, `GetBuildTime`, `GetStatus`, `GetName`
-  and `GetPhoneMac`;
-- it acknowledges every frame as stock does;
-- it polls `GetStatus` every 5 s, but only after the module has answered once;
-- it logs the version, build time, name and call events, but never the
-  caller's number.
+- At start it sends only `GetVersion`, `GetBuildTime`, `GetStatus`, `GetName`
+  and `GetPhoneMac`. It acknowledges every frame as stock does and polls
+  `GetStatus` every 5 s once the module has answered. The loop runs every
+  100 ms for the bus and the countdown.
+- **Pair** (`Command::BtPair`, Bluetooth screen "Pair a device"):
+  `Disconnect` then `EnterPairing`, back to back as stock's "Connect a new
+  device". `BluetoothState::pairing_left_s` counts 120 s down. The window ends
+  at 0, when a phone connects (a new connection, not the old phone still
+  dropping), or when `0xB2` bit 3 clears after it was set. Nothing is sent at
+  the end: no command to leave pairing mode is known.
+- **Disconnect** (`BtDisconnect`): `Disconnect` only. Stock's UI disconnect
+  also enters pairing.
+- **Calls** (`BluetoothState::call`, `BtCall`): `0xB1` with a number rings,
+  `0xD1 00` makes the call active while a number is known (as stock), `0xD1 01`,
+  an empty `0xB1` or the phone dropping end it. `0xB2` bit 2 alone starts no
+  call (an in-band ring tone opens the audio link while ringing).
+  `BtAnswerCall` sends button event 3 only while ringing; `BtDeclineCall` sends
+  event 0 while ringing (decline) or active (hang up). Both carry `time(NULL)`.
+- **Disconnects:** whatever says the phone is gone (`0xB2` bit 0 clear,
+  `0xAA 00`, `0xE1` with its MAC, three `0xB4` reports without a phone) also
+  clears the call, `phone_audio` and `call_audio`, so I2 closes `hw:0,0`.
+  `pairing` (bit 3) is the module's own and stays.
+- **Name:** `0xC6` fills `BluetoothState::advertised_name`, which the
+  Bluetooth screen shows ("Shows up as …", and large while pairing).
+- **Privacy:** the phone book (`0xB0`) is dropped unread. No info or debug log
+  line carries a phone's name, MAC or a number (`log_line`, tested on every
+  event that carries one); module log lines (`0xF0`) are trace only; the
+  `waved-uart` reader's trace line prints the command byte and length, never
+  the payload. `BtCall`'s `Debug` hides the number.
 
-It doesn't switch Bluetooth on or off, rename the module, pair or save the
-module's flash.
+It doesn't switch Bluetooth on or off, rename the module (`device.name`) or
+save the module's flash. The plan and the device-pass checklist are in
+`docs/superpowers/plans/2026-10-13-m3-i1-i3-i4-bt-control.md`.
 
 ## Implementation outline
 
@@ -611,9 +638,10 @@ waved at `bae1fff`, then with `UART_BAUD = waved_bt::BT_BAUD`:
   is `0x01`. A phone paired under stock reconnects by itself.
 - **The phone book arrives by itself.** Right after an iPhone connected, the
   module sent `0xB0` frames: one contact each (index, length, number as ASCII,
-  name as UTF-16LE). It is PBAP, which stock uses for caller names. waved must
-  never log or store these (TODO: decode as a dropped event; "Phone book
-  (PBAP) sync" is not planned).
+  name as UTF-16LE). It is PBAP, which stock uses for caller names. waved never
+  logs or stores these: `0xB0` decodes to `Event::PhoneBookEntry`, which
+  carries nothing, and is still acknowledged ("Phone book (PBAP) sync" is not
+  planned).
 - **Module log lines (`0xF0`) carry the phone's Bluetooth name and MAC**
   (`app_set_bt_last_addr`). Keep them out of the log at info and debug.
 - **`PhoneMac` decodes one byte off:** `app_set_bt_last_addr A1B2C3D4E557`
@@ -697,7 +725,9 @@ adb shell 'arecord -D hw:0,0 -c 2 -r 48000 -f S16_LE -d 5 /tmp/bt-in.wav; ls -l 
 ## Open
 
 - The module's prefix and echo behaviour (B, C above).
-- How to leave pairing mode, and whether the module is discoverable when idle.
+- How to leave pairing mode and how long the module stays in it (waved ends
+  its own window after 2 minutes). The module is not discoverable when idle
+  (verified).
 - What `ConnectReply` 0 and 1 mean, and when `0xD6` is sent.
 - What `0xD8` means (stock clears it on every connect).
 - The unknown bytes in `0xB2`, `0xB3`, `0xB4`, `0x91`/`0x93` and `0xC6`, and

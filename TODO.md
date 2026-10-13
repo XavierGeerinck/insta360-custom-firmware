@@ -321,21 +321,29 @@ Rules for the parallel milestones:
 
 ## I — Bluetooth
 
-- [ ] **I1 Pairing** (L) — `waved-bt`
-  - Discoverable for 2 min.
-  - Paired list; connect, disconnect, forget.
-  - Name from `device.name`.
+- [x] **I1 Pairing** (L) — `waved-bt` — host-tested; check it in the milestone 3 device pass.
+  Plan and checklist: `waved/docs/superpowers/plans/2026-10-13-m3-i1-i3-i4-bt-control.md`.
+  - [x] Discoverable for 2 min: `BtPair` sends `Disconnect` + `EnterPairing` (stock's
+    "Connect a new device"); the window ends early when a phone connects or the module
+    leaves pairing mode.
+  - [x] Disconnect (`BtDisconnect`).
+  - Paired list, connect, forget: not built. The module keeps its pairings and has no
+    command to list, connect to or forget a phone; the screen shows the connected phone.
+  - [ ] Name from `device.name`: not done (`SetName`'s accepted lengths unverified; the
+    module names itself `Insta360 Wave BT <serial>`).
+  - [ ] Measure how long the module stays in pairing mode (no known command ends it).
 - [ ] **I2 Audio routing** (L) — A2DP/HFP into the pipeline, with the AEC reference tap.
   - Built on the host 2026-10-13 (`waved-audio` `bt_audio`): `0xB2` bit 1 plays the phone
     through the speaker chain, mixed with USB audio, into the AEC reference and recordings'
     far end; bit 2 sends the processed uplink to the phone. `bt_audio` in the audio stats.
   - Ships after the device pass: checklist in
     `waved/docs/superpowers/plans/2026-10-13-m3-i2-bt-audio.md`.
-- [ ] **I3 Calls** (M)
-  - Incoming-call screen with Answer and Decline.
-  - HID hook-switch to the computer.
-  - Phone number only, no phone book.
-- [ ] **I4 Bluetooth screen** (S) — `screens/bluetooth.rs`.
+- [x] **I3 Calls** (M) — host-tested; check it in the milestone 3 device pass.
+  - [x] Incoming-call screen with Answer and Decline; takes over the screen while it rings,
+    also during a recording; "In a call" with Hang up once answered.
+  - [ ] HID hook-switch to the computer: not done (USB HID side; needs a telephony report).
+  - [x] Phone number only, no phone book (`0xB0` dropped unread, never logged).
+- [x] **I4 Bluetooth screen** (S) — `screens_v2/bluetooth.rs`; Menu row; behind the PIN.
 
 ## J — Wave Controller
 

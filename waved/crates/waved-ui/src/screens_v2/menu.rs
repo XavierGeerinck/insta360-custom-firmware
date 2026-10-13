@@ -1,6 +1,5 @@
 //! Menu (B1): every setting with its current value, opened from the status
-//! pill (menu.png). Mic height (B5) joined in milestone 3; Bluetooth (I4) joins
-//! with its workstream.
+//! pill (menu.png). Mic height (B5) and Bluetooth (I4) joined in milestone 3.
 //! This file also holds the value words other settings screens reuse.
 
 use crate::kit::components::buttons::back_button;
@@ -23,18 +22,20 @@ pub enum MenuRow {
     Volume,
     MicHeight,
     Wifi,
+    Bluetooth,
     Uploads,
     System,
 }
 
 /// The rows in scope, in the mockup's order (how often people need them).
-pub const ROWS: [MenuRow; 8] = [
+pub const ROWS: [MenuRow; 9] = [
     MenuRow::Files,
     MenuRow::AudioMode,
     MenuRow::NoiseReduction,
     MenuRow::Volume,
     MenuRow::MicHeight,
     MenuRow::Wifi,
+    MenuRow::Bluetooth,
     MenuRow::Uploads,
     MenuRow::System,
 ];
@@ -52,6 +53,7 @@ impl MenuRow {
             MenuRow::Volume => Route::Volume,
             MenuRow::MicHeight => Route::MicHeight,
             MenuRow::Wifi => Route::Wifi,
+            MenuRow::Bluetooth => Route::Bluetooth,
             MenuRow::Uploads => Route::Uploads,
             MenuRow::System => Route::System,
         }
@@ -65,6 +67,7 @@ impl MenuRow {
             MenuRow::Volume => "Volume",
             MenuRow::MicHeight => "Mic height",
             MenuRow::Wifi => "Wi-Fi",
+            MenuRow::Bluetooth => "Bluetooth",
             MenuRow::Uploads => "Uploads",
             MenuRow::System => "System",
         }
@@ -78,6 +81,7 @@ impl MenuRow {
             MenuRow::Volume => icons::VOLUME_HIGH,
             MenuRow::MicHeight => icons::MIC,
             MenuRow::Wifi => icons::WIFI,
+            MenuRow::Bluetooth => icons::BLUETOOTH,
             MenuRow::Uploads => icons::SEND,
             MenuRow::System => icons::SETTINGS,
         }
@@ -109,6 +113,17 @@ impl MenuRow {
                 "Connected".into()
             } else {
                 snap.wifi.ssid.clone()
+            }),
+            MenuRow::Bluetooth => Some(if snap.bt.connected {
+                if snap.bt.device_name.is_empty() {
+                    "Connected".into()
+                } else {
+                    snap.bt.device_name.clone()
+                }
+            } else if snap.bt.pairing_left_s > 0 {
+                "Pairing".into()
+            } else {
+                "Not connected".into()
             }),
             MenuRow::Uploads => Some(upload_mode_name(snap.settings.upload_mode).into()),
             MenuRow::System => None,
@@ -398,10 +413,33 @@ mod tests {
                 "Volume",
                 "Mic height",
                 "Wi-Fi",
+                "Bluetooth",
                 "Uploads",
                 "System"
             ]
         );
+    }
+
+    #[test]
+    fn the_bluetooth_row_names_the_phone_and_opens_bluetooth() {
+        let mut snap = snap();
+        assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("Not connected"));
+        snap.bt.pairing_left_s = 90;
+        assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("Pairing"));
+        snap.bt.connected = true;
+        assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("Connected"));
+        snap.bt.device_name = "iPhone".into();
+        assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("iPhone"));
+        assert_eq!(MenuRow::Bluetooth.route(), Route::Bluetooth);
+        lvgl(|lv| {
+            let root = lv.screen();
+            let f = fixture();
+            let mut screen = MenuScreen::default();
+            screen.build(root, &f.ctx, &menu_snap());
+            let index = ROWS.iter().position(|row| *row == MenuRow::Bluetooth).unwrap();
+            lv.click(screen.list.as_ref().unwrap().row(index));
+            assert_eq!(f.events(), vec![UiEvent::Navigate(Route::Bluetooth)]);
+        });
     }
 
     #[test]
@@ -478,6 +516,7 @@ mod tests {
         for row in [
             MenuRow::Files,
             MenuRow::Wifi,
+            MenuRow::Bluetooth,
             MenuRow::Uploads,
             MenuRow::System,
         ] {

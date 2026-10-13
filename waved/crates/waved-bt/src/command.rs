@@ -351,6 +351,9 @@ mod tests {
             assert!(f.data.is_empty(), "{cmd:#04x}");
         }
         assert_eq!(ack(0xD4).as_deref(), Some("75 46 01 D4 D5"));
+        // The phone book is dropped unread but still acknowledged, or the
+        // module repeats each contact every 500 ms.
+        assert_eq!(ack(0xB0).as_deref(), Some("75 46 02 B0 00 B2"));
         // ...and 0xE0 (flash saved) is never acknowledged.
         assert_eq!(ack(0xE0), None);
     }

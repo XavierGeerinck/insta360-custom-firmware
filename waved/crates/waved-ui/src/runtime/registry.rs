@@ -4,9 +4,9 @@
 use crate::kit::route::Route;
 use crate::kit::screen::Screen;
 use crate::screens_v2::{
-    about, ambient, audio_mode, boot, confirm, datetime, decision, display, file_detail, files,
-    first_run, home, menu, mic_height, noise, ota, pin, powering_off, recording, system,
-    upload_mode, uploads, volume, wifi, wifi_setup,
+    about, ambient, audio_mode, bluetooth, boot, call, confirm, datetime, decision, display,
+    file_detail, files, first_run, home, menu, mic_height, noise, ota, pin, powering_off,
+    recording, system, upload_mode, uploads, volume, wifi, wifi_setup,
 };
 
 /// The screen for `route`, or `None` for a milestone 3 route, which the
@@ -41,11 +41,10 @@ pub fn screen_for(route: &Route) -> Option<Box<dyn Screen>> {
         Route::Confirm(kind) => Box::new(confirm::ConfirmScreen::new(*kind)),
         Route::Pin(_) => Box::new(pin::PinScreen::default()),
         Route::Update => Box::new(ota::UpdateScreen::default()),
-        // Milestone 3: Bluetooth, USB storage and incoming call have no
-        // screen yet.
-        Route::Bluetooth
-        | Route::UsbStorage
-        | Route::IncomingCall => return None,
+        Route::Bluetooth => Box::new(bluetooth::BluetoothScreen::default()),
+        Route::IncomingCall => Box::new(call::CallScreen::default()),
+        // Milestone 3: USB storage has no screen yet.
+        Route::UsbStorage => return None,
     };
     Some(screen)
 }
@@ -101,6 +100,8 @@ mod tests {
             // Milestone 3 screens built so far.
             Route::MicHeight,
             Route::Update,
+            Route::Bluetooth,
+            Route::IncomingCall,
         ]
     }
 
@@ -197,12 +198,19 @@ mod tests {
 
     #[test]
     fn milestone_3_routes_have_no_screen_yet() {
-        for route in [
-            Route::Bluetooth,
-            Route::UsbStorage,
-            Route::IncomingCall,
-        ] {
-            assert!(screen_for(&route).is_none(), "{route:?}");
-        }
+        assert!(screen_for(&Route::UsbStorage).is_none());
+    }
+
+    #[test]
+    fn a_ringing_call_builds_with_its_number() {
+        let mut snap = fixture();
+        snap.bt.connected = true;
+        snap.bt.call = waved_state::BtCall::Ringing {
+            number: "+32470123456".into(),
+        };
+        build(&Route::IncomingCall, &snap, |root| {
+            assert!(shows_text(root, "+32470123456"));
+            assert_targets_ok(root);
+        });
     }
 }

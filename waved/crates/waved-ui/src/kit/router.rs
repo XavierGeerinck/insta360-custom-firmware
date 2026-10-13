@@ -3,10 +3,14 @@
 use crate::kit::dispatch::UiEvent;
 use crate::kit::route::Route;
 use crate::kit::snapshot::UiSnapshot;
+use waved_state::BtCall;
 
 pub struct Router {
     stack: Vec<Route>,
     unlocked: bool,
+    /// The user went Back from the call screen: it stays away until the call
+    /// ends (I3).
+    call_dismissed: bool,
 }
 
 impl Default for Router {
@@ -20,6 +24,7 @@ impl Router {
         Self {
             stack: vec![Route::Boot],
             unlocked: false,
+            call_dismissed: false,
         }
     }
 
@@ -102,6 +107,9 @@ impl Router {
             }
             UiEvent::Back => {
                 if self.stack.len() > 1 {
+                    if *self.current() == Route::IncomingCall {
+                        self.call_dismissed = true;
+                    }
                     self.stack.pop();
                 }
             }
@@ -171,6 +179,32 @@ impl Router {
         } else if self.stack[0] != base {
             self.stack[0] = base;
         }
+        self.follow_call(snap);
+    }
+
+    /// A Bluetooth call that rings takes over, on top of whatever shows (a
+    /// recording keeps running underneath), until the user goes Back from
+    /// it; once answered it stays as "In a call". It leaves when the call
+    /// ends. A ring while resting goes under the resting screen (the runtime
+    /// wakes the screen for a ring). Plan 2026-10-13, decision 4.
+    fn follow_call(&mut self, snap: &UiSnapshot) {
+        if snap.bt.call == BtCall::Idle {
+            self.call_dismissed = false;
+            self.stack.retain(|route| *route != Route::IncomingCall);
+            return;
+        }
+        if !snap.bt.call.is_ringing()
+            || self.call_dismissed
+            || self.stack.contains(&Route::IncomingCall)
+        {
+            return;
+        }
+        let at = if *self.current() == Route::Resting {
+            self.stack.len() - 1
+        } else {
+            self.stack.len()
+        };
+        self.stack.insert(at, Route::IncomingCall);
     }
 }
 
@@ -520,5 +554,144 @@ mod tests {
         assert_eq!((router.current(), router.depth()), (&Route::Menu, 2));
         router.handle(&UiEvent::Back, &snap);
         assert_eq!(router.current(), &Route::Home);
+    }
+
+    fn call(snap: &mut UiSnapshot, call: waved_state::BtCall) {
+        snap.bt.call = call;
+    }
+
+    fn ringing() -> waved_state::BtCall {
+        waved_state::BtCall::Ringing { number: "0471".into() }
+    }
+
+    fn active() -> waved_state::BtCall {
+        waved_state::BtCall::Active { number: "0471".into() }
+    }
+
+    #[test]
+    fn a_ringing_call_takes_over_until_it_ends() {
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Menu), &snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Menu, Route::IncomingCall]);
+        router.sync(&snap);
+        assert_eq!(router.depth(), 3, "once");
+        // Answered: the screen stays, now "In a call".
+        call(&mut snap, active());
+        router.sync(&snap);
+        assert_eq!(router.current(), &Route::IncomingCall);
+        // Ended: back to where it was.
+        call(&mut snap, waved_state::BtCall::Idle);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Menu]);
+    }
+
+    #[test]
+    fn a_call_covers_a_recording_which_stays_underneath() {
+        let mut snap = ready();
+        snap.meeting.recording = true;
+        let mut router = started(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Recording, Route::IncomingCall]);
+        router.handle(&UiEvent::Back, &snap);
+        assert_eq!(router.stack(), [Route::Recording]);
+    }
+
+    #[test]
+    fn back_dismisses_the_call_for_that_call_only() {
+        let mut snap = ready();
+        let mut router = started(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        router.handle(&UiEvent::Back, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home], "dismissed while it rings");
+        call(&mut snap, active());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home], "and once it is up");
+        call(&mut snap, waved_state::BtCall::Idle);
+        router.sync(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.current(), &Route::IncomingCall, "the next call shows again");
+    }
+
+    #[test]
+    fn a_call_answered_elsewhere_shows_nothing_new() {
+        // Only a ring pushes the screen: a call that is already up (answered
+        // on the phone before Wave saw it ring) does not take over.
+        let mut snap = ready();
+        let mut router = started(&snap);
+        call(&mut snap, active());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home]);
+    }
+
+    #[test]
+    fn a_ring_while_resting_goes_under_the_resting_screen() {
+        // The runtime wakes the screen for a ring first; should the screen
+        // rest during the ring, waking returns to the call.
+        let mut snap = ready();
+        let mut router = started(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        router.handle(&UiEvent::Rest, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall, Route::Resting]);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.current(), &Route::IncomingCall);
+
+        let mut router = started(&ready());
+        router.handle(&UiEvent::Rest, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall, Route::Resting]);
+    }
+
+    #[test]
+    fn a_relock_that_drops_the_call_screen_brings_it_back() {
+        let mut snap = locked();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::Bluetooth), &snap);
+        router.handle(&UiEvent::PinAccepted, &snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Home, Route::Bluetooth, Route::IncomingCall]);
+        router.handle(&UiEvent::Rest, &snap);
+        router.sync(&snap);
+        router.handle(&UiEvent::Wake, &snap);
+        assert_eq!(router.stack(), [Route::Home, Route::IncomingCall]);
+    }
+
+    #[test]
+    fn a_decision_arriving_during_a_call_keeps_the_call_on_top() {
+        let mut snap = ready();
+        let mut router = started(&snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        snap.meeting.pending_decision = Some(decision());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Decision, Route::IncomingCall]);
+    }
+
+    #[test]
+    fn no_call_screen_before_the_first_start_is_done_or_while_powering_off() {
+        let mut snap = UiSnapshot::default();
+        call(&mut snap, ringing());
+        let mut router = Router::new();
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::Boot]);
+        router.handle(&UiEvent::BootDone, &snap);
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::FirstRun]);
+
+        let mut snap = ready();
+        let mut router = started(&snap);
+        router.handle(&UiEvent::Navigate(Route::PoweringOff), &snap);
+        call(&mut snap, ringing());
+        router.sync(&snap);
+        assert_eq!(router.stack(), [Route::PoweringOff]);
     }
 }
