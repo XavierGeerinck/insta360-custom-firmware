@@ -348,12 +348,13 @@ the main checkout's `firmwares/` (`../firmwares/README.md`).
 ### Paths back, least invasive first
 
 1. **Soft revert (normal path).** waved never touches the SquashFS slots, so the unit still
-   runs the stock rootfs it had. `deploy/revert.sh` removes waved's overlay files
-   (`S60waved`, the `S60pspapp_daemon` stub, the `libapplogrs.so` stub, update `.prev`
-   copies) and `/data/waved`; after a reboot `pspapp` runs again. Not removed by it,
-   because they were installed by hand: `S03splash`, `/etc/rsyslog.conf`, the
-   `S89usbgadget` patch (`scripts/patch-stock-usbgadget.sh`). Remove those from
-   `/data/overlay/upper/etc/` too for a clean stock `/etc`.
+   runs the stock rootfs it had. `deploy/revert.sh` removes everything `deploy/install.sh`
+   and updates put in the overlay (`/data/overlay/upper`): `S60waved`, the
+   `S60pspapp_daemon` stub, `S03splash`, the patched `S89usbgadget`, `/etc/rsyslog.conf`,
+   the `libapplogrs.so` stub, and the `.prev` / `.new` copies updates leave beside
+   `S60waved`, `S03splash` and `rsyslog.conf`. Then it removes `/data/waved`. After a
+   reboot `pspapp` runs again and ADB is off, as on stock. It leaves the recordings in
+   `/mnt/udisk/recordings` and the saved Wi-Fi networks (`/etc/wpa_supplicant.conf`).
 2. **Stock updater, after a soft revert.** With `pspapp` back, copy an original vendor
    package (container included, e.g. `software_model_1_1_6_6.swu`) to the recordings
    volume as `psp.swu` (`/mnt/udisk/psp.swu`) and let `pspapp` install it. It writes the
