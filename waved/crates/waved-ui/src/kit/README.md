@@ -191,7 +191,9 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   one-minute wait) and routes `PinAccepted` itself. A `PinAccepted` sent by a screen is
   ignored. Wrong tries and the wait reach the screen in `UiSnapshot::pin`.
 - **Leave commands.** A route can send commands when it goes away (Wi-Fi setup sends
-  `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays).
+  `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays,
+  Bluetooth sends `BtStopPairing`, which ends its pairing window). Resting does not count:
+  the parked route stays on the stack, so a phone can keep pairing while the screen rests.
   The runtime sends them once, when the route leaves the router stack by any path: a button
   or swipe Back, `ToBase`, a base navigate or a meeting takeover (`runtime::gesture::leave_commands`).
   A screen's own Back button may send the same command too; a duplicate is accepted.

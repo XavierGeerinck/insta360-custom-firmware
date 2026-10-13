@@ -1062,6 +1062,52 @@ mod tests {
         });
     }
 
+    /// The probes, plus one for Bluetooth (which `probes` leaves out).
+    fn with_bluetooth(route: &Route) -> Option<Box<dyn Screen>> {
+        match route {
+            Route::Bluetooth => Some(Box::new(Probe {
+                name: "Bluetooth".into(),
+                status: None,
+            })),
+            other => probes(other),
+        }
+    }
+
+    #[test]
+    fn back_from_bluetooth_while_pairing_stops_pairing_and_resting_does_not() {
+        lvgl(|lv| {
+            lv.screen();
+            let (mut rt, mut bus) = runtime_with(Box::new(with_bluetooth));
+            rt.step(ready(0), &[]);
+            rt.step(ready(BOOT_MIN_MS), &[]);
+            send(&mut rt, UiEvent::Navigate(Route::Menu), 2_000);
+            send(&mut rt, UiEvent::Navigate(Route::Bluetooth), 2_100);
+            assert_eq!(rt.shown_route(), Some(&Route::Bluetooth));
+            drain(&mut bus);
+            // The screen rests while a phone pairs: the route stays, and so
+            // does pairing (a phone takes longer than the dim time to pair).
+            let pairing = |now_ms| {
+                let mut snap = ready(now_ms);
+                snap.bt.pairing_left_s = 90;
+                snap
+            };
+            rt.step(pairing(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            assert!(drain(&mut bus).is_empty(), "resting leaves nothing");
+            rt.touch(down(200, 150), &pairing(2 * MIN + 10));
+            rt.step(pairing(2 * MIN + 20), &[]);
+            rt.touch(up(), &pairing(2 * MIN + 30));
+            assert_eq!(rt.shown_route(), Some(&Route::Bluetooth));
+            assert!(drain(&mut bus).is_empty(), "waking leaves nothing");
+            // Back to Menu: pairing ends.
+            rt.dispatcher().ui(UiEvent::Back);
+            rt.step(pairing(2 * MIN + 200), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Menu));
+            assert_eq!(drain(&mut bus), [Command::BtStopPairing]);
+            rt.close();
+        });
+    }
+
     #[test]
     fn to_base_sends_the_leave_commands_of_every_route_it_drops() {
         lvgl(|lv| {

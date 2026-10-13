@@ -91,10 +91,13 @@ pub fn runtime_gesture(
 /// WifiSetup -> [CancelWifiProvisioning] (always, as its Cancel does; the
 /// provisioning service ignores a Cancel when idle);
 /// FileDetail(id) with snap.playback.recording == Some(id) -> [StopPlayback];
+/// Bluetooth -> [BtStopPairing] (always: waved-bt ignores it without a
+/// pairing window, and the snapshot may not show a window that just opened);
 /// otherwise empty.
 pub fn leave_commands(current: &Route, snap: &UiSnapshot) -> Vec<Command> {
     match current {
         Route::WifiSetup => vec![Command::CancelWifiProvisioning],
+        Route::Bluetooth => vec![Command::BtStopPairing],
         Route::FileDetail(id) if snap.playback.recording == Some(*id) => {
             vec![Command::StopPlayback]
         }
@@ -653,6 +656,18 @@ mod tests {
             vec![Command::StopPlayback]
         );
         assert!(leave_commands(&Route::Menu, &snap).is_empty());
+    }
+
+    #[test]
+    fn leaving_bluetooth_ends_pairing() {
+        // Always, as Wi-Fi setup's cancel: waved-bt ignores it when no
+        // pairing window is open, and a Back right after Pair a device may
+        // come before the snapshot shows the window.
+        let mut snap = UiSnapshot::default();
+        assert_eq!(leave_commands(&Route::Bluetooth, &snap), vec![Command::BtStopPairing]);
+        snap.bt.pairing_left_s = 102;
+        assert_eq!(leave_commands(&Route::Bluetooth, &snap), vec![Command::BtStopPairing]);
+        assert!(leave_commands(&Route::IncomingCall, &snap).is_empty());
     }
 
     #[test]
