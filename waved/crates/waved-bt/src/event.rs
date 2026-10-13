@@ -226,7 +226,8 @@ pub fn decode(frame: &Frame) -> Event {
         id::OTA_REQUEST => Some(Event::Ota(OtaReply::Ready)),
         id::OTA_FW_INFO_DONE | id::DONGLE_OTA_FW_INFO_DONE => Some(Event::Ota(OtaReply::FwInfo)),
         id::OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.first() != Some(&3) })),
-        id::DONGLE_OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.first().is_none_or(|&b| b == 0) })),
+        // Stock reads the dongle's verdict from byte 4 (bt_ota_cmd_send 74854).
+        id::DONGLE_OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.get(4).is_none_or(|&b| b == 0) })),
         id::OTA_CRC => Some(Event::Ota(OtaReply::Crc { ok: d.first() == Some(&1) })),
         id::DONGLE_OTA_CRC_DONE => Some(Event::Ota(OtaReply::Crc { ok: d.first().is_none_or(|&b| b == 0) })),
         id::OTA_RESET => Some(Event::Ota(OtaReply::Reset)),
@@ -552,7 +553,9 @@ mod tests {
         assert_eq!(ev(0xA0, &[0]), Event::Ota(OtaReply::Packet { ok: true }));
         assert_eq!(ev(0xA0, &[3]), Event::Ota(OtaReply::Packet { ok: false }));
         assert_eq!(ev(0xDC, &[0]), Event::Ota(OtaReply::Packet { ok: true }));
-        assert_eq!(ev(0xDC, &[1]), Event::Ota(OtaReply::Packet { ok: false }));
+        // The dongle's verdict is byte 4 (stock 74854), not byte 0.
+        assert_eq!(ev(0xDC, &[1, 0, 0, 0, 0]), Event::Ota(OtaReply::Packet { ok: true }));
+        assert_eq!(ev(0xDC, &[0, 0, 0, 0, 1]), Event::Ota(OtaReply::Packet { ok: false }));
         assert_eq!(ev(0xA1, &[1]), Event::Ota(OtaReply::Crc { ok: true }));
         assert_eq!(ev(0xA1, &[0]), Event::Ota(OtaReply::Crc { ok: false }));
         assert_eq!(ev(0xDE, &[0]), Event::Ota(OtaReply::Crc { ok: true }));
