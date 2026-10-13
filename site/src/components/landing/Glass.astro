@@ -27,18 +27,20 @@ if (cycle && screens.length !== 5) {
 <figure class:list={['glass', size, { cycle }]}>
 	<div class="bezel">
 		<div class="panel">
-			{
-				screens.map((s, i) => (
-					<Image
-						src={s.src}
-						alt={s.alt}
-						width={400}
-						class="screen"
-						style={`--i:${i}`}
-						loading={size === 'hero' ? 'eager' : 'lazy'}
-					/>
-				))
-			}
+			<div class="window">
+				{
+					screens.map((s, i) => (
+						<Image
+							src={s.src}
+							alt={s.alt}
+							width={400}
+							class="screen"
+							style={`--i:${i}`}
+							loading={size === 'hero' ? 'eager' : 'lazy'}
+						/>
+					))
+				}
+			</div>
 		</div>
 	</div>
 	{
@@ -80,21 +82,30 @@ if (cycle && screens.length !== 5) {
 			0 2.5rem 4rem -2rem rgb(0 0 0 / 0.7);
 	}
 
+	/* Circle geometry in framebuffer units: the round window spans x 2..398
+	   and y -92..304, but the panel behind it starts at y 0. So, as on the
+	   device, the top of the circle is a flat bar of bezel and the screen is
+	   the flat-topped shape below it, 92/396 of the way down. */
 	.panel {
 		position: relative;
 		width: 100%;
 		aspect-ratio: 1;
 		border-radius: 50%;
 		overflow: hidden;
-		background: var(--wave-glass);
+		background: radial-gradient(circle at 50% 35%, #2e3a39, #1a2325 80%);
 	}
-
-	/* Circle geometry in framebuffer units: the circle spans x 2..398 and
-	   y -92..304, so the 400x304 image sits 92/396 down and 2/396 left. */
-	.panel :global(.screen) {
+	.window {
+		position: absolute;
+		inset: 23.23% 0 0 0;
+		background: var(--wave-glass);
+		box-shadow:
+			0 -1px 0 rgb(0 0 0 / 0.6),
+			0 -2px 0 rgb(255 255 255 / 0.05);
+	}
+	.window :global(.screen) {
 		position: absolute;
 		left: -0.505%;
-		top: 23.23%;
+		top: 0;
 		width: 101.01%;
 		height: auto;
 	}
