@@ -7,7 +7,8 @@
 #      reach /dev/hidg0.
 #
 # Idempotent: re-running adds nothing after the first patch. Backs up
-# the original to S89usbgadget.bak.<ts> on first run.
+# the original to /data/waved/S89usbgadget.bak.<ts> on first run: never into
+# /etc/init.d, where rcS runs every S??* at boot (docs/AUDIO_HARDWARE.md).
 #
 # After patching, reboot:   adb reboot
 
@@ -32,7 +33,8 @@ if [ "$ALREADY_VOL" = "1" ] && [ "$ALREADY_HID" = "1" ] && [ "$ALREADY_CVOL" = "
     exit 0
 fi
 
-cp "$INIT" "${INIT}.bak.$(date +%s)"
+mkdir -p /data/waved
+cp "$INIT" "/data/waved/S89usbgadget.bak.$(date +%s)"
 
 if [ "$ALREADY_VOL" = "0" ]; then
     sed -i \
