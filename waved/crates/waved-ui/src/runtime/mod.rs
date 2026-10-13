@@ -241,7 +241,8 @@ impl Runtime {
     /// unanswered does not keep the screen awake. No press is delivered.
     fn wake_for_arrivals(&mut self, snap: &UiSnapshot) {
         let decision = snap.meeting.pending_decision.is_some();
-        let ringing = snap.audio.call_ringing;
+        // The host's ring (HID) or a phone ringing through Bluetooth (I3).
+        let ringing = snap.audio.call_ringing || snap.bt_ringing();
         let arrived = (decision && !self.had_decision) || (ringing && !self.had_ringing);
         self.had_decision = decision;
         self.had_ringing = ringing;
@@ -896,6 +897,28 @@ mod tests {
             rt.step(ringing, &[]);
             assert_eq!(rt.shown_route(), Some(&Route::Home));
             assert_eq!(writes.borrow().last(), Some(&80));
+            rt.close();
+        });
+    }
+
+    #[test]
+    fn a_bluetooth_ring_wakes_a_resting_screen_onto_the_call() {
+        lvgl(|lv| {
+            let (mut rt, writes) = booted_lit(lv);
+            rt.step(ready(2 * MIN), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Resting));
+            let mut ringing = ready(2 * MIN + 100);
+            ringing.bt.call = waved_state::BtCall::Ringing {
+                number: "0471".into(),
+            };
+            rt.step(ringing.clone(), &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::IncomingCall));
+            assert_eq!(writes.borrow().last(), Some(&80));
+            // Declined: back to Home.
+            ringing.bt.call = waved_state::BtCall::Idle;
+            ringing.now_ms += 100;
+            rt.step(ringing, &[]);
+            assert_eq!(rt.shown_route(), Some(&Route::Home));
             rt.close();
         });
     }
