@@ -381,3 +381,258 @@ def test_nan_prime_on_device_and_host_refuses_partial_unwritten_half():
     assert validate_graph_output(record, expected, partial_old_prime)["passed"]
     with pytest.raises(HybridError):
         validate_graph_output(record, expected, b"\x00\x7e" + expected[2:])
+
+
+def pad_profile_record(*, include_pad=True):
+    """Exact Pad control, or the separately admitted flat stride2 control."""
+    if not include_pad:
+        record = graph_record()
+        record["profile_id"] = "fp16-marblenet-pad-v1"
+        record["native_policy"] = {"id": "flat-height-depthwise-symmetric-v1"}
+        for node in record["nodes"]:
+            if node["type"] == "Conv":
+                node["native_strides"] = [
+                    node["stride"],
+                    2 if node["group"] != 1 and node["stride"] == 2 else 1,
+                ]
+        return seal(record)
+    incoming = 'input\\"; graph->Run(); //'
+    pads_payload = struct.pack("<6q", 0, 0, 28, 0, 0, 28)
+    constants = {
+        "pad-widths": {
+            "name": "pad-widths",
+            "dtype": "INT64",
+            "shape": [6],
+            "byte_size": 48,
+            "payload_hex": pads_payload.hex(),
+            "sha256": hashlib.sha256(pads_payload).hexdigest(),
+        },
+        "pad-value": tensor("pad-value", [], struct.pack("<H", 0)),
+        "depthwise": tensor(
+            "depthwise", [64, 1, 29], struct.pack("<1856H", *([0x3400] * 1856))
+        ),
+        "pointwise": tensor(
+            "pointwise", [128, 64, 1], struct.pack("<8192H", *([0x3000] * 8192))
+        ),
+        "bias": tensor("bias", [128], struct.pack("<128H", *([0x3000] * 128))),
+    }
+    nodes = [
+        {
+            "type": "Pad",
+            "inputs": [incoming],
+            "output": "padded",
+            "input_shape": [1, 64, 200],
+            "output_shape": [1, 64, 256],
+            "pads": [28, 28],
+            "value": 0.0,
+            "pads_constant": "pad-widths",
+            "value_constant": "pad-value",
+        },
+        {
+            "type": "Conv",
+            "inputs": ["padded"],
+            "output": "depthwise-out",
+            "input_shape": [1, 64, 256],
+            "output_shape": [1, 64, 200],
+            "weights": "depthwise",
+            "bias": None,
+            "kernel": 29,
+            "stride": 1,
+            "native_strides": [1, 1],
+            "dilation": 2,
+            "pads": [0, 0],
+            "group": 64,
+        },
+        {
+            "type": "Conv",
+            "inputs": ["depthwise-out"],
+            "output": "pointwise-out",
+            "input_shape": [1, 64, 200],
+            "output_shape": [1, 128, 200],
+            "weights": "pointwise",
+            "bias": "bias",
+            "kernel": 1,
+            "stride": 1,
+            "native_strides": [1, 1],
+            "dilation": 1,
+            "pads": [0, 0],
+            "group": 1,
+        },
+        {
+            "type": "Relu",
+            "inputs": ["pointwise-out"],
+            "output": "output",
+            "input_shape": [1, 128, 200],
+            "output_shape": [1, 128, 200],
+        },
+    ]
+    return seal(
+        {
+            "schema_version": 1,
+            "profile_id": "fp16-marblenet-pad-v1",
+            "native_policy": {"id": "flat-height-depthwise-symmetric-v1"},
+            "source_model_sha256": "1" * 64,
+            "graph_signature": "2" * 64,
+            "onnx_input": tensor(incoming, [1, 64, 200]),
+            "onnx_output": tensor("output", [1, 128, 200]),
+            "native_input": tensor("input", [200, 1, 64, 1]),
+            "native_output": tensor("output", [200, 1, 128, 1]),
+            "constants": constants,
+            "nodes": nodes,
+            "operation": {"type": "ConvGraph", "node_count": len(nodes)},
+            "numerical_policy": {"atol": 0.02, "rtol": 0.02},
+        }
+    )
+
+
+def test_old_profile_generated_bytes_stay_frozen():
+    record = graph_record()
+    compiler = generate_compile_source(record, COMPILE_ROOT)
+    executor = generate_execute_source(record, EXECUTE_ROOT, 1800)
+    assert hashlib.sha256(compiler.encode()).hexdigest() == (
+        "6cc11a1e3f2ba9422c0141ca1d32063c67ea21ef7c237efd969a520e4cc0e00f"
+    )
+    assert hashlib.sha256(executor.encode()).hexdigest() == (
+        "c239564fbc65e8eca57c75a1485fdef82bf24829c823abe6cb4aba466f07c772"
+    )
+
+
+def test_pad_profile_emits_exact_native_pad_and_valid_trained_conv():
+    record = pad_profile_record()
+    source = generate_compile_source(record, COMPILE_ROOT)
+    validate_compile_source(record, COMPILE_ROOT, source)
+    assert '#include "tim/vx/ops/pad.h"' in source
+    assert "const std::vector<uint32_t> pad_front0{28, 0, 0, 0}" in source
+    assert "const std::vector<uint32_t> pad_back0{28, 0, 0, 0}" in source
+    assert "pad_front0, pad_back0, 0, tim::vx::ops::Pad::PAD_MODE_CONSTANT" in source
+    assert "tensor_shape1{256, 1, 64, 1}" in source
+    assert "weight_shape1{29, 1, 64, 1}" in source
+    assert "pad1{0, 0, 0, 0}" in source
+    assert "stride1{1, 1}" in source and "dilation1{2, 1}" in source
+    assert (
+        "operations[0]->BindInput(tensors[0])\n"
+        "        .BindOutput(tensors[1]);"
+    ) in source
+    assert "kBiasBits1{0x00000000U" in source
+    assert "flat-height-depthwise-symmetric-v1" in source
+    assert record["lowering_sha256"] in source
+    assert record["onnx_input"]["name"] not in source and "pad-widths" not in source
+    assert source.count("graph->CompileToBinary(") == 2
+    assert "graph->Run(" not in source and "alarm(0)" not in source
+
+
+def test_new_flat_depthwise_stride2_is_native_symmetric_and_old_is_unchanged():
+    record = pad_profile_record(include_pad=False)
+    source = generate_compile_source(record, COMPILE_ROOT)
+    assert "stride0{2, 2}" in source
+    assert "stride1{1, 1}" in source
+    assert "tensor_shape1{200, 1, 2, 1}" in source
+    assert "stride0{2, 1}" in generate_compile_source(graph_record(), COMPILE_ROOT)
+    assert "fp16-marblenet-pad-v1" in source
+
+
+def test_pad_executor_binds_new_policy_operation_and_same_guarded_lifecycle():
+    record = pad_profile_record()
+    source = generate_execute_source(record, EXECUTE_ROOT, 1800)
+    validate_execute_source(record, EXECUTE_ROOT, 1800, source)
+    assert "operation=fp16-marblenet-pad" in source
+    assert "flat-height-depthwise-symmetric-v1" in source
+    assert record["lowering_sha256"] in source
+    assert "kInputBytes = 25600" in source and "kOutputBytes = 51200" in source
+    assert source.count("graph->Compile()") == source.count("graph->Run()") == 1
+    assert "kWatchdogSeconds = 8" in source and "alarm(0)" not in source
+    assert "kCanaryHalfBits = 0x7e00U" in source
+    assert source.count("static_cast<uint8_t>(kCanaryHalfBits >> 8U)") == 2
+    assert source.index("graph->Compile()") < source.index("device_canary[index]")
+    assert source.index("context.reset();") < source.index("EXECUTION status=PASS")
+
+
+def test_pad_omitted_zero_scalar_still_emits_exact_zero():
+    record = pad_profile_record()
+    record["nodes"][0]["value_constant"] = None
+    del record["constants"]["pad-value"]
+    source = generate_compile_source(seal(record), COMPILE_ROOT)
+    assert "pad_front0, pad_back0, 0, tim::vx::ops::Pad::PAD_MODE_CONSTANT" in source
+
+
+def test_legacy_profile_cannot_admit_pad_even_after_record_reseal():
+    record = pad_profile_record()
+    record["profile_id"] = "fp16-marblenet-v1"
+    del record["native_policy"]
+    for node in record["nodes"]:
+        node.pop("native_strides", None)
+    with pytest.raises(ValueError):
+        generate_compile_source(seal(record), COMPILE_ROOT)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda r: r.update(native_policy={"id": "anything-else"}),
+        lambda r: r.update(
+            native_policy={"id": "flat-height-depthwise-symmetric-v1", "extra": 1}
+        ),
+        lambda r: r["nodes"][0].update(pads=[27, 29]),
+        lambda r: r["nodes"][0].update(value=1.0),
+        lambda r: r["nodes"][0].update(pads_constant="missing"),
+        lambda r: r["nodes"][1].update(pads=[28, 28]),
+        lambda r: r["nodes"][1].update(native_strides=[1, 2]),
+        lambda r: r["nodes"][1].update(native_strides=[True, 1]),
+    ],
+)
+def test_resealed_pad_or_native_policy_mutations_are_refused(change):
+    record = pad_profile_record()
+    change(record)
+    with pytest.raises(ValueError):
+        generate_compile_source(seal(record), COMPILE_ROOT)
+
+
+def test_new_profile_missing_native_policy_or_conv_strides_is_refused():
+    removals = (
+        lambda r: r.pop("native_policy"),
+        lambda r: r["nodes"][0].pop("native_strides"),
+    )
+    for remove in removals:
+        record = pad_profile_record(include_pad=False)
+        remove(record)
+        with pytest.raises(ValueError):
+            generate_compile_source(seal(record), COMPILE_ROOT)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda s: s.replace("pad_front0{28, 0, 0, 0}", "pad_front0{0, 0, 28, 0}"),
+        lambda s: s.replace("pad_back0{28, 0, 0, 0}", "pad_back0{27, 0, 0, 0}"),
+        lambda s: s.replace("Pad::PAD_MODE_CONSTANT", "Pad::PAD_MODE_EDGE"),
+        lambda s: s.replace("pad_front0, pad_back0, 0,", "pad_front0, pad_back0, 1,"),
+        lambda s: s.replace("dilation1{2, 1}", "dilation1{1, 1}"),
+        lambda s: s.replace("context.reset();", "alarm(0); context.reset();"),
+    ],
+)
+def test_pad_generated_source_edits_are_refused(mutation):
+    record = pad_profile_record()
+    source = generate_compile_source(record, COMPILE_ROOT)
+    changed = mutation(source)
+    assert changed != source
+    with pytest.raises(ValueError, match="source"):
+        validate_compile_source(record, COMPILE_ROOT, changed)
+
+
+def test_new_flat_stride_source_edit_is_refused():
+    record = pad_profile_record(include_pad=False)
+    source = generate_compile_source(record, COMPILE_ROOT)
+    changed = source.replace("stride0{2, 2}", "stride0{2, 1}")
+    assert changed != source
+    with pytest.raises(ValueError, match="source"):
+        validate_compile_source(record, COMPILE_ROOT, changed)
+
+
+def test_changed_pad_template_is_refused(tmp_path, monkeypatch):
+    template = marblenet_sources._TEMPLATE_ROOT / "compile_fp16_pad_graph.cc.in"
+    (tmp_path / template.name).write_text(
+        template.read_text().replace("context.reset();", "alarm(0); context.reset();")
+    )
+    monkeypatch.setattr(marblenet_sources, "_TEMPLATE_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="template hash"):
+        generate_compile_source(pad_profile_record(), COMPILE_ROOT)

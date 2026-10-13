@@ -17,9 +17,14 @@ from .native_sources import _definition
 from .native_sources import _template as _execute_template
 
 _PROFILE = "fp16-marblenet-v1"
+_PAD_PROFILE = "fp16-marblenet-pad-v1"
+_PAD_NATIVE_POLICY = {"id": "flat-height-depthwise-symmetric-v1"}
 _TEMPLATE_ROOT = Path(__file__).resolve().parents[3] / "npu-compiler" / "marblenet"
 _COMPILE_TEMPLATE_SHA256 = (
     "2a196a53756e8e3b399d776d889ba7c417b8ac7713f6bed3dd0ff4cbf10860a3"
+)
+_PAD_COMPILE_TEMPLATE_SHA256 = (
+    "8a340f1b573e707a0b704d41cb5f83438fdf6c2c5223488c73ec5ed789513845"
 )
 
 
@@ -38,6 +43,25 @@ def _record(record: dict[str, Any]) -> None:
         validate_graph_record(record)
     except HybridError as error:
         raise ValueError(f"invalid MarbleNet lowering record: {error}") from error
+    if record["profile_id"] not in (_PROFILE, _PAD_PROFILE):
+        raise ValueError("unsupported MarbleNet source profile")
+    if record["profile_id"] == _PAD_PROFILE:
+        if record.get("native_policy") != _PAD_NATIVE_POLICY:
+            raise ValueError("unsupported MarbleNet native policy")
+        for node in record["nodes"]:
+            if node["type"] == "Conv":
+                strides = node.get("native_strides")
+                expected = [
+                    node["stride"],
+                    2 if node["group"] != 1 and node["stride"] == 2 else 1,
+                ]
+                if (
+                    not isinstance(strides, list)
+                    or len(strides) != 2
+                    or any(type(value) is not int for value in strides)
+                    or strides != expected
+                ):
+                    raise ValueError("unsupported flat depthwise native strides")
 
 
 def _shape(shape: list[int]) -> str:
@@ -96,6 +120,7 @@ def _tensor_creation(index: int, shape: list[int], attribute: str) -> list[str]:
 
 def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     nodes = record["nodes"]
+    padded_profile = record["profile_id"] == _PAD_PROFILE
     ids = {record["onnx_input"]["name"]: 0}
     ids.update({node["output"]: index + 1 for index, node in enumerate(nodes)})
     conv_count = sum(node["type"] == "Conv" for node in nodes)
@@ -127,6 +152,9 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
             input_channels = node["input_shape"][1]
             output_channels = node["output_shape"][1]
             multiplier = 0 if node["group"] == 1 else 1
+            native_strides = (
+                node["native_strides"] if padded_profile else [node["stride"], 1]
+            )
             weight_shape = [
                 node["kernel"],
                 1,
@@ -166,7 +194,7 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                     f"    const std::array<uint32_t, 4> pad{index}"
                     f"{{{_shape(node['pads'])}, 0, 0}};",
                     f"    const std::array<uint32_t, 2> stride{index}"
-                    f"{{{node['stride']}, 1}};",
+                    f"{{{_shape(native_strides)}}};",
                     f"    const std::array<uint32_t, 2> dilation{index}"
                     f"{{{node['dilation']}, 1}};",
                     "    operations.push_back(graph->CreateOperation<"
@@ -181,9 +209,30 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                 weight_shape=weight_shape,
                 bias_shape=[output_channels],
                 pads=[*node["pads"], 0, 0],
-                stride=[node["stride"], 1],
+                stride=native_strides,
                 dilation=[node["dilation"], 1],
                 multiplier=multiplier,
+            )
+        elif node["type"] == "Pad":
+            front = [node["pads"][0], 0, 0, 0]
+            back = [node["pads"][1], 0, 0, 0]
+            lines.extend(
+                [
+                    f"    const std::vector<uint32_t> pad_front{index}"
+                    f"{{{_shape(front)}}};",
+                    f"    const std::vector<uint32_t> pad_back{index}"
+                    f"{{{_shape(back)}}};",
+                    "    operations.push_back(graph->CreateOperation<"
+                    "tim::vx::ops::Pad>(",
+                    f"        pad_front{index}, pad_back{index}, 0, "
+                    "tim::vx::ops::Pad::PAD_MODE_CONSTANT));",
+                ]
+            )
+            definition.update(
+                front_size=front,
+                back_size=back,
+                value=0,
+                pad_mode="CONSTANT",
             )
         else:
             lines.append(
@@ -210,8 +259,15 @@ def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
     """Emit actual graph parameters under the immutable compile-only lifecycle."""
     root = _root(remote_root, "compile")
     _record(record)
-    data = (_TEMPLATE_ROOT / "compile_fp16_graph.cc.in").read_bytes()
-    if hashlib.sha256(data).hexdigest() != _COMPILE_TEMPLATE_SHA256:
+    padded_profile = record["profile_id"] == _PAD_PROFILE
+    template_name = (
+        "compile_fp16_pad_graph.cc.in" if padded_profile else "compile_fp16_graph.cc.in"
+    )
+    template_digest = (
+        _PAD_COMPILE_TEMPLATE_SHA256 if padded_profile else _COMPILE_TEMPLATE_SHA256
+    )
+    data = (_TEMPLATE_ROOT / template_name).read_bytes()
+    if hashlib.sha256(data).hexdigest() != template_digest:
         raise ValueError("immutable MarbleNet source template hash mismatch")
     graph, nodes = _graph(record)
     definition = {
@@ -225,7 +281,7 @@ def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
         },
         "operation": "ConvGraph",
         "backend_required": "OPENVX",
-        "model": _PROFILE,
+        "model": record["profile_id"],
         "data_type": "FLOAT16",
         "executes_graph": False,
         "input": {"dtype": "FLOAT16", "shape": record["native_input"]["shape"]},
@@ -233,6 +289,11 @@ def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
         "node_count": len(nodes),
         "nodes": nodes,
     }
+    if padded_profile:
+        definition.update(
+            native_policy=record["native_policy"],
+            lowering_sha256=record["lowering_sha256"],
+        )
     source = data.decode("utf-8")
     for key, value in {
         "ROOT": root,
@@ -255,6 +316,8 @@ def generate_execute_source(
     if type(nbg_bytes) is not int or not 513 <= nbg_bytes <= 64 * 1024 * 1024:
         raise ValueError("invalid fixed NBG byte size")
     tensors = []
+    padded_profile = record["profile_id"] == _PAD_PROFILE
+    operation = "fp16-marblenet-pad" if padded_profile else "fp16-marblenet"
     for name, attribute in (("input", "INPUT"), ("output", "OUTPUT")):
         tensors.extend(
             [
@@ -271,7 +334,7 @@ def generate_execute_source(
         "operation": "NBG",
         "model": f"{root}/model/model.nbg",
         "model_bytes": nbg_bytes,
-        "model_operation": "fp16-marblenet",
+        "model_operation": operation,
         "input_file": f"{root}/input/input.bin",
         "output_file": f"{root}/output/output.bin",
         "inputs": [{"type": "FLOAT16", "shape": record["native_input"]["shape"]}],
@@ -279,6 +342,11 @@ def generate_execute_source(
         "iterations": 1,
         "executes_graph": True,
     }
+    if padded_profile:
+        definition.update(
+            native_policy=record["native_policy"],
+            lowering_sha256=record["lowering_sha256"],
+        )
     source = _execute_template(
         "execute.cc.in",
         {
@@ -287,7 +355,7 @@ def generate_execute_source(
             "INPUT_BYTES": str(record["native_input"]["byte_size"]),
             "OUTPUT_BYTES": str(record["native_output"]["byte_size"]),
             "TENSORS": "\n".join(tensors),
-            "OPERATION": "fp16-marblenet",
+            "OPERATION": operation,
             "DEFINITION": _definition(definition),
         },
     )
