@@ -11,6 +11,7 @@ pub mod fixtures;
 pub mod integrity;
 pub mod makeup;
 pub mod metrics;
+pub mod mixer_poll;
 pub mod mic_check;
 pub mod playback;
 pub mod processed_frame;
