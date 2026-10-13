@@ -23,7 +23,8 @@ use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use waved_state::{
-    Command, DeviceEvent, MeetingState, UsbStoragePhase, UsbStorageProblem, UsbStorageState,
+    Command, DeviceEvent, MeetingState, OtaState, UsbStoragePhase, UsbStorageProblem,
+    UsbStorageState,
 };
 
 /// The recordings partition (`mmcblk0p16`, exFAT).
@@ -114,23 +115,56 @@ pub trait Volume: Send {
     fn mounted(&self) -> io::Result<Option<MountSpec>>;
     fn unmount(&mut self) -> io::Result<()>;
     /// Check (and repair what is safe to repair) the unmounted filesystem on
-    /// `source`. Returns a line for the log.
+    /// `source`. Returns a line for the log. `ErrorKind::TimedOut` means the
+    /// check was stopped part way.
     fn check(&mut self, source: &str) -> io::Result<String>;
     fn mount(&mut self, spec: &MountSpec) -> io::Result<()>;
+    /// Note, before unmounting, that waved takes the volume off Wave and how
+    /// it was mounted. The note is on tmpfs: a waved that restarts before it
+    /// mounted the volume again finds it and mounts it; after a reboot there
+    /// is none and the boot mounts the volume.
+    fn note_unmount(&mut self, spec: &MountSpec) -> io::Result<()>;
+    /// The note a waved left, if any.
+    fn unmount_noted(&self) -> Option<MountSpec>;
+    /// The volume is mounted on Wave again: drop the note.
+    fn clear_unmount_note(&mut self);
 }
 
 /// What `reclaim_at_start` found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reclaim {
-    /// No medium was loaded: nothing to take back.
+    /// Nothing to take back: no medium was loaded for the computer, and no
+    /// waved left the volume unmounted.
     Nothing,
-    /// A medium was loaded and is unloaded now; the volume is mounted.
+    /// A medium was loaded and is unloaded now, or a waved left the volume
+    /// unmounted; the volume is mounted.
     Reclaimed,
     /// The computer still holds the medium: the volume stays unmounted and
     /// USB storage stays on.
     StillExported,
-    /// Unloaded, but the volume could not be mounted.
+    /// The volume could not be mounted (or its check was stopped): storage
+    /// stays Stopping, so the meeting service keeps away from it.
     NotMounted,
+}
+
+/// `WAVED_USB_REPLUG=1`: at start-up, re-plug USB (`soft_connect`) when the
+/// computer still holds a drive a previous waved left loaded. Off until the
+/// device pass shows `soft_connect` brings USB, adb included, back on the
+/// `crgudc2` controller; without it the drive stays with the computer until
+/// it is ejected there or the cable is pulled.
+pub const REPLUG_ENV: &str = "WAVED_USB_REPLUG";
+
+/// Whether `REPLUG_ENV` switches the start-up re-plug on: only "1".
+pub fn replug_opted_in(value: Option<&str>) -> bool {
+    value.map(str::trim) == Some("1")
+}
+
+/// Whether the recordings volume is mounted on Wave now (`/proc/mounts` has
+/// `MOUNT_POINT`). The meeting service reconciles the recordings only then.
+pub fn recordings_mounted() -> bool {
+    device::SystemVolume::device()
+        .mounted()
+        .is_ok_and(|mount| mount.is_some())
 }
 
 /// Whether the meeting service still owns a take: recording, paused,
@@ -151,6 +185,11 @@ pub struct UsbStorage {
     mount: MountSpec,
     /// Polls in a row that found no computer.
     gone_polls: u32,
+    /// `reclaim_at_start` may re-plug USB; cleared after a re-plug that did
+    /// not bring the computer back.
+    replug: bool,
+    /// Firmware updates (`with_ota`).
+    ota: Option<watch::Receiver<OtaState>>,
     sleep: Box<dyn Fn(Duration) + Send>,
 }
 
@@ -171,11 +210,14 @@ impl UsbStorage {
             partition: PARTITION.into(),
             mount: MountSpec::boot(),
             gone_polls: 0,
+            replug: false,
+            ota: None,
             sleep: Box::new(std::thread::sleep),
         }
     }
 
-    /// The device: configfs gadget, `/mnt/udisk` and `/dev/udisk`.
+    /// The device: configfs gadget, `/mnt/udisk` and `/dev/udisk`. The
+    /// start-up re-plug follows `REPLUG_ENV`.
     pub fn device(
         state_tx: Arc<watch::Sender<UsbStorageState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
@@ -188,11 +230,33 @@ impl UsbStorage {
             events_tx,
             commands_tx,
         )
+        .with_replug(replug_opted_in(std::env::var(REPLUG_ENV).ok().as_deref()))
     }
 
     /// Replace the pauses (`SETTLE`, the re-plug's waits) in tests.
     pub fn with_sleep(mut self, sleep: impl Fn(Duration) + Send + 'static) -> Self {
         self.sleep = Box::new(sleep);
+        self
+    }
+
+    /// Follow firmware updates: no start while one installs (it restarts
+    /// Wave, and the computer would lose its drive unejected). Before that
+    /// point the update waits for storage to end (waved-update).
+    pub fn with_ota(mut self, ota: watch::Receiver<OtaState>) -> Self {
+        self.ota = Some(ota);
+        self
+    }
+
+    fn installing_update(&self) -> bool {
+        self.ota
+            .as_ref()
+            .is_some_and(|ota| ota.borrow().phase.takes_over_screen())
+    }
+
+    /// Let `reclaim_at_start` re-plug USB (`soft_connect`) to end a
+    /// computer's hold on the drive. Off by default (`REPLUG_ENV`).
+    pub fn with_replug(mut self, on: bool) -> Self {
+        self.replug = on;
         self
     }
 
@@ -213,9 +277,9 @@ impl UsbStorage {
     }
 
     /// `Command::StartUsbStorage`: hand the volume to the computer. Refused
-    /// (nothing changes) while a take is in progress, with no computer, with
-    /// no drive in the gadget or with the volume not mounted here; a busy
-    /// volume leaves everything as it was.
+    /// (nothing changes) while a take is in progress, while a firmware update
+    /// installs, with no computer, with no drive in the gadget or with the
+    /// volume not mounted here; a busy volume leaves everything as it was.
     pub fn start(&mut self, meeting: &MeetingState) {
         if self.phase() != UsbStoragePhase::Off {
             return;
@@ -223,6 +287,10 @@ impl UsbStorage {
         if take_in_progress(meeting) {
             info!("usb storage: not started, a recording is in progress");
             return self.problem(UsbStorageProblem::Recording);
+        }
+        if self.installing_update() {
+            info!("usb storage: not started, a firmware update is installing");
+            return self.problem(UsbStorageProblem::Unavailable);
         }
         if !self.gadget.drive_ready() {
             warn!(
@@ -262,8 +330,16 @@ impl UsbStorage {
         let _ = self.commands_tx.send(Command::StopPlayback);
         (self.sleep)(SETTLE);
         self.volume.sync();
+        // Before the unmount: a waved that dies from here on leaves the note,
+        // and the next one mounts the volume again (`reclaim_at_start`).
+        if let Err(error) = self.volume.note_unmount(&spec) {
+            warn!("usb storage: not started, the unmount cannot be noted: {error}");
+            self.publish(UsbStoragePhase::Off);
+            return self.problem(UsbStorageProblem::Unavailable);
+        }
         if let Err(error) = self.volume.unmount() {
             info!("usb storage: not started, {MOUNT_POINT} is busy: {error}");
+            self.volume.clear_unmount_note();
             self.publish(UsbStoragePhase::Off);
             return self.problem(UsbStorageProblem::Busy);
         }
@@ -319,7 +395,8 @@ impl UsbStorage {
         if let Ok(None) = self.gadget.loaded() {
             info!("usb storage: the computer ejected the drive");
             self.publish(UsbStoragePhase::Stopping);
-            return self.mount_back(true);
+            self.mount_back(true);
+            return;
         }
         if self.gadget.host() != HostLink::Gone {
             self.gone_polls = 0;
@@ -340,60 +417,101 @@ impl UsbStorage {
     }
 
     /// At start-up, before the meeting service opens the recordings: take
-    /// back a drive left loaded by a waved that exited while exported. If the
-    /// computer still holds it, re-plug the USB connection to end its hold.
-    /// A medium loaded in an unlinked drive (stock's `msc_init` at boot) is
-    /// only emptied: the computer never saw it, and the boot mounts the volume.
+    /// back what a waved that exited during USB storage left behind. A drive
+    /// still loaded is emptied (if the computer still holds it, it is
+    /// re-plugged when that is switched on); a volume that waved unmounted
+    /// (the unmount note) is checked and mounted again. A medium loaded in an
+    /// unlinked drive (stock's `msc_init` at boot) is only emptied: the
+    /// computer never saw it. Without a note an unmounted volume is the
+    /// boot's to mount: stock's `udisk_fix` may still be checking it.
     pub fn reclaim_at_start(&mut self) -> Reclaim {
-        let medium = match self.gadget.loaded() {
-            Ok(Some(medium)) => medium,
-            Ok(None) | Err(_) => return Reclaim::Nothing,
-        };
-        let exported = self.gadget.drive_ready();
-        if !exported {
-            if let Err(error) = self.gadget.unload() {
-                warn!("usb storage: could not empty the unlinked drive ({medium}): {error}");
-            }
-            return Reclaim::Nothing;
+        let note = self.volume.unmount_noted();
+        if let Some(spec) = &note {
+            self.mount = spec.clone();
         }
-        warn!("usb storage: the drive still held {medium} at start-up; taking the recordings back");
-        if !self.unload_verified() {
-            info!("usb storage: the computer holds the drive; re-plugging USB to release it");
-            if let Err(error) = self.gadget.replug() {
-                warn!("usb storage: re-plug failed: {error}");
-            }
-            let mut released = false;
-            for _ in 0..RELEASE_TRIES {
-                (self.sleep)(RETRY_PAUSE);
-                if self.unload_verified() {
-                    released = true;
-                    break;
+        let exported = match self.gadget.loaded() {
+            Ok(Some(medium)) if self.gadget.drive_ready() => {
+                warn!("usb storage: the drive still held {medium} at start-up; taking the recordings back");
+                if !self.release_at_start() {
+                    warn!("usb storage: the computer still holds the drive; storage stays on, the recordings unmounted");
+                    self.publish(UsbStoragePhase::On);
+                    return Reclaim::StillExported;
                 }
+                true
             }
-            if !released {
-                error!("usb storage: the computer still holds the drive; the recordings stay unmounted");
-                self.publish(UsbStoragePhase::On);
-                return Reclaim::StillExported;
+            Ok(Some(medium)) => {
+                if let Err(error) = self.gadget.unload() {
+                    warn!("usb storage: could not empty the unlinked drive ({medium}): {error}");
+                }
+                false
             }
-        }
+            Ok(None) | Err(_) => false,
+        };
         match self.volume.mounted() {
             Ok(Some(_)) => {
-                // Mounted here while exported: the LUN is empty now, so the
-                // computer cannot write any more. The mount stays.
-                error!("usb storage: the recordings were mounted while exported; emptied the drive");
+                if exported {
+                    // Mounted here while exported: the LUN is empty now, so
+                    // the computer cannot write any more. The mount stays.
+                    error!("usb storage: the recordings were mounted while exported; emptied the drive");
+                }
+                if note.is_some() {
+                    self.volume.clear_unmount_note();
+                }
                 self.publish(UsbStoragePhase::Off);
-                Reclaim::Reclaimed
+                if exported {
+                    Reclaim::Reclaimed
+                } else {
+                    Reclaim::Nothing
+                }
             }
-            _ => {
-                self.mount_back(false);
-                if self.volume.mounted().ok().flatten().is_some() {
+            Ok(None) if exported || note.is_some() => {
+                if !exported {
+                    warn!("usb storage: a waved before this one took the recordings off Wave; mounting them again");
+                }
+                if self.mount_back(false) {
                     info!("usb storage: reclaimed, recordings mounted");
                     Reclaim::Reclaimed
                 } else {
                     Reclaim::NotMounted
                 }
             }
+            Ok(None) => Reclaim::Nothing,
+            Err(error) => {
+                warn!("usb storage: the mounts cannot be read at start-up: {error}");
+                Reclaim::Nothing
+            }
         }
+    }
+
+    /// Empty the drive the computer may still hold, at start-up. With the
+    /// re-plug switched on, drop and remake the USB connection to end its
+    /// hold. False while it still holds the drive.
+    fn release_at_start(&mut self) -> bool {
+        if self.unload_verified() {
+            return true;
+        }
+        if !self.replug {
+            warn!(
+                "usb storage: the computer holds the drive; it keeps it until it is ejected \
+                 there or the cable is pulled (start-up re-plug is off, {REPLUG_ENV}=1 turns it on)"
+            );
+            return false;
+        }
+        info!("usb storage: the computer holds the drive; re-plugging USB to release it");
+        if let Err(error) = self.gadget.replug() {
+            error!(
+                "usb storage: USB did not come back after the re-plug ({error}); Wave may be off \
+                 USB, adb included, until the cable is re-plugged. No more re-plugs."
+            );
+            self.replug = false;
+        }
+        for _ in 0..RELEASE_TRIES {
+            (self.sleep)(RETRY_PAUSE);
+            if self.unload_verified() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Empty the drive and read it back empty. False while the computer holds it.
@@ -406,20 +524,42 @@ impl UsbStorage {
     }
 
     /// The LUN is empty: check the filesystem and mount it as it was (else as
-    /// the boot mounts it), then storage is off. `announce` logs the outcome
-    /// as the end of storage mode.
-    fn mount_back(&mut self, announce: bool) {
+    /// the boot mounts it). Storage is Off only once `/proc/mounts` shows the
+    /// volume: Off tells the meeting service the recordings are back, and it
+    /// reconciles them. Until then the phase stays Stopping, so nothing
+    /// records, uploads or reconciles on the empty mount point; the user is
+    /// told to restart Wave (the next waved, or the boot, mounts it).
+    /// `announce` logs the outcome as the end of storage mode. Returns
+    /// whether the volume is mounted.
+    fn mount_back(&mut self, announce: bool) -> bool {
         match self.volume.mounted() {
             Ok(Some(_)) => {
+                self.volume.clear_unmount_note();
                 self.publish(UsbStoragePhase::Off);
-                return;
+                return true;
             }
             Ok(None) => {}
             Err(error) => warn!("usb storage: the mounts cannot be read: {error}"),
         }
+        self.publish(UsbStoragePhase::Stopping);
         let spec = self.mount.clone();
         match self.volume.check(&spec.source) {
             Ok(summary) => info!("usb storage: checked {}: {summary}", spec.source),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                // Stopped part way through its repairs: the filesystem may be
+                // half repaired. Not mounted at all, so nothing writes to it;
+                // the next waved checks it again (the note stays), and a
+                // reboot mounts it as stock does.
+                error!(
+                    "usb storage: the check of {} was stopped ({error}); \
+                     the recordings stay unmounted until Wave restarts",
+                    spec.source
+                );
+                self.problem(UsbStorageProblem::NotMounted);
+                return false;
+            }
+            // It did not run (no checker, no process): it changed nothing.
+            // Stock's boot mounts the volume after a read-only check anyway.
             Err(error) => warn!("usb storage: could not check {}: {error}", spec.source),
         }
         let mut mounted = self.volume.mount(&spec);
@@ -430,13 +570,27 @@ impl UsbStorage {
                 mounted = self.volume.mount(&boot);
             }
         }
-        self.publish(UsbStoragePhase::Off);
+        let mounted = mounted.and_then(|()| match self.volume.mounted() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(io::Error::other(format!("mount succeeded, but {MOUNT_POINT} is not in the mounts"))),
+            Err(error) => Err(error),
+        });
         match mounted {
-            Ok(()) if announce => info!("usb storage: off, recordings mounted on Wave"),
-            Ok(()) => {}
+            Ok(()) => {
+                self.volume.clear_unmount_note();
+                self.publish(UsbStoragePhase::Off);
+                if announce {
+                    info!("usb storage: off, recordings mounted on Wave");
+                }
+                true
+            }
             Err(error) => {
-                error!("usb storage: the recordings could not be mounted: {error}");
+                error!(
+                    "usb storage: the recordings could not be mounted: {error}; \
+                     they stay away from the meeting service until Wave restarts"
+                );
                 self.problem(UsbStorageProblem::NotMounted);
+                false
             }
         }
     }
@@ -481,7 +635,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use uuid::Uuid;
-    use waved_state::PendingDecision;
+    use waved_state::{OtaPhase, OtaState, PendingDecision};
 
     /// One world for both fakes, so they can check the rule this module
     /// exists for: the computer and Wave never both have the volume.
@@ -494,12 +648,20 @@ mod tests {
         locked: bool,
         /// A re-plug ends the computer's hold.
         replug_releases: bool,
+        /// USB does not come back after the re-plug.
+        replug_fails: bool,
         mounted: Option<MountSpec>,
         /// Something has a file open on the volume.
         busy: bool,
         load_fails: bool,
         /// Mount attempts that fail before one succeeds.
         mount_failures: u32,
+        /// `mount` exits 0, but `/proc/mounts` does not show the volume.
+        mount_vanishes: bool,
+        /// The check runs past its time and is stopped.
+        check_times_out: bool,
+        /// The tmpfs note that waved took the volume off Wave.
+        note: Option<MountSpec>,
         log: Vec<String>,
     }
 
@@ -511,10 +673,14 @@ mod tests {
                 host: HostLink::Configured,
                 locked: false,
                 replug_releases: true,
+                replug_fails: false,
                 mounted: Some(live_mount()),
                 busy: false,
                 load_fails: false,
                 mount_failures: 0,
+                mount_vanishes: false,
+                check_times_out: false,
+                note: None,
                 log: Vec::new(),
             }
         }
@@ -569,6 +735,9 @@ mod tests {
             if w.replug_releases {
                 w.locked = false;
             }
+            if w.replug_fails {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "no computer after the re-plug"));
+            }
             Ok(())
         }
     }
@@ -593,6 +762,9 @@ mod tests {
             let mut w = self.0.lock().unwrap();
             assert!(w.mounted.is_none(), "checked while mounted");
             w.log.push(format!("check {source}"));
+            if w.check_times_out {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "stopped after 120 s"));
+            }
             Ok("clean".into())
         }
         fn mount(&mut self, spec: &MountSpec) -> io::Result<()> {
@@ -603,8 +775,20 @@ mod tests {
                 w.mount_failures -= 1;
                 return Err(io::Error::from_raw_os_error(libc::EINVAL));
             }
-            w.mounted = Some(spec.clone());
+            if !w.mount_vanishes {
+                w.mounted = Some(spec.clone());
+            }
             Ok(())
+        }
+        fn note_unmount(&mut self, spec: &MountSpec) -> io::Result<()> {
+            self.0.lock().unwrap().note = Some(spec.clone());
+            Ok(())
+        }
+        fn unmount_noted(&self) -> Option<MountSpec> {
+            self.0.lock().unwrap().note.clone()
+        }
+        fn clear_unmount_note(&mut self) {
+            self.0.lock().unwrap().note = None;
         }
     }
 
@@ -721,6 +905,28 @@ mod tests {
             assert_eq!(rig.problems(), [UsbStorageProblem::Recording]);
             assert!(rig.world().mounted.is_some());
         }
+    }
+
+    #[test]
+    fn a_firmware_install_refuses_to_start_and_touches_nothing() {
+        // The install restarts Wave: the computer would lose its drive unejected.
+        for phase in [OtaPhase::Installing, OtaPhase::Restarting] {
+            let mut rig = Rig::new(World::default());
+            let (ota_tx, ota_rx) = watch::channel(OtaState::default());
+            rig.storage = rig.storage.with_ota(ota_rx);
+            ota_tx.send_modify(|ota| ota.phase = phase.clone());
+            rig.storage.start(&idle());
+            assert_eq!(rig.phase(), UsbStoragePhase::Off, "{phase:?}");
+            assert!(rig.log().is_empty(), "{phase:?}");
+            assert_eq!(rig.problems(), [UsbStorageProblem::Unavailable]);
+        }
+        // Before the point of no return the update waits for storage instead.
+        let mut rig = Rig::new(World::default());
+        let (ota_tx, ota_rx) = watch::channel(OtaState::default());
+        rig.storage = rig.storage.with_ota(ota_rx);
+        ota_tx.send_modify(|ota| ota.phase = OtaPhase::Waiting);
+        rig.storage.start(&idle());
+        assert_eq!(rig.phase(), UsbStoragePhase::On);
     }
 
     #[test]
@@ -911,7 +1117,11 @@ mod tests {
         let mut rig = Rig::on(World::default());
         rig.world().mount_failures = 2;
         rig.storage.stop();
-        assert_eq!(rig.phase(), UsbStoragePhase::Off, "the computer no longer has it");
+        assert_eq!(
+            rig.phase(),
+            UsbStoragePhase::Stopping,
+            "the computer no longer has it, and Wave has not got it back"
+        );
         assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
         assert!(rig.world().mounted.is_none());
     }
@@ -966,11 +1176,62 @@ mod tests {
             locked: true,
             ..World::default()
         });
+        rig.storage = rig.storage.with_replug(true);
         assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Reclaimed);
         assert_eq!(
             rig.log(),
             ["unload", "replug", "unload", "check /dev/udisk", "mount rw,fmask=0077"]
         );
+    }
+
+    #[test]
+    fn without_the_switch_reclaim_waits_for_the_computer_to_eject() {
+        // Re-plugging is off until the device pass shows `soft_connect`
+        // brings USB (and adb) back on this controller.
+        let mut rig = Rig::new(World {
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            locked: true,
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert_eq!(rig.log(), ["unload"], "never re-plugged");
+        assert_eq!(rig.phase(), UsbStoragePhase::On, "the takeover shows; eject ends it");
+        {
+            let mut world = rig.world();
+            world.locked = false;
+            world.lun = None;
+        }
+        rig.storage.poll();
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert!(rig.world().mounted.is_some());
+    }
+
+    #[test]
+    fn a_re_plug_that_does_not_bring_usb_back_is_not_tried_again() {
+        let mut rig = Rig::new(World {
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            locked: true,
+            replug_releases: false,
+            replug_fails: true,
+            ..World::default()
+        });
+        rig.storage = rig.storage.with_replug(true);
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert_eq!(rig.log().iter().filter(|op| *op == "replug").count(), 1);
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
+        assert!(!rig.log().iter().any(|op| op == "replug"), "no second unplug");
+    }
+
+    #[test]
+    fn the_re_plug_switch_is_off_unless_set_to_1() {
+        assert!(!replug_opted_in(None));
+        assert!(!replug_opted_in(Some("")));
+        assert!(!replug_opted_in(Some("0")));
+        assert!(!replug_opted_in(Some("yes")));
+        assert!(replug_opted_in(Some("1")));
+        assert!(replug_opted_in(Some(" 1\n")));
     }
 
     #[test]
@@ -982,6 +1243,7 @@ mod tests {
             replug_releases: false,
             ..World::default()
         });
+        rig.storage = rig.storage.with_replug(true);
         assert_eq!(rig.storage.reclaim_at_start(), Reclaim::StillExported);
         assert_eq!(rig.phase(), UsbStoragePhase::On, "the takeover shows; stop or eject ends it");
         assert!(rig.world().mounted.is_none());
@@ -1010,6 +1272,125 @@ mod tests {
         assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Reclaimed);
         assert_eq!(rig.log(), ["unload"], "already mounted: nothing to mount");
         assert!(rig.world().lun.is_none());
+    }
+
+    #[test]
+    fn start_notes_the_unmount_and_the_mount_back_clears_the_note() {
+        let mut rig = Rig::new(World::default());
+        rig.storage.start(&idle());
+        assert_eq!(rig.world().note, Some(live_mount()), "how it was mounted");
+        rig.storage.stop();
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(rig.world().note, None);
+    }
+
+    #[test]
+    fn a_busy_volume_leaves_no_note() {
+        let mut rig = Rig::new(World { busy: true, ..World::default() });
+        rig.storage.start(&idle());
+        assert_eq!(rig.world().note, None, "still mounted on Wave");
+    }
+
+    #[test]
+    fn storage_stays_away_until_the_volume_is_mounted() {
+        // Off tells the meeting service the recordings are back: it reconciles
+        // them. On an empty mount point every one would read as missing.
+        let mut rig = Rig::on(World::default());
+        rig.world().mount_failures = 2;
+        rig.storage.stop();
+        assert_ne!(rig.phase(), UsbStoragePhase::Off);
+        assert!(rig.state.borrow().recordings_away());
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+        assert!(rig.world().note.is_some(), "a restart still owes the mount");
+    }
+
+    #[test]
+    fn a_mount_that_proc_mounts_does_not_show_is_not_a_mount() {
+        let mut rig = Rig::on(World::default());
+        rig.world().mount_vanishes = true;
+        rig.storage.stop();
+        assert_ne!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+    }
+
+    #[test]
+    fn an_ejected_drive_that_will_not_mount_keeps_the_recordings_away() {
+        let mut rig = Rig::on(World::default());
+        {
+            let mut world = rig.world();
+            world.lun = None;
+            world.mount_failures = 2;
+        }
+        rig.storage.poll();
+        assert!(rig.state.borrow().recordings_away());
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+    }
+
+    #[test]
+    fn a_check_stopped_part_way_leaves_the_volume_unmounted() {
+        // fsck.exfat -p killed at 120 s may have left a half-repaired
+        // filesystem: never mount that read-write.
+        let mut rig = Rig::on(World::default());
+        rig.world().check_times_out = true;
+        rig.storage.stop();
+        assert_eq!(rig.log(), ["unload", "check /dev/udisk"], "no mount");
+        assert_eq!(rig.phase(), UsbStoragePhase::Stopping);
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+        assert!(rig.world().note.is_some(), "a restart checks it again");
+    }
+
+    #[test]
+    fn reclaim_that_cannot_mount_keeps_the_recordings_away() {
+        let mut rig = Rig::new(World {
+            lun: Some("/dev/mmcblk0p16".into()),
+            mounted: None,
+            mount_failures: 2,
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::NotMounted);
+        assert!(rig.state.borrow().recordings_away(), "the meeting service must not reconcile");
+        assert_eq!(rig.problems(), [UsbStorageProblem::NotMounted]);
+    }
+
+    #[test]
+    fn reclaim_mounts_a_volume_a_waved_left_unmounted() {
+        // waved died between the unmount and the load, or between emptying
+        // the drive and the mount (the check takes up to 120 s): the drive is
+        // empty, the volume unmounted, and the note says waved owes the mount.
+        let mut rig = Rig::new(World {
+            mounted: None,
+            note: Some(live_mount()),
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Reclaimed);
+        assert_eq!(
+            rig.log(),
+            ["check /dev/udisk", "mount rw,relatime,fmask=0077,dmask=0022"],
+            "mounted as the note says"
+        );
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
+        assert_eq!(rig.world().note, None);
+    }
+
+    #[test]
+    fn reclaim_leaves_an_unmounted_volume_to_the_boot_without_a_note() {
+        // A fresh boot: stock's udisk_fix may still be checking the volume.
+        let mut rig = Rig::new(World { mounted: None, ..World::default() });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Nothing);
+        assert!(rig.log().is_empty(), "never a second fsck or mount next to the boot's");
+        assert!(rig.problems().is_empty());
+    }
+
+    #[test]
+    fn reclaim_drops_a_note_once_the_volume_is_mounted() {
+        let mut rig = Rig::new(World {
+            note: Some(live_mount()),
+            ..World::default()
+        });
+        assert_eq!(rig.storage.reclaim_at_start(), Reclaim::Nothing);
+        assert!(rig.log().is_empty());
+        assert_eq!(rig.world().note, None);
+        assert_eq!(rig.phase(), UsbStoragePhase::Off);
     }
 
     #[test]

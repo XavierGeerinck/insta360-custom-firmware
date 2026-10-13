@@ -84,16 +84,32 @@ Each mode change re-enumerates: `all_disable` writes `none` to `UDC`, unlinks ad
 **Swap the medium, never the gadget.** `scripts/patch-stock-usbgadget.sh` links
 `mass_storage.usb0` into `configs/amlogic.1` at boot as a removable drive with no medium (it empties
 the `lun.0/file` that `msc_init` set, then links, then `usb_flash` binds). The computer sees an empty
-card reader next to Wave's audio, HID and adb. Storage mode only writes `lun.0/file`:
+card reader next to Wave's audio, HID and adb. Storage mode only writes `lun.0/file`.
+
+**The bind is checked at boot.** This controller has never been bound with `mass_storage.usb0`
+next to `uac2.0`, `hid.0`, `ffs.adb` and `acm.0` (stock's mode 8 has no adb or acm), and stock S89
+ignores a failed bind: Wave would boot with no USB, adb included. The patched `start_usbgadget`
+runs `waved_g1_link_drive`, `usb_flash`, `waved_g1_check_bind`: if `$G/UDC` reads empty after the
+bind, it removes the link, binds again without the drive, and says so on the console and in
+`/tmp/waved-usbgadget.log` (with the `dmesg` tail). waved then finds no linked drive and answers
+"USB storage isn't available". The script writes each change to a dot-named file next to S89 (rcS
+runs `S??*` only), checks it with `sh -n`, makes it executable, syncs and renames it over S89; the
+backups go to `/data/waved/S89usbgadget.bak.<ts>`. `scripts/test-patch-stock-usbgadget.sh` runs
+the patch and the bind check under busybox against a fake configfs tree.
 
 1. **Start** (`Command::StartUsbStorage`, System → USB storage). Refused, with nothing changed, while
-   a take is recording, paused, finishing or awaiting its decision; with no configured computer
-   (`/sys/class/udc/*/state`); with no linked removable drive; with `/mnt/udisk` not mounted. Then:
-   phase Starting, `StopPlayback`, 1 s for an upload or playback that just began to open its file,
-   `sync`, `umount /mnt/udisk` (no lazy unmount: busy → "Recordings in use, try again", nothing
-   changed), `/dev/udisk` → `lun.0/file`, read back, phase On.
-2. **On.** The takeover screen; the meeting service starts no take and the upload worker waits
-   (an upload would find the file gone and mark it missing). Audio, HID and adb keep working.
+   a take is recording, paused, finishing or awaiting its decision; while a firmware update
+   installs (`OtaPhase::Installing`/`Restarting`: it restarts Wave; before that point the update
+   waits for USB storage instead); with no configured computer (`/sys/class/udc/*/state`); with no
+   linked removable drive; with `/mnt/udisk` not mounted. Then: phase Starting, `StopPlayback`, 1 s
+   for an upload or playback that just began to open its file, `sync`, the unmount note
+   (`/tmp/waved-usb-storage.unmounted`, the `/proc/mounts` line), `umount /mnt/udisk` (no lazy
+   unmount: busy → "Recordings in use, try again", note removed, nothing changed), `/dev/udisk` →
+   `lun.0/file`, read back, phase On.
+2. **On.** The takeover screen; the meeting service starts no take, deletes nothing, the player
+   plays nothing and the upload worker waits (an upload would find the file gone and mark it
+   missing; a delete would remove the rows and leave the files, which would come back). Audio,
+   HID and adb keep working.
 3. **Stop** (the screen's "Stop USB storage", confirmed). `"\n"` → `lun.0/file`. If the computer
    locked the medium, f_mass_storage answers EBUSY: "Eject Wave on the computer first", storage
    stays on. Waved never forces the computer off.
@@ -103,20 +119,55 @@ card reader next to Wave's audio, HID and adb. Storage mode only writes `lun.0/f
    clears the computer's lock, so the unload succeeds. A sleeping computer (`suspended`) keeps its drive.
 6. **Back on Wave**: `lun.0/file` reads empty, then `fsck.exfat -p /dev/udisk` (at most 120 s), then
    mount exactly as `/proc/mounts` said before the start, falling back to the boot's
-   `-t exfat -o rw,fmask=0077`. Phase Off, "USB storage stopped". The meeting service reconciles the
-   recordings as at boot (one deleted on the computer shows as missing) and republishes Files.
-7. **Waved restarts while exported** (crash, watchdog): `reclaim_at_start` runs before the meeting
-   service opens anything. It unloads the LUN; if the computer holds it, it re-plugs USB
-   (`/sys/class/udc/*/soft_connect` disconnect, 1 s, connect), retries, then checks and mounts.
-   Without it, reconciliation would mark every recording missing. A medium in an *unlinked* drive
-   (stock `msc_init` at boot, before the patch empties it) is only emptied; the boot mounts the volume.
+   `-t exfat -o rw,fmask=0077`. Only once `/proc/mounts` shows the volume: note removed, phase Off,
+   "USB storage stopped". The meeting service reconciles the recordings as at boot (one deleted on
+   the computer shows as missing; one marked missing whose files are back is kept again) and
+   republishes Files.
+   - **The mount fails**: the phase stays Stopping (the takeover stays, nothing records, uploads,
+     deletes or reconciles on the bare mount point) and the status says "Recordings unavailable,
+     restart Wave". The note stays, so the next waved checks and mounts it; a reboot mounts it
+     as stock does.
+   - **The check is stopped at 120 s** (killed part way through its repairs): the volume is not
+     mounted at all, as above. A half-repaired exFAT is never mounted read-write by waved. A check
+     that could not run at all (no `fsck.exfat`) still mounts, as stock's boot does after its
+     read-only check.
+7. **Waved restarts during USB storage** (crash, watchdog): `reclaim_at_start` runs before the
+   meeting service opens anything.
+   - A drive still loaded is unloaded. If the computer holds it (EBUSY), storage stays On with the
+     takeover until the computer ejects it or the cable is pulled; the start-up **re-plug is off**
+     (decision below). With `WAVED_USB_REPLUG=1` waved re-plugs USB (`/sys/class/udc/*/soft_connect`
+     disconnect, 1 s, connect), writes connect up to 3 times until the UDC state shows a computer
+     again (5 s each), then retries the unload; a re-plug that does not bring the computer back is
+     logged as an error ("Wave may be off USB, adb included") and not tried again.
+   - Then, with the volume unmounted and the LUN empty: if the unmount note is there (waved died
+     between the unmount and the load, or between emptying the drive and the mount), it checks and
+     mounts it as the note says. **Without a note** (a fresh boot: `/tmp` is tmpfs) it leaves the
+     volume to the boot, whose `udisk_fix` may still be checking it.
+   - A medium in an *unlinked* drive (stock `msc_init` at boot, before the patch empties it) is
+     only emptied.
+8. **The meeting service reconciles only on a mounted volume** (`/proc/mounts`,
+   `waved_system::usb_storage::recordings_mounted`): at start-up, after USB storage, and on the
+   5 s Files tick once a start-up or a return found it unmounted. Without that, a restart with the
+   volume away marked every recording missing, for good. The interrupted deletes finish at the same
+   points. A delete that finds the recordings directory itself missing fails and keeps its claim
+   (`deleting`) until then, instead of removing the rows.
 
 The two sides never write at once: the LUN is loaded only after the unmount succeeded, and the volume
 is mounted only once the LUN reads back empty. The kernel would not stop either: the LUN opens the
 partition without `O_EXCL`, and `mount` does not see that open.
 
-Not done (yet): an update install (H) does not wait for USB storage to end; it reboots, which the
-device side survives (the volume is unmounted), but the computer loses its drive unejected.
+**Decision: the start-up re-plug is off** until the device pass shows that `soft_connect`
+disconnect/connect on `fdd00000.crgudc2` brings the computer, audio and adb back. `soft_connect` is
+write-only and the kernel accepts "connect" even when the controller does not start, so a bad
+re-plug can leave Wave off USB with nothing but the log to show it. Cost if wrong (it works and stays
+off): after a crash during USB storage, the computer keeps its drive until it is ejected there or
+the cable is pulled; nothing is lost, the takeover says what is going on.
+
+Still open: an update that reaches Installing does not itself wait for USB storage (the update agent
+is adding that check); a start during Installing/Restarting is refused here. The upload worker does
+not look at `/proc/mounts`: at boot, before stock's `udisk_fix` mounts the volume, an upload could
+find its file missing and mark it so; the next reconciliation turns it back (kept on Wave, not
+queued again).
 
 ### Kernel behaviour this relies on (Linux 5.4 `f_mass_storage`; verify in the device pass)
 
@@ -129,21 +180,44 @@ device side survives (the volume is unmounted), but the computer loses its drive
 - `lun.0/ro` can only change with no medium loaded (waved never sets it).
 - `soft_connect` keeps the functions bound (no unbind, so adb's functionfs and the UAC2 card stay).
 
-Measured on the device: _(fill in at the device pass: does macOS lock the medium; mount options in
-`/proc/mounts`; `soft_connect` on `crgudc2`; xruns during a 500 MB copy)_.
+Measured on the device: _(fill in at the device pass: does the composite with `mass_storage.usb0`
+bind (`$G/UDC` after the patch and reboot, `/tmp/waved-usbgadget.log`); does macOS lock the medium;
+mount options in `/proc/mounts`; `soft_connect` on `crgudc2` (does the UDC state go to `not
+attached` and back, do audio and adb come back); xruns during a 500 MB copy)_.
 
 ## Recovering by hand
 
 ```sh
 G=/sys/kernel/config/usb_gadget/amlogic
 L=$G/functions/mass_storage.usb0/lun.0
-cat $L/file; cat /sys/class/udc/*/state; grep udisk /proc/mounts
+cat $G/UDC; cat $L/file; cat /sys/class/udc/*/state; grep udisk /proc/mounts
+cat /tmp/waved-usbgadget.log /tmp/waved-usb-storage.unmounted 2>/dev/null
 # Take the drive back (fails with EBUSY while the computer holds it: eject there or unplug):
-echo > $L/file && cat $L/file && fsck.exfat -p /dev/udisk && mount -t exfat /dev/udisk /mnt/udisk -o rw,fmask=0077
-# Re-plug without touching the cable:
+echo > $L/file && cat $L/file && fsck.exfat -p /dev/udisk && mount -t exfat /dev/udisk /mnt/udisk -o rw,fmask=0077 && rm -f /tmp/waved-usb-storage.unmounted
+# Re-plug without touching the cable (unproven on crgudc2: it may leave Wave off USB):
 echo disconnect > /sys/class/udc/fdd00000.crgudc2/soft_connect; sleep 1; echo connect > /sys/class/udc/fdd00000.crgudc2/soft_connect
 # Waved never unbinds the gadget; if it is unbound anyway ($G/UDC empty):
 echo fdd00000.crgudc2 > $G/UDC
 ```
 
 Never `echo /dev/udisk > $L/file` while `/mnt/udisk` is mounted.
+
+**Undo the gadget patch** (over adb). Each patching run saved the S89 it replaced; the newest
+backup is the script from just before the last patch (the volume and HID patches only, if that run
+added USB storage). Restore it the way the patch writes (dot-named file, executable, synced, then
+renamed), check it, and reboot:
+
+```sh
+B=$(ls -t /data/waved/S89usbgadget.bak.* | head -1); echo "$B"
+cp "$B" /etc/init.d/.S89usbgadget.restore && sh -n /etc/init.d/.S89usbgadget.restore \
+  && chmod 755 /etc/init.d/.S89usbgadget.restore && sync \
+  && mv -f /etc/init.d/.S89usbgadget.restore /etc/init.d/S89usbgadget && sync && echo restored
+grep -c waved_g1_ /etc/init.d/S89usbgadget   # 0: the USB storage patch is gone
+ls -A /etc/init.d                            # no .S89usbgadget.restore left
+reboot
+```
+
+Never copy a backup into `/etc/init.d` under
+an `S??*` name: rcS runs it at boot. If adb is gone after a reboot (the bind check failed too), only
+the UART console is left (`../docs/GUIDE_DEVICE_ACCESS.md`): there, `echo fdd00000.crgudc2 > $G/UDC`
+after `rm $G/configs/amlogic.1/mass_storage.usb0`, then the restore above.

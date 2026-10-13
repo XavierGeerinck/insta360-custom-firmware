@@ -382,16 +382,24 @@ pub struct ArtifactRow {
     pub id: String,
     pub dir: String,
     pub status: String,
+    /// Delivered once (`uploaded_at` is set).
+    pub uploaded: bool,
 }
 
 pub async fn artifact_rows(pool: &SqlitePool) -> Result<Vec<ArtifactRow>, sqlx::Error> {
-    let rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT id, file_path, upload_status FROM meetings ORDER BY rowid")
-            .fetch_all(pool)
-            .await?;
+    let rows: Vec<(String, String, String, i64)> = sqlx::query_as(
+        "SELECT id, file_path, upload_status, uploaded_at IS NOT NULL FROM meetings ORDER BY rowid",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, dir, status)| ArtifactRow { id, dir, status })
+        .map(|(id, dir, status, uploaded)| ArtifactRow {
+            id,
+            dir,
+            status,
+            uploaded: uploaded != 0,
+        })
         .collect())
 }
 

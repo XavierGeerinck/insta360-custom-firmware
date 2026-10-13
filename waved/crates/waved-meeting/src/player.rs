@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
-use waved_state::{AudioState, Command, MeetingState, PlaybackState};
+use waved_state::{AudioState, Command, MeetingState, PlaybackState, UsbStorageState};
 
 /// Periods kept queued ahead of the speaker: enough to ride out a late tick,
 /// few enough that Pause and Seek feel immediate.
@@ -164,6 +164,9 @@ pub struct RecordingPlayer {
     playing: bool,
     blocked: bool,
     published_ms: u32,
+    /// USB storage (G1): nothing starts playing while the computer has the
+    /// recordings volume or it is being handed over.
+    usb_storage: Option<watch::Receiver<UsbStorageState>>,
 }
 
 impl RecordingPlayer {
@@ -180,7 +183,15 @@ impl RecordingPlayer {
             playing: false,
             blocked: false,
             published_ms: 0,
+            usb_storage: None,
         }
+    }
+
+    /// Follow USB storage (G1): Play and Resume are refused while the
+    /// recordings volume is away. Starting it stops playback first.
+    pub fn with_usb_storage(mut self, usb_storage: watch::Receiver<UsbStorageState>) -> Self {
+        self.usb_storage = Some(usb_storage);
+        self
     }
 
     pub async fn run(
@@ -256,6 +267,11 @@ impl RecordingPlayer {
     fn play(&mut self, id: Uuid) {
         if self.blocked {
             warn!("play ignored: a call or recording is active");
+            return;
+        }
+        if crate::recordings_away(self.usb_storage.as_ref()) {
+            // An open file would keep the volume from unmounting.
+            warn!("play ignored: USB storage has the recordings volume");
             return;
         }
         if self.track.as_ref().map(Track::id) != Some(id) {
@@ -459,6 +475,23 @@ mod tests {
             RecordingPlayer::new(dir.to_path_buf(), output, Arc::new(tx)),
             rx,
         )
+    }
+
+    #[test]
+    fn nothing_plays_while_usb_storage_has_the_volume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = fixture(tmp.path(), &ramp(1_000), 0, &[]);
+        let out = FakeOutput::new(100);
+        let (p, state) = player(tmp.path(), &out);
+        let (usb_tx, usb_rx) = watch::channel(waved_state::UsbStorageState::default());
+        let mut p = p.with_usb_storage(usb_rx);
+        usb_tx.send_modify(|s| s.phase = waved_state::UsbStoragePhase::Starting);
+        p.handle(&Command::PlayRecording(id));
+        assert!(out.submitted().is_empty(), "the file is being handed to the computer");
+        assert!(!state.borrow().playing);
+        usb_tx.send_modify(|s| s.phase = waved_state::UsbStoragePhase::Off);
+        p.handle(&Command::PlayRecording(id));
+        assert!(state.borrow().playing);
     }
 
     #[test]
