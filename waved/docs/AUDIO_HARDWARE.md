@@ -1283,6 +1283,23 @@ session closes. `start-stop-daemon -b` was verified on-device to retain exactly
 one `/bin/sh /etc/init.d/S60waved start` watchdog and one `waved` process across
 the scripted five-second display restart.
 
+### The speaker is busy for the first seconds of a boot
+
+On 2026-10-13 `waved.log` showed four starts in the first ~10 s of a cold boot:
+three exited with `FATAL: ALSA playback open failed: … Device or resource busy
+(16)` on the speaker (`hw:0,1`), the fourth opened it, and the display
+workaround's SIGTERM made a fifth. Nothing in `/etc/init.d` plays audio
+(`S45asound` only sets mixer levels); what holds the device is still to be found
+(look at `/proc/*/fd` → `/dev/snd/*` during a boot). waved now retries the
+playback and dual-stream opens for up to 20 s (`open_retrying` in
+`crates/waved/src/main.rs`) instead of exiting, and the update fall-back counts
+boots, not starts (`docs/UPDATES.md`).
+
+`/etc/init.d` also held three old `S89usbgadget.bak.*` copies from
+`scripts/patch-stock-usbgadget.sh`. rcS runs every `S??*`, so they ran after
+the real script at each boot (their writes to the already-bound gadget most
+likely fail). Never leave backups of init scripts in `/etc/init.d`.
+
 ## Deploy
 
 ```bash

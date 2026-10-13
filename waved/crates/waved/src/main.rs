@@ -331,7 +331,11 @@ async fn run_async(
         let mut hid_stats_handle: Option<Arc<waved_hid::stats::HidStats>> = None;
 
         let (source, alignment) = if cfg.reference_enabled() {
-            match AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods) {
+            match tokio::task::block_in_place(|| {
+                open_retrying("ALSA dual stream", ALSA_OPEN_TRIES, ALSA_OPEN_RETRY, || {
+                    AlsaDualStreamSource::from_capture_config(&cfg.capture, cfg.period_frames, cfg.buffer_periods)
+                })
+            }) {
                 Ok(s) => {
                     let a = s.alignment();
                     (SourceDyn::Dual(s), a.as_str().to_string())
@@ -345,18 +349,22 @@ async fn run_async(
         } else if let Some(pb) = cfg.playback.clone() {
             // Spawn playback first so the broadcast receiver can be subscribed
             // before capture starts emitting frames.
-            let playback = match spawn_playback(
-                PlaybackConfig {
-                    device: pb.device.clone(),
-                    channels: pb.channels,
-                    sample_rate: pb.sample_rate,
-                    format: pb.format,
-                    period_frames: pb.period_frames,
-                    buffer_periods: pb.buffer_periods,
-                    initial_preset: bus.audio.borrow().playback_preset,
-                },
-                bus.audio.subscribe(),
-            ) {
+            let playback = match tokio::task::block_in_place(|| {
+                open_retrying("ALSA playback", ALSA_OPEN_TRIES, ALSA_OPEN_RETRY, || {
+                    spawn_playback(
+                        PlaybackConfig {
+                            device: pb.device.clone(),
+                            channels: pb.channels,
+                            sample_rate: pb.sample_rate,
+                            format: pb.format,
+                            period_frames: pb.period_frames,
+                            buffer_periods: pb.buffer_periods,
+                            initial_preset: bus.audio.borrow().playback_preset,
+                        },
+                        bus.audio.subscribe(),
+                    )
+                })
+            }) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("FATAL: ALSA playback open failed: {e}");
@@ -922,6 +930,40 @@ async fn power_off_in_order(
 /// What a low-battery report asks for: power off at the critical level
 /// (TODO F2), nothing above it. waved-mcu reports a level only once it held
 /// on battery power, so one reading never powers off.
+/// Tries before giving up on an ALSA device at start-up, and the wait between
+/// them: 20 s. On 2026-10-13 the speaker (`hw:0,1`) was busy for the first
+/// ~10 s of a boot, and waved exited and restarted three times.
+const ALSA_OPEN_TRIES: u32 = 40;
+const ALSA_OPEN_RETRY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// `open` until it works or `attempts` tries have failed, `delay` apart.
+fn open_retrying<T, E: std::fmt::Display>(
+    what: &str,
+    attempts: u32,
+    delay: std::time::Duration,
+    mut open: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut tried = 0;
+    loop {
+        tried += 1;
+        match open() {
+            Ok(opened) => {
+                if tried > 1 {
+                    info!("{what} opened after {tried} tries");
+                }
+                return Ok(opened);
+            }
+            Err(e) if tried >= attempts => return Err(e),
+            Err(e) => {
+                if tried == 1 {
+                    warn!("{what} open failed ({e}); trying again for up to {:?}", delay * (attempts - 1));
+                }
+                std::thread::sleep(delay);
+            }
+        }
+    }
+}
+
 fn low_battery_command(level: u8) -> Option<Command> {
     (level <= CRITICAL_BATTERY_LEVEL).then_some(Command::PowerOff)
 }
@@ -1234,6 +1276,23 @@ fn parse_doa_override(s: &str) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod exit_tests {
     use super::*;
+
+    #[test]
+    fn a_busy_device_is_retried_before_giving_up() {
+        let mut calls = 0;
+        let opened = open_retrying("speaker", 5, std::time::Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 { Err("busy") } else { Ok(calls) }
+        });
+        assert_eq!(opened, Ok(3));
+
+        let mut calls = 0;
+        let failed: Result<(), &str> = open_retrying("speaker", 4, std::time::Duration::ZERO, || {
+            calls += 1;
+            Err("busy")
+        });
+        assert_eq!((failed, calls), (Err("busy"), 4));
+    }
 
     #[test]
     fn only_a_critical_battery_powers_off_and_nothing_moves_the_lift() {
