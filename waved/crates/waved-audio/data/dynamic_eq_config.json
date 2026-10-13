@@ -1,0 +1,49 @@
+{
+  "asp_param_eq": {
+    "mic_num": 2,
+    "sample_rate": 48000,
+    "data_len": 960,
+    "asp_output_ch_num": 2,
+    "system_output_ch_num": 2,
+
+    "hpf_switch": 0,
+    "agc_switch": 0,
+    "mbagc_switch": 0,
+    "iir_eq_switch": 1,
+    "vad_switch": 0,
+    "rms_thres_lb": 10.0,
+    "rms_thres_ub": 25.0,
+    "zcr_thres_lb": 0.4,
+    "zcr_thres_ub": 0.8,	
+    "cut_off_freq": 30.0,
+    "agc_target": 2.3198e+04,
+    "agc_max_gain": 8.0,
+    "agc_gain_knee": 5.0,
+    "init_gain": 1.0,
+    "agc_release_time": 1000.0,
+    "agc_lt_attack_time": 0.0,
+    "agc_lt_release_time": 0.0,
+    "multi_band_num": 4,
+    "agc_settings": [
+      {
+        "crossover_freq": [300.0, 4000.0, 7000.0],
+        "mbagc_target": [8.2030e+03, 1.6406e+04, 1.1599e+03, 579.9500],
+        "mbagc_max_gain": [6.0, 20.0, 10.0, 10.0],
+        "mbagc_gain_knee": [5.0, 5.0, 5.0, 5.0],
+        "mbagc_release_time": [200.0, 200.0, 200.0, 200.0]
+      }
+    ],
+    "device": 4,
+    "eq_filter_num": 3,
+    "eq_setting_num": 1,
+    "eq_smoothing_time": 400,
+    "eq_settings": [
+      {
+        "type"		    : [4,		2,		0],
+        "center_freq"	: [150.0,	8000.0, 90.0],
+        "gain_dB"    	: [0.0,	    5.0, 	-6.0],
+        "Q"	     	    : [0.7,		0.7, 	2.0]
+      }
+    ]
+  }
+}
