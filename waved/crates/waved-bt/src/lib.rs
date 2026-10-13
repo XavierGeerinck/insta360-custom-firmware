@@ -336,9 +336,10 @@ mod tests {
                 hex_upper.join(""),
                 hex_upper.join(" "),
                 decimal.join(", "),
-                "ba:ad".to_string(),
-                "BA AD".to_string(),
-                "186, 173".to_string(),
+                // Two bytes of it, in case a line truncates the MAC.
+                hex_lower[3..5].join(":"),
+                hex_upper[3..5].join(" "),
+                decimal[3..5].join(", "),
             ];
             needles.into_iter().filter(|n| line.contains(n.as_str())).collect()
         }
