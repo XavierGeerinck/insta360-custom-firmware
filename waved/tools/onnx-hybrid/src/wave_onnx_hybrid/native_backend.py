@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -38,6 +39,16 @@ def _failure(code: ErrorCode, message: str) -> HybridError:
     return HybridError(code, message)
 
 
+def validate_native_run_id(run_id: str) -> str:
+    """Match the lab bridge's exclusive run-directory identifier contract."""
+    if (
+        not isinstance(run_id, str)
+        or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", run_id) is None
+    ):
+        raise _failure(ErrorCode.POLICY_INVALID, "invalid native run ID")
+    return run_id
+
+
 class NativeSession:
     """One supported ONNX graph, with a latched CPU fallback in hybrid mode."""
 
@@ -54,7 +65,7 @@ class NativeSession:
     ) -> None:
         self.model_path = Path(model_path)
         self.package_dir = Path(package_dir)
-        self.run_id = run_id
+        self.run_id = validate_native_run_id(run_id)
         self.mode = ExecutionMode(mode)
         if self.mode not in (ExecutionMode.STRICT, ExecutionMode.HYBRID):
             raise _failure(

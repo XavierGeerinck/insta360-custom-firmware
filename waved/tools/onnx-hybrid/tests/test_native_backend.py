@@ -25,7 +25,12 @@ class Cpu:
 
 
 def setup_session(
-    *, mode=ExecutionMode.STRICT, executor=None, loader=None, control="17b2"
+    *,
+    mode=ExecutionMode.STRICT,
+    executor=None,
+    loader=None,
+    control="17b2",
+    run_id="unit-test",
 ):
     model = FIXTURES / f"{control}.onnx"
     record = import_native_model(model)
@@ -95,7 +100,7 @@ def setup_session(
     session = NativeSession(
         model,
         Path("/mock/package"),
-        run_id="unit-test",
+        run_id=run_id,
         mode=mode,
         executor=executor or execute,
         package_loader=loader or load,
@@ -115,6 +120,41 @@ def test_qualified_native_session_validates_output_and_evidence():
     np.testing.assert_array_equal(
         output["output"], np.array([[30, 24, 18, 27]], dtype=np.uint8)
     )
+
+
+@pytest.mark.parametrize("run_id", ["Upper", "under_score", "a" * 65, ""])
+def test_invalid_run_id_refuses_before_package_or_executor(run_id):
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        calls.append(True)
+        pytest.fail("native work started for invalid run ID")
+
+    with pytest.raises(HybridError, match="run ID"):
+        NativeSession(
+            FIXTURES / "17b2.onnx",
+            Path("/mock/package"),
+            run_id=run_id,
+            mode=ExecutionMode.HYBRID,
+            executor=forbidden,
+            package_loader=forbidden,
+        )
+    assert calls == []
+
+
+def test_maximum_length_run_id_reaches_executor_unchanged():
+    run_id = "a" * 64
+    observed = []
+    session, inputs, _, _ = setup_session(run_id=run_id)
+    original = session._executor
+
+    def capture(package_dir, values, passed_id, **kwargs):
+        observed.append(passed_id)
+        return original(package_dir, values, passed_id, **kwargs)
+
+    session._executor = capture
+    session.run(inputs)
+    assert observed == [run_id]
 
 
 def test_failed_run_latches_cpu_without_second_native_attempt():

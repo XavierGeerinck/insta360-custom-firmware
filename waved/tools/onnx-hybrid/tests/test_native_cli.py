@@ -53,6 +53,23 @@ def test_lifecycle_commands_dispatch_exact_arguments(monkeypatch, tmp_path):
     ]
 
 
+@pytest.mark.parametrize("command", ["compile-native", "qualify-native"])
+@pytest.mark.parametrize("run_id", ["Upper", "under_score", "a" * 65])
+def test_lifecycle_invalid_run_id_refuses_before_bridge(
+    monkeypatch, tmp_path, command, run_id
+):
+    monkeypatch.setattr(
+        native_cli,
+        "native_bridge",
+        lambda: pytest.fail("bridge loaded for invalid run ID"),
+    )
+    args = [command, str(tmp_path / "package")]
+    if command == "qualify-native":
+        args.extend(["--inputs", str(tmp_path / "inputs.npz")])
+    args.extend(["--run-id", run_id])
+    assert cli.main(args) == 2
+
+
 def _run_args(tmp_path: Path) -> list[str]:
     model = tmp_path / "model.onnx"
     model.write_bytes(b"mock")
@@ -78,7 +95,8 @@ def _run_args(tmp_path: Path) -> list[str]:
     ]
 
 
-def test_native_run_writes_actual_backend_evidence(monkeypatch, tmp_path):
+@pytest.mark.parametrize("run_id", ["run-1", "a" * 64])
+def test_native_run_writes_actual_backend_evidence(monkeypatch, tmp_path, run_id):
     calls = []
 
     class Session:
@@ -98,8 +116,10 @@ def test_native_run_writes_actual_backend_evidence(monkeypatch, tmp_path):
 
     monkeypatch.setattr(native_backend, "NativeSession", Session)
     args = _run_args(tmp_path)
+    args[args.index("--run-id") + 1] = run_id
     assert cli.main(args) == 0
     assert len(calls) == 1
+    assert calls[0][2] == run_id
     with np.load(tmp_path / "out.npz") as archive:
         np.testing.assert_array_equal(archive["output"], [[1, 2, 3, 4]])
     evidence = json.loads((tmp_path / "evidence.json").read_text())
@@ -117,6 +137,9 @@ def test_native_run_writes_actual_backend_evidence(monkeypatch, tmp_path):
             args.index("--evidence") + 1, args[args.index("--outputs") + 1]
         ),
         lambda args: args.__setitem__(args.index("--run-id") + 1, "../invalid"),
+        lambda args: args.__setitem__(args.index("--run-id") + 1, "Upper"),
+        lambda args: args.__setitem__(args.index("--run-id") + 1, "under_score"),
+        lambda args: args.__setitem__(args.index("--run-id") + 1, "a" * 65),
     ],
 )
 def test_native_run_rejects_path_or_id_before_session(monkeypatch, tmp_path, change):

@@ -18,11 +18,13 @@ the actual native call count is unknown (`null`) rather than guessed.
 
 The CLI adds `import-native`, `build-native`, `compile-native`, and
 `qualify-native`, plus `run --backend wave-native --package ... --run-id ...`.
-It checks native mode, path exclusivity, output existence, and run ID before
-constructing a native session. The historical default run path and policy are
+It checks native mode, path exclusivity, output existence, and the bridge's
+lowercase run ID contract before constructing a native session. The same run
+ID check applies to compile and qualification commands. The historical default
+run path and policy are
 unchanged. Output NPZ and JSON evidence are written exclusively.
 
-Validation: the full `waved/tools/onnx-hybrid` test suite passed (330 tests);
+Validation: the full `waved/tools/onnx-hybrid` test suite passed (345 tests);
 focused tests cover qualified output, failure latching, strict refusal,
 changed/unqualified package, malformed result, unsupported CPU fallback,
 all-canary output, CLI dispatch, and path rejection. Ruff lint and format

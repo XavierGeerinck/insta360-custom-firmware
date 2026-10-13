@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -123,7 +122,7 @@ def _command_run(args: argparse.Namespace) -> int:
 
 
 def _command_native_run(args: argparse.Namespace) -> int:
-    from .native_backend import NativeSession
+    from .native_backend import NativeSession, validate_native_run_id
 
     if (
         args.policy.resolve() != DEFAULT_POLICY.resolve()
@@ -141,8 +140,7 @@ def _command_native_run(args: argparse.Namespace) -> int:
         raise HybridError(
             ErrorCode.POLICY_INVALID, "native run requires strict or hybrid mode"
         )
-    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.run_id) is None:
-        raise HybridError(ErrorCode.POLICY_INVALID, "invalid native run ID")
+    validate_native_run_id(args.run_id)
     paths = [args.model, args.inputs, args.outputs, args.evidence]
     resolved = [path.resolve() for path in paths]
     if len(set(resolved)) != len(resolved):

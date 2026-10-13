@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ErrorCode, HybridError
-from .native_backend import native_bridge
+from .native_backend import native_bridge, validate_native_run_id
 
 
 def _invoke(operation: str, *arguments: Any) -> int:
@@ -32,11 +32,18 @@ def _build(args: argparse.Namespace) -> int:
 
 
 def _compile(args: argparse.Namespace) -> int:
-    return _invoke("compile_package", args.package_dir, args.run_id)
+    return _invoke(
+        "compile_package", args.package_dir, validate_native_run_id(args.run_id)
+    )
 
 
 def _qualify(args: argparse.Namespace) -> int:
-    return _invoke("qualify_package", args.package_dir, args.inputs, args.run_id)
+    return _invoke(
+        "qualify_package",
+        args.package_dir,
+        args.inputs,
+        validate_native_run_id(args.run_id),
+    )
 
 
 def add_native_commands(subparsers: Any) -> None:
