@@ -317,12 +317,398 @@ def prepare_isolation(prepared: Path, output: Path) -> dict[str, Any]:
     return receipt
 
 
+def _extract(model, start, stop, input_name, input_shape, output_shape):
+    """Copy an exact trained subgraph, renaming only its boundary tensors."""
+    from onnx import helper
+
+    result = copy.deepcopy(model)
+    nodes = list(result.graph.node)[start:stop]
+    output_name = nodes[-1].output[0]
+    for node in nodes:
+        for i, name in enumerate(node.input):
+            if name == input_name:
+                node.input[i] = "input"
+        for i, name in enumerate(node.output):
+            if name == output_name:
+                node.output[i] = "output"
+    used = {name for n in nodes for name in n.input}
+    constants = [copy.deepcopy(t) for t in model.graph.initializer if t.name in used]
+    del result.graph.node[:]
+    result.graph.node.extend(nodes)
+    del result.graph.initializer[:]
+    result.graph.initializer.extend(constants)
+    del result.graph.value_info[:]
+    dtype = model.graph.input[0].type.tensor_type.elem_type
+    del result.graph.input[:]
+    result.graph.input.extend(
+        [helper.make_tensor_value_info("input", dtype, input_shape)]
+    )
+    del result.graph.output[:]
+    result.graph.output.extend(
+        [helper.make_tensor_value_info("output", dtype, output_shape)]
+    )
+    onnx.checker.check_model(result, full_check=True)
+    return result
+
+
+def _fp32(model):
+    from onnx import TensorProto
+
+    result = copy.deepcopy(model)
+    for t in result.graph.initializer:
+        if t.data_type == TensorProto.FLOAT16:
+            t.CopyFrom(
+                numpy_helper.from_array(
+                    numpy_helper.to_array(t).astype(np.float32), t.name
+                )
+            )
+    for value in [*result.graph.input, *result.graph.output, *result.graph.value_info]:
+        if value.type.tensor_type.elem_type == TensorProto.FLOAT16:
+            value.type.tensor_type.elem_type = TensorProto.FLOAT
+    return result
+
+
+def _cpu_session(model):
+    session = ort.InferenceSession(
+        model.SerializeToString(), providers=["CPUExecutionProvider"]
+    )
+    _require(
+        session.get_providers() == ["CPUExecutionProvider"],
+        "Pad candidate reference provider differs",
+    )
+    return session
+
+
+def _fp32_comparison(reference, observed):
+    _require(
+        reference.shape == observed.shape
+        and reference.dtype == observed.dtype == np.float32
+        and np.isfinite(reference).all()
+        and np.isfinite(observed).all(),
+        "FP32 Pad comparison contract/nonfinite failure",
+        ErrorCode.ONNX_OUTPUT_INVALID,
+    )
+    error = np.abs(reference - observed)
+    bad = error > 1e-4 + 1e-5 * np.abs(reference)
+    result = {
+        "status": "PASS" if not bad.any() else "FAIL",
+        "elements": reference.size,
+        "max_abs_error": float(error.max()),
+        "mismatched_elements": int(bad.sum()),
+        "policy": {"atol": 1e-4, "rtol": 1e-5},
+        "reference_sha256": _sha(reference.tobytes()),
+        "observed_sha256": _sha(observed.tobytes()),
+    }
+    _require(
+        not bad.any(),
+        "FP32 Pad arithmetic exceeds frozen policy",
+        ErrorCode.NPU_OUTPUT_NUMERICAL_MISMATCH,
+    )
+    return result
+
+
+def _probability(logits):
+    _require(
+        logits.shape == (1, 2, 200) and np.isfinite(logits).all(),
+        "invalid full Pad logits",
+    )
+    x = logits.astype(np.float32)
+    exp = np.exp(x - x.max(axis=1, keepdims=True))
+    return np.ascontiguousarray(
+        (exp / exp.sum(axis=1, keepdims=True))[0, 1], np.float32
+    )
+
+
+def _probability_comparison(reference, observed):
+    error = np.abs(reference - observed)
+    disagree = int(np.sum((reference >= 0.5) != (observed >= 0.5)))
+    agreement = 1 - disagree / 200
+    result = {
+        "status": "PASS" if error.max() <= 0.02 and agreement >= 0.99 else "FAIL",
+        "elements": 200,
+        "max_abs_error": float(error.max()),
+        "decision_agreement": agreement,
+        "disagreements": disagree,
+        "policy": {"max_abs_error": 0.02, "minimum_decision_agreement": 0.99},
+    }
+    _require(
+        result["status"] == "PASS",
+        "Pad candidate probability gate failed",
+        ErrorCode.AUDIO_QUALITY_GATE_FAILURE,
+    )
+    return result
+
+
+def _learned_accounting(source, candidate):
+    original = {t.name: t for t in source.graph.initializer}
+    learned = [t for t in candidate.graph.initializer if t.name in original]
+    _require(
+        all(
+            t.SerializeToString() == original[t.name].SerializeToString()
+            for t in learned
+        ),
+        "learned initializer bits changed",
+    )
+    return {
+        "initializer_count": len(learned),
+        "elements": sum(numpy_helper.to_array(t).size for t in learned),
+        "bytes": sum(numpy_helper.to_array(t).nbytes for t in learned),
+        "bits_identical": True,
+        "initializers": {
+            t.name: {
+                "shape": list(t.dims),
+                "sha256": _sha(numpy_helper.to_array(t).tobytes()),
+            }
+            for t in learned
+        },
+    }
+
+
+def prepare_pad_candidate(originalprep: Path, output: Path) -> dict[str, Any]:
+    """Freeze19c/d/e/f and exact full-model proof, without device/native calls."""
+    from .marblenet_pad import (
+        PAD_RECIPE,
+        PROFILE_ID,
+        add_profile_marker,
+        rewrite_explicit_pad,
+        validate_full_pad_model,
+    )
+
+    originalprep, output = Path(originalprep), Path(output)
+    original, target = originalprep.resolve(), output.resolve()
+    _require(
+        not output.is_symlink() and not output.exists(),
+        "Pad output exists/linked",
+        ErrorCode.OUTPUT_EXISTS,
+    )
+    _require(
+        target != original
+        and original not in target.parents
+        and target not in original.parents
+        and OUTPUT_ROOT.resolve() in target.parents,
+        "Pad output aliases original or leaves PoC19",
+        ErrorCode.POLICY_INVALID,
+    )
+    source_c, _, input_c, input_c_npz = _frozen(originalprep)
+    _require(
+        ort.__version__ == "1.27.0"
+        and onnx.__version__ == "1.22.0"
+        and np.__version__ == "2.5.1",
+        "Pad preparation requires pinned host versions",
+        ErrorCode.MODEL_STATE_VERSION_MISMATCH,
+    )
+    source_full = onnx.load_model_from_string(_regular(originalprep / "18d.onnx"))
+    folded32 = onnx.load_model_from_string(
+        _regular(originalprep / "marblenet_folded_fp32.onnx")
+    )
+    source_d = _extract(source_full, 0, 3, "input", [1, 80, 400], [1, 128, 200])
+    source_e = _extract(
+        source_full, 11, 27, "activation_11", [1, 64, 200], [1, 64, 200]
+    )
+    models = {
+        "19c": rewrite_explicit_pad(source_c, 0),
+        "19d": add_profile_marker(source_d),
+        "19e": add_profile_marker(source_e),
+        "19f": rewrite_explicit_pad(source_full, 27),
+    }
+    full_identity = validate_full_pad_model(models["19f"].SerializeToString())
+    output = target
+    output.mkdir(parents=True, exist_ok=False)
+    files = {}
+
+    def retain(name, data):
+        _write(output / name, data)
+        files[name] = {"sha256": _sha(data), "bytes": len(data)}
+
+    records = {}
+    for name, model in models.items():
+        retain(name + ".onnx", model.SerializeToString())
+        records[name] = import_graph(output / (name + ".onnx"), profile_id=PROFILE_ID)
+        retain(name + "_lowering.json", canonical_json(records[name]))
+    speech32 = np.load(originalprep / "speech_features_fp32.npy", allow_pickle=False)
+    capture = _extract(folded32, 0, 11, "input", [1, 80, 400], [1, 64, 200])
+    capture32 = np.ascontiguousarray(
+        _cpu_session(capture).run(None, {"input": speech32})[0]
+    )
+    input_e = capture32.astype(np.float16)
+    retain("19e_capture_prefix_fp32.onnx", capture.SerializeToString())
+    retain("19e_capture_activation_fp32.bin", capture32.tobytes())
+    source_models = {
+        "19c": source_c,
+        "19d": source_d,
+        "19e": source_e,
+        "19f": source_full,
+    }
+    sessions = {name: _cpu_session(model) for name, model in models.items()}
+    originals = {name: _cpu_session(model) for name, model in source_models.items()}
+    input_d_npz = _regular(originalprep / "18d_speech_input.npz")
+    with np.load(originalprep / "18d_speech_input.npz", allow_pickle=False) as z:
+        input_d = np.array(z["input"], copy=True, order="C")
+    inputs = {"19c": input_c, "19d": input_d, "19e": input_e, "19f": input_d}
+    input_archives = {
+        "19c": input_c_npz,
+        "19d": input_d_npz,
+        "19e": deterministic_npz_bytes({"input": input_e}),
+        "19f": input_d_npz,
+    }
+    controls = {}
+    for name, model in models.items():
+        values = inputs[name]
+        record = records[name]
+        expected = independent_graph_oracle(record, {"input": values})["output"]
+        observed = np.ascontiguousarray(sessions[name].run(None, {"input": values})[0])
+        reference = np.ascontiguousarray(
+            originals[name].run(None, {"input": values})[0]
+        )
+        _require(
+            observed.dtype == np.float16
+            and list(observed.shape) == record["onnx_output"]["shape"],
+            "Pad observed output contract mismatch",
+            ErrorCode.ONNX_OUTPUT_INVALID,
+        )
+        vs_independent = validate_graph_output(
+            record, expected.tobytes(), observed.tobytes()
+        )
+        vs_original = validate_graph_output(
+            record, reference.tobytes(), observed.tobytes()
+        )
+        retain(name + "_input.npz", input_archives[name])
+        retain(name + "_input.bin", values.tobytes())
+        retain(name + "_expected.npz", deterministic_npz_bytes({"output": expected}))
+        retain(name + "_independent_output.bin", expected.tobytes())
+        retain(name + "_ort_output.bin", observed.tobytes())
+        controls[name] = {
+            "profile_id": PROFILE_ID,
+            "model": str(output / (name + ".onnx")),
+            "model_sha256": record["source_model_sha256"],
+            "lowering": str(output / (name + "_lowering.json")),
+            "lowering_sha256": record["lowering_sha256"],
+            "graph_signature": record["graph_signature"],
+            "input": str(output / (name + "_input.npz")),
+            "input_sha256": _sha(values.tobytes()),
+            "expected": str(output / (name + "_expected.npz")),
+            "independent_output_sha256": _sha(expected.tobytes()),
+            "ort_output_sha256": _sha(observed.tobytes()),
+            "input_shape": record["onnx_input"]["shape"],
+            "output_shape": record["onnx_output"]["shape"],
+            "nodes": len(record["nodes"]),
+            "learned_initializers": _learned_accounting(source_models[name], model),
+            "cpu_vs_independent": vs_independent,
+            "cpu_vs_original_fp16": vs_original,
+            "full_model": name == "19f",
+        }
+    layer32_original = _cpu_session(_fp32(source_c))
+    layer32_padded = _cpu_session(_fp32(models["19c"]))
+    layer32_parity = _fp32_comparison(
+        layer32_original.run(None, {"input": input_c.astype(np.float32)})[0],
+        layer32_padded.run(None, {"input": input_c.astype(np.float32)})[0],
+    )
+    padded32 = rewrite_explicit_pad(folded32, 27)
+    retain("19f_folded_fp32.onnx", padded32.SerializeToString())
+    original32_session, padded32_session = (
+        _cpu_session(folded32),
+        _cpu_session(padded32),
+    )
+    clips = {}
+    for clip in ("silence", "noise", "speech", "noisy-speech"):
+        features = np.load(
+            originalprep / (clip + "_features_fp32.npy"), allow_pickle=False
+        )
+        values = features.astype(np.float16)
+        expected = independent_graph_oracle(records["19f"], {"input": values})["output"]
+        observed = np.ascontiguousarray(sessions["19f"].run(None, {"input": values})[0])
+        old_half = np.ascontiguousarray(
+            originals["19f"].run(None, {"input": values})[0]
+        )
+        padded_full32 = np.ascontiguousarray(
+            padded32_session.run(None, {"input": features})[0]
+        )
+        folded_full32 = np.ascontiguousarray(
+            original32_session.run(None, {"input": features})[0]
+        )
+        original_full32_bytes = _regular(
+            originalprep / ("18d_" + clip + "_original_fp32.bin")
+        )
+        original_full32 = np.frombuffer(original_full32_bytes, dtype="<f4").reshape(
+            1, 2, 200
+        )
+        prefix = "19f_" + clip
+        retain(
+            prefix + "_input.npz",
+            _regular(originalprep / ("18d_" + clip + "_input.npz")),
+        )
+        retain(prefix + "_expected.npz", deterministic_npz_bytes({"output": expected}))
+        retain(prefix + "_independent_output.bin", expected.tobytes())
+        retain(prefix + "_ort_output.bin", observed.tobytes())
+        retain(prefix + "_original_fp32.bin", original_full32_bytes)
+        retain(prefix + "_padded_fp32.bin", padded_full32.tobytes())
+        clips[clip] = {
+            "input": str(output / (prefix + "_input.npz")),
+            "expected": str(output / (prefix + "_expected.npz")),
+            "features_fp32_sha256": _sha(features.tobytes()),
+            "input_sha256": _sha(values.tobytes()),
+            "cpu_fp16_vs_original_fp16": validate_graph_output(
+                records["19f"], old_half.tobytes(), observed.tobytes()
+            ),
+            "cpu_fp16_vs_independent": validate_graph_output(
+                records["19f"], expected.tobytes(), observed.tobytes()
+            ),
+            "padded_fp32_vs_folded_fp32": _fp32_comparison(
+                folded_full32, padded_full32
+            ),
+            "padded_fp32_vs_original_unfused_fp32": _fp32_comparison(
+                original_full32, padded_full32
+            ),
+            "cpu_fp16_probabilities": _probability_comparison(
+                _probability(original_full32), _probability(observed)
+            ),
+            "independent_fp16_probabilities": _probability_comparison(
+                _probability(original_full32), _probability(expected)
+            ),
+        }
+    receipt = {
+        "schema_version": 1,
+        "experiment": "poc19-exact-marblenet-explicit-pad",
+        "profile_id": PROFILE_ID,
+        "qualification": "UNQUALIFIED",
+        "source_preparation_sha256": PREPARATION_SHA256,
+        "source_original_model_sha256": full_identity["source_original_model_sha256"],
+        "checkpoint_sha256": full_identity["checkpoint_sha256"],
+        "recipe": PAD_RECIPE,
+        "recipe_sha256": full_identity["recipe_sha256"],
+        "full_identity": full_identity,
+        "versions": {
+            "onnx": onnx.__version__,
+            "onnxruntime": ort.__version__,
+            "numpy": np.__version__,
+        },
+        "controls": controls,
+        "clips": clips,
+        "layer_fp32_parity": layer32_parity,
+        "19e_input_origin": {
+            "kind": "captured-original-folded-fp32-prefix-activation11-cast-fp16",
+            "prefix_model_sha256": _sha(capture.SerializeToString()),
+            "features_fp32_sha256": _sha(speech32.tobytes()),
+            "activation_fp32_sha256": _sha(capture32.tobytes()),
+            "activation_fp16_sha256": _sha(input_e.tobytes()),
+        },
+        "files": files,
+    }
+    _write(output / "preparation.json", canonical_json(receipt))
+    return receipt
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--candidate", choices=["isolation", "pad"], default="isolation"
+    )
     args = parser.parse_args(argv)
-    receipt = prepare_isolation(args.prepared, args.output)
+    receipt = (
+        prepare_isolation if args.candidate == "isolation" else prepare_pad_candidate
+    )(args.prepared, args.output)
     print(
         json.dumps(
             {

@@ -155,8 +155,13 @@ def _constant(tensor: TensorProto) -> dict[str, Any]:
     }
 
 
-def import_graph(path: Path) -> dict[str, Any]:
+def import_graph(path: Path, *, profile_id: str = PROFILE_ID) -> dict[str, Any]:
     """Extract a bounded graph from the same audited bytes, without execution."""
+    if profile_id == "fp16-marblenet-pad-v1":
+        from .marblenet_pad import import_pad_graph
+
+        return import_pad_graph(path)
+    _require(profile_id == PROFILE_ID, "unsupported graph profile")
     with Path(path).open("rb") as handle:
         payload = handle.read(_POLICY.limits.max_model_bytes + 1)
     audit = audit_model_bytes(payload, source_name=Path(path).name, policy=_POLICY)
@@ -322,6 +327,10 @@ def import_graph(path: Path) -> dict[str, Any]:
 
 def validate_graph_record(record: dict[str, Any]) -> None:
     """Check identity and every structural/constant edge before native use."""
+    if isinstance(record, dict) and record.get("profile_id") == "fp16-marblenet-pad-v1":
+        from .marblenet_pad import validate_pad_record
+
+        return validate_pad_record(record)
     _keys(
         record,
         {
@@ -564,6 +573,10 @@ def independent_graph_oracle(
     record: dict[str, Any], inputs: dict[str, np.ndarray]
 ) -> dict[str, np.ndarray]:
     """Evaluate FP16 stages with FP32 Conv accumulation and no ORT session."""
+    if isinstance(record, dict) and record.get("profile_id") == "fp16-marblenet-pad-v1":
+        from .marblenet_pad import independent_pad_oracle
+
+        return independent_pad_oracle(record, inputs)
     validate_graph_record(record)
     spec = record["onnx_input"]
     _require(
