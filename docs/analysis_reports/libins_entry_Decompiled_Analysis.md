@@ -1,6 +1,6 @@
 # Insta360 Wave Firmware Analysis: `libins_entry.so`
 
-**File**: `/Users/xaviergeerinck/Projects/insta360/decompiled/libins_entry.so.c`
+**File**: `decompiled/libins_entry.so.c`
 **Size**: 173,122 lines, ~3,882 functions
 **Build path**: `/home/jenkins/workspace/PSP_Releasebuild/575/projectCode/SOC/output/a5_av400_psp_a64_release/build/pspapp-0.0.0/`
 

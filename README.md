@@ -41,9 +41,12 @@ Back to stock, from `waved/`: `./deploy/revert.sh && adb reboot`.
 | `site/` | the documentation site |
 | `scripts/` | decompilation, cross-version diff and LVGL asset tools |
 
-The stock firmware images are not in the repository. `scripts/decompile_version.sh`
-regenerates the Ghidra decompilation of the six target binaries from an
-unpacked firmware rootfs (`firmwares/<version>/extracted/rootfs`).
+The stock firmware images and the decompiled stock binaries are not distributed.
+`scripts/decompile_version.sh` regenerates the Ghidra decompilation of the six
+target binaries from a stock firmware image, once you unpack its rootfs to
+`firmwares/<version>/extracted/rootfs`; the output lands in
+`firmwares/<version>/decompiled/`. It needs Ghidra and JDK 21 and hardcodes their
+paths, so edit `ROOT`, `GHIDRA` and `JAVA_HOME` at the top of the script first.
 
 ## Status
 

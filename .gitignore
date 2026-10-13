@@ -78,3 +78,7 @@ site/src/content/docs/reference/
 site/src/content/docs/research/
 site/src/assets/screens/
 site/public/repo-assets/
+
+# Decompiled stock binaries: regenerate with scripts/decompile_version.sh,
+# never commit (Insta360 code).
+/decompiled/

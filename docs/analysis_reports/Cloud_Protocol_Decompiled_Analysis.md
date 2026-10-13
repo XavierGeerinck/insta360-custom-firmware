@@ -1,6 +1,6 @@
 # Thorough Analysis of `libcloud_proto_https.so` - Insta360 Wave Cloud Protocol Library
 
-**File**: `/Users/xaviergeerinck/Projects/insta360/decompiled/libcloud_proto_https.so.c`
+**File**: `decompiled/libcloud_proto_https.so.c`
 **Size**: 168,649 lines, ~11MB, 6,457 functions
 **Source path leaked in binary**: `/home/jasper/WORK/PSP_1110/SOC/vendor/insta360/pspapp/tools/cloud_proto/cloud_proto_https.cpp` (and `cloud_proto_https_c.cpp` for the C wrapper)
 

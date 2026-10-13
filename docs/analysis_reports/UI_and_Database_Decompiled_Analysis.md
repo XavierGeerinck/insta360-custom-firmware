@@ -2,7 +2,7 @@
 
 ## 1. libdatabase.so Analysis
 
-**File:** `/Users/xaviergeerinck/Projects/insta360/decompiled/libdatabase.so.c`
+**File:** `decompiled/libdatabase.so.c`
 
 ### Finding: NO SQL database at all
 
@@ -30,7 +30,7 @@ This is a **publish-subscribe data store** -- not a persistent database. It hold
 
 ## 2. libui.so Analysis
 
-**File:** `/Users/xaviergeerinck/Projects/insta360/decompiled/libui.so.c`
+**File:** `decompiled/libui.so.c`
 
 ### Complete Page/Screen Map (91 screens)
 
@@ -162,7 +162,7 @@ There is a dedicated `ui_privacy_policy_voiceprint_screen_create()` that appears
 
 ## 3. libInstaAudio.so Analysis
 
-**File:** `/Users/xaviergeerinck/Projects/insta360/decompiled/libInstaAudio.so.c`
+**File:** `decompiled/libInstaAudio.so.c`
 
 ### Audio Server Version
 

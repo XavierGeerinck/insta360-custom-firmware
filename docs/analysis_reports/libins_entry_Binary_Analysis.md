@@ -1,6 +1,6 @@
 # Comprehensive Binary Analysis Report: `libins_entry.so`
 
-**File:** `/Users/xaviergeerinck/Projects/insta360/fw_v1.1.6.6/rootfs/usr/lib/libins_entry.so`
+**File:** `fw_v1.1.6.6/rootfs/usr/lib/libins_entry.so`
 
 ## 1. Binary Metadata
 

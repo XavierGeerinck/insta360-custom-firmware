@@ -1,5 +1,10 @@
 # Insta360 Wave Firmware Deep Analysis Report
 
+> The decompiled C these reports cite (`decompiled/*.c`, with line numbers) is not
+> distributed. `scripts/decompile_version.sh` regenerates it from a stock firmware
+> image with Ghidra (into `firmwares/<version>/decompiled/`); line numbers match
+> the 1.1.6.6 image.
+
 **Date:** 2026-03-18
 **Firmware versions analyzed:** v1.0.13.6 (Oct 27, 2025) and v1.1.6.6 (Nov 28, 2025)
 **Device:** Insta360 Wave Conference Speakerphone (Model CINSABCA)
