@@ -50,7 +50,7 @@ TIM-VX C++17, exact device SDK and offline AArch64 Docker toolchain.
 - ONNX C-order `[O,I,K]` already matches native temporal-fast coefficient
   memory; a transpose or wrong depthwise multiplier must fail layout tests.
 - Native dilation is a rate, not rate-minus-one; the trained dilated control
-  must distinguish rate2 from1 before full-model execution.
+  must distinguish rate 2 from1 before full-model execution.
 - Numeric qualification must bind actual native and actual CPU bytes
   independently. Changing either must refuse without CPU session or ADB.
 - A20ms output interval is not causal latency: retain model context and
@@ -86,7 +86,7 @@ addition = {
 Missing Conv bias is `None` and lowered to FP32zero bias. Operation is
 `{"type":"ConvGraph","node_count":len(nodes)}` and numerical_policy is
 `{"atol":0.02,"rtol":0.02}`. Lowering hashes use existing canonical_json
-excluding lowering_sha256. Admit opset13, static one-input/output FP16,
+excluding lowering_sha256. Admit opset 13, static one-input/output FP16,
 at most48nodes, channels in `{2,64,80,128}`, temporal widths in `{200,400}`,
 kernels in `{1,11,13,15,17,29}`, stride/dilation1or2, explicit symmetric
 pads, group1or depthwise(group=Cin,Cout=Cin). Validate all constants/edges,
@@ -105,23 +105,23 @@ Eligibility still requires exact package qualification, not this profile ID.
 `independent_graph_oracle(record:dict, inputs:dict)->dict`;
 `validate_graph_output(record:dict, expected:bytes, observed:bytes)->dict`.
 
-- [ ] Write missing-module/refusal/layout tests, observe RED, then implement
+- [x] Write missing-module/refusal/layout tests, observe RED, then implement
   exact checkpoint hash/member/state validation and the source-matched
-  unfused Torch reference. Load weights_only and account for all84tensors.
-- [ ] Verify BNfold and classifier-to-Conv transformation against unfused
+  unfused Torch reference. Load weights_only and account for all 84tensors.
+- [x] Verify BNfold and classifier-to-Conv transformation against unfused
   FP32, then ORTFP32 and ORTFP16. Reuse serialized window/filterbank; test
-  waveform63840→400frames, epsilon0.001 and no DW/PW intermediate activation.
-- [ ] Generate deterministic silence, low-amplitude seeded noise, public
+  waveform63840→400frames, epsilon 0.001 and no DW/PW intermediate activation.
+- [x] Generate deterministic silence, low-amplitude seeded noise, public
   speech and noisy-speech windows. Freeze wave/feature/probability hashes.
   Emit original/folded FP32 and folded FP16 ONNX and18A/B/Csubgraphs with
   actual activation inputs, outputs and provenance under the exclusive
   output directory. Public speech source is NVIDIA's model-card example:
   `https://dldata-public.s3.us-east-2.amazonaws.com/2086-149220-0033.wav`.
-- [ ] Implement the exact record interface and NumPy oracle. Test actual
+- [x] Implement the exact record interface and NumPy oracle. Test actual
   coefficient order/depthwise groups, wrongdilation, broadcasting, changed
   parameters, graph wiring, nonfinite/output-bound and stale identities.
   Add profile dispatch without broadening either existing PoC17 profile.
-- [ ] Run meaningful focused tests, old importer/regression checks and lint;
+- [x] Run meaningful focused tests, old importer/regression checks and lint;
   commit owned code. Record full reference/export/fixture receipts.
 
 ## Task2 — Native graph source generation
@@ -133,23 +133,23 @@ Eligibility still requires exact package qualification, not this profile ID.
 **Interfaces:** same generate/validate_compile_source and execute_source
 signatures as native_sources, consuming the shared graph record.
 
-- [ ] Write source-policy tests showing wrong root, edited template,
+- [x] Write source-policy tests showing wrong root, edited template,
   altered constants, extra native call and premature alarm cancellation
   refusal; observeRED before implementation.
-- [ ] Derive fixed compiler lifecycle from immutable PoC17 template; emit
+- [x] Derive fixed compiler lifecycle from immutable PoC17 template; emit
   numeric identifiers and bit-pattern arrays only. Conv nodes use actual
   FP16weights and exactly converted FP32bias; depthwise multiplier1,
   dense multiplier0, explicit pads `{L,R,0,0}`, stride `{s,1}`, dilation
   `{d,1}`. Bind Add/Relu with exact same-shape tensors. Retain operations and
   tensors until teardown, then release all before PASS.
-- [ ] Validate graph records before generation. New remote roots are
+- [x] Validate graph records before generation. New remote roots are
   `/tmp/wave-npu-onnx18-<loweringhex16>-compile`/`-execute`; executables keep
   versioned filenames. Reuse pinned input-file executor lifecycle with
   generated tensor sizes/shapes and operation `fp16-marblenet`.
-- [ ] Source equality/template hashes control admission. Verify exactly
+- [x] Source equality/template hashes control admission. Verify exactly
   one size query/export and one Compile/Run, guarded canary after Compile,
   atomic output and alarm through teardown. Build only offline on host.
-- [ ] Run source/layout/refusal tests and oldsource regressions; commit owned
+- [x] Run source/layout/refusal tests and oldsource regressions; commit owned
   changes and retain a report. No device calls from this task.
 
 ## Task3 — Package bridge and numerical qualification
@@ -157,19 +157,19 @@ signatures as native_sources, consuming the shared graph record.
 **Modify:** `npu_onnx_native_lab.py`, its focused tests, minimal shared
 `npu_compile_lab.py`/`npu_erf_execution_lab.py` and `native_backend.py`.
 
-- [ ] Write RED tests for new-profile byte-size bounds, actualoutput parsing,
+- [x] Write RED tests for new-profile byte-size bounds, actualoutput parsing,
   numeric failure, preserved oldexact policy and noCPU/ADB on changed evidence.
-- [ ] Derive PoC18 roots/policies from profile, keep oldpackage manifests
+- [x] Derive PoC18 roots/policies from profile, keep oldpackage manifests
   byte-identical and extend service/diagnostic gates to18. Bound file reads
   by exact tensor contracts up to8MiB rather than32bytes for newprofile.
-- [ ] Preserve native output hex/file bytes in envelope; compare them to
+- [x] Preserve native output hex/file bytes in envelope; compare them to
   independent oracle with fixed policy. Retain actualORTCPU output bytes,
   CPU evidence, independent reference and native bytes with separate hashes.
   Require successful numerical/cleanup evidence in qualified loading.
-- [ ] Strict native sessions use NumPy only and the pinned comparison;
+- [x] Strict native sessions use NumPy only and the pinned comparison;
   hybrid latches CPU fallback after onefailed dispatch. Oldprofiles remain
   byte-exact and all four existing qualified packages reload unchanged.
-- [ ] Run affected bridge/parser/execution and ONNX regression checks. Build
+- [x] Run affected bridge/parser/execution and ONNX regression checks. Build
   inspected compiler packages for18A–D. Independent source review must pass
   before any new live call; controller executes device operations only.
 
@@ -204,7 +204,7 @@ tests; document exact binary/API identities before execution.
   and fullboundary cost. Separate process/ADB startup from graph timing and
   state preprocessing/context costs. Report slowdown as readily as speedup.
 - [ ] Provide explicit hostfile-oriented command for qualified MarbleNet
-  VAD, usingexisting nativebackend and CPUpre/postprocessing; no production
+  VAD, using existing nativebackend and CPUpre/postprocessing; no production
   wavedservice integration. Test model/input/qualification tamper refusal.
 
 ## Task6 — Final review, durable evidence and completion
@@ -212,12 +212,12 @@ tests; document exact binary/API identities before execution.
 **Create:** PoC18notebook, MarbleNet guide and sanitized result ledger.
 **Update:** NPU/ONNX README and COMPUTE_HARDWARE with observed coverage only.
 
-- [ ] Actualqualified strictload/changed-artifact checks create noCPU/ADB.
+- [x] Actualqualified strictload/changed-artifact checks create noCPU/ADB.
   Finalglobalhealth compares identical systempaths; inspect allderivedroots
   absent and no nativeprocess remains. Preserve rawdiagnostics privately.
-- [ ] Independently review source and actualnative/evidence/timing claims;
+- [x] Independently review source and actualnative/evidence/timing claims;
   resolve material findings with targeted regression tests.
-- [ ] Record exactversions/checkpoint/model/build/NBG/output/evidence hashes,
+- [x] Record exactversions/checkpoint/model/build/NBG/output/evidence hashes,
   tolerances, lookahead and explicit failures. Keep futuremodel expansion
   separate from exactqualification. Mark plan steps honestly and commitowned
   changes without push, merge or service deployment.
@@ -228,3 +228,49 @@ Work remains in theexisting `feat/m3` checkout to retain exactSDK/runtime
 evidence. The user's `go` approves the preceding recommendation and design;
 source discovery refines fixed preprocessing/operator details. Rawprogress
 and scoped rulings are recorded at `artifacts/npu/poc18/progress.md`.
+
+## Observed compiler stop and independent CPU completion
+
+18A and18B compiled, executed and qualified. 18C was rejected during the
+size query at the trained depthwise K29/rate 2 node; remote exit 5, no NBG,
+no timeout or captured device-health/kernel delta, and cleanup CLEAN.
+Vendor teardown emitted force-release warnings. The fourth compile and
+dependent full-model NPU/32-pair comparison are skipped, with no retry.
+This is a failure of this exact graph signature; no universal dilation or
+kernel-size hardware limit is inferred. Actual native budget: three
+compiler processes/five export API calls/two Runs.
+
+The complete model instead receives an explicit hybrid CPU frontend and
+one independent Wave CPU-only baseline. This does not submit a graph to
+the NPU or repeat the rejected control. The baseline uses frozen full
+FP32 ONNX (actual IR8), stock ORT1.15.1/API15/CPUExecutionProvider, one
+thread,4 warm and 32 measured CPU calls,8s native watchdog through ORT
+teardown and12s host deadline. It has its own immutable source/build
+review, fixed read-only files and exact inventory/health cleanup.
+
+- [x] Host full-model hybrid frontend: four clips,100% of800 decisions
+  match source-matched original FP32, no ADB/native calls. Real strict
+  frontend refuses before features/inference/transport.
+- [x] Independent source, ELF and host-harness review for CPU-only baseline.
+- [x] Execute CPU-only baseline once; retain actual output and raw timings,
+  or a precise negative with no retry. No CPU-versus-NPU speedup claim.
+- [x] Final state/root comparison and durable notebook/result ledger/guide.
+  Whole-experiment kernel history remains inconclusive; retained post-negative
+  diagnostic chain and each run gate pass. Independent final review recorded separately.
+
+Task4/5 unchecked full-model native items above are intentionally skipped
+by the compiler stop, not outstanding authorized live calls. Final closure
+records the negative and CPU fallback rather than marking them passed.
+
+CPU-only outcome: one process,36 CPU calls (4warm+32measured), zero
+NPU calls. Actual FP32 output exact to host ORT reference; speech decisions
+200/200 match original FP32. Median Run8.547625ms and prepared-feature
+boundary8.630792ms; p95boundary8.824513ms. Cleanup CLEAN. Final global
+state hashes/services/boot/parameters match and all8 roots are absent.
+Initial global diagnostic marker aged out; original comparisonFAIL retained
+and assessmentPARTIAL records unresolved whole-experiment kernel continuity.
+Ccleanup→preCPU→final diagnostic chainPASS, as do all individual run gates.
+
+Final independent review4 PASS for the accurately reported experimental
+outcome and implemented tooling. Full NPU qualification is not claimed;
+global health remains PARTIAL with the historical diagnostic gap explicit.

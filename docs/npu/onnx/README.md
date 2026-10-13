@@ -6,6 +6,12 @@ the qualified FP16 Conv and quantized U8 FC routes. See the
 qualification evidence and commands. The PoC 9 control plane documented
 below remains the default; its approval registry stays empty.
 
+PoC18 adds a bounded trained Conv/Add/Relu graph profile. The exact
+MarbleNet pointwise and residual blocks qualified on NN; its dilated
+depthwise block was rejected and the complete NPU model remains
+unqualified. The [MarbleNet guide](marblenet.md) documents the real model,
+explicit CPU fallback, fixed audio window and measured limits.
+
 ## Historical PoC 9E/9F result
 
 **PoC:** 9E/9F

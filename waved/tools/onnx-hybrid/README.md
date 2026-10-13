@@ -10,6 +10,14 @@ imports single-node FP16 Conv or U8 QLinearMatMul graphs and delegates
 hash-bound compilation and execution to the repository's bounded ADB lab
 bridge. Each exact model needs its own successful device qualification.
 
+The bounded `fp16-marblenet-v1` graph profile also imports actual trained
+Conv/Add/Relu graphs. PoC18 qualified MarbleNet's pointwise and first
+residual blocks; its K29/dilation2 depthwise control was rejected. The
+complete model therefore uses the explicit file-oriented hybrid CPU
+frontend, and strict mode refuses its unqualified native package. See the
+[MarbleNet guide](../../../docs/npu/onnx/marblenet.md) for the command,
+optional Torch feature environment, fixed window and evidence.
+
 Use the [native backend guide](../../../docs/npu/onnx/native-backend.md) for
 the supported tensor contracts, package lifecycle and device commands.
 

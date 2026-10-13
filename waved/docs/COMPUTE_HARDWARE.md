@@ -57,16 +57,38 @@ Research continuation and remaining routes:
    removed and captured health stayed unchanged. See the
    [native backend guide](../../docs/npu/onnx/native-backend.md) and
    [PoC 17 notebook](../../docs/npu/lab-notebook/2026-10-13-poc17-onnx-native-backend.md).
-4. **Remaining model-specific work.** Other shapes, multi-layer graphs,
+4. **Real trained model (PoC18, 2026-10-13).** MarbleNet's trained
+   pointwise/folded-BN/Relu and first residual block (depthwise/pointwise,
+   projection, Add and Relu) exported on NN and ran once each. Maximum
+   activation errors were0.001953125 and0.00048828125, within the new
+   finite `0.02+0.02*abs(reference)` policy. The exact trained depthwise
+   K29, dilation2, group64 control failed kernel initialization before an
+   NBG existed. Its exit5 had no captured device-health/kernel delta and
+   cleanup removed the owned root; vendor teardown emitted force-release
+   warnings. Full-model NPU execution/performance remain unqualified.
+   Native TIM-VX dilation is a rate: `{2,1}` maps temporal dilation2 to
+   OpenVX gap1. This rejection does not prove a universal dilation/kernel
+   limit. The complete VAD has an explicit CPU fallback and about1.46s
+   future context despite20ms output spacing. See the
+   [MarbleNet guide](../../docs/npu/onnx/marblenet.md) and
+   [PoC18 notebook](../../docs/npu/lab-notebook/2026-10-13-poc18-trained-marblenet.md).
+   The full FP32 graph independently passed36 CPU-only calls on stock
+   ORT1.15.1, one thread, with exact host-reference output. Median Run was
+   8.55ms; input-copy/Run/softmax boundary8.63ms (p95 8.82ms) per3.99s
+   prepared-feature window, excluding feature extraction and orchestration.
+   Every call's captured health passed. Final state hashes/services/boot/
+   parameters match and all roots are absent; whole-experiment kernel
+   history is inconclusive because the initial diagnostic marker aged out.
+5. **Remaining model-specific work.** Other shapes, multi-layer graphs,
    additional operator/dtype pairs and one-weight serializer differentials
    need separate qualification. The two first-run timings are correctness
    observations, not performance measurements.
-5. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
+6. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
    Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
    6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
    (`VIP9000NANOS_PID0X1000000E`) SDK. Either pairs with public acuitylite
    6.57.1 (ovxlib 1.2.30).
-6. **E0, Khadas `aml_npu_sdk`.** Public; its Acuity device file
+7. **E0, Khadas `aml_npu_sdk`.** Public; its Acuity device file
    `VIPNANOQI_PID0X1E` targets `VIP9000NANOS_PID0X1000000E`, but its 6.4.8
    simulator writes NBG v1 (`0x0001000F`). The earlier rejection
    (`sample-add.nb`) failed on the product field first, so whether the driver
