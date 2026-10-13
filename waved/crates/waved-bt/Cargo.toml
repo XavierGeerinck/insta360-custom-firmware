@@ -12,3 +12,7 @@ waved-uart = { path = "../waved-uart" }
 tokio = { workspace = true, features = ["sync"] }
 crossbeam-channel.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+# The HID watches, to check that the phone's volume sends the computer no key.
+waved-hid = { path = "../waved-hid" }

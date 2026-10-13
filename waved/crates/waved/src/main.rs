@@ -637,6 +637,8 @@ async fn run_async(
                 bus.audio.subscribe(),
                 ev_tx.clone(),
                 Arc::clone(&hid_stats),
+                // The phone's volume unmuting the speaker (waved-bt) sends no key.
+                Arc::clone(&bus.pending_speaker_mute),
             );
             let _mmh = waved_hid::watch::spawn_mic_mute_watch(
                 bus.audio.subscribe(),

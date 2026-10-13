@@ -242,13 +242,15 @@ impl Core {
 }
 
 /// Where the phone's volume goes: the speaker's volume and mute on the bus,
-/// as any other volume change (persisted by waved-settings). The change is
-/// marked as not the Wave's own, so the HID volume watch does not step the
-/// computer's volume for it (`StateBus::host_pending_speaker_vol`).
+/// as any other volume change (persisted by waved-settings). Both changes
+/// are marked as not the Wave's own before either command goes, so the HID
+/// watches send the computer no volume step and no mute key for them
+/// (`StateBus::host_pending_speaker_vol`, `StateBus::pending_speaker_mute`).
 pub struct Speaker {
     commands: broadcast::Sender<BusCommand>,
     audio: watch::Receiver<AudioState>,
-    echo: Arc<AtomicI32>,
+    echo_volume: Arc<AtomicI32>,
+    echo_mute: Arc<AtomicI32>,
 }
 
 impl Speaker {
@@ -256,7 +258,8 @@ impl Speaker {
         Self {
             commands: bus.commands.clone(),
             audio: bus.audio.subscribe(),
-            echo: Arc::clone(&bus.host_pending_speaker_vol),
+            echo_volume: Arc::clone(&bus.host_pending_speaker_vol),
+            echo_mute: Arc::clone(&bus.pending_speaker_mute),
         }
     }
 
@@ -268,9 +271,13 @@ impl Speaker {
         };
         let commands = volume::speaker_commands(target, volume, muted);
         for command in &commands {
-            if let BusCommand::SetSpeakerVolume(v) = command {
-                self.echo.store(i32::from(*v), Ordering::Release);
+            match command {
+                BusCommand::SetSpeakerVolume(v) => self.echo_volume.store(i32::from(*v), Ordering::Release),
+                BusCommand::SetSpeakerMute(m) => self.echo_mute.store(i32::from(*m), Ordering::Release),
+                _ => {}
             }
+        }
+        for command in &commands {
             let _ = self.commands.send(command.clone());
         }
         commands
@@ -1311,6 +1318,78 @@ mod tests {
             }
             for f in frames.iter().map(Command::frame) {
                 assert!(!OTA.contains(&f.cmd), "{:#04x}", f.cmd);
+            }
+        }
+    }
+
+    mod speaker {
+        use super::super::Speaker;
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+        use waved_hid::stats::HidStats;
+        use waved_hid::watch::{spawn_mute_watch, spawn_volume_watch};
+        use waved_state::{Command as BusCommand, StateBus};
+
+        /// waved-audio's speaker commands (`AudioService::set_speaker_muted`):
+        /// unmuting below 10 % raises the volume to 10 %. It yields after
+        /// each, so the watches see every state on the way, as they may on
+        /// the device (other threads).
+        fn spawn_audio(bus: &StateBus) {
+            let mut commands = bus.commands.subscribe();
+            let audio = std::sync::Arc::clone(&bus.audio);
+            tokio::spawn(async move {
+                while let Ok(command) = commands.recv().await {
+                    match command {
+                        BusCommand::SetSpeakerMute(muted) => {
+                            audio.send_if_modified(|s| {
+                                if s.speaker_muted == muted {
+                                    return false;
+                                }
+                                s.speaker_muted = muted;
+                                if !muted && s.speaker_volume < 10 {
+                                    s.speaker_volume = 10;
+                                }
+                                true
+                            });
+                        }
+                        BusCommand::SetSpeakerVolume(v) => audio.send_modify(|s| s.speaker_volume = v),
+                        _ => {}
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn the_phones_volume_never_sends_a_key_to_the_computer() {
+            // (speaker volume, muted, the phone's target) → the speaker after.
+            let cases = [
+                ((5, true), 5, (10, false)),
+                ((60, true), 60, (60, false)),
+                ((30, true), 50, (50, false)),
+                ((8, true), 20, (20, false)),
+                ((40, false), 70, (70, false)),
+                ((40, false), 0, (0, false)),
+                ((40, true), 0, (0, true)),
+            ];
+            for ((volume, muted), target, after) in cases {
+                let bus = StateBus::new();
+                bus.audio.send_modify(|s| {
+                    s.speaker_volume = volume;
+                    s.speaker_muted = muted;
+                });
+                let (tx, mut keys) = mpsc::channel(64);
+                let marker = std::sync::Arc::clone(&bus.host_pending_speaker_vol);
+                let _v = spawn_volume_watch(bus.audio.subscribe(), tx.clone(), HidStats::new(), 1000, marker);
+                let mute_marker = std::sync::Arc::clone(&bus.pending_speaker_mute);
+                let _m = spawn_mute_watch(bus.audio.subscribe(), tx, HidStats::new(), mute_marker);
+                spawn_audio(&bus);
+                tokio::task::yield_now().await;
+                Speaker::from_bus(&bus).apply(target);
+                let key = tokio::time::timeout(Duration::from_millis(100), keys.recv()).await;
+                assert!(key.is_err(), "{volume} % muted {muted} → {target} %: sent {key:?}");
+                let s = bus.audio.borrow().clone();
+                assert_eq!((s.speaker_volume, s.speaker_muted), after, "{volume} % muted {muted} → {target} %");
             }
         }
     }

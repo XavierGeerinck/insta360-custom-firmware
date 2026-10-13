@@ -3728,6 +3728,7 @@ dependencies = [
  "crossbeam-channel",
  "tokio",
  "tracing",
+ "waved-hid",
  "waved-state",
  "waved-uart",
 ]
