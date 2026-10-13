@@ -143,7 +143,7 @@ pages", "Calls in waved", "Volume", "Firmware").
 | R9 | **The phone's volume sets the speaker** while the phone's audio plays, through stock's `map_volume_100`, music and call kinds alike (stock ignores the call kind). Level 0 sets 0 without muting; above 0 unmutes. Marked as not the Wave's own (no HID volume steps to the computer). | Double attenuation in calls if the module already applies the phone's call volume: drop the call kind. |
 | R10 | **Nothing goes back to the phone** when the Wave's volume changes. Stock does send `0xD0 01 / 02 / 09` (1.1.6.6 with the level, 1.2.2.6 without), not "nothing" as the doc said; what the module does with them is unknown, and an echo through `0xD5` could fight the knob. | The phone's slider does not follow the Wave. T3 tries one event by hand. |
 | R11 | **Stock's Bluetooth switch**: config `[bluetooth] enabled` (default on, waved-settings persists it), `SetBluetooth`, a switch at the end of the device row (the only target there). Off: `CloseBt`, the phone counts as gone at once, and `0xB2` bits 0-2, `0xB4`, `0xAA`, `0xB1`, `0xD1` and `0xD5` are ignored until on (stock ignores only `0xB2` bit 0 and `0xB4`; `0xAA` because the module kept answering `0xAA 01` after `CloseBt`). | If the module never drops the phone after `CloseBt`, the phone may still play through the module's own path; T6 checks. |
-| R12 | **Stock's start-up sequence** at every waved start: `SetName` until `0x8C`, `OpenBt` / `CloseBt`, `D8 01` (on) / `D8 00` (off), `SaveFlash`, versions, status, `GetName` until `0xC6`, `PtaMode(1)`, then `GetPhoneMac`. No Auto Reconnect setting: on means reconnect to the last phone, as stock's default copy reads. Stock's 10 s of `0xD0 01` volume events before it are left out (R10). | `OpenBt` / `D8 01` on a module that is already running could disturb a connected phone at every waved restart (T5); reconnect at start may bring back a phone the user disconnected before a restart. |
+| R12 | **Stock's start-up sequence** at every waved start: `SetName` until `0x8C`, `OpenBt` / `CloseBt`, `D8 01` (on) / `D8 00` (off), `SaveFlash`, versions, status, `GetName` until `0xC6`, `PtaMode(1)`, then `GetPhoneMac`. No Auto Reconnect setting: on means reconnect to the last phone, as stock's default copy reads. Stock's 10 s of `0xD0 01` volume events before it are left out (R10). | `OpenBt` / `D8 01` on a module that is already running could disturb a connected phone at every waved restart (T5); reconnect at start may bring back a phone the user disconnected before a restart. **Superseded (R16-R18):** reads first, writes only what differs, once a boot; no `D8` while a phone is connected. |
 | R13 | **Module name = `device.name`**, cut to 23 bytes, NUL-padded to stock's 23; empty → stock's `Insta360 Wave BT <serial digits>`. The mockup shows "Shows up as Wave Boardroom". Two Waves left at the default "Wave Open" show the same name. | If the module refuses or garbles a shorter name, use stock's format (`startup::module_name`). |
 | R14 | **Pair another phone asks first** (`ConfirmKind::PairAnotherPhone`), as stock's Connect New Device (supersedes R3). | One more tap. |
 | R15 | **F6 by hand only**: `ota::flash` with stock's waits, tries, CRC check and byte-exact frames (the module's size with stock's `0xAB` low byte), run only by `waved-bt-flash` (`check`, `version`, `flash … --owner-approved`, refuses while waved runs). Stricter than stock on its failure paths. | A bad flash leaves the module without Bluetooth until flashed again; the boot area is never sent and btpower is the first recovery. |
@@ -158,6 +158,31 @@ Hotspot edits (additive): `waved-state` `Command::SetBluetooth` (+ tests, a doc 
 `bt_on`); `waved-config` `BluetoothConfig` / `[bluetooth] enabled` (+ `config/default.toml`);
 `crates/waved/src/main.rs` `.with_settings(..)` and `.with_speaker(..)` on `BtService`;
 `waved-ui/src/runtime/registry.rs` one route in a test list.
+
+## Fourth round: review fixes (2026-10-13)
+
+A review of the third round before the next deploy. Research and line numbers in
+`docs/BLUETOOTH_PROTOCOL.md` ("How stock runs the module", "Start-up and the module's flash",
+"Calls in waved", "Volume"). Each fix has a test that failed first.
+
+| ID | Decision | Cost if wrong |
+|---|---|---|
+| R16 | **The module is written only when it differs, at most once a boot per value** (supersedes R12's "at every waved start"). Stock's `bt_info_init` runs once per boot; waved restarts far more (S60waved kills the first waved of every boot, restarts any that exits): every start sent `SetName`, `D8`, `SaveFlash`, so a crash loop could save the module's flash ~25,000 times a day. Now the reads come first (`OpenBt`/`CloseBt`, versions, status, `GetName`); `SetName` only when the module's name differs; `D8` only when this boot has not sent that value; `SaveFlash` only after either. What was written is noted in `/tmp/waved-bt-module` (tmpfs, emptied at boot) before the frames go. Renaming (start-up and the 5 s poll while `XXXXXX`) stops after 3 tries a boot per name (`MAX_RENAMES`). `waved-bt-flash` removes the note after flashing the module. Test first: `a_crash_loop_writes_the_module_once_per_boot`, `a_module_that_keeps_its_default_name_is_renamed_three_times_a_boot`. | A module that forgets its settings without a power cycle is not configured again until the next boot or a change of name or switch; a module that pads or cuts its name differently is renamed and saved once a boot (U1, T4). |
+| R17 | **No `D8 01` while a phone is connected.** Stock's `bt_info_init` sends `D8 <saved>` regardless (79438), but only once a boot, and turns the reconnect off (`D8 00` + `SaveFlash`) as soon as it sees the phone (75955). waved sends no `D8` at all then: no frame, no flash write. Test first: `a_phone_already_connected_is_not_sent_a_reconnect`. | The module's reconnect stays as its flash has it while that phone is connected (stock's net state would be off). Decided by `0xAA` / `0xB2` arriving before `0xC6`; if they come later, `D8 01` goes as before. |
+| R18 | **Each start-up step reads the switch when it comes** (`OpenBt`/`CloseBt`, `D8`), so Bluetooth switched off while the start-up waits is not reopened by a queued `OpenBt` / `D8 01` / `SaveFlash`. Test first: `switching_off_during_the_start_up_is_not_undone`. | None known: the steps follow the switch's last word. |
+| R19 | **The phone's volume never sends the computer a key.** The speaker gets the volume first, then the unmute, at no less than waved-audio's 10 % unmute floor; both changes are marked before either command goes (`host_pending_speaker_vol`, and a new `StateBus::pending_speaker_mute` that `spawn_mute_watch` consumes on that edge, or drops when no edge can come). Setting the volume marker first alone would not do: the unmute's 10 % floor is a second change. Test first: `the_phones_volume_never_sends_a_key_to_the_computer` (a stray volume-up at 5 %, a `ConsumerMute` on unmute). | The computer's mute no longer follows a speaker the phone unmuted (F10 toggles, so one press may mute instead); from muted, a 5 % phone level plays at 10 %. |
+| R20 | **The call screen comes back after a reset.** Once shown for a call, the router puts it back, ringing or answered, after anything that reset the stack under it (a recording's decision, USB storage, a base navigate or `ToBase`, a relock on rest): its Hang up is the only one on the Wave. Back still keeps it away for that call; a call already up when the Wave first heard of it still shows nothing. Chosen over a Home "In a call" entry: one flag in `Router`, no new control or golden. Test first: `an_answered_call_comes_back_after_its_screen_was_reset_away`. | After Back during an answered call, Hang up is reachable only on the phone (as before); a Home entry would be the next step. |
+| R21 | **A call up without its audio ends after 60 s without news** (`call::QUIET_CALL_MS`, the ring's own bound): answered on the Wave or on the phone, the call audio never opened here, and no `0xB1` with its number, `0xD1 00` or `HFP  Call active` for a minute. Without it a missed end kept "In a call" and the lit screen for ever. Test first: `a_call_that_never_opens_its_audio_here_ends_after_a_minute_without_news`. | A call answered on the phone with its audio there shows "In a call" for one minute only; if the phone then moves the audio to the Wave, it plays without a call screen. |
+| R22 | **UART parse errors are logged once, then counted** (`waved-uart` mux): the first error, then "N more frame parse errors in the last 60 s, the last: …" at most once a minute. Test first: `parse_errors_log_the_first_then_a_count_at_most_once_a_minute`. | A burst shows as one line a minute; the exact time of each error is gone. |
+
+Files: `waved-bt/src/{startup,call,volume,lib}.rs`, `src/bin/waved-bt-flash.rs`, `Cargo.toml`
+(dev-dependency on `waved-hid` for the end-to-end volume test); `waved-hid/src/watch.rs`;
+`waved-uart/src/mux.rs`; `waved-ui/src/kit/{router.rs,README.md}`; docs.
+
+Hotspot edits (additive): `waved-state` `StateBus::pending_speaker_mute` (+ a test);
+`crates/waved/src/main.rs` one more argument to `spawn_mute_watch`
+(`Arc::clone(&bus.pending_speaker_mute)`); not compiled on macOS (sqlx), check it with
+`scripts/linux-test.sh check -p waved --features ui,capture-alsa` before the deploy.
 
 ## Files
 
@@ -218,17 +243,56 @@ trace line names each received frame's prefix, command byte and length, never it
 `parsed frame: 75 45 cmd 0xc6, 24 data bytes, target Bluetooth`). Stop the watchdog and start
 waved with `setsid` as in `waved/CLAUDE.md`.
 
+### Review fixes (R16-R22)
+
+Log as above. `/tmp/waved-bt-module` is the start-up's note of what it wrote to the module
+this boot (`name <hex>`, `renames n`, `reconnect 0|1`); it holds no phone data.
+
+- **U1. The module's flash once a boot (R16, R17).** Reboot the Wave (S60waved kills the first
+  waved after 5 s; the second runs). `cat /tmp/waved-bt-module`: `reconnect 1`, and
+  `name …` / `renames 1` only if the module's name had to change. With the debug log:
+  `grep -E "bt: sends 0x(8b|d8|e0)" <log>` shows each at most once since the boot. Then
+  `killall waved` three times (watchdog on, ~3 s apart): no `0x8b`, `0xd8` or `0xe0` after the
+  first start, the note unchanged, and Menu → Bluetooth still shows the right name. Change
+  `device.name`: one `0x8b` and one `0xe0`, no `0xd8`; `renames 1` for the new name. Reboot
+  with a phone that reconnects by itself, connected before waved starts: no `0xd8` at start
+  (`reconnect` missing from the note); record whether `0xAA`/`0xB2` arrived before `0xC6`.
+- **U2. Switching off during the start-up (R18).** Too quick to time by hand (the module
+  answers within ~100 ms and the screen is not up yet); covered by
+  `switching_off_during_the_start_up_is_not_undone`. Only check T6's restart-while-off still
+  starts closed (`0xcb` first, `0xd8 00` only on the first start of a boot).
+- **U3. The phone's volume sends the computer nothing (R19).** Music from the phone through
+  the Wave, USB to the Mac. Mute the Wave's speaker from the Mac (F10). Press the phone's
+  volume up: the Wave unmutes and plays (`bt: the phone's volume sets the speaker to N %`); the
+  Mac shows no mute or volume change (its HUD does not appear). Mute again, take the phone's
+  volume to its lowest step: the Wave plays at 10 % (Home's volume), again with nothing on the
+  Mac. Then the Wave's own volume (Home, Quieter / Louder) still steps the Mac.
+- **U4. The call screen comes back (R20).** Set a PIN, open Menu → Bluetooth (PIN), call the
+  phone and Answer on the Wave ("In a call", Hang up). Let the screen rest (dim time), wake
+  it: the call screen with Hang up is there, not Home. Hang up works. Repeat with Back on the
+  call screen first: Home, and the call screen does not come back for that call.
+- **U5. A call without audio ends (R21).** Answer on the phone with the audio on the phone (the
+  Wave says "In a call" through `0xD1 00` or `HFP  Call active`), stay in the call for two
+  minutes: within ~60 s of the module's last word, `bt: no call audio and no news of the call
+  for 60 s: call over here`, the screen leaves and Home no longer says "In a call". Note any
+  `bt: call ringing` (debug repeats) or `bt module: HFP …` lines during the call: each restarts
+  the minute.
+- **U6. Parse errors (R22).** If `frame parse error` ever shows in `waved.log`, it shows once,
+  then at most one `more frame parse errors in the last N s` line a minute.
+
 ### Third round (R7-R15)
 
 Log with `RUST_LOG=waved_bt=debug,waved_uart=trace` as above. Note every answer in
 `docs/BLUETOOTH_PROTOCOL.md` ("Open" and the sections named).
 
 - **T0. Start-up.** Fresh start of waved: `grep -E "bt_srv started|bt:|bt module" /tmp/waved.log`.
-  Expect `bt_srv started, Bluetooth on`, then `bt: sends 0x..` (debug) in this order: `0x8b`
-  (once if `0x8C` comes, up to 10 × 1.1 s if not), `0xcc`, `0xd8`, `0xe0`, `0x91`, `0x93`,
-  `0xc5` (`GetStatus` is not logged), `0xea`, `0xc7`. Record whether
-  `0x8C`, `0xE0` and `0xEB` come back, and with which prefix. The phone that was connected
-  before the restart: still connected after 30 s? (T5).
+  Expect `bt_srv started, Bluetooth on`, then `bt: sends 0x..` (debug) in this order (R16):
+  `0xcc`, `0x91`, `0x93` (`GetStatus` is not logged), `0xc5` (once if `0xC6` comes, up to
+  10 × 1.1 s if not); then, only on the first start of a boot or a new name, `0x8b` (if the
+  name differs; once if `0x8C` comes), `0xd8` (unless a phone is connected), `0xe0` and `0xc5`
+  again after a rename; then `0xea`, `0xc7`. Record whether `0x8C`, `0xE0` and `0xEB` come
+  back, and with which prefix. The phone that was connected before the restart: still
+  connected after 30 s? (T5).
 - **T1. Call answered on the phone** (the bug). Phone connected, Wave idle. Call it; the Wave
   shows Incoming call. Answer **on the phone** with the audio on the phone. Expect within 3 s
   of the ring ending: the screen leaves (`bt: the call audio closed: call over here` if the
@@ -244,7 +308,7 @@ Log with `RUST_LOG=waved_bt=debug,waved_uart=trace` as above. Note every answer 
   phone's volume keys: `grep -E "PhoneVolume|phone's volume sets" /tmp/waved.log` shows
   `bt: PhoneVolume { kind: Music, level: n, max: 15|16 }` (debug) and
   `bt: the phone's volume sets the speaker to N %` (info); Home's volume follows the steps
-  0, 5, 10, 20 … 100; the computer's volume does not move. Pause the music and change the
+  0, 5, 10, 20 … 100; the computer's volume and mute do not move (U3). Pause the music and change the
   phone's volume: no change on the Wave. During a call, the phone's keys change the Wave's
   level (`kind: Call`). If no `PhoneVolume` line ever appears, look for
   `bt module: app_bt_avrcp_ct_vol_change` / `AVRCP_CTYPE_CONTROL @remote vol change` /
@@ -259,15 +323,20 @@ Log with `RUST_LOG=waved_bt=debug,waved_uart=trace` as above. Note every answer 
   restart. Menu → Bluetooth shows "Shows up as Wave Boardroom" (the module's own `0xC6`
   answer); a phone's Bluetooth list shows "Wave Boardroom" (no trailing garbage). If the
   screen keeps "Insta360 Wave BT …", note whether `0x8C` came (T0) and try a 23-character
-  name. Then empty `device.name`: stock's name comes back.
+  name. Then empty `device.name`: stock's name comes back. Each new name costs one `0x8b` +
+  `0xe0`; a restart with the same name sends neither (U1). If every boot renames a module
+  that already shows the right name, its `0xC6` pads or cuts the name differently: record
+  the bytes' length (`bt module name …` at info shows the text).
 - **T5. `OpenBt` at start with a phone connected.** Phone connected and playing; restart waved
   (`killall waved`, watchdog on). Does the music stop, the phone drop, `RECONN_START!` show?
-  Record how long until the screen shows the phone again.
+  Record how long until the screen shows the phone again. Since R16/R17 only `OpenBt` and the
+  reads reach the module on such a restart (no `D8`, no `SaveFlash`).
 - **T6. The switch.** Phone connected and playing. Menu → Bluetooth: tap the switch off. Expect
   at once: "Bluetooth off", no Disconnect or pairing; log `bt: SetBluetooth(false)`;
   `waved_uart` sends `CB`; the music stops; Menu shows "Bluetooth Off". Within 60 s does the
   phone show the Wave disconnected? Call the phone: the Wave shows nothing. Restart waved: it
-  starts off (`bt_srv started, Bluetooth off`, `CB` and `D8 00` at start;
+  starts off (`bt_srv started, Bluetooth off`, `CB` at start, and `D8 00` + `E0` once, as the
+  switch's value changed this boot (R16);
   `grep -A1 "\[bluetooth\]" /data/waved/config.toml` says `enabled = false`). Switch on:
   `CC 00`; the phone reconnects (from the phone if not by itself) and shows "Connected".
 - **T7. Pair another phone asks.** Phone A connected: tap Pair another phone. The

@@ -101,6 +101,11 @@ matches `AUDIO_HARDWARE.md`. **[file]**
      - `GetName`, retried until `0xC6` arrives.
      - `PtaMode`: 1 when a Wi-Fi chip exists (Wi-Fi/BT coexistence;
        **[inferred]** from the name).
+
+     It runs once per pspapp start (and after `bt_force_reset`), and checks
+     nothing first: not the module's name, not a connected phone (`D8
+     <saved>` goes out regardless, 79438). waved reads first and writes
+     only what differs ("Start-up and the module's flash").
   3. Every 5 s it sends `Heartbeat` (`0xB3`: battery, charging, Wi-Fi),
      `GetStatus` (`0xA9`) and `PhoneMode(1)` (`0x97`). It sends `SetName` and
      `GetName` again while the stored name still contains "XXXXXX".
@@ -215,7 +220,7 @@ column, byte for byte.
 
 | Byte | Stock name | Data | Reply | Stock use | waved |
 |------|-----------|------|-------|-----------|-------|
-| `0x8B` | CTRL_SET_NAME | the name, 23 bytes | `0x8C` | at boot; on each heartbeat while unnamed | yes: at start (`device.name`) |
+| `0x8B` | CTRL_SET_NAME | the name, 23 bytes | `0x8C` | at boot; on each heartbeat while unnamed | yes: `device.name`, at start when the module's name differs, and on the 5 s poll while unnamed; at most 3 tries a boot per name |
 | `0x91` | CTRL_GET_VERSION | — | `0x91` `[?] ascii` | at boot | yes |
 | `0x93` | CTRL_GET_BUILDTIME | — | `0x93` `[?] ascii` | at boot | yes |
 | `0x97` | CTRL_BT_PHONE_MODE | mode (stock always sends 1) | `0x97` | every 5 s | yes |
@@ -236,8 +241,8 @@ column, byte for byte.
 | `0xCE` | CTRL_24G_DISCONNECT | `00` | — | dongle | no |
 | `0xD0` | CTRL_BUTTON_EVENT | event, `time(NULL)` as a u32 LE, a level byte (the volume for events 1, 2, 9 in 1.1.6.6; 0 or unset otherwise) | `0xD0` | call buttons; recording state; the Wave's volume while the phone plays | yes: call buttons |
 | `0xD7` | CTRL_CLOSE_CONNECT_REPLY | reply | — | answers `0xD6` | yes |
-| `0xD8` | CTRL_RECONNECT_SWITCH | 0/1; 2 at factory reset | — | at boot (the setting); the Auto Reconnect switch; 0 after each connect; 2 at factory reset | yes: at start (1 when on), 0 before Disconnect and Pair |
-| `0xE0` | CTRL_BT_CONFIG_SAVE_FLASH | `00` | `0xE0` | at boot, after a connect, at power off | yes: at start |
+| `0xD8` | CTRL_RECONNECT_SWITCH | 0/1; 2 at factory reset | — | at boot (the setting); the Auto Reconnect switch; 0 after each connect; 2 at factory reset | yes: at start (1 when on, 0 when off) once per boot per value, not while a phone is connected; 0 before Disconnect and Pair |
+| `0xE0` | CTRL_BT_CONFIG_SAVE_FLASH | `00` | `0xE0` | at boot, after a connect, at power off | yes: at start, only after a `SetName` or `D8` of that start |
 | `0xE2`–`0xE5` | LL/BT data test modes | 2–3 bytes | — | factory | no |
 | `0xE6` | GET_DONGLE_VERSION | `00` | `0xE8` | update | yes |
 | `0xE7` | GET_DONGLE_BUILDTIME | `00` | `0xE9` | — | yes |
@@ -385,14 +390,23 @@ leaves the ringing or in-call state on every sign it has:
 |---|---|---|
 | ringing | in a call | `0xD1 00`; Answer on the Wave (at once, as stock); module log `HFP  Call active`; 60 s without `0xB1` while the call audio (bit 2) is open |
 | ringing | no call | `0xD1 01`; an empty `0xB1`; Decline on the Wave (at once); the phone gone or Bluetooth switched off; module log `HFP call end` or `HFP RFCOMM_CLOSED`; the call audio open during the ring, then closed for 3 s; 60 s without `0xB1` |
-| in a call | no call | `0xD1 01`; an empty `0xB1`; Hang up on the Wave (at once); the phone gone or switched off; `HFP call end` / `HFP RFCOMM_CLOSED`; the call audio open during the call, then closed for 3 s |
+| in a call | no call | `0xD1 01`; an empty `0xB1`; Hang up on the Wave (at once); the phone gone or switched off; `HFP call end` / `HFP RFCOMM_CLOSED`; the call audio open during the call, then closed for 3 s; the call audio never open since the call went up and 60 s without news of it |
 
 - The module log lines are the module's own fixed messages (0.0.0.28 and
   0.0.0.33): `HFP  Call active` (two spaces), `HFP call end`,
   `HFP RFCOMM_CLOSED`. Whether the module sends them over the UART at its
   log level is unverified (checklist T1).
 - A call that went up with its audio closed (answered on the phone, audio
-  there) stays "In a call" until `0xD1 01` or a log line, as on stock.
+  there; or answered on the Wave and the module never opened the call
+  audio) stays "In a call" while the module says so, and ends 60 s after
+  its last word (`call::QUIET_CALL_MS`, the ring's own bound): the number
+  again (`0xB1`), `0xD1 00` or `HFP  Call active`. Stock would keep its
+  calling page until `0xD1 01`; with no bound a missed end kept "In a call"
+  and the lit screen for ever. **Cost if wrong:** a call answered on the
+  phone with its audio there, which the module stays silent about, shows
+  "In a call" for one minute only; if the phone then moves the call audio
+  to the Wave, the audio plays but no call screen (and no Hang up) shows,
+  as the call audio alone starts no call.
 - Each `0xB1` with the same number restarts the 60 s; stock has no such
   timeout. Networks hand an unanswered call to voicemail after 20–30 s.
 - After Decline or Hang up on the Wave, the same number does not ring again
@@ -448,8 +462,11 @@ leaves the ringing or in-call state on every sign it has:
   `0x8C` arrives (10 tries, 1 s apart, 79416), and on each 5 s heartbeat
   while the module's name still contains `XXXXXX` (75122). **[code]**
   waved sends `device.name` (the mockup's "Shows up as Wave Boardroom"),
-  cut at 23 bytes on a character boundary and NUL-padded to 23, at start
-  and with the same retries; an empty `device.name` sends stock's name.
+  cut at 23 bytes on a character boundary and NUL-padded to 23, with the
+  same retries, only when the module's own name (`GetName`, read first)
+  differs, and at most 3 times a boot for one name (start-up and the 5 s
+  poll together; see "Start-up and the module's flash"); an empty
+  `device.name` sends stock's name.
   Whether the module accepts a NUL-padded shorter name is unverified
   (checklist T4: the screen's "Shows up as" is the module's own `0xC6`
   answer). **Cost if wrong:** the module keeps or garbles the name; the fix
@@ -688,10 +705,20 @@ and the business build handle `0xD5` the same way (1.1.6.6 65441, 62590).
   if the module also scales the call audio by the phone's volume, quiet
   calls get quieter; drop `VolumeKind::Call` in `speaker_target`.
 - `SetSpeakerVolume` on the bus, so it is saved like any volume change.
-  Level 0 sets 0 without muting (a mute would also toggle the computer's
-  mute through HID); a level above 0 unmutes, as stock. The value is marked
-  in `StateBus::host_pending_speaker_vol`, so the HID volume watch does not
-  step the computer's volume for it.
+  Level 0 sets 0 without muting; a level above 0 unmutes, as stock: the
+  volume first, then `SetSpeakerMute(false)`, at no less than waved-audio's
+  10 % unmute floor (from muted, a 5 % level unmutes at 10 %).
+- **The phone's volume never sends the computer a key.** Both changes are
+  marked before either command goes: the volume in
+  `StateBus::host_pending_speaker_vol`, the unmute in
+  `StateBus::pending_speaker_mute`, which the HID mute watch consumes on that
+  edge (and drops when no edge can come). Before (review 2026-10-13), the
+  unmute reached the computer as a `ConsumerMute` key, and at a 5 % level
+  the unmute's 10 % floor sent a stray volume-up key (only the final 5 %
+  was marked). **Cost if wrong:** the computer's mute no longer follows a
+  speaker the phone unmuted; macOS's F10 toggles the Wave's speaker mute
+  (`ToggleSpeakerMute`), so one press may mute it instead of unmuting.
+  With a 5 % phone level and a muted Wave, the speaker plays at 10 %.
 - An unknown scale is ignored (stock would mute).
 - **The Wave's own volume is not sent to the phone.** Stock's `0xD0 1/2/9`
   events are unverified on this module (what they do, whether the phone's
@@ -914,12 +941,15 @@ acknowledgement never waits behind a read). `main.rs` hands it the bus with
 `.with_settings(Settings::new(config.bluetooth.enabled, &config.device.name))`
 and the speaker with `.with_speaker(Speaker::from_bus(&bus))`.
 
-- At start it sends stock's `bt_info_init` (79400): `SetName(device.name)`
-  until `0x8C` (10 tries, 1.1 s apart), `OpenBt` or `CloseBt` from config,
-  `AutoReconnect` (1 when on, 0 when off; waved has no Auto Reconnect
-  setting), `SaveFlash`, `GetVersion`, `GetBuildTime`, `GetStatus`,
-  `GetName` until `0xC6`, `PtaMode(1)` (the Wave always has its Wi-Fi
-  chip), then waved's `GetPhoneMac`. Stock's 10 s of `0xD0 01` volume
+- At start it sends stock's `bt_info_init` (79400) with the reads first and
+  the writes only when needed (see "Start-up and the module's flash"
+  below): `OpenBt` or `CloseBt`, `GetVersion`, `GetBuildTime`, `GetStatus`,
+  `GetName` until `0xC6`; then `SetName(device.name)` until `0x8C` if the
+  name differs, `AutoReconnect` (1 when on, 0 when off; waved has no Auto
+  Reconnect setting) if this boot has not sent it and no phone is
+  connected, `SaveFlash` after either (and `GetName` again after a rename);
+  then `PtaMode(1)` (the Wave always has its Wi-Fi chip) and waved's
+  `GetPhoneMac`. Stock's 10 s of `0xD0 01` volume
   events before it are left out. It acknowledges every `75 45` frame but `0xE0` with
   stock's bytes, and no `75 46` frame (`command::ack_for_frame`; see
   "Acknowledgements and replies"), and polls `GetStatus` every 5 s once the
@@ -953,10 +983,11 @@ and the speaker with `.with_speaker(Speaker::from_bus(&bus))`.
   `0xAA 00`, `0xE1` with its MAC, three `0xB4` reports without a phone) also
   clears the call, `phone_audio` and `call_audio`, so I2 closes `hw:0,0`.
   `pairing` (bit 3) is the module's own and stays.
-- **Name:** `SetName(device.name)` at start; `0xC6` fills
-  `BluetoothState::advertised_name`, which the Bluetooth screen shows
-  ("Shows up as …", and large while pairing). While it still contains
-  `XXXXXX` the 5 s poll sends `SetName` and `GetName` again, as stock.
+- **Name:** `SetName(device.name)` at start when the module's name differs;
+  `0xC6` fills `BluetoothState::advertised_name`, which the Bluetooth screen
+  shows ("Shows up as …", and large while pairing). While it still contains
+  `XXXXXX` the 5 s poll sends `SetName` and `GetName` again, as stock, but
+  within the boot's 3 tries for that name.
 - **Privacy:** the phone book (`0xB0`) is dropped unread. No log line at any
   level carries a phone's name, MAC or a number (`log_line`, tested on every
   event that carries one). Module log lines (`0xF0`) show only as one of the
@@ -968,12 +999,59 @@ and the speaker with `.with_speaker(Speaker::from_bus(&bus))`.
   only, and so does the `waved-uart` reader's trace line (plus the prefix).
   `BtCall`'s `Debug` hides the number.
 
-It saves the module's flash only at start (stock also saves after each
-connect and at power off: not done), sends no `0xB3` heartbeat or
-`PhoneMode`, and never flashes (`waved-bt-flash` does, by hand). The plan and
-the device-pass checklist are in
-`docs/superpowers/plans/2026-10-13-m3-i1-i3-i4-bt-control.md` (third round:
-T1-T9).
+It saves the module's flash only at start, and only when that start wrote a
+name or the reconnect switch (stock also saves after each connect and at
+power off: not done), sends no `0xB3` heartbeat or `PhoneMode`, and never
+flashes (`waved-bt-flash` does, by hand). `waved-uart`'s reader logs the
+first frame parse error, then their count at most once a minute
+(`waved.log` is on the small `/data`). The plan and the device-pass
+checklist are in `docs/superpowers/plans/2026-10-13-m3-i1-i3-i4-bt-control.md`
+(third round: T1-T9; review fixes: U1-U6).
+
+### Start-up and the module's flash (review 2026-10-13)
+
+Stock runs `bt_info_init` once per boot: pspapp starts once. waved starts
+far more often: `S60waved` kills the first waved of every boot after 5 s
+and restarts any waved that exits within ~3 s, so stock's sequence at
+every start (`SetName`, `D8`, `SaveFlash`) would save the module's flash at
+every restart, about 25,000 times a day in a crash loop; and while the
+name held `XXXXXX`, `SetName` + `GetName` went out every 5 s without end.
+Whether `SetName` and `D8` write the flash by themselves is unknown; stock
+follows them with `SaveFlash` at boot.
+
+waved (`crates/waved-bt/src/startup.rs`):
+
+1. `OpenBt` / `CloseBt`, as the switch is at that moment (stock's switch
+   never saves the module, 74413-74473).
+2. The reads: `GetVersion`, `GetBuildTime`, `GetStatus`, `GetName` until
+   `0xC6` (10 tries, 1.1 s apart).
+3. `SetName` until `0x8C`, only when the module's name differs from
+   `device.name`, and at most 3 times a boot for that name (`MAX_RENAMES`,
+   the start-up and the 5 s poll together).
+4. `AutoReconnect`, as the switch is at that moment, only when this boot
+   has not sent that value and no phone is connected (stock turns the
+   reconnect off, `D8 00`, as each phone connects, 75955, and its
+   `bt_info_init` sends `D8 <saved>` regardless at its once-per-boot start).
+5. `SaveFlash` only when 3 or 4 sent something, then `GetName` again after a
+   rename. Then `PtaMode(1)` and `GetPhoneMac`.
+
+What a start wrote is noted in `/tmp/waved-bt-module` (`startup::Stamp`:
+the name in hex, its tries, the `D8` value) before the frames go, so a
+waved killed right after sending them does not send them again. `/tmp` is
+a tmpfs, emptied at boot, so the first start of every boot configures the
+module as stock does. A new `device.name` or switch state is a new value:
+written once more. `waved-bt-flash` removes the note after flashing the
+module. Each step reads the switch when it comes, so turning Bluetooth off
+while the start-up waits is not undone by a queued `OpenBt` or `D8 01`.
+
+**Cost if wrong:** if the module forgets its name or reconnect switch
+without a power cycle (a module reset by itself), waved does not write them
+again until the next boot or a change of `device.name` / the switch (the
+name is still read and retried within the boot's 3 tries). With a phone
+connected at the first start of a boot, the module's reconnect stays as its
+flash has it (stock would send `D8 01`, then `D8 00` + `SaveFlash` as it saw
+the phone). A module that answers `GetName` with spaces after the name, or
+cut shorter, is renamed and saved once a boot (T4).
 
 ## Implementation outline
 
@@ -1196,6 +1274,8 @@ adb shell 'arecord -D hw:0,0 -c 2 -r 48000 -f S16_LE -d 5 /tmp/bt-in.wav; ls -l 
   call (T1).
 - Whether `0xD5` arrives from an iPhone with module 0.0.0.28 (T2), and what
   stock's `0xD0 01 / 02 / 09` volume events do (T3).
-- What `OpenBt` at every start does to a phone already connected (T5).
+- What `OpenBt` at every start does to a phone already connected (T5; `D8`
+  is no longer sent while one is). Whether `SetName` or `D8` write the
+  module's flash without `SaveFlash`.
 - MAC byte order.
 - The module's exact Telink part.

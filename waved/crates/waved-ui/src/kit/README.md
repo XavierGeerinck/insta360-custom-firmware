@@ -208,8 +208,11 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 - **Call takeover (I3).** While a Bluetooth call rings, `Router::sync` puts `IncomingCall` on
   top of whatever shows, a recording included (it keeps running underneath), and under the
   resting screen when resting. Back dismisses it until that call ends; it stays, as "In a
-  call", once answered; it leaves when the call ends. Never during start-up, first start, an
-  install or power off. `UiSnapshot::in_call` counts an active Bluetooth call.
+  call", once answered; it leaves when the call ends. Once shown for a call it comes back,
+  ringing or answered, after anything that resets the stack under it (a pending decision, USB
+  storage, a base navigate or `ToBase`, a relock on rest), since its Hang up is the only one on
+  the Wave; only Back keeps it away. Never during start-up, first start, an install or power
+  off. `UiSnapshot::in_call` counts an active Bluetooth call.
 - **USB storage takeover (G1).** While `snap.usb_storage.phase` is not Off (Starting, On,
   Stopping), `Router::sync` makes `UsbStorage` the base and drops everything above it; only
   `Confirm(StopUsbStorage)`, `Confirm(PowerOff)`, a ringing call and the resting screen go on

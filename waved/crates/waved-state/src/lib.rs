@@ -953,6 +953,13 @@ pub struct StateBus {
     /// HID events, breaking the feedback loop (Mac F11 → mixer → state →
     /// HID → Mac F11 again). Sentinel `-1` = no pending host echo.
     pub host_pending_speaker_vol: Arc<AtomicI32>,
+    /// Echo-suppress marker for the HID mute key: a speaker mute change
+    /// the Wave did not make on its own (the phone's volume unmuting the
+    /// speaker, waved-bt). Its writer stores the state it is about to set
+    /// (1 muted, 0 unmuted) before sending the command; `spawn_mute_watch`
+    /// consumes it on that edge and sends no `ConsumerMute`. Sentinel `-1`
+    /// = none.
+    pub pending_speaker_mute: Arc<AtomicI32>,
 }
 
 impl Default for StateBus {
@@ -998,6 +1005,7 @@ impl StateBus {
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
+            pending_speaker_mute: Arc::new(AtomicI32::new(-1)),
         }
     }
 }
@@ -1012,6 +1020,14 @@ mod tests {
         let audio = bus.audio.subscribe();
         assert!(!audio.borrow().mic_muted);
         assert_eq!(audio.borrow().mode, AudioMode::Omni);
+    }
+
+    #[test]
+    fn the_echo_markers_start_empty() {
+        use std::sync::atomic::Ordering;
+        let bus = StateBus::new();
+        assert_eq!(bus.host_pending_speaker_vol.load(Ordering::Acquire), -1);
+        assert_eq!(bus.pending_speaker_mute.load(Ordering::Acquire), -1);
     }
 
     #[test]

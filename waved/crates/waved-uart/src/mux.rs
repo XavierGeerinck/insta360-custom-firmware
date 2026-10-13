@@ -1,8 +1,8 @@
-use crate::frame::{Frame, FrameParser, FrameTarget};
+use crate::frame::{Frame, FrameError, FrameParser, FrameTarget};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use serialport::SerialPort;
 use std::io::Read;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
 /// A frame with priority for the write queue.
@@ -83,13 +83,14 @@ impl UartMux {
 
     fn reader_loop(mut port: Box<dyn SerialPort>, bt_tx: Sender<Frame>, mcu_tx: Sender<Frame>) {
         let mut parser = FrameParser::new();
+        let mut errors = ParseErrors::default();
         let mut buf = [0u8; 64];
 
         loop {
             match port.read(&mut buf) {
                 Ok(n) => {
                     for &byte in &buf[..n] {
-                        if handle_byte(byte, &mut parser, &bt_tx, &mcu_tx).is_err() {
+                        if handle_byte(byte, &mut parser, &mut errors, &bt_tx, &mcu_tx).is_err() {
                             return;
                         }
                     }
@@ -101,6 +102,9 @@ impl UartMux {
                     error!("UART read error: {e}");
                     std::thread::sleep(Duration::from_millis(100));
                 }
+            }
+            if let Some(line) = errors.due(Instant::now()) {
+                warn!("{line}");
             }
         }
     }
@@ -134,6 +138,7 @@ impl UartMux {
 fn handle_byte(
     byte: u8,
     parser: &mut FrameParser,
+    errors: &mut ParseErrors,
     bt_tx: &Sender<Frame>,
     mcu_tx: &Sender<Frame>,
 ) -> Result<(), ()> {
@@ -151,11 +156,64 @@ fn handle_byte(
                 }
             }
             Err(e) => {
-                warn!("frame parse error: {e}");
+                if let Some(line) = errors.on_error(&e, Instant::now()) {
+                    warn!("{line}");
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Parse errors in the log at most once a minute. At 921600 a noisy line or
+/// a wrong speed gives thousands a second, and `waved.log` lives on the small
+/// `/data` (S60waved keeps 2 MB and one old copy): the first error is logged
+/// as it comes, every later one is counted, and the count goes to the log at
+/// most once a minute with the last error's text.
+#[derive(Debug, Default)]
+struct ParseErrors {
+    /// When the last line went to the log; `None` until the first error.
+    logged_at: Option<Instant>,
+    /// Errors since that line.
+    unlogged: u64,
+    last: Option<String>,
+}
+
+impl ParseErrors {
+    const EVERY: Duration = Duration::from_secs(60);
+
+    /// The line to log for an error at `now`: the first error only.
+    fn on_error(&mut self, e: &FrameError, now: Instant) -> Option<String> {
+        if self.logged_at.is_none() {
+            self.logged_at = Some(now);
+            return Some(format!(
+                "frame parse error: {e} (further ones are counted, one line a minute)"
+            ));
+        }
+        self.unlogged += 1;
+        self.last = Some(e.to_string());
+        None
+    }
+
+    /// The count line, when errors came since the last line and a minute has
+    /// passed since it. The reader asks after every read (at least every
+    /// 100 ms, its timeout).
+    fn due(&mut self, now: Instant) -> Option<String> {
+        let at = self.logged_at?;
+        let since = now.saturating_duration_since(at);
+        if self.unlogged == 0 || since < Self::EVERY {
+            return None;
+        }
+        let line = format!(
+            "{} more frame parse errors in the last {} s, the last: {}",
+            self.unlogged,
+            since.as_secs(),
+            self.last.take().unwrap_or_default()
+        );
+        self.unlogged = 0;
+        self.logged_at = Some(now);
+        Some(line)
+    }
 }
 
 /// A frame for the trace log: its prefix, command byte and length, never its
@@ -176,6 +234,7 @@ fn describe(frame: &Frame) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const REPORT_EVERY: Duration = ParseErrors::EVERY;
 
     fn channels() -> (Sender<Frame>, Receiver<Frame>, Sender<Frame>, Receiver<Frame>) {
         let (bt_tx, bt_rx) = bounded::<Frame>(16);
@@ -234,6 +293,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_errors_log_the_first_then_a_count_at_most_once_a_minute() {
+        // At 921600 a noisy line or a wrong speed gives thousands of errors a
+        // second; waved.log lives on the small /data.
+        let bad = || FrameError::ChecksumMismatch { expected: 0x12, actual: 0x34 };
+        let t0 = Instant::now();
+        let mut errors = ParseErrors::default();
+        let first = errors.on_error(&bad(), t0).expect("the first is logged");
+        assert!(first.contains("checksum mismatch"), "{first}");
+        for ms in 1..=5_000 {
+            assert_eq!(errors.on_error(&bad(), t0 + Duration::from_millis(ms)), None);
+        }
+        assert_eq!(errors.due(t0 + REPORT_EVERY - Duration::from_millis(1)), None);
+        let count = errors.due(t0 + REPORT_EVERY).expect("a count after a minute");
+        assert!(count.starts_with("5000 more frame parse errors"), "{count}");
+        assert_eq!(errors.due(t0 + 2 * REPORT_EVERY), None, "nothing new, nothing logged");
+        // A burst later: counted again, reported a minute after the last report.
+        let later = t0 + 3 * REPORT_EVERY;
+        assert_eq!(errors.on_error(&bad(), later), None);
+        let line = errors.due(later).expect("over a minute since the last line");
+        assert!(line.starts_with("1 more frame parse errors"), "{line}");
+        assert_eq!(errors.on_error(&bad(), later + Duration::from_secs(1)), None);
+        assert_eq!(errors.due(later + Duration::from_secs(59)), None);
+    }
+
+    #[test]
     fn standalone_button_bytes_are_ignored_as_heartbeat_corruption() {
         // On-device measurement (see AUDIO_HARDWARE.md): the MCU emits a 0x4B
         // heartbeat byte ~every 0.5 s and individual bytes get corrupted with
@@ -245,7 +329,7 @@ mod tests {
         for byte in [0x48u8, 0x49, 0x4A] {
             let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
             let mut parser = FrameParser::new();
-            handle_byte(byte, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(byte, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
             assert!(
                 mcu_rx.try_recv().is_err(),
                 "standalone {byte:#04x} must not emit a frame",
@@ -265,7 +349,7 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
 
         let frame = mcu_rx.try_recv().expect("expected the real battery frame");
@@ -285,7 +369,7 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
 
         let frame = mcu_rx.try_recv().expect("expected the real frame");
@@ -297,7 +381,7 @@ mod tests {
     fn heartbeat_byte_does_not_emit_anything() {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
-        handle_byte(0x4B, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        handle_byte(0x4B, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         assert!(mcu_rx.try_recv().is_err());
     }
 
@@ -311,9 +395,9 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
-        handle_byte(0x4A, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        handle_byte(0x4A, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
 
         let first = mcu_rx.try_recv().expect("battery frame");
         assert_eq!(first.data, payload.to_vec());

@@ -83,10 +83,18 @@ pub fn spawn_volume_watch(
 /// Subscribe to `audio_rx` and emit `ConsumerMute` on each transition of
 /// `speaker_muted`. Additionally emits `TelephonyPhoneMute` when the
 /// snapshot at the moment of the edge has `call_off_hook == true`.
+///
+/// `pending_speaker_mute` is the StateBus echo-suppress marker for a change
+/// the Wave did not make on its own (`StateBus::pending_speaker_mute`: the
+/// phone's volume unmuting the speaker). An edge to the marked state
+/// consumes it and sends nothing. A marker for the state the speaker is
+/// already in, seen without an edge (its command changed nothing), is
+/// dropped, so it never swallows a later edge of the Wave's own.
 pub fn spawn_mute_watch(
     mut audio_rx: watch::Receiver<AudioState>,
     events: mpsc::Sender<HidEvent>,
     stats: Arc<HidStats>,
+    pending_speaker_mute: Arc<AtomicI32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last = audio_rx.borrow().speaker_muted;
@@ -95,10 +103,17 @@ pub fn spawn_mute_watch(
                 let g = audio_rx.borrow();
                 (g.speaker_muted, g.call_off_hook)
             };
+            let marked = pending_speaker_mute.load(Ordering::Acquire) == i32::from(snap_muted);
+            if marked {
+                pending_speaker_mute.store(-1, Ordering::Release);
+            }
             if snap_muted == last {
                 continue;
             }
             last = snap_muted;
+            if marked {
+                continue;
+            }
             if events.try_send(HidEvent::ConsumerMute).is_err() {
                 stats.glue_drops.fetch_add(1, Ordering::Relaxed);
                 warn!("hid: mute_watch dropped ConsumerMute (queue full)");
@@ -236,7 +251,7 @@ mod tests {
     async fn mute_watch_emits_consumer_mute_on_toggle() {
         let (tx, rx) = watch::channel(AudioState::default());
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new());
+        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new(), Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await; // let the task reach .changed()
         tx.send_modify(|s| s.speaker_muted = true);
         let ev = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
@@ -249,7 +264,7 @@ mod tests {
         s.call_off_hook = true;
         let (tx, rx) = watch::channel(s);
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new());
+        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new(), Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await; // let the task reach .changed()
         tx.send_modify(|s| s.speaker_muted = true);
         let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
@@ -263,11 +278,57 @@ mod tests {
     async fn mute_watch_ignores_no_op_changes() {
         let (tx, rx) = watch::channel(AudioState::default());
         let (ev_tx, mut ev_rx) = mpsc::channel(16);
-        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new());
+        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new(), Arc::new(AtomicI32::new(-1)));
         tokio::task::yield_now().await; // let the task reach .changed()
         tx.send_modify(|s| s.speaker_muted = false);
         let t = tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await;
         assert!(t.is_err(), "expected no event without an edge");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mute_watch_skips_an_edge_the_wave_did_not_make() {
+        // The phone's volume unmutes the speaker (waved-bt): the marker is
+        // stored before the command, so the computer gets no mute key.
+        let mut s = AudioState::default();
+        s.speaker_muted = true;
+        s.call_off_hook = true;
+        let (tx, rx) = watch::channel(s);
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let pending = Arc::new(AtomicI32::new(-1));
+        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new(), Arc::clone(&pending));
+        tokio::task::yield_now().await;
+        pending.store(0, Ordering::Release);
+        tx.send_modify(|s| s.speaker_volume = 30); // another change first: no edge
+        tokio::task::yield_now().await;
+        assert_eq!(pending.load(Ordering::Acquire), 0, "kept for its edge");
+        tx.send_modify(|s| s.speaker_muted = false);
+        let t = tokio::time::timeout(Duration::from_millis(50), ev_rx.recv()).await;
+        assert!(t.is_err(), "no ConsumerMute, no TelephonyPhoneMute: {t:?}");
+        assert_eq!(pending.load(Ordering::Acquire), -1, "consumed");
+        // The Wave's own mute after it still reaches the computer.
+        tx.send_modify(|s| s.speaker_muted = true);
+        let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
+        assert_eq!(a, HidEvent::ConsumerMute);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mute_watch_drops_a_marker_for_the_state_it_already_has() {
+        // The phone unmuted a speaker that was already unmuted: no edge will
+        // come, so the marker must not swallow the Wave's next unmute.
+        let (tx, rx) = watch::channel(AudioState::default());
+        let (ev_tx, mut ev_rx) = mpsc::channel(16);
+        let pending = Arc::new(AtomicI32::new(-1));
+        let _h = spawn_mute_watch(rx, ev_tx, HidStats::new(), Arc::clone(&pending));
+        tokio::task::yield_now().await;
+        pending.store(0, Ordering::Release);
+        tx.send_modify(|s| s.doa_confidence = 0.5);
+        tokio::task::yield_now().await;
+        assert_eq!(pending.load(Ordering::Acquire), -1);
+        for muted in [true, false] {
+            tx.send_modify(|s| s.speaker_muted = muted);
+            let a = tokio::time::timeout(Duration::from_millis(200), ev_rx.recv()).await.unwrap().unwrap();
+            assert_eq!(a, HidEvent::ConsumerMute, "muted {muted}");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

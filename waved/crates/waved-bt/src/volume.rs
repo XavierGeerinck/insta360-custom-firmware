@@ -22,9 +22,11 @@
 //! **waved** maps both kinds with stock's `map_volume_100`, while the phone's
 //! audio plays on the speaker (`0xB2` bit 1 or 2, waved's equivalent of
 //! stock's `BT_IN` path): a phone's volume keys work in a call too (stock
-//! ignores them there). A level of 0 sets the volume to 0 without muting
-//! (muting would also toggle the computer's mute through HID); a level
-//! above 0 unmutes, as stock does. An unknown scale is ignored rather than
+//! ignores them there). A level of 0 sets the volume to 0 without muting;
+//! a level above 0 unmutes, as stock does, at no less than waved-audio's
+//! 10 % unmute floor ([`speaker_commands`]). The phone's changes never reach
+//! the computer: `Speaker` marks the volume and the unmute for the HID
+//! watches before sending them. An unknown scale is ignored rather than
 //! muting. Nothing goes back to the phone when the Wave's own volume changes
 //! (see the doc: stock's `0xD0` volume events are unverified on this module).
 
@@ -59,17 +61,26 @@ pub fn speaker_target(kind: VolumeKind, level: u8, max: u8, s: &BluetoothState) 
     }
 }
 
+/// waved-audio's unmute floor (`AudioService::set_speaker_muted`): unmuting
+/// a speaker below 10 % raises it to 10 %.
+pub const UNMUTE_FLOOR: u8 = 10;
+
 /// The bus commands that bring the speaker from `volume` / `muted` to
-/// `target`: unmute first (so its 10 % floor does not override a 5 % target),
-/// then the volume. Nothing when it is already there.
+/// `target`: the volume, then the unmute, so each changes the speaker once
+/// and `Speaker` can mark both for the HID watches. A muted speaker unmutes
+/// at [`UNMUTE_FLOOR`] at least: a 5 % target from muted ends at 10 %
+/// (unmuting first and then setting 5 % would pass through 10 %, a change
+/// no marker covers, and the computer would get a volume key). Nothing when
+/// it is already there.
 pub fn speaker_commands(target: u8, volume: u16, muted: bool) -> Vec<BusCommand> {
-    let target = u16::from(target);
+    let unmute = target > 0 && muted;
+    let target = u16::from(if unmute { target.max(UNMUTE_FLOOR) } else { target });
     let mut out = Vec::new();
-    if target > 0 && muted {
-        out.push(BusCommand::SetSpeakerMute(false));
-    }
-    if volume != target || (target > 0 && muted && volume < 10) {
+    if volume != target {
         out.push(BusCommand::SetSpeakerVolume(target));
+    }
+    if unmute {
+        out.push(BusCommand::SetSpeakerMute(false));
     }
     out
 }
@@ -123,15 +134,17 @@ mod tests {
     }
 
     #[test]
-    fn the_speaker_gets_the_volume_and_is_unmuted_first() {
+    fn the_speaker_gets_the_volume_then_is_unmuted() {
         use BusCommand::{SetSpeakerMute, SetSpeakerVolume};
         assert_eq!(speaker_commands(50, 80, false), [SetSpeakerVolume(50)]);
         assert!(speaker_commands(50, 50, false).is_empty(), "already there");
         assert_eq!(speaker_commands(60, 60, true), [SetSpeakerMute(false)]);
-        assert_eq!(speaker_commands(60, 30, true), [SetSpeakerMute(false), SetSpeakerVolume(60)]);
-        // Unmuting below 10 % raises the volume to 10 % (waved-audio): set
-        // the 5 % again after it.
-        assert_eq!(speaker_commands(5, 5, true), [SetSpeakerMute(false), SetSpeakerVolume(5)]);
+        assert_eq!(speaker_commands(60, 30, true), [SetSpeakerVolume(60), SetSpeakerMute(false)]);
+        // Unmuting below 10 % raises the volume to 10 % (waved-audio): from
+        // muted, 5 % unmutes at 10 %, one change of each.
+        assert_eq!(speaker_commands(5, 5, true), [SetSpeakerVolume(10), SetSpeakerMute(false)]);
+        assert_eq!(speaker_commands(5, 10, true), [SetSpeakerMute(false)]);
+        assert_eq!(speaker_commands(5, 40, false), [SetSpeakerVolume(5)], "unmuted: 5 % as asked");
         // 0 sets the volume to 0 and leaves the mute alone.
         assert_eq!(speaker_commands(0, 40, false), [SetSpeakerVolume(0)]);
         assert_eq!(speaker_commands(0, 40, true), [SetSpeakerVolume(0)]);
