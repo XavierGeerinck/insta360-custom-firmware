@@ -121,8 +121,8 @@ removes it when it finds it (either earlier version) and keeps its other steps
 
 Still to measure (device pass below): v3 with the real volume (an empty LUN
 was tested), whether macOS locks the medium, the computer's eject, a pulled
-cable, a waved restart in storage mode, and what happens to waved's own USB
-handles (below).
+cable, a waved restart in storage mode, and that waved's own USB handles come
+back by themselves (below).
 
 ## What waved does
 
@@ -288,24 +288,25 @@ From the 5.4 source (`drivers/usb/gadget/function/f_mass_storage.c`,
   always empty it, and why Stop tries the unload while still bound.
 - 5.4 has no `forced_eject`.
 
-### waved's own USB handles across the switch (open; check in the device pass)
+### waved's own USB handles across the switch (check in the device pass)
 
-The unbind takes the gadget's functions down and the bind brings them up new:
-f_uac2's ALSA card (`hw:1`) is freed and a new one created, and `/dev/hidg0`
-belongs to a new `hid.0` (the old one went with its link).
-
-- waved's UAC bridges (`uac-downstream`, `uac-upstream`) retry their opens
-  every second: audio to and from the computer comes back by itself.
-- waved's UAC mixer poll (`waved-audio` `uac/control.rs`: Mac volume and mute →
-  Wave) keeps the old card's mixer and does not reopen it: likely stops until
-  waved restarts.
-- waved-hid's writer disables itself on its first failed write ("disabling HID
-  until restart") and its reader ends or blocks on the old device: Wave's
-  volume keys → Mac, the PC link (Wave Controller) and the call LEDs likely
-  stop until waved restarts.
-
-Not fixed here (other crates): reopen `/dev/hidg0` and the `hw:1` mixer on
-error. The device pass checks each after a storage round trip.
+The unbind takes the gadget's functions down and the bind brings them up new,
+on the way in and again on the way back: f_uac2's ALSA card (`hw:1`) is freed
+and a new one created, and `/dev/hidg0` belongs to a new `hid.0` (the old one
+went with its link). Every waved handle on them comes back by itself, tried
+once a second, each outage logged once (its first failure and its end): the
+UAC bridges reopen `hw:1,0` on error; the mixer poll (`waved-audio`
+`mixer_poll`, Mac volume and mute → Wave) drops the old card's mixer when its
+events fail (ENODEV), opens `hw:1` again, writes Wave's volume and mute into
+the new card (it starts at the kernel's defaults) and only then reads it, so
+the defaults are never taken for the Mac's; the HID key writer, the reader
+(call LEDs, the Wave Controller's requests) and the PC link's writer
+(`waved-hid` `node`) check before using their handle that `/dev/hidg0` is
+still the node they opened (device and inode; a read waits at most 1 s), open
+it again when not or after an error, and keep keys and replies that wait for
+it (bounded, oldest dropped first, none sent more than 10 s late). The check
+comes before the error because Linux 5.4 `f_hid` frees `hid.0` under open
+files: a read or write on the old node may never return.
 
 Still open: the upload worker does not look at `/proc/mounts`: at boot, before
 stock's `udisk_fix` mounts the volume, an upload could find its file missing
@@ -343,11 +344,20 @@ switch kills.
    storage:" /data/waved/waved.log | tail -30; dmesg | tail -60'`: the file is
    there, the mount options as before, the links and configuration string as
    in 0, the LUN empty, one adbd, no notes, no `crg_issue_command time out`.
-   Audio: play music on the Mac through Wave and talk into it. Then check
-   waved's USB handles (above): the Mac's volume keys move Wave's speaker
-   volume; Wave's volume buttons move the Mac's; the Wave Controller app
-   connects. Note each in this doc; a `waved` restart (`killall waved`) is the
-   workaround until they reopen.
+   Audio: play music on the Mac through Wave and talk into it. Then waved's
+   USB handles (above), without restarting waved:
+   - the Mac's volume keys (or its menu-bar slider) change Wave's speaker
+     volume and F10 mutes it, as they did before the session;
+   - Wave's Louder/Quieter move the Mac's volume (one Mac step per press, no
+     ping-pong back);
+   - the Wave Controller app connects and answers (PC link), e.g. it shows
+     Wave's volume and a change there reaches Wave;
+   - `grep -E "uac-control|hid|pclink" /data/waved/waved.log | tail -30`: per
+     switch at most one failure line and one "is back"/"again"/"new node" line
+     each for the mixer, the key writer, the reader and the PC link, no line
+     repeating every second.
+   If one stays dead, note it here with its log lines; `killall waved` (the
+   watchdog restarts it) is the workaround.
 2. **Stop without ejecting.** Start, wait for the drive, Stop USB storage →
    Stop. If macOS locked the medium: "Eject Wave on the computer first" and the
    screen stays; eject in Finder and it leaves. If not: storage stops and the
