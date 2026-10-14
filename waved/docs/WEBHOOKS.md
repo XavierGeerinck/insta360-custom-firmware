@@ -1,7 +1,7 @@
 # Recording webhooks
 
 Wave can deliver each finalized meeting to a generic HTTP endpoint. Delivery is
-durable: the WAV and metadata are committed locally first, the queue survives a
+durable: the audio and metadata are committed locally first, the queue survives a
 restart, and the meeting UUID is reused as the idempotency key for every retry.
 
 ## Configure on the phone

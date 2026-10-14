@@ -104,6 +104,7 @@ the file before it saves, so your edits stay.
 | `time.zone` | `"UTC"` | IANA time zone name, for example `"Europe/Brussels"`. |
 | `time.clock_24h` | `true` | Show 14:30 instead of 2:30 pm. |
 | `recording.pre_recording` | `false` | Keep the last 30 seconds in memory so Record includes them. |
+| `recording.format` | `"opus"` | `"opus"` (Ogg Opus, about 15 MB an hour) or `"flac"` (lossless, about 200 MB an hour). Applies to the next recording. |
 | `recording.ask_timeout_s` | `60` | With `upload_mode = "ask"`, an unanswered recording is kept on the Wave after this many seconds (15 to 600). |
 | `tones.enabled` | `true` | Sounds for mute, volume, and recording start and stop. |
 | `api.endpoint` | `""` | Webhook URL for recordings. Empty keeps them on the Wave. |
@@ -127,8 +128,10 @@ if your server wants one. Use `https://`; a plain `http://` URL also needs
 **Allow insecure HTTP**.
 
 For each recording it uploads, the Wave sends one `POST` with three parts: the
-meeting ID, a JSON metadata file and the audio as a WAV file (mono, 48 kHz,
-16-bit).
+meeting ID, a JSON metadata file and the audio, mono at 48 kHz, in the
+recording's format: Ogg Opus (`audio/ogg; codecs=opus`) by default, or FLAC
+(`audio/flac`) if you chose it. Take the format from the part's
+`Content-Type` rather than assume one.
 The meeting ID is also the `Idempotency-Key` header, so your server can drop
 repeats. When you save the setup page with a webhook URL set, the Wave
 restarts and sends a small `webhook.test` request.

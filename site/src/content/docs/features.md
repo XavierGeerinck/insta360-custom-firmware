@@ -64,9 +64,13 @@ is on, the Wave keeps the last 30 seconds in memory, and Record starts the
 file with them. A teal dot leads the status pill while that buffer is filling.
 The dot goes away while the microphones are muted.
 
-Each recording is a folder in `/mnt/udisk/recordings` with `audio.wav` (mono,
-48 kHz, 16-bit) and `metadata.json`. During a call the recording holds both
-sides: the room and the far end.
+Each recording is a folder in `/mnt/udisk/recordings` with the audio (mono,
+48 kHz) and `metadata.json`. The audio is `audio.opus` (Ogg Opus at 32 kbps,
+about 15 MB an hour) by default, or `audio.flac` (lossless, about 200 MB an
+hour) if you pick FLAC in **Menu → System → Recording format** or on the setup
+page. A change applies to the next recording. Recordings made before
+2026-10-14 are `audio.wav`, and they still play and upload. During a call the
+recording holds both sides: the room and the far end.
 
 **Status:** Works, on the Wave. The one-hour and power-loss certification is
 still to do.

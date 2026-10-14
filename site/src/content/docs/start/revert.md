@@ -52,8 +52,8 @@ sudo python3 scripts/enable_adb.py
 ## What it keeps
 
 - **Your recordings.** `revert.sh` does not touch `/mnt/udisk`, so the
-  folders in `/mnt/udisk/recordings` (each with `audio.wav` and
-  `metadata.json`) stay. To copy them to your computer first:
+  folders in `/mnt/udisk/recordings` (each with its audio, `audio.opus`,
+  `audio.flac` or `audio.wav`, and `metadata.json`) stay. To copy them to your computer first:
 
   ```bash
   adb pull /mnt/udisk/recordings ./wave-recordings

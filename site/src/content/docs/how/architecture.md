@@ -56,7 +56,7 @@ commands.
 | `waved-config` | `config.toml`: its format, loading with a fall-back to `config.toml.bak` and then defaults, migration from older versions, validation, the setup page's form fields, and the PIN hash. |
 | `waved-settings` | Seeds the live settings from `config.toml` at boot and writes changes made on the Wave back to it. |
 | `waved-audio` | Capture from the eight microphones, direction of arrival, beamforming, echo cancellation, gain, the speaker's processing, USB audio (UAC2) and Bluetooth audio. Writes `/tmp/audio_stats.json` every 500 ms. |
-| `waved-meeting` | Recording: the WAV writer and the pre-recording buffer, the recordings list in SQLite, numbered speakers, webhook uploads with retries, pruning, and playback for Files. |
+| `waved-meeting` | Recording: the Opus and FLAC writers (from `waved-codec`) and the pre-recording buffer, the recordings list in SQLite, numbered speakers, webhook uploads with retries, pruning, and playback for Files. |
 | `waved-ui` | The touch screen: LVGL, the screens, navigation, gestures and the PIN gate. |
 | `waved-bt` | The Bluetooth module on `/dev/ttyS1`: pairing, disconnecting, calls and the connected phone. |
 | `waved-uart` | The `/dev/ttyS1` serial port and its frame parser, which `waved-bt` runs on. |
@@ -177,7 +177,8 @@ shows how to run them.
 
 The recording service gets the processed microphone signal, plus the far end
 of a call, from the audio service. Each recording is a folder in
-`/mnt/udisk/recordings` with `audio.wav` and `metadata.json`. The list of
+`/mnt/udisk/recordings` with `audio.opus` (or `audio.flac`, or `audio.wav`
+for recordings made before 2026-10-14) and `metadata.json`. The list of
 recordings and each one's upload state live in a SQLite database,
 `/data/waved/meetings.db`.
 
