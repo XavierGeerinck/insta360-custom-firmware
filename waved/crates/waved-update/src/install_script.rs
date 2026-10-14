@@ -1,9 +1,12 @@
 //! `deploy/install.sh` against a fake Wave. A fake `adb` maps the Wave's
-//! `/data`, `/tmp`, `/etc` and `/mnt` into a directory and runs `adb shell`
-//! scripts with `sh`; fake busybox commands (`ps`, `killall`, `pidof`,
+//! `/data`, `/tmp`, `/etc`, `/usr` and `/mnt` into a directory and runs `adb
+//! shell` scripts with `sh`; fake busybox commands (`ps`, `killall`, `pidof`,
 //! `start-stop-daemon`) log what they were asked. The watchdog and waved are
-//! real `sleep` processes, so the script's `kill` reaches something. Nothing
-//! here talks to a device.
+//! real `sleep` processes, so the script's `kill` reaches something. The USB
+//! gadget patch is the real `scripts/patch-stock-usbgadget.sh`, run on an
+//! `S89usbgadget`-shaped fixture (its `INIT` and `BACKUP_DIR` point into the
+//! fake Wave). Nothing here talks to a device. `deploy/tests/test-deploy-scripts.sh`
+//! covers the refusals and failure paths in more detail.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -12,12 +15,15 @@ use std::process::{Child, Command, Output};
 use std::time::{Duration, Instant};
 
 /// The fake `adb`: `push` copies, `shell` runs the script with `sh`, both with
-/// the Wave's paths mapped into `$FAKE_WAVE`. `$FAKE_ADB_CORRUPT` names a
-/// pushed path whose copy gets one byte too many.
+/// the Wave's paths (`/data/...` and a bare `/data` alike) mapped into
+/// `$FAKE_WAVE`. `$FAKE_ADB_CORRUPT` names a pushed path whose copy gets one
+/// byte too many.
 const ADB: &str = r#"#!/bin/sh
 printf 'adb %s\n' "$*" >> "$FAKE_WAVE/log"
 on_wave() {
-    printf '%s' "$1" | sed -E "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|mnt)/#\1$FAKE_WAVE/\2/#g"
+    printf '%s' "$1" | sed -E \
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)/#\1$FAKE_WAVE/\2/#g" \
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)([^[:alnum:]_./-]|\$)#\1$FAKE_WAVE/\2\3#g"
 }
 case "$1" in
     push)
@@ -31,10 +37,50 @@ case "$1" in
         ;;
     shell)
         shift
-        PATH="$FAKE_WAVE_BIN:$PATH" sh -c "$(on_wave "$*")"
+        INIT="$FAKE_WAVE/etc/init.d/S89usbgadget" BACKUP_DIR="$FAKE_WAVE/data/waved" \
+            PATH="$FAKE_WAVE_BIN:$PATH" sh -c "$(on_wave "$*")"
         ;;
 esac
 "#;
+
+/// Stock `S89usbgadget`, the parts the patch and install.sh's ADB-at-boot
+/// check read: `adbd_enable` commented out in both boot branches of
+/// `start_usbgadget()` (`scripts/test-patch-stock-usbgadget.sh` has the same
+/// shape).
+const STOCK_GADGET: &str = r#"#!/bin/sh
+uac_init()
+{
+	echo -100 > functions/uac2.0/c_volume_min
+	echo 1 > functions/uac2.0/c_volume_res
+	echo -100 > functions/uac2.0/p_volume_min
+	echo 1 > functions/uac2.0/p_volume_res
+}
+
+adbd_enable()
+{
+	/usr/bin/adbd &
+}
+
+function start_usbgadget(){
+    usb_dir=/sys/kernel/config/usb_gadget/amlogic
+    if [ ! -d ${usb_dir} ]
+    then
+    {
+		if [ -e $config_file ]; then
+			uac_enable
+			#adbd_enable
+		else
+			uac_enable
+			# adbd_enable
+		fi
+        sleep 4
+		usb_flash
+    }
+    fi
+}
+"#;
+
+const STOCK_DAEMON: &str = "#!/bin/sh\n/usr/bin/pspapp_daemon &\n";
 
 /// Fake `llvm-objcopy`: "strips" by appending a marker the test can see.
 const OBJCOPY: &str = r#"#!/bin/sh
@@ -142,17 +188,20 @@ impl FakeWave {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let repo = root.join("repo/waved");
-        for name in ["install.sh", "S60waved", "iptables.rules"] {
-            let to = repo.join("deploy").join(name);
+        for name in [
+            "deploy/install.sh",
+            "deploy/S60waved",
+            "deploy/S03splash",
+            "deploy/rsyslog.conf",
+            "deploy/splash.fb",
+            "deploy/iptables.rules",
+            "scripts/patch-stock-usbgadget.sh",
+            "config/default.toml",
+        ] {
+            let to = repo.join(name);
             fs::create_dir_all(to.parent().unwrap()).unwrap();
-            fs::copy(deploy_dir().join(name), &to).unwrap();
+            fs::copy(deploy_dir().join("..").join(name), &to).unwrap();
         }
-        fs::create_dir_all(repo.join("config")).unwrap();
-        fs::copy(
-            deploy_dir().join("../config/default.toml"),
-            repo.join("config/default.toml"),
-        )
-        .unwrap();
         let binary = repo.join("target/aarch64-unknown-linux-gnu/release/waved");
         fs::create_dir_all(binary.parent().unwrap()).unwrap();
         fs::write(&binary, NEW_BINARY).unwrap();
@@ -170,16 +219,22 @@ impl FakeWave {
         ] {
             write_exe(&root.join("wave-bin").join(name), text);
         }
-        for dir in ["data", "tmp", "etc/init.d", "mnt", "run"] {
+        for dir in ["data", "tmp", "etc/init.d", "usr/lib", "mnt", "run"] {
             fs::create_dir_all(root.join("wave").join(dir)).unwrap();
         }
         fs::write(root.join("wave/log"), "").unwrap();
-        Self {
+        let wave = Self {
             dir,
             processes: Vec::new(),
             corrupt: None,
             data_full: false,
-        }
+        };
+        // Stock: the gadget script the patch changes, and the start-up
+        // script and telemetry library the stubs replace.
+        wave.put("etc/init.d/S89usbgadget", STOCK_GADGET, 0o755);
+        wave.put("etc/init.d/S60pspapp_daemon", STOCK_DAEMON, 0o755);
+        wave.put("usr/lib/libapplogrs.so", "ELF", 0o755);
+        wave
     }
 
     /// A Wave that runs waved under the watchdog, with its own settings.
@@ -349,6 +404,26 @@ fn an_update_keeps_the_settings_and_swaps_a_stripped_binary_once_waved_has_exite
         wave.read("data/waved/iptables.rules"),
         fs::read_to_string(deploy_dir().join("iptables.rules")).ok()
     );
+    for (deployed, on_wave) in [
+        ("S03splash", "etc/init.d/S03splash"),
+        ("rsyslog.conf", "etc/rsyslog.conf"),
+        ("splash.fb", "data/waved/splash.fb"),
+    ] {
+        assert_eq!(
+            fs::read(wave.wave(on_wave)).ok(),
+            fs::read(deploy_dir().join(deployed)).ok(),
+            "{on_wave}:\n{log}"
+        );
+    }
+    assert_eq!(mode(&wave.wave("etc/init.d/S03splash")), 0o755);
+
+    // ADB at boot before anything stopped: the gadget patch, then its check.
+    let patch = wave.at("adb shell sh /tmp/patch-usbgadget.sh").expect(&log);
+    let check = wave.at("commented++").expect(&log);
+    let stop = wave.at("killall").expect(&log);
+    assert!(patch < check && check < stop, "{log}");
+    let gadget = wave.read("etc/init.d/S89usbgadget").unwrap();
+    assert!(!gadget.contains("#adbd_enable") && !gadget.contains("# adbd_enable"));
 
     // Watchdog stopped, waved gone, then the swap, then the watchdog again.
     assert!(wave.ended(0), "the watchdog was stopped:\n{log}");
@@ -357,6 +432,11 @@ fn an_update_keeps_the_settings_and_swaps_a_stripped_binary_once_waved_has_exite
     let start = wave.watchdog_started().expect(&log);
     assert!(exited < swap && swap < start, "{log}");
     assert_eq!(wave.log()[start], START_WATCHDOG);
+    assert_eq!(
+        wave.read("tmp/waved.old").as_deref(),
+        Some("old waved"),
+        "{log}"
+    );
 }
 
 #[test]
@@ -374,13 +454,19 @@ fn a_first_install_writes_the_default_settings_and_asks_for_a_reboot() {
         Some("new waved binary STRIPPED")
     );
     assert!(wave.read("etc/init.d/S60waved").is_some());
+    // The stubs, through the /etc and /usr mounts, never into the overlay's
+    // upper directory.
     assert_eq!(
-        wave.read("data/overlay/upper/etc/init.d/S60pspapp_daemon")
-            .as_deref(),
+        wave.read("etc/init.d/S60pspapp_daemon").as_deref(),
         Some("#!/bin/sh\n")
     );
+    assert_eq!(wave.read("usr/lib/libapplogrs.so").as_deref(), Some(""));
+    assert!(!wave.wave("data/overlay/upper").exists(), "{log}");
     assert!(wave.watchdog_started().is_none(), "{log}");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("adb reboot"));
+    // The patch's own "adb reboot" advice is not shown: one reboot hint, last.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.matches("adb reboot").count(), 1, "{stdout}");
+    assert!(stdout.trim_end().ends_with("Run: adb reboot"), "{stdout}");
 }
 
 #[test]
@@ -394,6 +480,11 @@ fn a_damaged_push_changes_nothing_and_leaves_waved_running() {
     assert!(wave.at("killall").is_none(), "{log}");
     assert!(!wave.ended(0), "the watchdog still runs");
     assert!(wave.backups().is_empty(), "{log}");
+    assert_eq!(
+        wave.read("etc/init.d/S89usbgadget").as_deref(),
+        Some(STOCK_GADGET),
+        "{log}"
+    );
 }
 
 #[test]

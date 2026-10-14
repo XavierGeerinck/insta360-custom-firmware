@@ -67,41 +67,63 @@ Still in `waved/`:
 ./deploy/install.sh
 ```
 
-The installer checks before it changes anything: that a Wave answers on ADB,
-that the build exists, that it can strip the binary, and that `/data` has room.
-Then it
+The installer checks before it changes anything: that the build exists, that
+it can strip the binary, that a Wave answers on ADB, that no over-the-air
+update is on trial, and that `/data` has room (`Checking the Wave`, `Checking
+free space on /data`). Then it
 
-1. strips the binary, copies it to the Wave's `/tmp` and checks that it
-   arrived intact (`Copying waved … to the Wave`),
-2. patches the USB gadget start-up script so ADB comes up at every boot, the
-   volume ranges work and the HID controls appear, then checks that ADB will
-   be on after a reboot (`Patching the USB gadget`). If it won't, the
-   installer stops here and the Wave still runs what it ran before,
-3. stops the stock app and any running waved (`Stopping the stock app and any
-   running waved`). If waved does not stop, it refuses to replace anything,
-4. swaps in the new waved binary (`Installing waved`),
-5. writes a default `config.toml` if the Wave has none; an existing one is kept
-   (`Writing the default config.toml`),
+1. strips the binary and copies it to the Wave's `/tmp`, with the start-up
+   scripts, the boot splash, the logging fix, the firewall rules, the USB
+   gadget patch and, if the Wave has no `config.toml` yet, the default one,
+   and checks that each one arrived intact (`Pushing to /tmp on the Wave (md5
+   checked)`),
+2. if the Wave has a `config.toml` (an update), copies it to
+   `/data/waved/config.toml.before-<UTC time>` (`Keeping a copy of
+   config.toml`). Your `config.toml` itself is never replaced,
+3. patches the USB gadget start-up script so ADB comes up at every boot, the
+   volume ranges work and the HID controls appear (`Patching the USB
+   gadget`), then checks that ADB will be on after a reboot (`Checking that
+   ADB comes up at boot`). If it won't, the installer stops here, before
+   anything is stopped, and the Wave still runs what it ran before,
+4. stops the stock app, waved's watchdog and any running waved (`Stopping
+   stock firmware, the watchdog and waved`). If waved does not exit, it
+   replaces nothing,
+5. swaps in the new waved binary (`Swapping the binary`). The old one waits in
+   `/tmp/waved.old`, and goes back in place if the new one does not fit,
 6. installs the start-up scripts, the boot splash, a logging fix that keeps
-   `/data` from filling up, and the firewall rules (`Installing start-up
-   scripts, splash, logging and firewall rules`), and
-7. last of all, switches the stock app and its telemetry library off with two
-   stubs, and reads them back to check they took (`Switching the stock app
-   and its telemetry off`).
+   `/data` from filling up, and the firewall rules (`Installing S60waved,
+   S03splash, rsyslog.conf, the splash and the firewall rules`),
+7. if the Wave had no `config.toml`, writes the default one (`Writing the
+   default config.toml`), and
+8. last of all, switches the stock app and its telemetry library off with two
+   stubs, and reads them back to check they took (`Stock pspapp off, telemetry
+   library stubbed`).
 
 The order is deliberate. A Wave without the stock app and without ADB can't
-be reached again, so nothing stock is switched off until ADB is known to come
-up at the next boot.
+be reached again, so nothing is stopped or switched off until ADB is known to
+come up at the next boot.
 
-It ends with `=== Done. Reboot the Wave to start waved: adb reboot ===`. If a
-step fails, the installer stops there and usually prints an `ERROR:` line that
-says what to do next. Messages that point to a Troubleshooting section:
-["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full)
-and ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot).
+How it ends depends on whether waved was on the Wave already:
 
-Running it again later upgrades waved and keeps your settings.
+- **A first install** (no waved on the Wave yet; the stock app ran) ends with
+  `=== Done! Reboot to start waved ===` and `Run: adb reboot`. Go on with
+  [step 4](/insta360-custom-firmware/start/install/#4-reboot).
+- **An update** (waved was on the Wave) starts waved's watchdog again
+  (`Starting the watchdog`), which starts the new waved, and ends with
+  `=== Done. The previous binary is in /tmp/waved.old until the Wave
+  restarts. ===`. No reboot is needed. Your settings stay.
+
+If a step fails, the installer stops there and prints an `ERROR:` line that
+says what to do next. Once it has stopped anything, it also puts things back
+as far as it can: after a failed update it starts the watchdog again (`The
+watchdog runs again.`), and after a failed first install it says `Stock
+firmware was stopped: adb reboot, then run this again.` Every message and
+what to do about it:
+[Installer messages](/insta360-custom-firmware/start/troubleshooting/#installer-messages).
 
 ## 4. Reboot
+
+After a first install:
 
 ```bash
 adb reboot

@@ -5,18 +5,45 @@ description: What to check and what to do when ADB, the build, the installer or 
 
 ## Installer messages
 
-| The installer says | Read |
-|---|---|
-| `no waved binary at …` | Build first: [Install, step 2](/insta360-custom-firmware/start/install/#2-build) |
-| `llvm-objcopy not found` | [`llvm-objcopy` not found](/insta360-custom-firmware/start/troubleshooting/#llvm-objcopy-not-found) |
-| `no Wave found on adb` | [`adb devices` is empty](/insta360-custom-firmware/start/troubleshooting/#adb-devices-is-empty) |
-| `/data has … MB available and waved needs … MB` | ["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full) |
-| `the copy on the Wave does not match (md5)` | [The copy did not match](/insta360-custom-firmware/start/troubleshooting/#the-copy-did-not-match) |
-| `the USB gadget patch did not finish` | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
-| `ADB is not enabled at boot` | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
-| `waved did not stop`, `could not copy waved into /data/waved`, `install.sh stopped at: …` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
-| `install.sh interrupted at: …` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
-| `the stock app and telemetry stubs did not take` | [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) |
+Every `ERROR:` the installer prints, in the order of its steps. The first
+group stops before anything on the Wave changed: fix the cause and run the
+installer again.
+
+| The installer says | What it means | What to do |
+|---|---|---|
+| `no waved binary at …` | There is no build where the installer looks. | Build first: [Install, step 2](/insta360-custom-firmware/start/install/#2-build), or set `WAVED_BINARY` to your build. |
+| `no llvm-objcopy at …` | The tool that strips the binary is missing. | [`llvm-objcopy` not found](/insta360-custom-firmware/start/troubleshooting/#llvm-objcopy-not-found) |
+| `could not strip … with …` | `llvm-objcopy` failed on the build. | Check that the build finished without errors and build again. |
+| `no Wave on adb (adb devices)` | No Wave answered on ADB, or more than one ADB device is attached. | [`adb devices` is empty](/insta360-custom-firmware/start/troubleshooting/#adb-devices-is-empty) |
+| `no answer from the Wave about …`, `could not read the free space on /data (…)`, `could not read the size of /data/waved/waved (…)` | The Wave stopped answering during the checks. | [The Wave stopped answering](/insta360-custom-firmware/start/troubleshooting/#the-wave-stopped-answering) |
+| `an over-the-air update is on trial (/data/waved/update/trial)` | An over-the-air update has not finished its trial; installing now would be undone. | [An update was on trial](/insta360-custom-firmware/start/troubleshooting/#an-update-was-on-trial) |
+| `/data has … MB available and waved needs … MB` | Not enough room on `/data` for the new binary. | ["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full) |
+| `could not copy … to … on the Wave (adb push)`, `… on the Wave is not … (md5 …, want …)` | A file did not arrive in the Wave's `/tmp`, or arrived damaged. | [The copy did not match](/insta360-custom-firmware/start/troubleshooting/#the-copy-did-not-match) |
+| `could not read …` | A file in your checkout could not be read for its md5. | Check that `waved/deploy/` and `waved/scripts/` are complete (`git status`). |
+| `could not copy config.toml; nothing was changed` | The copy of your settings could not be written, usually because `/data` is full. | ["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full) |
+| `the USB gadget patch did not finish` | The patch that keeps ADB on at boot failed. Nothing was stopped. | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
+| `ADB is not enabled at boot (…)` | The check after the patch found that ADB would be off after a reboot. Nothing was stopped. | ["ADB at boot"](/insta360-custom-firmware/start/troubleshooting/#adb-at-boot) |
+
+The rest come after the installer stopped the stock app and waved. It puts
+back what it can and says so on the next line:
+[The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way).
+
+| The installer says | What it means | What to do |
+|---|---|---|
+| `could not stop waved` | waved did not exit within 40 seconds, not even when killed. Nothing was replaced. | Run the installer again; if it happens again, reboot the Wave first. |
+| `the binary was not replaced` | The new binary did not fit in `/data/waved`. On an update the old one is back in place. | Make room (["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full)), then run the installer again. |
+| `S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)` | The new binary is in place, but some start-up files may still be the old ones. | Run the installer again. |
+| `config.toml not written` | The default settings file could not be written. | Run the installer again. |
+| `could not stub the stock services`, `the stock app and telemetry stubs did not take (…)` | Everything else is installed, but the stock app's stubs did not write or did not read back. The stock app would start next to waved at the next boot. | Run the installer again; [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) if it stops here again. |
+| `could not start the watchdog` | An update installed everything, but waved's watchdog did not start, so waved is not running. | `adb reboot`: waved starts at boot. |
+
+Two can come at any step. From `Stopping stock firmware, the watchdog and
+waved` on, the installer puts back what it can, as above.
+
+| The installer says | What it means | What to do |
+|---|---|---|
+| `install.sh stopped during: …` | A command failed unexpectedly in the step it names. | Run the installer again; each run starts from the beginning. |
+| `install.sh interrupted during: …` | Ctrl-C or a closed terminal stopped the installer in the step it names. | Run the installer again. |
 
 ## `adb devices` is empty
 
@@ -52,12 +79,13 @@ With waved installed, ADB comes up at every boot by itself, and
 time to finish booting, then check the cable and restart the ADB server.
 
 If more than one ADB device is attached, the installer can't tell which one
-to use and says `no Wave found on adb`. Unplug the others, or set
+to use and says `no Wave on adb`. Unplug the others, or set
 `ANDROID_SERIAL` to the Wave's serial (the `PSP_…` name `adb devices` shows).
 
 ## "/data is full"
 
-The installer stopped before it changed anything. Check the space:
+After `/data has … MB available and waved needs … MB`, the installer stopped
+before it changed anything. Check the space:
 
 ```bash
 adb shell df -h /data
@@ -90,10 +118,11 @@ installed.
 
 The installer stopped because it could not make ADB come up at every boot.
 It refuses to go on without that: a Wave with the stock app switched off and
-no ADB can't be reached again. At this point nothing else was changed. The
-Wave still runs what it ran before, the stock app or an older waved. Only
-`/etc/init.d/S89usbgadget` may have changed. Before the patch changes it, it
-saves a copy as `/data/waved/S89usbgadget.bak.<time>`.
+no ADB can't be reached again. At this point nothing was stopped and nothing
+was installed. The Wave still runs what it ran before, the stock app or an
+older waved. Only `/etc/init.d/S89usbgadget` may have changed. Before the
+patch changes it, it saves a copy as `/data/waved/S89usbgadget.bak.<time>`.
+Any lines above the `ERROR:` are what the patch printed when it failed.
 
 Run the installer again. The patch is safe to repeat:
 
@@ -125,37 +154,83 @@ If the Wave reboots in the meantime, it comes back on what it ran before. On
 stock firmware that means ADB is off: turn it on again with `enable_adb.py`
 ([Install, step 1](/insta360-custom-firmware/start/install/#1-enable-adb)).
 
+## The Wave stopped answering
+
+`no answer from the Wave about …` and `could not read the free space on
+/data` mean the Wave did not answer one of the installer's checks. The
+installer stopped before it changed anything. Check the connection:
+
+```bash
+adb devices
+```
+
+The Wave should be listed once, as `device`. If it shows `offline` or is
+missing, unplug the cable and plug it in again, then run the installer
+again. If it stays missing, see
+[`adb devices` is empty](/insta360-custom-firmware/start/troubleshooting/#adb-devices-is-empty).
+
 ## The copy did not match
 
-The binary that arrived in the Wave's `/tmp` is not the one on your computer.
-Nothing was changed. Run the installer again. If it keeps happening, try
-another USB-C cable.
+The installer copies every file to the Wave's `/tmp` first and compares each
+copy with the file on your computer. `could not copy … (adb push)` means a
+copy failed, and `… on the Wave is not …` means a copy arrived different.
+Either way nothing on the Wave was changed. Run the installer again. If it
+keeps happening, try another USB-C cable or port.
 
 ## The installer stopped part-way
 
-`waved did not stop` means the old waved was still running, so the installer
-replaced nothing. The new binary waits in `/tmp/waved.new` until the next
-reboot. Run the installer again.
+These are the failures after the installer stopped the stock app and waved
+(`Stopping stock firmware, the watchdog and waved` and later). The installer
+then puts back what it can, and says so on the line after the `ERROR:`:
 
-`could not copy waved into /data/waved` means the old binary was already
-removed when the copy failed. The new one is still in `/tmp/waved.new`. Check
-the space with `adb shell df -h /data`, then run the installer again.
+- `The watchdog runs again.` (an update): waved runs again, the old binary or
+  the new one, whichever is in place.
+- `Could not start the watchdog: …` (an update): waved is not running. Reboot
+  the Wave with `adb reboot`; waved starts at boot.
+- `Stock firmware was stopped: adb reboot, then run this again.` (a first
+  install): reboot the Wave, then run the installer again.
 
-`install.sh stopped at: …` names the step that failed. Run the installer
-again; each run starts from the beginning.
+ADB comes up at every boot by then: the installer checked it before it
+stopped anything. So after a reboot you can always reach the Wave to run the
+installer again or to [revert](/insta360-custom-firmware/start/revert/).
 
-`install.sh interrupted at: …` means the installer was stopped, by Ctrl-C or
-a closed terminal, during the step it names. Run it again.
+`could not stop waved` means waved did not exit, so the installer replaced
+nothing. The new binary waits in `/tmp/waved.new` until the next reboot.
 
-`the stock app and telemetry stubs did not take` means everything else is
-installed, but the two stubs that switch the stock app and its telemetry off
-did not read back as written. Run the installer again before you reboot: with
-the stock app's start-up script still in place, the stock app would start
-next to waved.
+`the binary was not replaced` means the new binary did not fit in
+`/data/waved`; the line above it says `the new binary did not fit on /data`.
+On an update the old binary is back in place (a copy also waits in
+`/tmp/waved.old` until the Wave restarts). On a first install there was no
+old one: after the reboot the stock app runs again. Make room
+(["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full))
+and run the installer again.
 
-Once the installer is past `Patching the USB gadget`, ADB comes up at every
-boot. So even if the Wave reboots after a later step failed, you can reach it
-to run the installer again or to [revert](/insta360-custom-firmware/start/revert/).
+`could not stub the stock services` and `the stock app and telemetry stubs
+did not take` mean everything else is installed, but the two stubs that keep
+the stock app and its telemetry off did not write or did not read back as
+written. With the stock app's start-up script still in place, the stock app
+would start next to waved at the next boot. Run the installer again. If it
+stops here again, look at what the Wave has:
+
+```bash
+adb shell 'cat /etc/init.d/S60pspapp_daemon; ls -l /usr/lib/libapplogrs.so'
+```
+
+The stub start-up script is the one line `#!/bin/sh`, and the stub library is
+empty (0 bytes, or 1 on a Wave an older installer set up). The installer
+writes a stub only where the overlay has none yet, so a different file in
+the overlay stays. To clear it, delete the two from the overlay's upper
+directory, reboot, and run the installer again:
+
+```bash
+adb shell rm -f /data/overlay/upper/etc/init.d/S60pspapp_daemon /data/overlay/upper/usr/lib/libapplogrs.so
+adb reboot
+```
+
+`install.sh stopped during: …` names the step in which a command failed
+unexpectedly, and `install.sh interrupted during: …` the step in which Ctrl-C
+or a closed terminal stopped the installer. Run the installer again; each run
+starts from the beginning.
 
 ## An update was on trial
 

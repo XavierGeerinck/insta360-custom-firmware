@@ -80,10 +80,43 @@ sync step (the `screens` list in `site/sync/manifest.mjs`).
 deploy/tests/test-deploy-scripts.sh
 ```
 
-It runs `deploy/install.sh` and `deploy/revert.sh` against a fake `adb` that
-logs every call, so no Wave is needed. It covers the order of the steps, a
-copy that doesn't match, a full `/data`, a missing Wave and the ADB-at-boot
-check.
+It runs `deploy/install.sh` and `deploy/revert.sh` against a fake `adb`, so
+no Wave is needed, and it aborts if `adb` is not the fake. The fake logs every
+call and runs the scripts meant for the Wave in a directory that stands in
+for the Wave's `/data`, `/tmp`, `/etc`, `/usr` and `/mnt`, with fake `ps`,
+`kill`, `killall`, `pidof`, `start-stop-daemon` and `df`. The USB gadget patch
+it runs is the real one, on an `S89usbgadget`-shaped copy. It covers:
+
+- a first install: every file through `/tmp` with an md5 check, the gadget
+  patch and the ADB-at-boot check before anything is stopped, the swap,
+  `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb` and `iptables.rules`
+  each through a dot-named copy and a rename, the default `config.toml`, the
+  stubs written through the `/etc` and `/usr` mounts (never into
+  `/data/overlay/upper`) and read back last, and `adb reboot` printed only at
+  the end;
+- an update: `config.toml` kept and copied to `config.toml.before-<time>`,
+  the gadget found already patched, the old binary in `/tmp/waved.old`, a
+  one-byte `libapplogrs.so` stub from an older installer accepted, the
+  watchdog started again at the end, and the old binary's space counted as
+  free;
+- refusals before anything changes: too little room on `/data` (before any
+  push), a copy that doesn't match, a failed push, an over-the-air update on
+  trial, no Wave, no build, a Wave that stops answering;
+- no ADB at boot, no further: a failed patch, a patch that leaves `adbd_enable`
+  commented out, a boot function without `adbd_enable`, a check without an
+  answer. None of them stops or stubs anything;
+- failures once waved is stopped: waved that won't exit (no swap), a binary
+  that doesn't fit (the old one back), a failed install step (no stubs),
+  stubs that don't take, each with the watchdog started again after an
+  update or "adb reboot" after a first install;
+- Ctrl-C during a step: the message names the step, and an update gets its
+  watchdog back;
+- `revert.sh`: what it deletes, only in the overlay's upper directory.
+
+`VERBOSE=1` prints the installer's output and the `adb` log of a failed
+check. `cargo test -p waved-update --lib` runs a shorter host test of
+`install.sh` (`crates/waved-update/src/install_script.rs`) with real processes
+standing in for the watchdog and waved.
 
 The USB gadget patch the installer runs on the Wave has its own test. It
 patches copies of an `S89usbgadget`-shaped script under busybox, the shell the

@@ -122,17 +122,37 @@ over the running binary deletes the old file before it fails for space, leaving
 no binary. Deploy through `/tmp` and swap with the watchdog stopped.
 
 `deploy/install.sh` does all of it, for a first install and for an update: after the
-`cross build` below, run it from anywhere. It strips the binary (`llvm-objcopy` from
-`rustup component add llvm-tools`, or `OBJCOPY=...`), pushes it, `S60waved` and
-`iptables.rules` to `/tmp` and checks their md5, copies the Wave's `config.toml` to
-`/data/waved/config.toml.before-<UTC time>` (mode 600) and never replaces it, stops the
-watchdog, waits for waved to exit, swaps the binary (the old one waits in
-`/tmp/waved.old` and goes back if the new one does not fit), installs `S60waved` through a
-dot-named copy and starts the watchdog again. It tests the Wave's files on the Wave and
-checks every step's output, because `adb shell`'s exit status is not reliable. It refuses
-while an over-the-air update is on trial (`/data/waved/update/trial`, `docs/UPDATES.md`).
-On a first install (no `/data/waved/waved`) it writes `config/default.toml` and asks for a
-reboot instead. Host-tested against a fake `adb` (`crates/waved-update/src/install_script.rs`).
+`cross build` below, run it from anywhere. In this order, which is the safety net:
+
+1. Checks, before anything changes: the Wave answers, no over-the-air update is on trial
+   (`/data/waved/update/trial`, `docs/UPDATES.md`), and `/data` has room for the stripped
+   binary plus 20 MB, counting the installed binary's space as free.
+2. Strips the binary (`llvm-objcopy` from `rustup component add llvm-tools`, or
+   `OBJCOPY=...`) and pushes it, `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb`,
+   `iptables.rules`, `scripts/patch-stock-usbgadget.sh` and (if the Wave has none)
+   `config/default.toml` to `/tmp`, checking each one's md5.
+3. Copies the Wave's `config.toml` to `/data/waved/config.toml.before-<UTC time>` (mode
+   600); it never replaces it.
+4. Runs the USB gadget patch (ADB at boot, `docs/USB_STORAGE.md`) and checks with awk that
+   no `adbd_enable` in `S89usbgadget` is commented out and at least one is live inside
+   `start_usbgadget()`. Nothing is stopped before this passes: a Wave without the stock app
+   and without ADB can't be reached again.
+5. Stops the stock app and the watchdog, waits for waved to exit (`killall -9` at 30 s,
+   gives up at 40 s), swaps the binary (the old one waits in `/tmp/waved.old` and goes back
+   if the new one does not fit).
+6. Installs `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb` and `iptables.rules`,
+   each through a dot-named copy and a rename; the default `config.toml` if there was none.
+7. Last, the stubs that keep the stock app and its telemetry off (`S60pspapp_daemon`,
+   `libapplogrs.so`; only where `/data/overlay/upper` has none yet), written through the
+   `/etc` and `/usr` mounts and read back.
+8. An update starts the watchdog again; a first install (no `/data/waved/waved`) asks for
+   `adb reboot`. A failure or Ctrl-C after step 5 began does the same.
+
+Overlay files are written through the mounts, never into `/data/overlay/upper` directly
+(`deploy/revert.sh` deletes there, on purpose). It tests the Wave's files on the Wave and
+checks every step's output, because `adb shell`'s exit status is not reliable. Host-tested
+against a fake `adb` (`deploy/tests/test-deploy-scripts.sh`,
+`crates/waved-update/src/install_script.rs`).
 
 By hand, the same steps for the binary alone:
 
@@ -165,8 +185,9 @@ adb shell 'kill $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); sleep 1; k
   reached 273 MB, mostly Wi-Fi driver (`atbm_log`) scan lines, and on 2026-10-08 it
   filled `/data`. Waved then exited at start-up without a word, because even its log
   write failed. `deploy/rsyslog.conf` drops the `atbm_log` lines and logs to
-  `/tmp/psp.log`. Install it with `adb push deploy/rsyslog.conf /etc/rsyslog.conf`
-  (it lands in the overlay and survives reboots), then `/etc/init.d/S11rsyslogd restart`.
+  `/tmp/psp.log`. `install.sh` installs it as `/etc/rsyslog.conf` (it lands in the
+  overlay and survives reboots); it takes effect at the next boot, or at once with
+  `/etc/init.d/S11rsyslogd restart`.
   If waved won't start, check `df -h /data` first.
 - `start-stop-daemon` needs `-m -p <pidfile>`; without it busybox matches any running
   `/bin/sh` and refuses to start.
