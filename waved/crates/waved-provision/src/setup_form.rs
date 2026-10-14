@@ -3,7 +3,7 @@ use waved_config::{
     field_specs, FieldError, FieldKind, Section, UploadMode, WavedConfig, PIN_MAX_DIGITS,
     PIN_MIN_DIGITS,
 };
-use waved_state::{AudioMode, NrLevel};
+use waved_state::{AudioMode, NrLevel, RecordingFormat};
 
 const OTHER_NETWORK_VALUE: &str = "__other_network__";
 
@@ -302,6 +302,11 @@ fn value(config: &WavedConfig, path: &str) -> String {
         }
         .into(),
         "recording.pre_recording" => config.recording.pre_recording.to_string(),
+        "recording.format" => match config.recording.format {
+            RecordingFormat::Opus => "opus",
+            RecordingFormat::Flac => "flac",
+        }
+        .into(),
         "recording.ask_timeout_s" => config.recording.ask_timeout_s.to_string(),
         _ => String::new(),
     }
@@ -439,6 +444,18 @@ mod tests {
         let page = render_page(&WavedConfig::default(), &[], "csrf", &[], None);
         assert!(page.contains("<option value=\"120\" selected>2 min</option>"));
         assert_eq!(page.matches("value=\"120\"").count(), 1);
+    }
+
+    #[test]
+    fn the_recording_format_select_shows_the_saved_format() {
+        let page = render_page(&WavedConfig::default(), &[], "csrf", &[], None);
+        assert!(page.contains("name=\"recording.format\""));
+        assert!(page.contains("<option value=\"opus\" selected>"));
+        let mut config = WavedConfig::default();
+        config.recording.format = RecordingFormat::Flac;
+        let page = render_page(&config, &[], "csrf", &[], None);
+        assert!(page.contains("<option value=\"flac\" selected>"));
+        assert!(!page.contains("<option value=\"opus\" selected>"));
     }
 
     #[test]

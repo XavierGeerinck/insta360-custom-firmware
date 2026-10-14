@@ -1,4 +1,4 @@
-use crate::{validate_config, UploadMode, WavedConfig};
+use crate::{validate_config, RecordingFormat, UploadMode, WavedConfig};
 use std::collections::{BTreeMap, BTreeSet};
 use waved_state::{AudioMode, NrLevel};
 
@@ -53,6 +53,10 @@ const UPLOAD_MODE_OPTIONS: &[(&str, &str)] = &[
     ("automatic", "Automatic"),
     ("ask", "Ask after recording"),
     ("local_only", "Keep locally"),
+];
+const RECORDING_FORMAT_OPTIONS: &[(&str, &str)] = &[
+    ("opus", "Opus (compact, about 15 MB per hour)"),
+    ("flac", "FLAC (lossless, about 200 MB per hour)"),
 ];
 const NR_LEVEL_OPTIONS: &[(&str, &str)] = &[
     ("off", "Off"),
@@ -225,6 +229,16 @@ static FIELD_SPECS: &[FieldSpec] = &[
         help: "Keep the last 30 seconds in memory so Record includes them.",
         kind: FieldKind::Boolean,
         required: false,
+    },
+    FieldSpec {
+        path: "recording.format",
+        section: Section::Webhook,
+        label: "Recording format",
+        help: "Opus keeps uploads small; FLAC keeps every bit. Applies to the next recording.",
+        kind: FieldKind::Select {
+            options: RECORDING_FORMAT_OPTIONS,
+        },
+        required: true,
     },
     FieldSpec {
         path: "recording.ask_timeout_s",
@@ -417,6 +431,19 @@ pub fn apply_form(
         "recording.pre_recording",
         &mut next.recording.pre_recording,
     );
+    if let Some(value) = submission.values.get("recording.format") {
+        next.recording.format = match value.as_str() {
+            "opus" => RecordingFormat::Opus,
+            "flac" => RecordingFormat::Flac,
+            _ => {
+                errors.push(FieldError {
+                    path: "recording.format",
+                    message: "unknown recording format; use opus or flac".into(),
+                });
+                next.recording.format
+            }
+        };
+    }
     parse_number(
         &submission.values,
         "recording.ask_timeout_s",
@@ -656,6 +683,7 @@ mod tests {
             "api.auth_token",
             "api.upload_mode",
             "recording.pre_recording",
+            "recording.format",
             "recording.ask_timeout_s",
             "api.allow_insecure_http",
             "api.retry_max",
@@ -868,6 +896,27 @@ mod tests {
     }
 
     #[test]
+    fn the_recording_format_is_a_select_of_opus_and_flac() {
+        let spec = field_specs()
+            .iter()
+            .find(|spec| spec.path == "recording.format")
+            .unwrap();
+        assert_eq!(
+            spec.kind,
+            FieldKind::Select {
+                options: RECORDING_FORMAT_OPTIONS
+            }
+        );
+        let values: Vec<&str> = RECORDING_FORMAT_OPTIONS.iter().map(|option| option.0).collect();
+        assert_eq!(values, ["opus", "flac"]);
+        let next = submit(&[("recording.format", "flac")]).unwrap();
+        assert_eq!(next.recording.format, RecordingFormat::Flac);
+        let back = submit(&[("recording.format", "opus")]).unwrap();
+        assert_eq!(back.recording.format, RecordingFormat::Opus);
+        rejects_path(&[("recording.format", "wav")], "recording.format");
+    }
+
+    #[test]
     fn omitted_new_keys_leave_values_unchanged() {
         let mut current = WavedConfig::default();
         current.display.brightness_pct = 42;
@@ -879,6 +928,7 @@ mod tests {
         current.audio.nr_level = NrLevel::High;
         current.recording.pre_recording = !current.recording.pre_recording;
         current.recording.ask_timeout_s = 200;
+        current.recording.format = RecordingFormat::Flac;
         let mut submission = FormSubmission::default();
         submission
             .values

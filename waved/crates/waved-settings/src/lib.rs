@@ -26,6 +26,7 @@ pub fn settings_from_config(config: &WavedConfig) -> SettingsState {
         first_run_done: config.device.first_run_done,
         pin_enabled: !config.security.device_password.is_empty(),
         mic_height: config.device.mic_height,
+        recording_format: config.recording.format,
     }
 }
 
@@ -61,6 +62,7 @@ mod tests {
         config.device.first_run_done = true;
         config.security.device_password = "4821".into();
         config.device.mic_height = waved_state::MotorPosition::High;
+        config.recording.format = waved_state::RecordingFormat::Flac;
         config
     }
 
@@ -73,6 +75,7 @@ mod tests {
         assert_eq!(settings.upload_mode, UploadMode::Ask);
         assert!(settings.first_run_done && settings.pin_enabled);
         assert_eq!(settings.mic_height, waved_state::MotorPosition::High);
+        assert_eq!(settings.recording_format, waved_state::RecordingFormat::Flac);
     }
 
     #[test]

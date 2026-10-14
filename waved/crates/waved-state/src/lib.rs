@@ -278,6 +278,19 @@ pub enum UploadMode {
     LocalOnly,
 }
 
+/// The codec of new recordings (`recording.format`). Lives here, like
+/// `UploadMode`, so state, commands and config share one type. Recordings
+/// already on Wave keep their format (WAV ones included).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingFormat {
+    /// Ogg Opus, 32 kbps: about 15 MB per hour.
+    #[default]
+    Opus,
+    /// FLAC, lossless: about 200 MB per hour.
+    Flac,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BatteryState {
     pub level: u8,
@@ -458,6 +471,8 @@ pub struct SettingsState {
     pub pin_enabled: bool,
     /// The chosen Mic height (B5); waved-mcu moves the lift on `SetMotorPosition`.
     pub mic_height: MotorPosition,
+    /// The format of the next recording; a change never touches the running one.
+    pub recording_format: RecordingFormat,
 }
 
 impl Default for SettingsState {
@@ -475,6 +490,7 @@ impl Default for SettingsState {
             first_run_done: false,
             pin_enabled: false,
             mic_height: MotorPosition::Medium,
+            recording_format: RecordingFormat::Opus,
         }
     }
 }
@@ -1044,6 +1060,8 @@ pub enum Command {
     SetClock24h(bool),
     /// Keep the last 30 s of audio in RAM so Record can include it (D3).
     SetPreRecording(bool),
+    /// The format of the next recording (System -> Recording format).
+    SetRecordingFormat(RecordingFormat),
     SetUploadMode(UploadMode),
     SetAlertTones(bool),
     /// Turn the device PIN off (System -> PIN, D10). Reaching System already
@@ -1593,6 +1611,19 @@ mod tests {
         assert!(!s.first_run_done && !s.pin_enabled);
         assert_eq!(s.time_zone, "UTC");
         assert_eq!(s.upload_mode, UploadMode::Automatic);
+        assert_eq!(s.recording_format, RecordingFormat::Opus, "the owner's default");
+    }
+
+    #[test]
+    fn recording_formats_are_named_as_in_config() {
+        assert_eq!(RecordingFormat::default(), RecordingFormat::Opus);
+        for (format, name) in [
+            (RecordingFormat::Opus, "\"opus\""),
+            (RecordingFormat::Flac, "\"flac\""),
+        ] {
+            assert_eq!(serde_json::to_string(&format).unwrap(), name);
+            assert_eq!(serde_json::from_str::<RecordingFormat>(name).unwrap(), format);
+        }
     }
 
     #[test]
@@ -1631,6 +1662,7 @@ mod tests {
             Command::SetTimeZone("Europe/Brussels".into()),
             Command::SetClock24h(true),
             Command::SetPreRecording(false),
+            Command::SetRecordingFormat(RecordingFormat::Flac),
             Command::SetUploadMode(UploadMode::Ask),
             Command::SetAlertTones(true),
             Command::MarkFirstRunDone,
@@ -1644,8 +1676,8 @@ mod tests {
             Command::FactoryReset,
         ];
         let cloned = commands.clone();
-        assert_eq!(cloned.len(), 16);
-        assert!(matches!(cloned[9], Command::DeleteRecording(x) if x == id));
+        assert_eq!(cloned.len(), 17);
+        assert!(matches!(cloned[10], Command::DeleteRecording(x) if x == id));
     }
 
     #[test]
