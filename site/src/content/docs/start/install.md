@@ -96,8 +96,9 @@ free space on /data`). Then it
 7. if the Wave had no `config.toml`, writes the default one (`Writing the
    default config.toml`), and
 8. last of all, switches the stock app and its telemetry library off with two
-   stubs, and reads them back to check they took (`Stock pspapp off, telemetry
-   library stubbed`).
+   stubs (`Stock pspapp off, telemetry library stubbed`). A stub an earlier
+   install left is kept as it is (`kept …`); a missing one is written and read
+   back to check it took (`wrote …`).
 
 The order is deliberate. A Wave without the stock app and without ADB can't
 be reached again, so nothing is stopped or switched off until ADB is known to

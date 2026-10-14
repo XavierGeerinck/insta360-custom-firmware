@@ -14,9 +14,10 @@
 #                               S03splash, rsyslog.conf (keeps the stock log
 #                               from filling /data), the patched S89usbgadget
 #                               (ADB at boot; its copy from before the patch
-#                               goes to /data/waved), a stub S60pspapp_daemon
-#                               and an empty libapplogrs.so (the stock app and
-#                               its telemetry, off)
+#                               goes to /data/waved), and where the upper dir
+#                               has none yet, a stub S60pspapp_daemon and an
+#                               empty libapplogrs.so (the stock app and its
+#                               telemetry, off)
 # Overlay files are written through the /etc and /usr mounts, as the
 # over-the-air updater writes them, never into /data/overlay/upper directly.
 #
@@ -34,8 +35,9 @@
 #      the new one does not fit.
 #   6. S60waved, S03splash, rsyslog.conf, splash.fb and iptables.rules, each
 #      through a dot-named copy and a rename; config.toml if there was none.
-#   7. Last, the stubs that keep the stock app and its telemetry off, read
-#      back to check they took.
+#   7. Last, the stubs that keep the stock app and its telemetry off: one
+#      already in the upper dir is kept as it is; a missing one is written
+#      and read back. Both must then be in the upper dir.
 #   8. An update starts the watchdog again; a first install (stock firmware
 #      was running) ends with "adb reboot".
 # A failure or Ctrl-C from step 5 on starts the watchdog again after an
@@ -304,23 +306,49 @@ rm -f /tmp/config.toml.new && sync && echo ok' || die "config.toml not written"
 fi
 
 step "Stock pspapp off, telemetry library stubbed"
-# Only where the overlay's upper directory has none yet (deploy/revert.sh
-# deletes them there), but written through the /etc and /usr mounts: never
-# into the upper directory under a mounted overlay.
-wave_ok 'u=/data/overlay/upper; \
-{ [ -f $u/etc/init.d/S60pspapp_daemon ] || \
-  { echo "#!/bin/sh" > /etc/init.d/S60pspapp_daemon && chmod 755 /etc/init.d/S60pspapp_daemon; }; } && \
-{ [ -f $u/usr/lib/libapplogrs.so ] || : > /usr/lib/libapplogrs.so; } && \
-sync && echo ok' || die "could not stub the stock services"
-# Read both back through the mounts: a stub that did not take leaves the stock
-# app starting next to waved at the next boot. libapplogrs.so is empty, or
-# one newline on a Wave installed by an older install.sh.
-wave_ok '[ "$(cat /etc/init.d/S60pspapp_daemon 2>/dev/null)" = "#!/bin/sh" ] && \
-[ -f /usr/lib/libapplogrs.so ] && n=$(wc -c < /usr/lib/libapplogrs.so) && [ $((n)) -le 1 ] && \
-echo ok || ls -l /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so 2>&1' ||
+# A stub already in the overlay's upper directory stays as it is, whatever it
+# holds: it was put there on purpose (by an earlier install, or a compiled
+# no-op libapplogrs.so), and any file there replaces the stock one. A missing
+# one is written through the /etc and /usr mounts, never into the upper
+# directory under a mounted overlay (deploy/revert.sh deletes them there).
+stubs="$(on_wave 'u=/data/overlay/upper; \
+if [ -f $u/etc/init.d/S60pspapp_daemon ]; then echo "kept /etc/init.d/S60pspapp_daemon"; \
+elif echo "#!/bin/sh" > /etc/init.d/S60pspapp_daemon && chmod 755 /etc/init.d/S60pspapp_daemon; then \
+    echo "wrote /etc/init.d/S60pspapp_daemon"; fi; \
+if [ -f $u/usr/lib/libapplogrs.so ]; then echo "kept /usr/lib/libapplogrs.so"; \
+elif : > /usr/lib/libapplogrs.so; then echo "wrote /usr/lib/libapplogrs.so"; fi; \
+sync; echo ok')" || stubs=""
+for stub in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so; do
+    grep -q -x -E "(kept|wrote) $stub" <<< "$stubs" || die "could not stub the stock services"
+done
+[ "$(tail -n 1 <<< "$stubs")" = ok ] || die "could not stub the stock services"
+grep -E '^(kept|wrote) ' <<< "$stubs" | sed 's/^/    /'
+# Both must now be in the upper directory: those copies are what replaces the
+# stock files at boot. A stub written just now must read back through the
+# mounts as written: S60pspapp_daemon exactly "#!/bin/sh" and a newline,
+# libapplogrs.so empty (0 or 1 byte). Otherwise the stock app would start next
+# to waved at the next boot.
+readback='u=/data/overlay/upper; bad=; \
+for f in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so \
+    $u/etc/init.d/S60pspapp_daemon $u/usr/lib/libapplogrs.so; do \
+    [ -f $f ] || bad="$bad $f"; \
+done; '
+case "$stubs" in
+    *"wrote /etc/init.d/S60pspapp_daemon"*)
+        readback+='f=/etc/init.d/S60pspapp_daemon; \
+[ "$(cat $f 2>/dev/null)" = "#!/bin/sh" ] && [ $(($(wc -c < $f))) -eq 10 ] || bad="$bad $f(content)"; ' ;;
+esac
+case "$stubs" in
+    *"wrote /usr/lib/libapplogrs.so"*)
+        readback+='f=/usr/lib/libapplogrs.so; \
+[ -f $f ] && [ $(($(wc -c < $f))) -le 1 ] || bad="$bad $f(content)"; ' ;;
+esac
+readback+='if [ -z "$bad" ]; then echo ok; else echo "not in place:$bad"; fi'
+wave_ok "$readback" ||
     die "the stock app and telemetry stubs did not take (/etc/init.d/S60pspapp_daemon, \
-/usr/lib/libapplogrs.so): waved is installed, but the stock app would start next to it at the \
-next boot. Run install.sh again; see Troubleshooting: \"The installer stopped part-way\"."
+/usr/lib/libapplogrs.so, and their copies in /data/overlay/upper): waved is installed, but the \
+stock app would start next to it at the next boot. Run install.sh again; see Troubleshooting: \
+\"The installer stopped part-way\"."
 # S60waved makes it at every start too; it fails while USB storage has the
 # volume (/mnt/udisk not mounted), which must not fail the install.
 on_wave 'mkdir -p /mnt/udisk/recordings 2>/dev/null' >/dev/null || true

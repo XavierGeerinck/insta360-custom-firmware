@@ -9,9 +9,11 @@
 # the stubs with their read-back are tested as written, not assumed. The
 # busybox commands whose effect matters are fakes that log what they were
 # asked (ps, kill, killall, pidof, start-stop-daemon, df, sleep, sync) and
-# keep the state of a fake watchdog and waved in $W/run. The fake does not
-# merge overlays: a stub written through /etc lands in $W/etc, so anything
-# that appears in $W/data/overlay/upper was written there directly.
+# keep the state of a fake watchdog and waved in $W/run. $W/etc and $W/usr are
+# the overlay mounts as the Wave shows them; after each script the fake copies
+# every file it changed there into $W/data/overlay/upper, as the overlay's
+# copy-up does. A script that changes the upper directory itself is logged as
+# DIRECT-UPPER-WRITE.
 #
 # Knobs (environment variables of the fake):
 #   FAKE_STATE         device, or anything else: no Wave answers  (device)
@@ -25,7 +27,11 @@
 #   FAKE_DATA_FULL     1: the new binary does not fit on /data    (0)
 #   FAKE_WAVED_STUCK   1: waved never exits, not even on SIGKILL  (0)
 #   FAKE_STUBS_STICK   0: writing the two stubs changes nothing   (1)
-#   FAKE_PUSH_FAIL     fail any push whose paths contain this text
+#   FAKE_NO_COPY_UP    1: writes through /etc and /usr never reach the
+#                      upper directory (no overlay there)         (0)
+#   FAKE_STUB_WRITE_FAILS  1: writing S60pspapp_daemon fails on the Wave,
+#                      while the rest of that script runs on      (0)
+#   FAKE_PUSH_FAIL    fail any push whose paths contain this text
 #   FAKE_SHELL_FAIL    fail (adb exits 1) any shell command containing this text
 #   FAKE_INTERRUPT     Ctrl-C (SIGINT to install.sh and the adb it waits for)
 #                      at the first shell command containing this text
@@ -34,6 +40,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEPLOY="$(cd "$HERE/.." && pwd)"
 PATCH="$(cd "$DEPLOY/../scripts" && pwd)/patch-stock-usbgadget.sh"
+STUB_LIB="$(cd "$DEPLOY/../scripts" && pwd)/libapplogrs.so"
 FAILS=0
 CHECKS=0
 START="-S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start"
@@ -114,7 +121,7 @@ setup() {
     export FAKE_ADB_LOG="$T/adb.log" FAKE_WAVE="$W" FAKE_WAVE_BIN="$T/wave-bin"
     export FAKE_STATE=device FAKE_FREE_KB=177876 FAKE_GADGET=stock FAKE_PATCH=real FAKE_CORRUPT=''
     export FAKE_DATA_FULL=0 FAKE_WAVED_STUCK=0 FAKE_STUBS_STICK=1 FAKE_PUSH_FAIL='' FAKE_SHELL_FAIL=''
-    export FAKE_INTERRUPT=''
+    export FAKE_INTERRUPT='' FAKE_NO_COPY_UP=0 FAKE_STUB_WRITE_FAILS=0
     : > "$FAKE_ADB_LOG"
     gadget "#adbd_enable" "# adbd_enable" "" > "$T/gadget-stock"
     gadget "" "" adbd_enable > "$T/gadget-no_boot_adbd"
@@ -152,6 +159,10 @@ interrupt() {
     kill -INT $$
     exit 130
 }
+export LC_ALL=C
+# Every file under the overlay's upper dir, and every file /etc and /usr show.
+upper_state() { (cd "$W/data/overlay/upper" && find . | sort && find . -type f -exec cksum {} + | sort); }
+merged_state() { (cd "$W" && find etc usr -type f -exec cksum {} + | sort); }
 case "$1" in
   get-state) echo "$FAKE_STATE" ;;
   push)
@@ -173,6 +184,9 @@ case "$1" in
     if [ -n "$FAKE_SHELL_FAIL" ]; then
       case "$cmd" in *"$FAKE_SHELL_FAIL"*) echo "adb: error: device offline" >&2; exit 1 ;; esac
     fi
+    if [ "$FAKE_STUB_WRITE_FAILS" = 1 ]; then
+      cmd="${cmd//> \/etc\/init.d\/S60pspapp_daemon/> /tmp/no-such-dir/S60pspapp_daemon}"
+    fi
     if [ "$FAKE_PATCH" = noop ]; then
       case "$cmd" in *"sh /tmp/patch-usbgadget.sh"*)
         printf '#!/bin/sh\necho "already patched (p_volume + c_volume + hid.0 + adb at boot; no USB storage at boot)"\n' \
@@ -191,13 +205,26 @@ case "$1" in
         cp -p "$W/etc/init.d/S60pspapp_daemon" "$W/usr/lib/libapplogrs.so" "$W/run/keep/" ;;
       esac
     fi
+    upper="$W/data/overlay/upper"
+    upper_before="$(upper_state)"
+    merged_before="$(merged_state)"
+    # What it prints names the Wave's paths, as on the Wave.
     INIT="$W/etc/init.d/S89usbgadget" BACKUP_DIR="$W/data/waved" PATH="$FAKE_WAVE_BIN:$PATH" \
       sh -c 'kill() { for p in "$@"; do echo "kill $p" >> "$FAKE_ADB_LOG"; [ "$p" != 4242 ] || rm -f "$FAKE_WAVE/run/watchdog"; done; }
-'"$mapped"
-    rc=$?
+'"$mapped" | sed "s#$W##g"
+    rc=${PIPESTATUS[0]}
     if [ "$keep" = yes ]; then
       cp -p "$W/run/keep/S60pspapp_daemon" "$W/etc/init.d/S60pspapp_daemon"
       cp -p "$W/run/keep/libapplogrs.so" "$W/usr/lib/libapplogrs.so"
+    fi
+    [ "$(upper_state)" = "$upper_before" ] || echo "DIRECT-UPPER-WRITE: $cmd" >> "$FAKE_ADB_LOG"
+    # The overlay's copy-up: what changed under /etc and /usr is in the upper dir.
+    if [ "$FAKE_NO_COPY_UP" != 1 ]; then
+      comm -13 <(printf '%s\n' "$merged_before") <(merged_state) | while read -r _ _ path; do
+        [ -n "$path" ] || continue
+        mkdir -p "$upper/$(dirname "$path")"
+        cp -p "$W/$path" "$upper/$path"
+      done
     fi
     exit $rc ;;
 esac
@@ -275,10 +302,12 @@ EOF
     fi
 }
 
-# A Wave running waved under its watchdog, with its own settings, installed
-# by an older install.sh: its stubs are in the overlay's upper directory, and
-# its libapplogrs.so stub is one newline.
+# A Wave running waved under its watchdog, with its own settings, set up by
+# an earlier install: its stubs are in the overlay's upper directory (and so
+# in /etc and /usr). $1 is its libapplogrs.so: by default the compiled no-op
+# library scripts/libapplogrs.so (8352 bytes), as on the owner's Wave.
 wave_running_waved() {
+    local lib="${1:-$STUB_LIB}"
     export FAKE_GADGET=patched
     mkdir -p "$W/data/waved" "$W/data/overlay/upper/etc/init.d" "$W/data/overlay/upper/usr/lib"
     printf 'old waved' > "$W/data/waved/waved"; chmod 755 "$W/data/waved/waved"
@@ -286,7 +315,7 @@ wave_running_waved() {
     printf '#!/bin/sh\necho old init\n' > "$W/etc/init.d/S60waved"; chmod 755 "$W/etc/init.d/S60waved"
     for d in "$W" "$W/data/overlay/upper"; do
         printf '#!/bin/sh\n' > "$d/etc/init.d/S60pspapp_daemon"; chmod 755 "$d/etc/init.d/S60pspapp_daemon"
-        printf '\n' > "$d/usr/lib/libapplogrs.so"
+        cp "$lib" "$d/usr/lib/libapplogrs.so"
     done
     : > "$W/run/watchdog"
     : > "$W/run/waved"
@@ -294,6 +323,13 @@ wave_running_waved() {
 
 upper_state() {
     (cd "$W/data/overlay/upper" && find . | sort && find . -type f | sort | while read -r f; do cat "$f"; done)
+}
+# Both stubs are in the upper dir and show through the mounts as they are there.
+stubs_in_upper() {
+    local f
+    for f in etc/init.d/S60pspapp_daemon usr/lib/libapplogrs.so; do
+        [ -f "$W/data/overlay/upper/$f" ] && same "$W/data/overlay/upper/$f" "$W/$f" || return 1
+    done
 }
 
 # run_install: install.sh against the Wave in $W, its S89usbgadget as
@@ -387,10 +423,12 @@ check installs_splash_fb 'installed splash.fb /data/waved/splash.fb /data/waved/
 check installs_iptables_rules 'installed iptables.rules /data/waved/iptables.rules /data/waved/.iptables.rules.new'
 check writes_the_default_config 'same "$W/data/waved/config.toml" "$DEPLOY/../config/default.toml" && [ "$(mode "$W/data/waved/config.toml")" = 600 ] && ! ls "$W"/data/waved/config.toml.before-* > /dev/null 2>&1'
 check leaves_nothing_in_tmp '[ -z "$(ls -A "$W/tmp")" ]'
-check writes_the_stubs_through_the_mounts '[ "$(cat "$W/etc/init.d/S60pspapp_daemon")" = "#!/bin/sh" ] && [ "$(mode "$W/etc/init.d/S60pspapp_daemon")" = 755 ] && [ -f "$W/usr/lib/libapplogrs.so" ] && [ ! -s "$W/usr/lib/libapplogrs.so" ]'
-check never_writes_the_upper_dir '[ "$(upper_state)" = "$UPPER_BEFORE" ]'
+check writes_both_stubs_through_the_mounts 'said "    wrote /etc/init.d/S60pspapp_daemon" && said "    wrote /usr/lib/libapplogrs.so" && [ "$(cat "$W/etc/init.d/S60pspapp_daemon")" = "#!/bin/sh" ] && [ "$(wc -c < "$W/etc/init.d/S60pspapp_daemon" | tr -d " ")" = 10 ] && [ "$(mode "$W/etc/init.d/S60pspapp_daemon")" = 755 ] && [ -f "$W/usr/lib/libapplogrs.so" ] && [ ! -s "$W/usr/lib/libapplogrs.so" ]'
+check reads_both_written_stubs_back '[ "$(grep -c -F "\$f(content)" "$FAKE_ADB_LOG")" -eq 2 ]'
+check the_stubs_reach_the_upper_dir_by_copy_up 'stubs_in_upper'
+check never_writes_the_upper_dir '! logged DIRECT-UPPER-WRITE'
 # The stubs are the last change, read back before the recordings folder.
-check stubs_come_last 'before "cp /tmp/config.toml.new" "> /etc/init.d/S60pspapp_daemon" && before "> /etc/init.d/S60pspapp_daemon" "cat /etc/init.d/S60pspapp_daemon" && before "cat /etc/init.d/S60pspapp_daemon" "mkdir -p /mnt/udisk/recordings"'
+check stubs_come_last 'before "cp /tmp/config.toml.new" "> /etc/init.d/S60pspapp_daemon" && before "> /etc/init.d/S60pspapp_daemon" "for f in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so" && before "for f in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so" "mkdir -p /mnt/udisk/recordings"'
 check makes_the_recordings_folder '[ -d "$W/mnt/udisk/recordings" ]'
 check first_install_leaves_the_watchdog_to_the_reboot '! logged start-stop-daemon'
 check firewall_lets_the_wifi_setup_network_in 'grep -q -e "-A INPUT -i wlan0 -p udp --dport 67 -j ACCEPT" "$DEPLOY/iptables.rules" && grep -q -e "-A INPUT -i wlan0 -p udp --dport 53 -j ACCEPT" "$DEPLOY/iptables.rules" && grep -q -e "-A INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT" "$DEPLOY/iptables.rules"'
@@ -406,10 +444,18 @@ check update_patches_before_stopping_waved 'before "commented++" "killall pspapp
 check update_stops_the_watchdog_and_waits_for_waved 'logged "kill 4242" && before "pidof waved: exited" "cp /tmp/waved.new waved"'
 check update_keeps_the_old_binary_in_tmp '[ "$(cat "$W/tmp/waved.old")" = "old waved" ] && same "$W/data/waved/waved" "$T/waved"'
 check update_installs_the_start_up_scripts 'installed S60waved /etc/init.d/S60waved /etc/init.d/.S60waved.new && installed S03splash /etc/init.d/S03splash /etc/init.d/.S03splash.new && installed rsyslog.conf /etc/rsyslog.conf /etc/.rsyslog.conf.new'
-check update_accepts_a_one_byte_telemetry_stub '[ "$(wc -c < "$W/usr/lib/libapplogrs.so" | tr -d " ")" = 1 ] && [ "$(cat "$W/etc/init.d/S60pspapp_daemon")" = "#!/bin/sh" ]'
-check update_never_writes_the_upper_dir '[ "$(upper_state)" = "$UPPER_BEFORE" ]'
+# Stubs already in the upper dir stay as they are, whatever they hold: the
+# 8352-byte compiled libapplogrs.so is neither rewritten nor size-checked.
+check update_keeps_the_stubs_in_the_upper_dir 'said "    kept /etc/init.d/S60pspapp_daemon" && said "    kept /usr/lib/libapplogrs.so" && same "$W/data/overlay/upper/usr/lib/libapplogrs.so" "$STUB_LIB" && same "$W/usr/lib/libapplogrs.so" "$STUB_LIB" && [ "$(cat "$W/data/overlay/upper/etc/init.d/S60pspapp_daemon")" = "#!/bin/sh" ] && stubs_in_upper'
+check update_checks_only_that_kept_stubs_are_there '! grep -q -F "\$f(content)" "$FAKE_ADB_LOG" && logged "for f in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so"'
+check update_never_writes_the_upper_dir '! logged DIRECT-UPPER-WRITE'
 check update_starts_the_watchdog_last 'watchdog_started_last && before "cp /tmp/waved.new waved" "start-stop-daemon"'
 check update_does_not_ask_for_a_reboot '! said "adb reboot" && [ "$(tail -n 1 "$T/out")" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ]'
+
+# An older install.sh's one-newline libapplogrs.so is kept too.
+setup; printf '\n' > "$T/one-byte.so"; wave_running_waved "$T/one-byte.so"
+run_install
+check update_keeps_a_one_byte_telemetry_stub '[ $rc -eq 0 ] && said "    kept /usr/lib/libapplogrs.so" && same "$W/data/overlay/upper/usr/lib/libapplogrs.so" "$T/one-byte.so"'
 
 # The installed binary's space comes back at the swap, so it counts as free.
 setup; wave_running_waved; head -c 2097152 /dev/zero > "$W/data/waved/waved"
@@ -477,12 +523,17 @@ setup; wave_running_waved; FAKE_SHELL_FAIL=".S03splash.new" run_install
 check failed_install_step_stops_before_the_stubs '[ $rc -ne 0 ] && said "ERROR: S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)" && ! logged "> /etc/init.d/S60pspapp_daemon" && said "The watchdog runs again." && watchdog_started_last'
 setup; FAKE_SHELL_FAIL="> /etc/init.d/S60pspapp_daemon" run_install
 check failed_stub_write_refuses '[ $rc -ne 0 ] && said "ERROR: could not stub the stock services" && said "Stock firmware was stopped: adb reboot, then run this again." && ! said "=== Done"'
+setup; FAKE_STUB_WRITE_FAILS=1 run_install
+check a_stub_that_could_not_be_written_refuses '[ $rc -ne 0 ] && said "ERROR: could not stub the stock services" && ! said "wrote /etc/init.d/S60pspapp_daemon" && ! said "=== Done"'
 setup; FAKE_SHELL_FAIL="mkdir -p /mnt/udisk/recordings" run_install
 check a_recordings_folder_that_fails_does_not_fail_the_install '[ $rc -eq 0 ] && [ "$(tail -n 1 "$T/out")" = "Run: adb reboot" ]'
 
-# Stubs that read back as something else (an overlay that did not take): no "Done".
+# Stubs written now that read back as something else (a write that did not
+# take), or that never reach the upper dir (no overlay there): no "Done".
 setup; FAKE_STUBS_STICK=0 run_install
-check refuses_when_the_stubs_did_not_take '[ $rc -ne 0 ] && said "ERROR: the stock app and telemetry stubs did not take" && ! said "=== Done"'
+check refuses_when_the_stubs_did_not_take '[ $rc -ne 0 ] && said "ERROR: the stock app and telemetry stubs did not take" && said "S60pspapp_daemon(content)" && said "libapplogrs.so(content)" && ! said "=== Done"'
+setup; FAKE_NO_COPY_UP=1 run_install
+check refuses_when_the_stubs_are_not_in_the_upper_dir '[ $rc -ne 0 ] && said "ERROR: the stock app and telemetry stubs did not take" && said "/data/overlay/upper/etc/init.d/S60pspapp_daemon" && said "/data/overlay/upper/usr/lib/libapplogrs.so" && ! said "(content)" && ! said "=== Done"'
 setup; wave_running_waved
 rm "$W/data/overlay/upper/etc/init.d/S60pspapp_daemon" "$W/data/overlay/upper/usr/lib/libapplogrs.so"
 printf '%s\n' "$STOCK_DAEMON" > "$W/etc/init.d/S60pspapp_daemon"; printf 'ELF' > "$W/usr/lib/libapplogrs.so"

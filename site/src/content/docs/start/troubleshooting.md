@@ -34,7 +34,7 @@ back what it can and says so on the next line:
 | `the binary was not replaced` | The new binary did not fit in `/data/waved`. On an update the old one is back in place. | Make room (["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full)), then run the installer again. |
 | `S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)` | The new binary is in place, but some start-up files may still be the old ones. | Run the installer again. |
 | `config.toml not written` | The default settings file could not be written. | Run the installer again. |
-| `could not stub the stock services`, `the stock app and telemetry stubs did not take (…)` | Everything else is installed, but the stock app's stubs did not write or did not read back. The stock app would start next to waved at the next boot. | Run the installer again; [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) if it stops here again. |
+| `could not stub the stock services`, `the stock app and telemetry stubs did not take (…)` | Everything else is installed, but the stock app's stubs are not in place: one it wrote did not read back as written, or one is not in the overlay's upper directory. The stock app would start next to waved at the next boot. | Run the installer again; [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) if it stops here again. |
 | `could not start the watchdog` | An update installed everything, but waved's watchdog did not start, so waved is not running. | `adb reboot`: waved starts at boot. |
 
 Two can come at any step. From `Stopping stock firmware, the watchdog and
@@ -207,25 +207,28 @@ and run the installer again.
 
 `could not stub the stock services` and `the stock app and telemetry stubs
 did not take` mean everything else is installed, but the two stubs that keep
-the stock app and its telemetry off did not write or did not read back as
-written. With the stock app's start-up script still in place, the stock app
-would start next to waved at the next boot. Run the installer again. If it
-stops here again, look at what the Wave has:
+the stock app and its telemetry off are not in place. With the stock app's
+start-up script still in effect, the stock app would start next to waved at
+the next boot. Run the installer again.
+
+What the installer checks: the stubs live in the overlay's upper directory,
+`/data/overlay/upper`, and it is the copies there that replace the stock
+files at boot. A stub already there is kept as it is, whatever it holds (an
+earlier install put it there; on some Waves `libapplogrs.so` is a compiled
+no-op library rather than an empty file). A missing one is written through
+`/etc` and `/usr` and read back: `S60pspapp_daemon` must be the one line
+`#!/bin/sh`, and `libapplogrs.so` empty (0 or 1 byte). Then both must be in the upper
+directory. The line above the `ERROR:` (`not in place: …`) names what is
+missing or what did not read back as written. If it stops here again, look
+at what the Wave has:
 
 ```bash
-adb shell 'cat /etc/init.d/S60pspapp_daemon; ls -l /usr/lib/libapplogrs.so'
+adb shell 'ls -l /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so /data/overlay/upper/etc/init.d/S60pspapp_daemon /data/overlay/upper/usr/lib/libapplogrs.so'
 ```
 
-The stub start-up script is the one line `#!/bin/sh`, and the stub library is
-empty (0 bytes, or 1 on a Wave an older installer set up). The installer
-writes a stub only where the overlay has none yet, so a different file in
-the overlay stays. To clear it, delete the two from the overlay's upper
-directory, reboot, and run the installer again:
-
-```bash
-adb shell rm -f /data/overlay/upper/etc/init.d/S60pspapp_daemon /data/overlay/upper/usr/lib/libapplogrs.so
-adb reboot
-```
+If only the two under `/data/overlay/upper` are missing, `/etc` and `/usr`
+are not the overlay the installer expects (`adb shell mount | grep overlay`
+shows what they are).
 
 `install.sh stopped during: …` names the step in which a command failed
 unexpectedly, and `install.sh interrupted during: …` the step in which Ctrl-C

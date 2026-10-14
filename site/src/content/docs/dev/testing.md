@@ -84,21 +84,24 @@ It runs `deploy/install.sh` and `deploy/revert.sh` against a fake `adb`, so
 no Wave is needed, and it aborts if `adb` is not the fake. The fake logs every
 call and runs the scripts meant for the Wave in a directory that stands in
 for the Wave's `/data`, `/tmp`, `/etc`, `/usr` and `/mnt`, with fake `ps`,
-`kill`, `killall`, `pidof`, `start-stop-daemon` and `df`. The USB gadget patch
-it runs is the real one, on an `S89usbgadget`-shaped copy. It covers:
+`kill`, `killall`, `pidof`, `start-stop-daemon` and `df`. Like the Wave's
+overlay, it copies whatever a script changes under `/etc` and `/usr` into
+`/data/overlay/upper`, and it flags a script that writes there directly. The
+USB gadget patch it runs is the real one, on an `S89usbgadget`-shaped copy.
+It covers:
 
 - a first install: every file through `/tmp` with an md5 check, the gadget
   patch and the ADB-at-boot check before anything is stopped, the swap,
   `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb` and `iptables.rules`
-  each through a dot-named copy and a rename, the default `config.toml`, the
+  each through a dot-named copy and a rename, the default `config.toml`, both
   stubs written through the `/etc` and `/usr` mounts (never into
-  `/data/overlay/upper`) and read back last, and `adb reboot` printed only at
-  the end;
+  `/data/overlay/upper` directly), read back and found in the upper
+  directory, last, and `adb reboot` printed only at the end;
 - an update: `config.toml` kept and copied to `config.toml.before-<time>`,
-  the gadget found already patched, the old binary in `/tmp/waved.old`, a
-  one-byte `libapplogrs.so` stub from an older installer accepted, the
-  watchdog started again at the end, and the old binary's space counted as
-  free;
+  the gadget found already patched, the old binary in `/tmp/waved.old`, the
+  stubs already in the upper directory kept untouched (a compiled 8352-byte
+  `libapplogrs.so`, or an older installer's one-byte one), the watchdog
+  started again at the end, and the old binary's space counted as free;
 - refusals before anything changes: too little room on `/data` (before any
   push), a copy that doesn't match, a failed push, an over-the-air update on
   trial, no Wave, no build, a Wave that stops answering;
@@ -107,8 +110,9 @@ it runs is the real one, on an `S89usbgadget`-shaped copy. It covers:
   answer. None of them stops or stubs anything;
 - failures once waved is stopped: waved that won't exit (no swap), a binary
   that doesn't fit (the old one back), a failed install step (no stubs),
-  stubs that don't take, each with the watchdog started again after an
-  update or "adb reboot" after a first install;
+  stubs that don't read back as written or never reach the upper directory,
+  each with the watchdog started again after an update or "adb reboot" after
+  a first install;
 - Ctrl-C during a step: the message names the step, and an update gets its
   watchdog back;
 - `revert.sh`: what it deletes, only in the overlay's upper directory.

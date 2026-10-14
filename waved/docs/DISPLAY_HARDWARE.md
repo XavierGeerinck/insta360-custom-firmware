@@ -143,8 +143,11 @@ no binary. Deploy through `/tmp` and swap with the watchdog stopped.
 6. Installs `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb` and `iptables.rules`,
    each through a dot-named copy and a rename; the default `config.toml` if there was none.
 7. Last, the stubs that keep the stock app and its telemetry off (`S60pspapp_daemon`,
-   `libapplogrs.so`; only where `/data/overlay/upper` has none yet), written through the
-   `/etc` and `/usr` mounts and read back.
+   `libapplogrs.so`). One already in `/data/overlay/upper` is kept as it is, whatever it
+   holds (on some Waves `libapplogrs.so` there is the compiled no-op
+   `scripts/libapplogrs.so`, 8352 bytes). A missing one is written through the `/etc` and
+   `/usr` mounts and read back (`#!/bin/sh` and a newline; 0 or 1 byte). Then both must be
+   in `/data/overlay/upper`: the copies there are what replace the stock files at boot.
 8. An update starts the watchdog again; a first install (no `/data/waved/waved`) asks for
    `adb reboot`. A failure or Ctrl-C after step 5 began does the same.
 

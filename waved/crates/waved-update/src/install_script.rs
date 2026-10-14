@@ -16,14 +16,20 @@ use std::time::{Duration, Instant};
 
 /// The fake `adb`: `push` copies, `shell` runs the script with `sh`, both with
 /// the Wave's paths (`/data/...` and a bare `/data` alike) mapped into
-/// `$FAKE_WAVE`. `$FAKE_ADB_CORRUPT` names a pushed path whose copy gets one
-/// byte too many.
+/// `$FAKE_WAVE`; what the script prints names the Wave's paths again.
+/// `$FAKE_WAVE/etc` and `$FAKE_WAVE/usr` are the overlay mounts: after each
+/// script, every file it changed there is copied into
+/// `$FAKE_WAVE/data/overlay/upper`, as the overlay's copy-up does.
+/// `$FAKE_ADB_CORRUPT` names a pushed path whose copy gets one byte too many.
 const ADB: &str = r#"#!/bin/sh
 printf 'adb %s\n' "$*" >> "$FAKE_WAVE/log"
 on_wave() {
     printf '%s' "$1" | sed -E \
         -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)/#\1$FAKE_WAVE/\2/#g" \
         -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)([^[:alnum:]_./-]|\$)#\1$FAKE_WAVE/\2\3#g"
+}
+merged() {
+    (cd "$FAKE_WAVE" && find etc usr -type f -exec cksum {} + | LC_ALL=C sort)
 }
 case "$1" in
     push)
@@ -37,8 +43,18 @@ case "$1" in
         ;;
     shell)
         shift
-        INIT="$FAKE_WAVE/etc/init.d/S89usbgadget" BACKUP_DIR="$FAKE_WAVE/data/waved" \
-            PATH="$FAKE_WAVE_BIN:$PATH" sh -c "$(on_wave "$*")"
+        state="$FAKE_WAVE/../adb-state"
+        mkdir -p "$state"
+        merged > "$state/before"
+        { INIT="$FAKE_WAVE/etc/init.d/S89usbgadget" BACKUP_DIR="$FAKE_WAVE/data/waved" \
+            PATH="$FAKE_WAVE_BIN:$PATH" sh -c "$(on_wave "$*")"; echo $? > "$state/rc"; } |
+            sed "s#$FAKE_WAVE##g"
+        merged > "$state/after"
+        LC_ALL=C comm -13 "$state/before" "$state/after" | while read -r _ _ path; do
+            mkdir -p "$FAKE_WAVE/data/overlay/upper/$(dirname "$path")"
+            cp -p "$FAKE_WAVE/$path" "$FAKE_WAVE/data/overlay/upper/$path"
+        done
+        exit "$(cat "$state/rc")"
         ;;
 esac
 "#;
@@ -165,6 +181,11 @@ fn deploy_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy")
 }
 
+/// The compiled no-op telemetry library some Waves have as their stub.
+fn stub_lib() -> PathBuf {
+    deploy_dir().join("../scripts/libapplogrs.so")
+}
+
 fn write_exe(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, text).unwrap();
@@ -247,6 +268,20 @@ impl FakeWave {
             0o600,
         );
         wave.put("etc/init.d/S60waved", "#!/bin/sh\necho old init\n", 0o755);
+        // Its stubs, in the overlay's upper directory and so in /etc and /usr:
+        // the compiled no-op libapplogrs.so (8352 bytes), as on the owner's Wave.
+        for dir in ["", "data/overlay/upper/"] {
+            wave.put(
+                &format!("{dir}etc/init.d/S60pspapp_daemon"),
+                "#!/bin/sh\n",
+                0o755,
+            );
+            fs::copy(
+                stub_lib(),
+                wave.wave(&format!("{dir}usr/lib/libapplogrs.so")),
+            )
+            .unwrap();
+        }
         wave.spawn("watchdog");
         wave.spawn("waved");
         wave
@@ -417,6 +452,13 @@ fn an_update_keeps_the_settings_and_swaps_a_stripped_binary_once_waved_has_exite
     }
     assert_eq!(mode(&wave.wave("etc/init.d/S03splash")), 0o755);
 
+    // Stubs already in the upper directory are kept as they are.
+    let stub = fs::read(stub_lib()).unwrap();
+    for dir in ["", "data/overlay/upper/"] {
+        let lib = format!("{dir}usr/lib/libapplogrs.so");
+        assert_eq!(fs::read(wave.wave(&lib)).unwrap(), stub, "{lib}:\n{log}");
+    }
+
     // ADB at boot before anything stopped: the gadget patch, then its check.
     let patch = wave.at("adb shell sh /tmp/patch-usbgadget.sh").expect(&log);
     let check = wave.at("commented++").expect(&log);
@@ -454,14 +496,22 @@ fn a_first_install_writes_the_default_settings_and_asks_for_a_reboot() {
         Some("new waved binary STRIPPED")
     );
     assert!(wave.read("etc/init.d/S60waved").is_some());
-    // The stubs, through the /etc and /usr mounts, never into the overlay's
-    // upper directory.
-    assert_eq!(
-        wave.read("etc/init.d/S60pspapp_daemon").as_deref(),
-        Some("#!/bin/sh\n")
-    );
-    assert_eq!(wave.read("usr/lib/libapplogrs.so").as_deref(), Some(""));
-    assert!(!wave.wave("data/overlay/upper").exists(), "{log}");
+    // The stubs, written through the /etc and /usr mounts; the overlay's
+    // copy-up puts them in its upper directory.
+    for dir in ["", "data/overlay/upper/"] {
+        assert_eq!(
+            wave.read(&format!("{dir}etc/init.d/S60pspapp_daemon"))
+                .as_deref(),
+            Some("#!/bin/sh\n"),
+            "{log}"
+        );
+        assert_eq!(
+            wave.read(&format!("{dir}usr/lib/libapplogrs.so"))
+                .as_deref(),
+            Some(""),
+            "{log}"
+        );
+    }
     assert!(wave.watchdog_started().is_none(), "{log}");
     // The patch's own "adb reboot" advice is not shown: one reboot hint, last.
     let stdout = String::from_utf8_lossy(&out.stdout);
