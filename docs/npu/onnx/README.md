@@ -1,9 +1,33 @@
-# Wave ONNX Audit and CPU Fallback
+# Wave ONNX Admission, CPU Fallback and Native Backend
+
+The explicit `wave-native` backend imports actual ONNX coefficients into
+the qualified FP16 Conv and quantized U8 FC routes. See the
+[native backend guide](native-backend.md) for exact supported profiles,
+qualification evidence and commands. The PoC 9 control plane documented
+below remains the default; its approval registry stays empty.
+
+PoC18 adds a bounded trained Conv/Add/Relu graph profile. The exact
+MarbleNet pointwise and residual blocks qualified on NN; its dilated
+depthwise block was rejected and the original complete NPU model remained
+unqualified at that stage. The [MarbleNet guide](marblenet.md) documents the real model,
+explicit CPU fallback, fixed audio window and measured limits.
+
+PoC19 qualifies the original dilated layer by moving zero padding into an
+explicit TP operation, followed by unchanged NN convolutions. The first
+trained strided block also qualifies. After owner reconnection on2026-10-14,
+the complete graph qualified in a separately reviewed quiet phase:800/800
+FP32 speech decisions agree, with maximum probability error0.000815. The
+paired prepared-feature boundary measured0.833ms native versus8.664ms CPU
+(10.399×). Wi-Fi restoration and final device cleanup are verified. The
+[compatibility notebook](../lab-notebook/2026-10-13-poc19-marblenet-compatibility.md)
+preserves the successful new phase and earlier failed intervals separately.
+
+## Historical PoC 9E/9F result
 
 **PoC:** 9E/9F
 **Date:** 2026-07-28
 **Status:** Host-only gate passed
-**General ONNX NPU support:** None approved
+**General ONNX NPU support in the PoC 9 policy:** None approved
 **Separate sealed partition:** Quantized U8 `[481]` Erf approved by PoC 13
 **Device, driver, compiler, or ADB calls:** None
 
@@ -79,8 +103,9 @@ See the [`Erf-mask result`](../models/erf-mask/README.md), exact
 - a non-executing audit of the repository's real Silero VAD model;
 - 35 focused tests and the existing 198-test NPU regression suite.
 
-The current policy has zero approved NPU graph signatures. Therefore every
-admitted node remains CPU-resident.
+The default PoC 9 policy has zero approved NPU graph signatures. Every node
+admitted through that backend remains CPU-resident. Explicit `wave-native`
+eligibility comes from a separate exact-package qualification ledger.
 
 ## Evidence map
 
@@ -425,10 +450,9 @@ The verified environment used:
 These are host-PoC identities. They do not describe the Wave firmware's
 packaged Python or ONNX Runtime environment.
 
-## What is still required for NPU execution
+## Original PoC 9 promotion requirements
 
-No general ONNX node may move to the Wave NPU until a later PoC supplies all
-of:
+The original PoC 9 backend requires all of:
 
 1. the missing no-kernel SDK or another exact compiler consumer;
 2. a hash-pinned compiler/runtime/profile dependency set;
@@ -438,7 +462,8 @@ of:
 6. repeatability, cleanup, health, and fallback evidence;
 7. an exact graph signature added through a reviewed policy update.
 
-Only then can the partition schema be exercised with an NPU-resident
-partition. Broad operator support, arbitrary ONNX compilation, denoising
-quality, real-time scheduling, and production deployment remain separate
-claims.
+PoC 17 implements a separate native package route with its own compiler,
+tensor, checksum, oracle, cleanup and health checks. It does not add graph
+signatures to the PoC 9 policy. Broad operator support, arbitrary ONNX
+compilation, denoising quality, real-time scheduling and production
+deployment remain separate claims.

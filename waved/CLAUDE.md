@@ -19,10 +19,12 @@ from on-device measurement and are hard to rederive.
 | Stock UI assets / home screen | [`docs/ui/ASSETS.md`](docs/ui/ASSETS.md), [`docs/ui/HOME_SCREEN.md`](docs/ui/HOME_SCREEN.md) (reference only) |
 | Wi-Fi / provisioning | [`docs/WIFI.md`](docs/WIFI.md)                      |
 | System services (power key, backlight, RTC, tones, reset) | [`crates/waved-system/README.md`](crates/waved-system/README.md) |
-| MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, power off) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
+| MCU link (`/dev/ttyS4`, MAVLink: battery, motor, power key, status LEDs, power off; no volume buttons exist) | [`docs/MCU_PROTOCOL.md`](docs/MCU_PROTOCOL.md) |
 | Bluetooth module (`/dev/ttyS1` 921600, Telink; audio on TDM-A `hw:0,0`; `BT.bin`/`DONGLE.bin`) | [`docs/BLUETOOTH_PROTOCOL.md`](docs/BLUETOOTH_PROTOCOL.md) |
 | Updates (signed packages, server, fall-back in `S60waved`, back to stock) | [`docs/UPDATES.md`](docs/UPDATES.md) |
 | Wave Controller app ("PC Link", vendor HID report 0x03, MAVLink) | [`docs/WAVE_CONTROLLER_PROTOCOL.md`](docs/WAVE_CONTROLLER_PROTOCOL.md) |
+| Security posture, release lockdown and the way back (K1) | [`docs/SECURITY.md`](docs/SECURITY.md) |
+| USB storage (recordings volume `/dev/udisk` as a drive; stock's `uac_hid_msc` mode switch at runtime, adb off while on; never link the drive next to adb) | [`docs/USB_STORAGE.md`](docs/USB_STORAGE.md) |
 
 When you learn something new about the device that is **not derivable from
 reading the code** (measured offsets, magic numbers, hardware quirks,
@@ -36,9 +38,11 @@ WAVED_BUILD_ID=$(git rev-parse --short HEAD) cross build --release --target aarc
     --features "ui,capture-alsa" -p waved
 ```
 
-Then deploy through `/tmp` with the watchdog stopped: `/data` is nearly full and a
-direct `adb push` over the binary can leave the device with none. The full
-procedure (strip, md5 check, swap, watchdog restart) is in
+Then deploy with `deploy/install.sh`: it goes through `/tmp` with the watchdog
+stopped (`/data` is nearly full and a direct `adb push` over the binary can leave
+the device with none), keeps the Wave's `config.toml` (copying it to
+`config.toml.before-<time>` first) and starts the watchdog again. The procedure
+(strip, md5 check, swap, watchdog restart) is in
 [`docs/DISPLAY_HARDWARE.md`](docs/DISPLAY_HARDWARE.md#deploy).
 
 For one-off runs with injected env vars, stop the watchdog first and start waved

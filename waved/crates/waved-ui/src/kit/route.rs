@@ -11,6 +11,12 @@ pub enum ConfirmKind {
     StopUsbStorage,
     /// Wi-Fi "Change network": leave the current network for the setup network (B7).
     ChangeNetwork,
+    /// System -> PIN: turn the device PIN off (D10). Reaching System already
+    /// needed the PIN, so this only confirms; a new PIN is set on the setup page.
+    TurnOffPin,
+    /// Bluetooth "Pair another phone": drops the connected phone (stock's
+    /// "Connecting a new device will disconnect from <phone>. Continue?").
+    PairAnotherPhone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +75,9 @@ impl Route {
             Route::Wifi | Route::WifiSetup | Route::Confirm(ConfirmKind::ChangeNetwork) => {
                 Some(Route::Wifi)
             }
-            Route::Bluetooth => Some(Route::Bluetooth),
+            Route::Bluetooth | Route::Confirm(ConfirmKind::PairAnotherPhone) => {
+                Some(Route::Bluetooth)
+            }
             Route::Uploads | Route::UploadMode => Some(Route::Uploads),
             Route::System
             | Route::Display
@@ -78,11 +86,13 @@ impl Route {
             | Route::TimeZone
             | Route::About
             | Route::Update
-            | Route::UsbStorage
-            | Route::Confirm(ConfirmKind::FactoryReset | ConfirmKind::StopUsbStorage) => {
+            | Route::Confirm(ConfirmKind::FactoryReset | ConfirmKind::TurnOffPin) => {
                 Some(Route::System)
             }
             // Power off stays open: the power key's long press must always work.
+            // USB storage is started from System, so its PIN guards that; the
+            // takeover and stopping stay open (G1): pulling the cable stops it
+            // anyway.
             _ => None,
         }
     }
@@ -141,12 +151,12 @@ mod tests {
             (Route::DateTime, Route::System),
             (Route::About, Route::System),
             (Route::Update, Route::System),
-            (Route::UsbStorage, Route::System),
             (Route::Confirm(ConfirmKind::FactoryReset), Route::System),
-            (Route::Confirm(ConfirmKind::StopUsbStorage), Route::System),
+            (Route::Confirm(ConfirmKind::TurnOffPin), Route::System),
             (Route::TimeZone, Route::System),
             (Route::DimAfter, Route::System),
             (Route::Confirm(ConfirmKind::ChangeNetwork), Route::Wifi),
+            (Route::Confirm(ConfirmKind::PairAnotherPhone), Route::Bluetooth),
         ];
         for (route, entry) in cases {
             assert_eq!(route.guarded_by(), Some(entry), "{route:?}");
@@ -163,6 +173,8 @@ mod tests {
             Route::Pin(Box::new(Route::Files)),
             Route::Resting,
             Route::IncomingCall,
+            Route::UsbStorage,
+            Route::Confirm(ConfirmKind::StopUsbStorage),
         ] {
             assert_eq!(open.guarded_by(), None, "{open:?}");
         }
@@ -174,6 +186,7 @@ mod tests {
             Route::TimeZone,
             Route::DimAfter,
             Route::Confirm(ConfirmKind::ChangeNetwork),
+            Route::Confirm(ConfirmKind::PairAnotherPhone),
         ] {
             assert!(!route.requires_pin(), "{route:?}");
             assert!(!route.is_base(), "{route:?}");

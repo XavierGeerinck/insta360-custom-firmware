@@ -1,169 +1,205 @@
 #!/bin/bash
-# Install waved on an Insta360 Wave over adb. Safe to re-run: it upgrades an
-# existing install and keeps its config.toml.
+# Install waved on a Wave over adb, or update the waved already on it.
+# docs/DISPLAY_HARDWARE.md#deploy explains every step. In short:
+# - Every test of the Wave's files runs on the Wave (adb shell), never here.
+# - /data/waved/config.toml on the Wave is never replaced. It is copied to
+#   /data/waved/config.toml.before-<UTC time> first: a newer build may save
+#   keys an older one rejects (docs/UPDATES.md, "Going back over adb").
+# - The binary is stripped, pushed to /tmp (RAM; /data is nearly full) and
+#   checked by md5, then swapped in only once the watchdog is stopped and waved
+#   has exited. S60waved and iptables.rules go the same way, through /tmp.
+# - An update starts the watchdog again; a first install (stock firmware
+#   running) ends with "reboot".
+# adb shell's exit status is not reliable across adb versions, so every step
+# on the Wave prints its answer and this script checks it.
 #
-# Everything it changes lives on /data; the read-only system partition is never
-# touched, and deploy/revert.sh removes all of it:
-#   /data/waved/                 waved, config.toml, splash.fb, iptables.rules
-#   the /etc and /usr overlays   (stored under /data/overlay/upper): S60waved,
-#                                S03splash, rsyslog.conf, the patched
-#                                S89usbgadget, a stub S60pspapp_daemon and an
-#                                empty libapplogrs.so (stock telemetry)
+# Env: WAVED_BINARY  the build to install
+#                    (default target/aarch64-unknown-linux-gnu/release/waved)
+#      OBJCOPY       llvm-objcopy (default: rustc's own, from
+#                    `rustup component add llvm-tools`)
 #
-# The procedure follows docs/DISPLAY_HARDWARE.md#deploy: /data is small, so
-# the new binary goes to /tmp first and replaces the old one only once it has
-# arrived intact and waved has exited. The overlay files are written through
-# the /etc and /usr mounts, as the over-the-air updater does, never into
-# /data/overlay/upper directly.
-#
-# The order is the safety net. A Wave without the stock app and without ADB
-# cannot be reached again, so nothing stock is stopped or stubbed until ADB is
-# known to come up at the next boot:
-#   1. checks, then the new binary to /tmp, intact
-#   2. the USB gadget patch (ADB at boot) and a check that it took
-#   3. stop the stock app and waved; swap the binary only once waved has exited
-#   4. config, start-up scripts, splash, logging, firewall rules
-#   5. last of all, the stubs that switch the stock app and telemetry off,
-#      read back to check they took
+# The scripts run on the Wave are single-quoted on purpose: they expand there.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WAVED_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BINARY="${WAVED_BINARY:-${WAVED_DIR}/target/aarch64-unknown-linux-gnu/release/waved}"
-MARGIN_KB=20480   # room for logs and the recordings database after the swap
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BINARY="${WAVED_BINARY:-$ROOT/target/aarch64-unknown-linux-gnu/release/waved}"
+DEFAULT_CONFIG="$ROOT/config/default.toml"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+START_WATCHDOG='start-stop-daemon -S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start'
+UPDATE=no
+STOPPED=no
 
-STEP="starting"
-trap 'echo "ERROR: install.sh stopped at: ${STEP}" >&2' ERR
-trap 'echo "ERROR: install.sh interrupted at: ${STEP}" >&2; exit 130' INT TERM
+die() {
+    echo "ERROR: $*" >&2
+    # Never leave a Wave that ran waved without its watchdog.
+    if [ "$STOPPED" = yes ] && [ "$UPDATE" = yes ]; then
+        if wave_ok "$START_WATCHDOG && echo ok"; then
+            echo "The watchdog runs again." >&2
+        else
+            echo "Could not start the watchdog: $START_WATCHDOG" >&2
+        fi
+    elif [ "$STOPPED" = yes ]; then
+        echo "Stock firmware was stopped: adb reboot, then run this again." >&2
+    fi
+    exit 1
+}
 
-die() { echo "ERROR: $*" >&2; exit 1; }
-# bash does not run the ERR trap inside a function, so an adb shell that fails
-# in on_wave would end the install without a word: its callers add || stopped.
-stopped() { die "install.sh stopped at: ${STEP}"; }
-on_wave() { adb shell "$1" | tr -d '\r'; }
+# What a command printed on the Wave, without adb's carriage returns.
+on_wave() {
+    adb shell "$1" | tr -d '\r'
+}
 
-strip_tool() {
-    if [ -n "${OBJCOPY:-}" ]; then echo "$OBJCOPY"; return; fi
-    local host tool
-    host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
-    tool="$(rustc --print sysroot 2>/dev/null)/lib/rustlib/${host}/bin/llvm-objcopy"
-    [ -x "$tool" ] || die "llvm-objcopy not found. Run: rustup component add llvm-tools"
-    echo "$tool"
+# Run a script on the Wave that prints "ok" last when every step worked.
+# Shows anything else it printed.
+wave_ok() {
+    local out
+    out="$(on_wave "$1")" || true
+    [ -z "$out" ] || printf '%s\n' "$out" | grep -vx ok || true
+    [ "$(printf '%s\n' "$out" | tail -n 1)" = ok ]
+}
+
+wave_has() {
+    [ "$(on_wave "if [ -e '$1' ]; then echo yes; else echo no; fi")" = yes ]
 }
 
 local_md5() {
-    if command -v md5sum >/dev/null 2>&1; then md5sum "$1" | cut -d' ' -f1; else md5 -q "$1"; fi
+    if command -v md5sum >/dev/null 2>&1; then
+        md5sum "$1" | cut -d' ' -f1
+    else
+        md5 -q "$1"
+    fi
 }
 
-# --- Checks. Nothing on the Wave changes until all of them pass. ---
-STEP="checking the binary and the adb connection"
-[ -f "$BINARY" ] || die "no waved binary at $BINARY
-Build it first, from the waved/ directory:
-  cross build --release --target aarch64-unknown-linux-gnu --features \"ui,capture-alsa\" -p waved"
-[ "$(adb get-state 2>/dev/null || true)" = "device" ] || die "no Wave found on adb. Connect it over USB and enable ADB (Install guide, step 1)."
+wave_md5() {
+    on_wave "md5sum '$1' 2>/dev/null" | cut -d' ' -f1
+}
 
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
+# Push $1 to $2 (in /tmp on the Wave) and check that it arrived whole.
+push_checked() {
+    local want got
+    adb push "$1" "$2" >/dev/null
+    want="$(local_md5 "$1")"
+    got="$(wave_md5 "$2")"
+    [ "$want" = "$got" ] || die "$2 on the Wave is not $1 (md5 ${got:-none}, want $want)"
+}
 
-STEP="stripping the binary"
-STRIP="$(strip_tool)"
-"$STRIP" --strip-all "$BINARY" "$STAGE/waved"
-SIZE_KB=$(( ($(wc -c < "$STAGE/waved") + 1023) / 1024 ))
-
-STEP="checking free space on /data"
-FREE_KB="$(on_wave "df -k /data | tail -1" | awk '{print $4}')"
-OLD_KB="$(on_wave "if [ -f /data/waved/waved ]; then du -k /data/waved/waved | cut -f1; else echo 0; fi")"
-NEED_KB=$(( SIZE_KB + MARGIN_KB ))
-[ $(( FREE_KB + OLD_KB )) -ge "$NEED_KB" ] || die "/data has $(( (FREE_KB + OLD_KB) / 1024 )) MB available and waved needs $(( NEED_KB / 1024 )) MB. Nothing was changed. See Troubleshooting: \"/data is full\"."
-
-# --- Copy the new binary to /tmp and check it arrived intact. ---
-STEP="copying waved to /tmp on the Wave"
-echo "=== Copying waved ($(( SIZE_KB / 1024 )) MB) to the Wave ==="
-adb push "$STAGE/waved" /tmp/waved.new >/dev/null
-[ "$(on_wave "md5sum /tmp/waved.new" | cut -d' ' -f1)" = "$(local_md5 "$STAGE/waved")" ] \
-    || die "the copy on the Wave does not match (md5). Nothing was changed; run install.sh again."
-
-# --- ADB at boot first, while the Wave is still fully stock. Without it the
-# Wave has no ADB after the reboot (only the stock app turns it on, and it will
-# not run), and revert.sh can't reach it. Harmless on stock: ADB comes up earlier.
-STEP="patching the USB gadget: ADB at boot, volume ranges, HID controls"
-echo "=== Patching the USB gadget: ADB at boot, volume ranges, HID controls ==="
-adb push "${WAVED_DIR}/scripts/patch-stock-usbgadget.sh" /tmp/patch-usbgadget.sh >/dev/null
-PATCH_OUT="$(on_wave "sh /tmp/patch-usbgadget.sh && echo patched; rm -f /tmp/patch-usbgadget.sh")" || true
-if [ "$(echo "$PATCH_OUT" | tail -n 1)" != "patched" ]; then
-    echo "$PATCH_OUT" | grep -v -e '^reboot the device' -e 'adb reboot' >&2 || true
-    die "the USB gadget patch did not finish. Nothing was changed except possibly /etc/init.d/S89usbgadget (a backup is in /data/waved); the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"."
+if [ ! -f "$BINARY" ]; then
+    echo "ERROR: Binary not found at $BINARY" >&2
+    echo "Build it first (docs/DISPLAY_HARDWARE.md#deploy):" >&2
+    echo "  WAVED_BUILD_ID=\$(git rev-parse --short HEAD) cross build --release \\" >&2
+    echo "    --target aarch64-unknown-linux-gnu --features \"ui,capture-alsa\" -p waved" >&2
+    exit 1
 fi
-# Only what it patched. Its closing "reboot the device ... adb reboot" is for
-# running the patch by hand; here the reboot comes once everything is in place.
-echo "$PATCH_OUT" | grep -E '^(already )?patched .' || true
+if [ -z "${OBJCOPY:-}" ]; then
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    OBJCOPY="$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-objcopy"
+fi
+command -v "$OBJCOPY" >/dev/null 2>&1 ||
+    die "no llvm-objcopy at $OBJCOPY (rustup component add llvm-tools, or set OBJCOPY)"
 
-# Both must hold: no adbd_enable line in the gadget script is still commented
-# out, and at least one live adbd_enable line is inside start_usbgadget(), the
-# function the boot runs (from its declaration to the "}" in column 0 that
-# closes it; start_usbgadget_ota_mode() does not count). busybox awk on the
-# Wave; the answer is read from its output, not from an exit code.
-STEP="checking that ADB is enabled at boot"
-ADB_AWK='/^[[:space:]]*#[[:space:]]*adbd_enable[[:space:]]*$/ { commented++ }; /^[[:space:]]*(function[[:space:]]+)?start_usbgadget[[:space:]]*[(][)]/ { boot = 1 }; boot && /^}/ { boot = 0 }; boot && /^[[:space:]]*adbd_enable[[:space:]]*$/ { live++ }; END { print "commented=" commented+0 " live=" live+0 }'
-ADB_AT_BOOT="$(on_wave "awk '${ADB_AWK}' /etc/init.d/S89usbgadget")" || stopped
-case "$ADB_AT_BOOT" in
-    "commented=0 live="[1-9]*) ;;
-    *) die "ADB is not enabled at boot (/etc/init.d/S89usbgadget: ${ADB_AT_BOOT:-no answer}). Nothing was changed except possibly that file; the Wave still runs the stock software. See Troubleshooting: \"ADB at boot\"." ;;
-esac
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-# --- Stop the stock app, the watchdog and waved, then swap. ---
-STEP="stopping the stock app and waved"
-echo "=== Stopping the stock app and any running waved ==="
-on_wave "killall pspapp pspapp_daemon 2>/dev/null; \
-kill \$(ps | awk '/S60waved start/ && !/awk/ {print \$1}') 2>/dev/null; \
-killall waved 2>/dev/null; \
-n=0; while pidof waved >/dev/null && [ \$n -lt 15 ]; do sleep 1; n=\$((n+1)); done; \
-if pidof waved >/dev/null; then killall -9 waved 2>/dev/null; n=0; while pidof waved >/dev/null && [ \$n -lt 5 ]; do sleep 1; n=\$((n+1)); done; fi; \
-true" >/dev/null || stopped
+echo "=== Stripping waved ==="
+"$OBJCOPY" --strip-all "$BINARY" "$WORK/waved"
+WAVED_MD5="$(local_md5 "$WORK/waved")"
 
-# The old binary's space is only freed once waved has exited: copying over a
-# live one fails with ENOSPC over a partial file. Swap only if it is gone.
-STEP="installing the waved binary"
-echo "=== Installing waved ==="
-SWAP="$(on_wave "if pidof waved >/dev/null; then echo busy; else mkdir -p /data/waved && rm -f /data/waved/waved && cp /tmp/waved.new /data/waved/waved && chmod 755 /data/waved/waved && rm -f /tmp/waved.new && echo ok; fi")" || true
-case "$SWAP" in
-    ok) ;;
-    busy) die "waved did not stop; nothing was replaced (the new binary is in /tmp/waved.new). Run install.sh again." ;;
-    *) die "could not copy waved into /data/waved. The new binary is still in /tmp/waved.new; check 'adb shell df -h /data' and run install.sh again." ;;
-esac
+echo "=== Checking the Wave ==="
+[ "$(on_wave 'echo ready' || true)" = ready ] || die "no Wave on adb (adb devices)"
+if wave_has /data/waved/update/trial; then
+    die "an over-the-air update is on trial (/data/waved/update/trial): installing now would \
+be undone when it commits or goes back. Wait until it has (about a minute after its second \
+start; docs/UPDATES.md), then run this again."
+fi
+if wave_has /data/waved/waved; then UPDATE=yes; fi
+HAS_CONFIG=no
+if wave_has /data/waved/config.toml; then HAS_CONFIG=yes; fi
 
-STEP="writing the config"
-HAS_CONFIG="$(on_wave "[ -f /data/waved/config.toml ] && echo yes || echo no")" || stopped
-case "$HAS_CONFIG" in
-    yes) ;;
-    no)
-        echo "=== Writing the default config.toml ==="
-        adb push "${WAVED_DIR}/config/default.toml" /data/waved/config.toml >/dev/null ;;
-    *) stopped ;;
-esac
+echo "=== Pushing to /tmp on the Wave (md5 checked) ==="
+push_checked "$WORK/waved" /tmp/waved.new
+push_checked "$SCRIPT_DIR/S60waved" /tmp/S60waved.new
+push_checked "$SCRIPT_DIR/iptables.rules" /tmp/iptables.rules.new
+if [ "$HAS_CONFIG" = no ]; then
+    push_checked "$DEFAULT_CONFIG" /tmp/config.toml.new
+fi
 
-# The /etc overlay: write through the mount, not into /data/overlay/upper.
-STEP="installing start-up scripts, splash, logging and firewall rules"
-echo "=== Installing start-up scripts, splash, logging and firewall rules ==="
-on_wave "mkdir -p /mnt/udisk/recordings" >/dev/null || stopped
-adb push "${SCRIPT_DIR}/S60waved" /etc/init.d/S60waved >/dev/null
-adb push "${SCRIPT_DIR}/S03splash" /etc/init.d/S03splash >/dev/null
-adb push "${SCRIPT_DIR}/splash.fb" /data/waved/splash.fb >/dev/null
-adb push "${SCRIPT_DIR}/rsyslog.conf" /etc/rsyslog.conf >/dev/null
-adb push "${SCRIPT_DIR}/iptables.rules" /data/waved/iptables.rules >/dev/null
-on_wave "chmod 0600 /data/waved/config.toml; chmod 755 /etc/init.d/S60waved /etc/init.d/S03splash" >/dev/null || stopped
+if [ "$HAS_CONFIG" = yes ]; then
+    echo "=== Keeping a copy of config.toml ==="
+    backup="/data/waved/config.toml.before-$STAMP"
+    wave_ok "cp /data/waved/config.toml $backup && chmod 600 $backup && echo ok" ||
+        die "could not copy config.toml; nothing was changed"
+    echo "    $backup"
+fi
 
-# Last: these switch the stock app and its telemetry off for good.
-STEP="switching the stock app and telemetry off"
-echo "=== Switching the stock app and its telemetry off ==="
-on_wave "printf '#!/bin/sh\n' > /etc/init.d/S60pspapp_daemon; chmod 755 /etc/init.d/S60pspapp_daemon; \
-: > /usr/lib/libapplogrs.so" >/dev/null || stopped
+echo "=== Stopping stock firmware, the watchdog and waved ==="
+STOPPED=yes
+# The watchdog is the S60waved start loop (started by rcS or start-stop-daemon);
+# !/awk/ also skips the shell running this script. waved takes ~2 s to exit
+# (the lift retracts first); its binary's space is free only once it has.
+wave_ok 'killall pspapp pspapp_daemon 2>/dev/null; \
+for pid in $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); do kill $pid; done; \
+rm -f /tmp/S60waved.pid; sleep 1; killall waved 2>/dev/null; n=0; \
+while pidof waved >/dev/null; do \
+    n=$((n + 1)); \
+    if [ $n -eq 30 ]; then killall -9 waved 2>/dev/null; fi; \
+    if [ $n -ge 40 ]; then echo "waved does not exit"; exit 1; fi; \
+    sleep 1; \
+done; echo ok' || die "could not stop waved"
 
-# Read them back. A stub that did not take leaves the stock app starting next
-# to waved at the next boot.
-STEP="checking the stubs"
-STUBS="$(on_wave "cat /etc/init.d/S60pspapp_daemon; if [ -f /usr/lib/libapplogrs.so ] && [ ! -s /usr/lib/libapplogrs.so ]; then echo 'libapplogrs.so: empty'; fi")" || stopped
-[ "$STUBS" = "$(printf '#!/bin/sh\nlibapplogrs.so: empty')" ] \
-    || die "the stock app and telemetry stubs did not take (/etc/init.d/S60pspapp_daemon, /usr/lib/libapplogrs.so). waved is installed, but the stock app would start next to it. Run install.sh again before you reboot. See Troubleshooting: \"The installer stopped part-way\"."
+echo "=== Swapping the binary ==="
+# The old binary waits in /tmp/waved.old: if the new one does not fit on
+# /data, it goes back.
+swap='mkdir -p /data/waved && cd /data/waved || exit 1; \
+if [ -f waved ]; then cp waved /tmp/waved.old || exit 1; fi; \
+rm -f waved; \
+if cp /tmp/waved.new waved && chmod 755 waved && \
+   [ "$(md5sum waved | cut -d" " -f1)" = WAVED_MD5 ]; then \
+    sync; rm -f /tmp/waved.new; echo ok; \
+else \
+    rm -f waved; \
+    if [ -f /tmp/waved.old ]; then cp /tmp/waved.old waved && chmod 755 waved; fi; \
+    echo "the new binary did not fit on /data (df -h /data); the old one is back"; \
+fi'
+wave_ok "${swap//WAVED_MD5/$WAVED_MD5}" || die "the binary was not replaced"
 
-echo "=== Done. Reboot the Wave to start waved: adb reboot ==="
+echo "=== Installing S60waved and the firewall rules ==="
+# A dot name until the rename: rcS runs every /etc/init.d/S??* at boot.
+wave_ok 'mkdir -p /etc/init.d && \
+cp /tmp/S60waved.new /etc/init.d/.S60waved.new && chmod 755 /etc/init.d/.S60waved.new && \
+mv -f /etc/init.d/.S60waved.new /etc/init.d/S60waved && \
+cp /tmp/iptables.rules.new /data/waved/.iptables.rules.new && \
+chmod 644 /data/waved/.iptables.rules.new && \
+mv -f /data/waved/.iptables.rules.new /data/waved/iptables.rules && \
+rm -f /tmp/S60waved.new /tmp/iptables.rules.new && sync && echo ok' ||
+    die "S60waved or iptables.rules not installed (the new binary is)"
+
+if [ "$HAS_CONFIG" = no ]; then
+    echo "=== Writing the default config.toml ==="
+    wave_ok 'if [ -e /data/waved/config.toml ]; then echo "config.toml exists; kept it"; \
+else cp /tmp/config.toml.new /data/waved/config.toml && chmod 600 /data/waved/config.toml; fi && \
+rm -f /tmp/config.toml.new && sync && echo ok' || die "config.toml not written"
+fi
+
+echo "=== Stock pspapp off, telemetry library stubbed ==="
+# Only where they are missing (a first install): these write the overlay's
+# upper directory, as deploy/revert.sh removes them from it.
+wave_ok 'u=/data/overlay/upper; mkdir -p $u/etc/init.d $u/usr/lib && \
+{ [ -f $u/etc/init.d/S60pspapp_daemon ] || \
+  { echo "#!/bin/sh" > $u/etc/init.d/S60pspapp_daemon && chmod 755 $u/etc/init.d/S60pspapp_daemon; }; } && \
+{ [ -f $u/usr/lib/libapplogrs.so ] || echo "" > $u/usr/lib/libapplogrs.so; } && \
+sync && echo ok' || die "could not stub the stock services"
+# S60waved makes it at every start too; it fails while USB storage has the
+# volume (/mnt/udisk not mounted), which must not fail the install.
+on_wave 'mkdir -p /mnt/udisk/recordings 2>/dev/null' >/dev/null || true
+
+if [ "$UPDATE" = yes ]; then
+    echo "=== Starting the watchdog ==="
+    wave_ok "$START_WATCHDOG && echo ok" || die "could not start the watchdog"
+    STOPPED=no
+    echo "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ==="
+else
+    echo "=== Done! Reboot to start waved ==="
+    echo "Run: adb reboot"
+fi

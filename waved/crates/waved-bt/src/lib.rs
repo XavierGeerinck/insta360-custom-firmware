@@ -4,40 +4,57 @@
 //! - [`frame`]: `75 45|46 LEN CMD DATA SUM` framing and the byte parser.
 //! - [`command`]: what the host sends, byte-exact with stock.
 //! - [`event`]: what the module sends, decoded.
-//! - [`state`]: events folded into `BluetoothState`, the call included.
-//! - [`control`]: bus commands (pair, disconnect, answer, decline) and the
-//!   2-minute pairing window.
-//! - [`ota`]: `BT.bin` / `DONGLE.bin` updates (TODO F6).
+//! - [`state`]: events folded into `BluetoothState` (the phone, the module's
+//!   name, the switch).
+//! - [`call`]: the call, and every sign that it is over.
+//! - [`control`]: bus commands (switch, pair, disconnect, answer, decline)
+//!   and the 2-minute pairing window.
+//! - [`startup`]: stock's start-up sequence and the module's name.
+//! - [`volume`]: the phone's volume on the Wave's speaker.
+//! - [`ota`]: `BT.bin` / `DONGLE.bin` updates (TODO F6), run only by the
+//!   `waved-bt-flash` tool, never by the service.
 //!
-//! [`BtService`] asks read-only questions at start, answers every frame with
-//! stock's acknowledgement and keeps `BluetoothState`. Given the bus
-//! (`with_commands`) it pairs, disconnects and answers or declines calls. It
-//! does not switch Bluetooth on, rename the module or save its flash.
+//! [`BtService`] sends the start-up ([`startup`]: stock's sequence, writing
+//! the module's name, reconnect switch and flash only when they differ, at
+//! most once per boot, noted in [`startup::STAMP_PATH`]), answers every
+//! frame the module repeats (`75 45`) with stock's acknowledgement and keeps
+//! `BluetoothState`. Given the bus (`with_commands`) it switches Bluetooth on
+//! and off, pairs, stops pairing, disconnects and answers or declines calls;
+//! given the speaker (`with_speaker`) it follows the phone's volume.
 //!
-//! Privacy: the phone book (`0xB0`) is dropped unread, and no info or debug
-//! log line carries a phone's name, MAC or a number (`log_line`).
+//! Privacy: the phone book (`0xB0`) is dropped unread, and no log line at
+//! any level carries a phone's name, MAC or a number (`log_line`): module log
+//! lines show only as known fixed messages, undecoded frames as their length.
 
+pub mod call;
 pub mod command;
 pub mod control;
 pub mod event;
 pub mod frame;
 pub mod ota;
+pub mod startup;
 pub mod state;
+pub mod volume;
 
 #[cfg(feature = "simulate")]
 pub mod simulate;
 
-use command::{ack_for, Command};
+pub use startup::Settings;
+
+use call::Calls;
+use command::{ack_for_frame, Command};
 use control::{Control, Response};
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use event::Event;
 use frame::{Frame, Prefix, PREFIX_ACK, PREFIX_LEGACY, PREFIX_REQUEST};
+use startup::{Stamp, Startup};
 use state::Tracker;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, watch};
 use tracing::{debug, info, trace, warn, Level};
-use waved_state::{BluetoothState, Command as BusCommand, DeviceEvent};
+use waved_state::{AudioState, BluetoothState, Command as BusCommand, DeviceEvent, StateBus};
 use waved_uart::UartMux;
 
 /// The module's UART and speed (stock `g_uart_bt_device`, `bttool`).
@@ -45,20 +62,21 @@ pub const BT_PORT: &str = "/dev/ttyS1";
 pub const BT_BAUD: u32 = 921_600;
 
 /// Stock polls the module every 5 s (`bt_heartbeat_thread`).
-const STATUS_POLL: Duration = Duration::from_secs(5);
+const STATUS_POLL_MS: u64 = 5_000;
 
-/// How often the loop looks at the bus and the pairing countdown when the
-/// module is quiet.
+/// How often the loop looks at the bus and the clocks when the module is
+/// quiet.
 const TICK: Duration = Duration::from_millis(100);
 
-/// Read-only questions asked once at start.
-const STARTUP: [Command; 5] = [
-    Command::GetVersion,
-    Command::GetBuildTime,
-    Command::GetStatus,
-    Command::GetName,
-    Command::GetPhoneMac,
-];
+impl Settings {
+    /// From config: `[bluetooth] enabled` and `device.name`; with no device
+    /// name, stock's name from `/proc/cpuinfo`'s serial.
+    pub fn new(enabled: bool, device_name: &str) -> Self {
+        let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
+        let serial = startup::serial_suffix(&cpuinfo);
+        Self { enabled, name: startup::module_name(device_name, serial.as_deref()) }
+    }
+}
 
 /// A frame from the `waved-uart` mux as a codec frame (`data` there holds
 /// `CMD DATA`). `None` for an empty frame or a header this port never carries.
@@ -73,33 +91,196 @@ pub fn from_uart(raw: &waved_uart::Frame) -> Option<Frame> {
     Some(Frame { prefix, cmd, data: data.to_vec() })
 }
 
-/// The service without the UART or the clock: module frames and bus
-/// commands in, frames to send and state changes out.
+/// The service without the UART or the clock: module frames, bus commands
+/// and the time in; frames to send, state changes and log lines out.
 #[derive(Debug, Default)]
 struct Core {
     tracker: Tracker,
     control: Control,
+    calls: Calls,
+    startup: Startup,
+    seen: Seen,
+    /// The module has sent something: the line works, polling makes sense.
+    heard: bool,
+    next_poll_ms: u64,
+}
+
+/// What one module frame asks of the service.
+#[derive(Debug, Default)]
+struct Handled {
+    /// Stock's acknowledgement, for a `75 45` frame other than `0xE0`.
+    acks: Vec<Frame>,
+    /// `BluetoothState` changed (notify watchers).
+    changed: bool,
+    /// A connect / disconnect to broadcast.
+    event: Option<DeviceEvent>,
+    /// The log line and its level: info only when the frame told us
+    /// something new, so a frame the module repeats never repeats at info.
+    log: Option<(Level, String)>,
+    /// An info line for a call change the frame does not name by itself.
+    note: Option<&'static str>,
+    /// The speaker volume the phone asks for (`0xD5`, [`volume`]).
+    speaker: Option<u8>,
+}
+
+/// What a tick of the clock asks of the service.
+#[derive(Debug, Default, PartialEq)]
+struct Ticked {
+    frames: Vec<Command>,
+    changed: bool,
+    note: Option<&'static str>,
+    /// What this boot wrote to the module, to note in [`startup::STAMP_PATH`]
+    /// before `frames` go out.
+    stamp: Option<Stamp>,
+}
+
+/// What the module said that `BluetoothState` does not keep.
+#[derive(Debug, Default)]
+struct Seen {
+    version: Option<String>,
+    build_time: Option<String>,
+}
+
+impl Seen {
+    /// Whether `event` brings a version or build time not seen before.
+    fn news(&mut self, event: &Event) -> bool {
+        let (slot, value) = match event {
+            Event::Version(v) => (&mut self.version, v),
+            Event::BuildTime(t) => (&mut self.build_time, t),
+            _ => return false,
+        };
+        if slot.as_ref() == Some(value) {
+            return false;
+        }
+        *slot = Some(value.clone());
+        true
+    }
 }
 
 impl Core {
-    /// A module frame: its acknowledgement (stock acknowledges every frame
-    /// but `0xE0`), whether `s` changed, and a connect / disconnect to
-    /// broadcast.
-    fn frame(&mut self, frame: &Frame, s: &mut BluetoothState) -> (Vec<Frame>, bool, Option<DeviceEvent>) {
-        let acks = ack_for(frame.cmd).into_iter().collect();
+    /// The start-up ([`startup`]) after what `stamp` says this boot already
+    /// wrote to the module, and the switch as config has it. Returns whether
+    /// `s` changed.
+    fn start(&mut self, settings: &Settings, stamp: Stamp, s: &mut BluetoothState) -> bool {
+        self.startup = Startup::new(settings, stamp);
+        self.next_poll_ms = STATUS_POLL_MS;
+        self.tracker.set_enabled(settings.enabled, s);
+        self.calls.set_enabled(settings.enabled);
+        let changed = s.bt_on != settings.enabled;
+        s.bt_on = settings.enabled;
+        changed
+    }
+
+    /// A module frame: its acknowledgement ([`command::ack_for_frame`]),
+    /// whether `s` changed, a connect / disconnect to broadcast, the log
+    /// line and the speaker volume the phone asks for.
+    fn frame(&mut self, frame: &Frame, now_ms: u64, s: &mut BluetoothState) -> Handled {
+        self.heard = true;
+        self.startup.heard(frame.cmd);
+        let acks = ack_for_frame(frame).into_iter().collect();
         let event = event::decode(frame);
-        log_event(&event);
         let applied = self.tracker.apply(&event, s);
+        let call = self.calls.event(&event, now_ms, s);
         let window = self.control.after_event(s);
-        (acks, applied.changed || window, applied.event)
+        let speaker = match &event {
+            Event::PhoneVolume { kind, level, max } => volume::speaker_target(*kind, *level, *max, s),
+            _ => None,
+        };
+        let news = applied.changed || call.changed || applied.event.is_some() || self.seen.news(&event);
+        let log = log_line(&event).map(|(level, line)| match level {
+            Level::INFO if !news => (Level::DEBUG, line),
+            _ => (level, line),
+        });
+        Handled {
+            acks,
+            changed: applied.changed || call.changed || window,
+            event: applied.event,
+            log,
+            note: call.why,
+            speaker,
+        }
     }
 
     fn command(&mut self, command: &BusCommand, now_ms: u64, unix_time: u32, s: &mut BluetoothState) -> Response {
-        self.control.command(command, now_ms, unix_time, s)
+        let mut out = self.control.command(command, now_ms, unix_time, s);
+        match command {
+            // Stock's call buttons act on the screen at once (`call`).
+            BusCommand::BtAnswerCall if !out.frames.is_empty() => out.changed |= self.calls.answered(now_ms, s),
+            BusCommand::BtDeclineCall if !out.frames.is_empty() => {
+                out.changed |= self.calls.hung_up(now_ms, s)
+            }
+            BusCommand::SetBluetooth(on) if out.changed => {
+                let applied = self.tracker.set_enabled(*on, s);
+                self.calls.set_enabled(*on);
+                out.event = applied.event;
+            }
+            _ => {}
+        }
+        out
     }
 
-    fn tick(&mut self, now_ms: u64, s: &mut BluetoothState) -> bool {
-        self.control.tick(now_ms, s)
+    /// The clocks: the start-up sequence, the pairing window, the call and
+    /// the 5 s status poll once the module has answered.
+    fn tick(&mut self, now_ms: u64, s: &mut BluetoothState) -> Ticked {
+        let mut frames = self.startup.poll(now_ms, s);
+        let window = self.control.tick(now_ms, s);
+        let call = self.calls.tick(now_ms, s);
+        if self.heard && now_ms >= self.next_poll_ms {
+            self.next_poll_ms = now_ms + STATUS_POLL_MS;
+            if self.startup.done() {
+                frames.extend(self.startup.rename(s));
+                frames.push(Command::GetStatus);
+            }
+        }
+        Ticked {
+            frames,
+            changed: window || call.changed,
+            note: call.why,
+            stamp: self.startup.take_stamp(),
+        }
+    }
+}
+
+/// Where the phone's volume goes: the speaker's volume and mute on the bus,
+/// as any other volume change (persisted by waved-settings). Both changes
+/// are marked as not the Wave's own before either command goes, so the HID
+/// watches send the computer no volume step and no mute key for them
+/// (`StateBus::host_pending_speaker_vol`, `StateBus::pending_speaker_mute`).
+pub struct Speaker {
+    commands: broadcast::Sender<BusCommand>,
+    audio: watch::Receiver<AudioState>,
+    echo_volume: Arc<AtomicI32>,
+    echo_mute: Arc<AtomicI32>,
+}
+
+impl Speaker {
+    pub fn from_bus(bus: &StateBus) -> Self {
+        Self {
+            commands: bus.commands.clone(),
+            audio: bus.audio.subscribe(),
+            echo_volume: Arc::clone(&bus.host_pending_speaker_vol),
+            echo_mute: Arc::clone(&bus.pending_speaker_mute),
+        }
+    }
+
+    /// Bring the speaker to `target` percent; returns what was sent.
+    fn apply(&self, target: u8) -> Vec<BusCommand> {
+        let (volume, muted) = {
+            let audio = self.audio.borrow();
+            (audio.speaker_volume, audio.speaker_muted)
+        };
+        let commands = volume::speaker_commands(target, volume, muted);
+        for command in &commands {
+            match command {
+                BusCommand::SetSpeakerVolume(v) => self.echo_volume.store(i32::from(*v), Ordering::Release),
+                BusCommand::SetSpeakerMute(m) => self.echo_mute.store(i32::from(*m), Ordering::Release),
+                _ => {}
+            }
+        }
+        for command in &commands {
+            let _ = self.commands.send(command.clone());
+        }
+        commands
     }
 }
 
@@ -109,6 +290,8 @@ pub struct BtService {
     bt_tx: Arc<watch::Sender<BluetoothState>>,
     events_tx: broadcast::Sender<DeviceEvent>,
     commands: Option<broadcast::Receiver<BusCommand>>,
+    settings: Settings,
+    speaker: Option<Speaker>,
 }
 
 impl BtService {
@@ -118,35 +301,53 @@ impl BtService {
         bt_tx: Arc<watch::Sender<BluetoothState>>,
         events_tx: broadcast::Sender<DeviceEvent>,
     ) -> Self {
-        Self { bt_rx, uart, bt_tx, events_tx, commands: None }
+        Self {
+            bt_rx,
+            uart,
+            bt_tx,
+            events_tx,
+            commands: None,
+            settings: Settings::new(true, ""),
+            speaker: None,
+        }
     }
 
-    /// Take `BtPair`, `BtDisconnect`, `BtAnswerCall` and `BtDeclineCall`
-    /// from the bus. Without it the service stays passive.
+    /// Take `SetBluetooth`, `BtPair`, `BtStopPairing`, `BtDisconnect`,
+    /// `BtAnswerCall` and `BtDeclineCall` from the bus. Without it the
+    /// service only follows the module.
     pub fn with_commands(mut self, commands: broadcast::Receiver<BusCommand>) -> Self {
         self.commands = Some(commands);
         self
     }
 
-    pub fn run(mut self) {
-        info!("bt_srv started");
-        for c in &STARTUP {
-            self.send(&c.frame());
-        }
+    /// The switch and the module's name from config (`Settings::new`).
+    /// Without it: Bluetooth on, stock's name.
+    pub fn with_settings(mut self, settings: Settings) -> Self {
+        self.settings = settings;
+        self
+    }
 
+    /// Follow the phone's volume on the speaker (`0xD5`). Without it the
+    /// phone's volume reports are only logged.
+    pub fn with_speaker(mut self, speaker: Speaker) -> Self {
+        self.speaker = Some(speaker);
+        self
+    }
+
+    pub fn run(mut self) {
+        info!(
+            "bt_srv started, Bluetooth {}",
+            if self.settings.enabled { "on" } else { "off" }
+        );
         let start = Instant::now();
         let now_ms = || start.elapsed().as_millis() as u64;
         let mut core = Core::default();
-        let mut next_poll = STATUS_POLL;
-        // Poll only once the module has answered: until then the line may be
-        // at the wrong speed and every byte we send is noise to it.
-        let mut heard = false;
+        let settings = self.settings.clone();
+        let stamp = read_stamp();
+        self.bt_tx.send_if_modified(|s| core.start(&settings, stamp, s));
         loop {
             match self.bt_rx.recv_timeout(TICK) {
-                Ok(raw) => {
-                    heard = true;
-                    self.handle(&raw, &mut core);
-                }
+                Ok(raw) => self.handle(&raw, now_ms(), &mut core),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
                     warn!("bt channel closed, stopping");
@@ -160,18 +361,38 @@ impl BtService {
                     out = core.command(&command, now, unix, s);
                     out.changed
                 });
-                if !out.frames.is_empty() {
+                if out.acted() {
                     info!("bt: {command:?}");
                 }
                 for c in &out.frames {
                     self.send(&c.frame());
                 }
+                if let Some(e) = out.event {
+                    let _ = self.events_tx.send(e);
+                }
             }
             let now = now_ms();
-            self.bt_tx.send_if_modified(|s| core.tick(now, s));
-            if heard && now >= next_poll.as_millis() as u64 {
-                self.send(&Command::GetStatus.frame());
-                next_poll = Duration::from_millis(now) + STATUS_POLL;
+            let mut ticked = Ticked::default();
+            self.bt_tx.send_if_modified(|s| {
+                ticked = core.tick(now, s);
+                ticked.changed
+            });
+            if let Some(note) = ticked.note {
+                info!("{note}");
+            }
+            // Noted before the frames go: a waved killed right after them
+            // must not write the module again this boot.
+            if let Some(stamp) = &ticked.stamp {
+                write_stamp(stamp);
+            }
+            for c in &ticked.frames {
+                let frame = c.frame();
+                // The start-up sequence and the 5 s poll: the command byte
+                // only (the device pass checks the order).
+                if frame.cmd != command::id::GET_STATUS {
+                    debug!("bt: sends {:#04x}", frame.cmd);
+                }
+                self.send(&frame);
             }
         }
     }
@@ -196,20 +417,44 @@ impl BtService {
         self.uart.send(frame.encode(), false);
     }
 
-    fn handle(&self, raw: &waved_uart::Frame, core: &mut Core) {
+    fn handle(&self, raw: &waved_uart::Frame, now_ms: u64, core: &mut Core) {
         let Some(frame) = from_uart(raw) else { return };
-        let mut out = (Vec::new(), false, None);
+        let mut out = Handled::default();
         self.bt_tx.send_if_modified(|s| {
-            out = core.frame(&frame, s);
-            out.1
+            out = core.frame(&frame, now_ms, s);
+            out.changed
         });
-        let (acks, _, event) = out;
-        for ack in &acks {
+        for ack in &out.acks {
             self.send(ack);
         }
-        if let Some(e) = event {
+        log_event(out.log);
+        if let Some(note) = out.note {
+            info!("{note}");
+        }
+        if let Some(e) = out.event {
             let _ = self.events_tx.send(e);
         }
+        if let (Some(target), Some(speaker)) = (out.speaker, self.speaker.as_ref()) {
+            let sent = speaker.apply(target);
+            if !sent.is_empty() {
+                info!("bt: the phone's volume sets the speaker to {target} %");
+            }
+        }
+    }
+}
+
+/// What an earlier waved wrote to the module this boot ([`startup::Stamp`]);
+/// nothing when the file is missing (the first start of a boot).
+fn read_stamp() -> Stamp {
+    std::fs::read_to_string(startup::STAMP_PATH)
+        .map(|text| Stamp::parse(&text))
+        .unwrap_or_default()
+}
+
+fn write_stamp(stamp: &Stamp) {
+    if let Err(e) = std::fs::write(startup::STAMP_PATH, stamp.render()) {
+        // The start-up still writes the module at most once per waved run.
+        warn!("bt: cannot note the module's settings in {}: {e}", startup::STAMP_PATH);
     }
 }
 
@@ -221,8 +466,8 @@ fn unix_time() -> u32 {
         .unwrap_or(0)
 }
 
-fn log_event(event: &Event) {
-    match log_line(event) {
+fn log_event(line: Option<(Level, String)>) {
+    match line {
         Some((Level::INFO, line)) => info!("{line}"),
         Some((Level::DEBUG, line)) => debug!("{line}"),
         Some((_, line)) => trace!("{line}"),
@@ -230,10 +475,92 @@ fn log_event(event: &Event) {
     }
 }
 
-/// The log line for a module event, and its level. No info or debug line
+/// The module's own fixed messages (strings in its firmware, 0.0.0.28 and
+/// 0.0.0.33): pairing, reconnecting, the radio, calls, call audio, volume and
+/// the phone book's link. A module log line shows only as the message it
+/// starts with, never as received: the rest of a line can carry the phone's
+/// address (`a2dp_snk_disconnect_req addr …`), and other lines its name and
+/// MAC (`app_set_bt_last_addr`).
+const MODULE_MESSAGES: &[&str] = &[
+    "BT set pairing mode by user",
+    "Warning! bt set pairing but bt has been connected",
+    "Warning! bt set pairing while bt is reconnecting",
+    "Warning! bt is reconnecting",
+    "time out ,app_bt_pairing_exit",
+    "app_exit_pairing_handle",
+    "RECONN_START!",
+    "RECONN_CANCEL!",
+    "RECONN_ERROR!",
+    "BT_RECONN_TIMEOUT!",
+    "BT_RECONN_ADDR_ERROR!",
+    "bt stop connback",
+    "app_bt_start_connback_func",
+    "Connback time out !",
+    "Connback error! Page scan",
+    "bt rf close done",
+    "bt rf close",
+    "bt rf open done",
+    "bt rf open",
+    "system_force_disconnect",
+    "app_bt_disconnect error",
+    "a2dp_snk_disconnect_req",
+    "ACL DISCONN CMP, reason",
+    "app_bt_clean_last_dev",
+    "bt clean info",
+    "set pairred_mode_switch3",
+    "delete pairred_mode_switch3",
+    // Calls (`call::call_hint` acts on the first three).
+    "HFP  Call active",
+    "HFP call end",
+    "HFP RFCOMM_CLOSED",
+    "HFP  incoming",
+    "HFP outgoing",
+    "AT RING",
+    "+CIEV hf-state",
+    "hf statusCall =",
+    "hf statusCallSetup =",
+    "hf_dev->statusCallSetup set 0",
+    // Call audio (the SCO link).
+    "SCO CONN CMP",
+    "SCO DISCONN CMP, reason",
+    "app_hci_evt_sco_connect",
+    "app_hci_evt_sco_disconn",
+    // Volume.
+    "app_bt_hfp_hf_vol_change",
+    "app_bt_avrcp_ct_vol_change",
+    "AVRCP_CTYPE_CONTROL @remote vol change",
+    "AVRCP_VEN_RSP_CHANGED, @remote vol change",
+    "app_set_avrcp_cur_music_vol",
+    "MAX A2DP VOL!",
+    "MIN A2DP VOL!",
+    "MAX HFP VOL!",
+    "MIN HFP VOL!",
+    // The phone book's link (never its contents).
+    "PBAP dev closed, open PBAP",
+    "PBAP START CONNECTING",
+    "APP_PBAP_CONNECTED",
+    "APP_PBAP_DISCONNECTED",
+];
+
+/// A module log line (`0xF0`): a known message at debug, else its length at
+/// trace (see [`MODULE_MESSAGES`]).
+fn module_log(line: &str) -> (Level, String) {
+    let line = line.trim_start_matches(|c: char| c == '@' || c == '#' || c.is_whitespace());
+    let known = MODULE_MESSAGES
+        .iter()
+        .filter(|message| line.starts_with(**message))
+        .max_by_key(|message| message.len());
+    match known {
+        Some(message) => (Level::DEBUG, format!("bt module: {message}")),
+        None => (Level::TRACE, format!("bt module log line, {} bytes", line.len())),
+    }
+}
+
+/// The log line for a module event, and its level. No line at any level
 /// carries a phone's name, its MAC or a number: those reach the state (and
-/// the screen) only. Module log lines (`0xF0`) can name the phone, so they
-/// stay at trace. The phone book is never logged.
+/// the screen) only. Module log lines (`0xF0`) show only as known messages
+/// ([`MODULE_MESSAGES`]); undecoded frames only as their length. The phone
+/// book is never logged.
 fn log_line(event: &Event) -> Option<(Level, String)> {
     let info = |line: String| Some((Level::INFO, line));
     let debug = |line: String| Some((Level::DEBUG, line));
@@ -254,9 +581,10 @@ fn log_line(event: &Event) -> Option<(Level, String)> {
             "bt heartbeat{}",
             if phone.is_some() { " naming the phone" } else { "" }
         )),
-        Event::Log(line) => trace(format!("bt module log: {line}")),
+        Event::PbapStatus(ready) => debug(format!("bt: phone book link status {ready} (never asked for)")),
+        Event::Log(line) => Some(module_log(line)),
         Event::PhoneBookEntry => None,
-        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x} {data:02x?}")),
+        Event::Other { cmd, data } => trace(format!("bt frame {cmd:#04x}, {} bytes", data.len())),
         // The rest carries no phone's name, MAC or number: signal levels,
         // volumes, the dongle, versions, OTA and the module's own MAC.
         other @ (Event::Status { .. }
@@ -365,22 +693,57 @@ mod tests {
         }
 
         #[test]
-        fn no_info_or_debug_line_names_a_phone_or_a_number() {
-            for event in personal() {
+        fn no_line_at_any_level_names_a_phone_or_a_number() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                decode(&Frame::request(0xF0, &data))
+            };
+            let mut events = personal();
+            events.extend([
+                module_line(&format!("@ app_set_bt_last_addr A1B2C3D4E557 name {NAME}")),
+                // A known message followed by the phone's address: only the
+                // message may show.
+                module_line("a2dp_snk_disconnect_req addr A1B2C3D4E557"),
+                module_line(&format!("RECONN_START! {NAME}")),
+                decode(&Frame::request(0xF0, &[0x02, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57])),
+                Event::Other { cmd: 0xC8, data: vec![0x00, 0x06, 0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0x57] },
+            ]);
+            for event in events {
                 if let Some((level, line)) = log_line(&event) {
-                    if level != Level::TRACE {
-                        assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
-                    }
+                    assert!(leaks(&line).is_empty(), "{level} {line:?} leaks {:?}", leaks(&line));
                 }
             }
         }
 
         #[test]
-        fn module_logs_are_trace_only() {
-            let line = decode(&Frame::request(0xF0, b"\x01BT set pairing mode by user"));
-            assert_eq!(log_line(&line).map(|(level, _)| level), Some(Level::TRACE));
+        fn module_messages_about_pairing_and_reconnecting_show_at_debug() {
+            let module_line = |text: &str| {
+                let mut data = vec![0x01];
+                data.extend_from_slice(text.as_bytes());
+                log_line(&decode(&Frame::request(0xF0, &data)))
+            };
+            let debug = |text: &str| Some((Level::DEBUG, format!("bt module: {text}")));
+            assert_eq!(module_line("BT set pairing mode by user"), debug("BT set pairing mode by user"));
+            assert_eq!(module_line("RECONN_START!"), debug("RECONN_START!"));
+            assert_eq!(module_line("@ bt stop connback\r\n"), debug("bt stop connback"));
+            // The longest match wins.
+            assert_eq!(module_line("bt rf close done"), debug("bt rf close done"));
+            assert_eq!(module_line("bt rf close"), debug("bt rf close"));
+            assert_eq!(module_line("time out ,app_bt_pairing_exit "), debug("time out ,app_bt_pairing_exit"));
+            // Anything else: its length at trace, never its text.
+            assert_eq!(
+                module_line("@ stack_overflow_check_init 0x1234"),
+                Some((Level::TRACE, "bt module log line, 32 bytes".into()))
+            );
             let raw = decode(&Frame::request(0xF0, &[0x02, 0xE4, 0x7F]));
             assert_eq!(log_line(&raw).map(|(level, _)| level), Some(Level::TRACE));
+        }
+
+        #[test]
+        fn an_undecoded_frame_shows_its_length_only() {
+            let other = Event::Other { cmd: 0x42, data: NUMBER.as_bytes().to_vec() };
+            assert_eq!(log_line(&other), Some((Level::TRACE, "bt frame 0x42, 12 bytes".into())));
         }
 
         #[test]
@@ -409,8 +772,9 @@ mod tests {
     }
 
     mod core {
-        use super::super::Core;
+        use super::super::{Core, Settings, Stamp};
         use crate::frame::{Frame, Parser};
+        use tracing::Level;
         use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
 
         fn wire(bytes: &[u8]) -> Frame {
@@ -427,74 +791,607 @@ mod tests {
                 .collect()
         }
 
+        fn settings(enabled: bool) -> Settings {
+            Settings { enabled, name: "Insta360 Wave BT 0A1B2C".into() }
+        }
+
+        /// The service started with Bluetooth on, as config's default.
+        fn started() -> (Core, BluetoothState) {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            core.start(&settings(true), Stamp::default(), &mut s);
+            (core, s)
+        }
+
         #[test]
         fn pairing_a_phone_from_the_bus_to_the_state() {
-            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let (mut core, mut s) = started();
             let out = core.command(&BusCommand::BtPair, 0, 0, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
+                "75 45 02 D8 00 DA",
                 "75 45 02 A3 00 A5",
                 "75 45 02 A7 00 A9"
             ]);
             assert_eq!(s.pairing_left_s, 120);
 
             // The module: pairing mode (seen on the device), acknowledged.
-            let (acks, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B2 00 B4"]);
-            assert!(changed && s.pairing && s.pairing_left_s == 120);
-            assert_eq!(event, None);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B2 00 B4"]);
+            assert!(h.changed && s.pairing && s.pairing_left_s == 120);
+            assert_eq!(h.event, None);
 
             // A phone connects: the window closes.
             core.tick(30_000, &mut s);
             assert_eq!(s.pairing_left_s, 90);
-            let (_, changed, event) = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), &mut s);
-            assert!(changed && s.connected && !s.pairing);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x01, 0x00, 0xB6]), 0, &mut s);
+            assert!(h.changed && s.connected && !s.pairing);
             assert_eq!(s.pairing_left_s, 0);
-            assert_eq!(event, Some(DeviceEvent::BtConnected(String::new())));
+            assert_eq!(h.event, Some(DeviceEvent::BtConnected(String::new())));
+        }
+
+        #[test]
+        fn leaving_the_pairing_screen_ends_the_window() {
+            let (mut core, mut s) = started();
+            core.command(&BusCommand::BtPair, 0, 0, &mut s);
+            core.frame(&wire(&[0x75, 0x45, 0x03, 0xB2, 0x08, 0x00, 0xBD]), 0, &mut s);
+            let out = core.command(&BusCommand::BtStopPairing, 5_000, 0, &mut s);
+            assert!(out.frames.is_empty(), "no command leaves pairing mode");
+            assert!(out.changed);
+            assert_eq!(s.pairing_left_s, 0);
+            assert!(s.pairing, "the module's own bit 3 stays until it says otherwise");
+            assert!(!core.tick(6_000, &mut s).changed);
         }
 
         #[test]
         fn a_call_from_the_module_to_answer() {
-            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let (mut core, mut s) = started();
             let ring = [0x75, 0x45, 0x0C, 0xB1, 0x2B, 0x33, 0x32, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0xF1];
-            let (acks, changed, _) = core.frame(&wire(&ring), &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B1 00 B3"]);
-            assert!(changed);
+            let h = core.frame(&wire(&ring), 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B1 00 B3"]);
+            assert!(h.changed);
             assert_eq!(s.call, BtCall::Ringing { number: "+3212345678".into() });
             let out = core.command(&BusCommand::BtAnswerCall, 0, 0x6720_0000, &mut s);
             assert_eq!(hex(&out.frames.iter().map(|c| c.frame()).collect::<Vec<_>>()), [
                 "75 45 07 D0 03 00 00 20 67 00 61"
             ]);
-            let (acks, _, _) = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), &mut s);
-            assert_eq!(hex(&acks), ["75 46 01 D1 D2"]);
+            // Up at once, as stock's pickup button (libui 27958).
+            assert!(out.changed && s.call.is_active());
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]), 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 01 D1 D2"]);
+            assert!(!h.changed, "the module's call up changes nothing more");
             assert!(s.call.is_active());
         }
 
         #[test]
         fn the_phone_book_is_acknowledged_and_changes_nothing() {
-            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let (mut core, mut s) = started();
             let entry = Frame::request(0xB0, b"\x01\0\0\0\x06+32470\x03A\0n\0n\0");
-            let (acks, changed, event) = core.frame(&entry, &mut s);
-            assert_eq!(hex(&acks), ["75 46 02 B0 00 B2"]);
-            assert!(!changed);
-            assert_eq!(event, None);
+            let h = core.frame(&entry, 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 B0 00 B2"]);
+            assert!(!h.changed);
+            assert_eq!(h.event, None);
+            assert_eq!(h.log, None);
+        }
+
+        fn name_frame(name: &str) -> Frame {
+            let mut data = vec![0x00];
+            data.extend_from_slice(name.as_bytes());
+            Frame::request(0xC6, &data)
+        }
+
+        #[test]
+        fn replies_to_our_requests_are_not_acknowledged() {
+            // Capture s1-pair-20261013.bin: the module answers GetStatus and
+            // GetName with `75 46 A9 00` / `75 46 C5 00` once each.
+            let (mut core, mut s) = started();
+            for echo in [[0x75, 0x46, 0x02, 0xA9, 0x00, 0xAB], [0x75, 0x46, 0x02, 0xC5, 0x00, 0xC7]] {
+                let h = core.frame(&wire(&echo), 0, &mut s);
+                assert!(h.acks.is_empty(), "{echo:02X?}");
+                assert!(!h.changed);
+            }
+            // The version comes back in the reply itself: decoded, not acknowledged.
+            let h = core.frame(&Frame::ack(0x91, b"\x000.0.0.28"), 0, &mut s);
+            assert!(h.acks.is_empty());
+            assert_eq!(h.log.map(|(_, line)| line), Some("bt module firmware 0.0.0.28".into()));
+            // The module's own frames still are, the name and the status included.
+            let h = core.frame(&name_frame("Insta360 Wave BT 0A1B2C"), 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 C6 00 C8"]);
+            let h = core.frame(&wire(&[0x75, 0x45, 0x02, 0xAA, 0x01, 0xAD]), 0, &mut s);
+            assert_eq!(hex(&h.acks), ["75 46 02 AA 00 AC"]);
+            assert!(core.frame(&Frame::request(0xE0, &[]), 0, &mut s).acks.is_empty());
+        }
+
+        #[test]
+        fn the_module_name_shows_at_info_only_when_it_changes() {
+            let (mut core, mut s) = started();
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, 0, s).log.map(|(l, _)| l);
+            let name = name_frame("Insta360 Wave BT 0A1B2C");
+            assert_eq!(level(&mut core, &mut s, &name), Some(Level::INFO));
+            for _ in 0..4 {
+                assert_eq!(level(&mut core, &mut s, &name), Some(Level::DEBUG), "a repeat");
+            }
+            let renamed = name_frame("Wave Boardroom");
+            assert_eq!(level(&mut core, &mut s, &renamed), Some(Level::INFO));
+        }
+
+        #[test]
+        fn nothing_at_info_repeats_per_frame() {
+            // Every frame that logs at info, sent twice in a row as a module
+            // that is not acknowledged sends it: the second copy is not info.
+            let ring = b"+32470123456".to_vec();
+            let mut connected = vec![0x01, 0x00, 0x05];
+            connected.extend_from_slice(b"Pixel");
+            connected.extend_from_slice(&[0x00, 0x06, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            let mut request = vec![0x06, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05];
+            request.extend_from_slice(b"Pixel");
+            let frames = [
+                Frame::ack(0x91, b"\x000.0.0.28"),
+                Frame::ack(0x93, b"\x002025-11-28 20:15:49"),
+                name_frame("Insta360 Wave BT 0A1B2C"),
+                Frame::request(0xB2, &connected),
+                Frame::request(0xB1, &ring),
+                Frame::request(0xD1, &[0x00]),
+                Frame::request(0xD1, &[0x01]),
+                Frame::request(0xB1, &[]),
+                Frame::request(0xD6, &request),
+                Frame::request(0xD1, &[0x02]),
+                Frame::request(0xE1, &[0x11, 0x22, 0x33, 0x44, 0x55, 0x66]),
+            ];
+            let (mut core, mut s) = started();
+            for f in &frames {
+                core.frame(f, 0, &mut s);
+                let again = core.frame(f, 0, &mut s).log;
+                assert!(
+                    !matches!(again, Some((Level::INFO, _))),
+                    "{:#04x} repeated at info: {again:?}",
+                    f.cmd
+                );
+            }
+        }
+
+        #[test]
+        fn a_new_call_after_the_last_one_logs_again() {
+            let (mut core, mut s) = started();
+            let ring = Frame::request(0xB1, b"0471");
+            let cleared = Frame::request(0xB1, &[]);
+            let level = |core: &mut Core, s: &mut BluetoothState, f: &Frame| core.frame(f, 0, s).log.map(|(l, _)| l);
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::DEBUG));
+            assert_eq!(level(&mut core, &mut s, &cleared), Some(Level::INFO));
+            assert_eq!(level(&mut core, &mut s, &ring), Some(Level::INFO));
         }
     }
 
-    #[test]
-    fn startup_only_asks() {
-        // Nothing that changes the module: no open/close, name, pairing or flash.
-        for c in &STARTUP {
-            assert!(
-                matches!(
-                    c,
-                    Command::GetVersion
-                        | Command::GetBuildTime
-                        | Command::GetStatus
-                        | Command::GetName
-                        | Command::GetPhoneMac
-                ),
-                "{c:?}"
-            );
+    mod service {
+        use super::super::{Core, Settings, Stamp, Ticked, STATUS_POLL_MS};
+        use crate::call::{CALL_AUDIO_GRACE_MS, RING_TIMEOUT_MS};
+        use crate::command::{id, Command};
+        use crate::frame::Frame;
+        use waved_state::{BluetoothState, BtCall, Command as BusCommand, DeviceEvent};
+
+        fn hex(frames: &[Command]) -> Vec<String> {
+            frames
+                .iter()
+                .map(|c| c.encode().iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" "))
+                .collect()
+        }
+
+        fn start(enabled: bool) -> (Core, BluetoothState) {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            let changed = core.start(&Settings { enabled, name: "Wave Boardroom".into() }, Stamp::default(), &mut s);
+            assert_eq!(changed, enabled, "bt_on starts false");
+            assert_eq!(s.bt_on, enabled);
+            (core, s)
+        }
+
+        /// The start-up as the module answers it at once.
+        /// (An unnamed module, the first start of a boot.)
+        fn answered_startup(core: &mut Core, s: &mut BluetoothState) -> Vec<String> {
+            let mut module = Module::named("Insta360 Wave BT XXXXXX");
+            let mut all = Vec::new();
+            for now in (0..=300).step_by(100) {
+                let frames = core.tick(now, s).frames;
+                module.answer(core, s, &frames, now);
+                all.extend(hex(&frames));
+            }
+            all
+        }
+
+        /// The module as the start-up meets it: its name, whether it takes
+        /// `SetName`, a phone already connected.
+        struct Module {
+            name: String,
+            takes_names: bool,
+            connected: bool,
+        }
+
+        impl Module {
+            fn named(name: &str) -> Self {
+                Self { name: name.into(), takes_names: true, connected: false }
+            }
+
+            /// `0x8C` for `SetName` (the name taken when it takes names),
+            /// `0xC6` with its name for `GetName`.
+            fn answer(&mut self, core: &mut Core, s: &mut BluetoothState, sent: &[Command], now: u64) {
+                for c in sent {
+                    match c {
+                        Command::SetName(name) => {
+                            if self.takes_names {
+                                self.name = name.clone();
+                            }
+                            core.frame(&Frame::request(id::NAME_SET, &[0]), now, s);
+                        }
+                        Command::GetName => {
+                            let mut data = vec![0];
+                            data.extend_from_slice(self.name.as_bytes());
+                            core.frame(&Frame::request(id::NAME, &data), now, s);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        /// One waved start against `module` for `ms` of its clock: every
+        /// frame sent, and the stamp it leaves for the next start.
+        fn run_start(settings: &Settings, stamp: Stamp, module: &mut Module, ms: u64) -> (Vec<Command>, Stamp) {
+            let (mut core, mut s) = (Core::default(), BluetoothState::default());
+            core.start(settings, stamp.clone(), &mut s);
+            if module.connected {
+                core.frame(&Frame::request(0xB2, &[0x01]), 0, &mut s);
+            }
+            let (mut sent, mut stamp) = (Vec::new(), stamp);
+            for now in (0..=ms).step_by(100) {
+                let t = core.tick(now, &mut s);
+                if let Some(written) = t.stamp {
+                    stamp = written;
+                }
+                module.answer(&mut core, &mut s, &t.frames, now);
+                sent.extend(t.frames);
+            }
+            (sent, stamp)
+        }
+
+        /// What writes the module's settings: the name, the reconnect switch
+        /// and the flash save.
+        fn writes(sent: &[Command]) -> Vec<Command> {
+            sent.iter()
+                .filter(|c| matches!(c, Command::SetName(_) | Command::AutoReconnect(_) | Command::SaveFlash))
+                .cloned()
+                .collect()
+        }
+
+        fn boardroom(enabled: bool) -> Settings {
+            Settings { enabled, name: "Wave Boardroom".into() }
+        }
+
+        #[test]
+        fn a_crash_loop_writes_the_module_once_per_boot() {
+            // S60waved kills the first waved of every boot and restarts any
+            // waved that exits: every start used to send SetName, D8 and
+            // SaveFlash.
+            let mut module = Module::named("Insta360 Wave BT XXXXXX");
+            let mut stamp = Stamp::default();
+            let mut all = Vec::new();
+            for _ in 0..10 {
+                let (sent, left) = run_start(&boardroom(true), stamp, &mut module, 30_000);
+                stamp = left;
+                all.extend(writes(&sent));
+            }
+            assert_eq!(all, [
+                Command::SetName("Wave Boardroom".into()),
+                Command::AutoReconnect(true),
+                Command::SaveFlash
+            ]);
+            assert_eq!(module.name, "Wave Boardroom");
+        }
+
+        #[test]
+        fn a_module_that_keeps_its_default_name_is_renamed_three_times_a_boot() {
+            // Stock renames every 5 s while the name holds XXXXXX, forever.
+            let mut module = Module { takes_names: false, ..Module::named("Insta360 Wave BT XXXXXX") };
+            let mut stamp = Stamp::default();
+            let mut renames = 0;
+            for _ in 0..5 {
+                let (sent, left) = run_start(&boardroom(true), stamp, &mut module, 120_000);
+                stamp = left;
+                renames += sent.iter().filter(|c| matches!(c, Command::SetName(_))).count();
+            }
+            assert_eq!(renames, usize::from(crate::startup::MAX_RENAMES));
+        }
+
+        #[test]
+        fn a_new_device_name_reaches_the_module_once() {
+            let mut module = Module::named("Wave Boardroom");
+            let (sent, stamp) = run_start(&boardroom(true), Stamp::default(), &mut module, 10_000);
+            assert_eq!(writes(&sent), [Command::AutoReconnect(true), Command::SaveFlash], "the name is right");
+            let lobby = Settings { enabled: true, name: "Wave Lobby".into() };
+            let (sent, stamp) = run_start(&lobby, stamp, &mut module, 10_000);
+            assert_eq!(writes(&sent), [Command::SetName("Wave Lobby".into()), Command::SaveFlash]);
+            assert_eq!(module.name, "Wave Lobby");
+            let (sent, _) = run_start(&lobby, stamp, &mut module, 10_000);
+            assert_eq!(writes(&sent), []);
+        }
+
+        #[test]
+        fn a_phone_already_connected_is_not_sent_a_reconnect() {
+            // Stock turns the module's reconnect off (D8 00) as a phone
+            // connects; D8 01 with one connected would only disturb it.
+            let mut module = Module { connected: true, ..Module::named("Wave Boardroom") };
+            let (sent, _) = run_start(&boardroom(true), Stamp::default(), &mut module, 10_000);
+            assert_eq!(writes(&sent), [], "nothing to write");
+            assert!(sent.contains(&Command::GetName) && sent.contains(&Command::PtaMode { wifi: true }));
+        }
+
+        #[test]
+        fn switching_off_during_the_start_up_is_not_undone() {
+            let (mut core, mut s) = start(true);
+            let mut module = Module::named("Wave Boardroom");
+            // The module is slow: the start-up waits for an answer.
+            core.tick(0, &mut s);
+            let out = core.command(&BusCommand::SetBluetooth(false), 500, 0, &mut s);
+            assert_eq!(hex(&out.frames), ["75 45 01 CB CC"]);
+            let mut after = Vec::new();
+            for now in (600..=10_000).step_by(100) {
+                let frames = core.tick(now, &mut s).frames;
+                module.answer(&mut core, &mut s, &frames, now);
+                if now == 600 {
+                    // Its answers to what was sent at 0.
+                    module.answer(&mut core, &mut s, &[Command::SetName("Wave Boardroom".into()), Command::GetName], now);
+                }
+                after.extend(frames);
+            }
+            assert!(!after.contains(&Command::OpenBt), "{after:?}");
+            assert!(!after.contains(&Command::AutoReconnect(true)), "{after:?}");
+            assert!(!s.bt_on);
+        }
+
+        #[test]
+        fn it_starts_like_stock_with_the_device_name() {
+            let (mut core, mut s) = start(true);
+            let frames = answered_startup(&mut core, &mut s);
+            assert_eq!(frames, [
+                "75 45 02 CC 00 CE", // OpenBt
+                "75 45 01 91 92",    // GetVersion
+                "75 45 01 93 94",    // GetBuildTime
+                "75 45 01 A9 AA",    // GetStatus
+                "75 45 01 C5 C6",    // GetName: "Insta360 Wave BT XXXXXX"
+                // SetName: the device name, NUL-padded to stock's 23 bytes.
+                "75 45 18 8B 57 61 76 65 20 42 6F 61 72 64 72 6F 6F 6D 00 00 00 00 00 00 00 00 00 FB",
+                "75 45 02 D8 01 DB",    // AutoReconnect on
+                "75 45 02 E0 00 E2",    // SaveFlash
+                "75 45 01 C5 C6",       // GetName: the new name
+                "75 45 03 EA 01 00 EE", // PtaMode
+                "75 45 01 C7 C8",       // GetPhoneMac
+            ]);
+            assert_eq!(s.advertised_name, "Wave Boardroom");
+        }
+
+        #[test]
+        fn switched_off_in_config_it_starts_closed() {
+            let (mut core, mut s) = start(false);
+            let frames = answered_startup(&mut core, &mut s);
+            assert_eq!(frames[0], "75 45 01 CB CC");
+            assert!(frames.contains(&"75 45 02 D8 00 DA".to_string()), "{frames:?}");
+            assert!(!frames.iter().any(|f| f.starts_with("75 45 02 CC")), "never opened");
+            // While off a phone the module still reports does not connect.
+            let h = core.frame(&Frame::request(0xB2, &[0x03]), 300, &mut s);
+            assert!(!s.connected && !s.phone_audio);
+            assert_eq!(h.event, None);
+        }
+
+        #[test]
+        fn the_switch_from_the_bus() {
+            let (mut core, mut s) = start(true);
+            core.frame(&Frame::request(0xB2, &[0x07]), 0, &mut s);
+            core.frame(&Frame::request(0xB1, b"0471"), 0, &mut s);
+            assert!(s.connected && s.call.is_ringing());
+            let out = core.command(&BusCommand::SetBluetooth(false), 1_000, 0, &mut s);
+            assert_eq!(hex(&out.frames), ["75 45 01 CB CC"]);
+            assert!(out.changed);
+            assert_eq!(out.event, Some(DeviceEvent::BtDisconnected));
+            assert!(!s.bt_on && !s.connected && !s.call_audio);
+            assert_eq!(s.call, BtCall::Idle);
+            // Off: the module's reports bring nothing back, nothing rings.
+            for f in [Frame::request(0xB2, &[0x07]), Frame::request(0xAA, &[1]), Frame::request(0xB1, b"0471")] {
+                let h = core.frame(&f, 2_000, &mut s);
+                assert!(!h.changed && h.event.is_none(), "{:#04x}", f.cmd);
+            }
+            // On again: OpenBt, and the next report counts.
+            let out = core.command(&BusCommand::SetBluetooth(true), 3_000, 0, &mut s);
+            assert_eq!(hex(&out.frames), ["75 45 02 CC 00 CE"]);
+            assert_eq!(out.event, None);
+            let h = core.frame(&Frame::request(0xAA, &[1]), 3_100, &mut s);
+            assert_eq!(h.event, Some(DeviceEvent::BtConnected(String::new())));
+        }
+
+        #[test]
+        fn the_phones_volume_reaches_the_speaker_while_it_plays() {
+            let (mut core, mut s) = start(true);
+            // Not playing: stock ignores it ("not bt or dongle path").
+            let h = core.frame(&Frame::request(0xD5, &[0, 0, 8]), 0, &mut s);
+            assert_eq!(h.speaker, None);
+            assert_eq!(h.acks[0].encode(), [0x75, 0x46, 0x01, 0xD5, 0xD6], "stock's empty ack");
+            core.frame(&Frame::request(0xB2, &[0x03]), 0, &mut s);
+            assert_eq!(core.frame(&Frame::request(0xD5, &[0, 0, 8]), 0, &mut s).speaker, Some(50));
+            assert_eq!(core.frame(&Frame::request(0xD5, &[1, 1, 16]), 0, &mut s).speaker, Some(100));
+            assert_eq!(core.frame(&Frame::request(0xD5, &[0, 7, 8]), 0, &mut s).speaker, None, "unknown scale");
+        }
+
+        #[test]
+        fn a_call_answered_on_the_phone_ends_on_its_own() {
+            // Device 2026-10-13: answered on the iPhone, no 0xD1, no empty
+            // 0xB1. With an in-band ring the call audio closes; without it,
+            // the minute runs out.
+            let (mut core, mut s) = start(true);
+            core.frame(&Frame::request(0xB2, &[0x01]), 0, &mut s);
+            core.frame(&Frame::request(0xB1, b"0471"), 0, &mut s);
+            core.frame(&Frame::request(0xB2, &[0x07]), 500, &mut s);
+            core.frame(&Frame::request(0xB2, &[0x01]), 4_000, &mut s);
+            let t = core.tick(4_000 + CALL_AUDIO_GRACE_MS, &mut s);
+            assert!(t.changed);
+            assert_eq!(t.note, Some("bt: the call audio closed: call over here"));
+            assert_eq!(s.call, BtCall::Idle);
+
+            core.frame(&Frame::request(0xB1, b"0472"), 10_000, &mut s);
+            let t = core.tick(10_000 + RING_TIMEOUT_MS, &mut s);
+            assert_eq!(t.note, Some("bt: no news of the ring for 60 s: ring over"));
+            assert_eq!(s.call, BtCall::Idle);
+        }
+
+        #[test]
+        fn the_modules_log_ends_a_call() {
+            let (mut core, mut s) = start(true);
+            core.frame(&Frame::request(0xB1, b"0471"), 0, &mut s);
+            let mut line = vec![1];
+            line.extend_from_slice(b"HFP  Call active");
+            let h = core.frame(&Frame::request(0xF0, &line), 1_000, &mut s);
+            assert!(h.changed && s.call.is_active());
+            assert_eq!(h.note, Some("bt: the module reports the call up"));
+            let mut line = vec![1];
+            line.extend_from_slice(b"HFP call end");
+            assert!(core.frame(&Frame::request(0xF0, &line), 9_000, &mut s).changed);
+            assert_eq!(s.call, BtCall::Idle);
+        }
+
+        #[test]
+        fn decline_on_the_wave_leaves_at_once() {
+            let (mut core, mut s) = start(true);
+            core.frame(&Frame::request(0xB1, b"0471"), 0, &mut s);
+            let out = core.command(&BusCommand::BtDeclineCall, 1_000, 0x6720_0000, &mut s);
+            assert_eq!(hex(&out.frames), ["75 45 07 D0 00 00 00 20 67 00 5E"]);
+            assert!(out.changed);
+            assert_eq!(s.call, BtCall::Idle);
+            // The module repeating the number does not bring the screen back.
+            assert!(!core.frame(&Frame::request(0xB1, b"0471"), 1_500, &mut s).changed);
+        }
+
+        #[test]
+        fn the_module_is_named_again_while_it_has_its_default_name() {
+            // Stock's heartbeat: SetName and GetName while "XXXXXX" (75122).
+            let (mut core, mut s) = start(true);
+            answered_startup(&mut core, &mut s);
+            s.advertised_name = "Insta360 Wave BT XXXXXX".into();
+            let t = core.tick(STATUS_POLL_MS, &mut s);
+            assert_eq!(t.frames, [Command::SetName("Wave Boardroom".into()), Command::GetName, Command::GetStatus]);
+            s.advertised_name = "Wave Boardroom".into();
+            let t = core.tick(2 * STATUS_POLL_MS, &mut s);
+            assert_eq!(t.frames, [Command::GetStatus]);
+            assert_eq!(core.tick(2 * STATUS_POLL_MS + 100, &mut s), Ticked::default());
+        }
+
+        #[test]
+        fn no_status_poll_before_the_module_answers() {
+            let (mut core, mut s) = start(true);
+            core.tick(0, &mut s);
+            let t = core.tick(10 * STATUS_POLL_MS, &mut s);
+            assert!(!t.frames.contains(&Command::GetStatus), "{t:?}");
+        }
+
+        #[test]
+        fn the_service_never_flashes() {
+            // F6 runs only from the waved-bt-flash tool: nothing the service
+            // sends, at start, on any bus command or on any tick, is an OTA
+            // frame.
+            const OTA: [u8; 9] = [0x80, 0x9D, 0x9F, 0xA1, 0xA2, 0xD9, 0xDB, 0xDD, 0xDF];
+            let (mut core, mut s) = start(true);
+            let mut frames: Vec<Command> = Vec::new();
+            let mut now = 0;
+            for _ in 0..50 {
+                frames.extend(core.tick(now, &mut s).frames);
+                now += 1_000;
+            }
+            core.frame(&Frame::request(0xB2, &[0x07]), now, &mut s);
+            core.frame(&Frame::request(0xB1, b"0471"), now, &mut s);
+            for command in [
+                BusCommand::BtAnswerCall,
+                BusCommand::BtDeclineCall,
+                BusCommand::BtPair,
+                BusCommand::BtStopPairing,
+                BusCommand::BtDisconnect,
+                BusCommand::SetBluetooth(false),
+                BusCommand::SetBluetooth(true),
+                BusCommand::InstallUpdate,
+                BusCommand::FactoryReset,
+            ] {
+                frames.extend(core.command(&command, now, 0, &mut s).frames);
+                frames.extend(core.tick(now, &mut s).frames);
+                now += 10_000;
+            }
+            for f in frames.iter().map(Command::frame) {
+                assert!(!OTA.contains(&f.cmd), "{:#04x}", f.cmd);
+            }
+        }
+    }
+
+    mod speaker {
+        use super::super::Speaker;
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+        use waved_hid::stats::HidStats;
+        use waved_hid::watch::{spawn_mute_watch, spawn_volume_watch};
+        use waved_state::{Command as BusCommand, StateBus};
+
+        /// waved-audio's speaker commands (`AudioService::set_speaker_muted`):
+        /// unmuting below 10 % raises the volume to 10 %. It yields after
+        /// each, so the watches see every state on the way, as they may on
+        /// the device (other threads).
+        fn spawn_audio(bus: &StateBus) {
+            let mut commands = bus.commands.subscribe();
+            let audio = std::sync::Arc::clone(&bus.audio);
+            tokio::spawn(async move {
+                while let Ok(command) = commands.recv().await {
+                    match command {
+                        BusCommand::SetSpeakerMute(muted) => {
+                            audio.send_if_modified(|s| {
+                                if s.speaker_muted == muted {
+                                    return false;
+                                }
+                                s.speaker_muted = muted;
+                                if !muted && s.speaker_volume < 10 {
+                                    s.speaker_volume = 10;
+                                }
+                                true
+                            });
+                        }
+                        BusCommand::SetSpeakerVolume(v) => audio.send_modify(|s| s.speaker_volume = v),
+                        _ => {}
+                    }
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn the_phones_volume_never_sends_a_key_to_the_computer() {
+            // (speaker volume, muted, the phone's target) → the speaker after.
+            let cases = [
+                ((5, true), 5, (10, false)),
+                ((60, true), 60, (60, false)),
+                ((30, true), 50, (50, false)),
+                ((8, true), 20, (20, false)),
+                ((40, false), 70, (70, false)),
+                ((40, false), 0, (0, false)),
+                ((40, true), 0, (0, true)),
+            ];
+            for ((volume, muted), target, after) in cases {
+                let bus = StateBus::new();
+                bus.audio.send_modify(|s| {
+                    s.speaker_volume = volume;
+                    s.speaker_muted = muted;
+                });
+                let (tx, mut keys) = mpsc::channel(64);
+                let marker = std::sync::Arc::clone(&bus.host_pending_speaker_vol);
+                let _v = spawn_volume_watch(bus.audio.subscribe(), tx.clone(), HidStats::new(), 1000, marker);
+                let mute_marker = std::sync::Arc::clone(&bus.pending_speaker_mute);
+                let _m = spawn_mute_watch(bus.audio.subscribe(), tx, HidStats::new(), mute_marker);
+                spawn_audio(&bus);
+                tokio::task::yield_now().await;
+                Speaker::from_bus(&bus).apply(target);
+                let key = tokio::time::timeout(Duration::from_millis(100), keys.recv()).await;
+                assert!(key.is_err(), "{volume} % muted {muted} → {target} %: sent {key:?}");
+                let s = bus.audio.borrow().clone();
+                assert_eq!((s.speaker_volume, s.speaker_muted), after, "{volume} % muted {muted} → {target} %");
+            }
         }
     }
 }

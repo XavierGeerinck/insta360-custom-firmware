@@ -1,10 +1,14 @@
 config_version = 2
 
+# The commented keys were added in milestone 3. waved writes them only when
+# they differ from the default shown, because the waved before it rejects a
+# file that has them (docs/UPDATES.md, "Going back over adb").
+
 [device]
 name = "Wave Open"
 language = "en"
 first_run_done = false
-mic_height = "medium"
+# mic_height = "medium"   # "low", "medium" or "high"
 
 [audio]
 mode = "omni"
@@ -45,7 +49,13 @@ minimum_free_mb = 2048
 [security]
 device_password = ""
 ota_server = ""
-ota_allow_downgrade = false
+# ota_allow_downgrade = false
+# Opt-in release lockdown (K1, docs/SECURITY.md). Keep false on development
+# units. When true, the documented /etc overlay step keeps adb off at boot.
+# release_lockdown = false
 
 [ntp]
 servers = ["pool.ntp.org", "time.google.com"]
+
+# [bluetooth]
+# enabled = true

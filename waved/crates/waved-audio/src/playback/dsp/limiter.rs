@@ -59,6 +59,12 @@ impl LookaheadLimiter {
         }
     }
 
+    /// Output delay in frames; the first this many frames after a reset
+    /// are silence.
+    pub fn lookahead_frames(&self) -> usize {
+        self.lookahead
+    }
+
     pub fn last_reduction_db(&self) -> f32 {
         self.last_reduction_db
     }

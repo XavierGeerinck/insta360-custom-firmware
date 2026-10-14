@@ -137,12 +137,12 @@ constructor (the struct may hold anything; `build` gets the rest from
 | `Confirm(kind)` | `confirm` | `ConfirmScreen::new(kind: ConfirmKind)` |
 | `Pin(target)` | `pin` | `PinScreen::default()` |
 | `Update` | `ota` | `UpdateScreen::default()` (H3; installing and restarting take over the router) |
-| `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4) |
+| `Bluetooth` | `bluetooth` | `BluetoothScreen::default()` (I4; stock's Bluetooth switch in the device row, `SetBluetooth`; Pair another phone opens `Confirm(PairAnotherPhone)`) |
 | `IncomingCall` | `call` | `CallScreen::default()` (I3; a ringing Bluetooth call takes over the router) |
+| `UsbStorage` | `usb_storage` | `UsbStorageScreen::default()` (G1; takes over while `snap.usb_storage` is not Off) |
 
 `messages.rs` is not a screen; it holds the message copy screens send. Nor is
-`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. USB storage
-is milestone 3 and has no module yet. A screen must cope with any snapshot (for example `FileDetail` for an
+`main_parts.rs`, the pieces Home, Recording, After stop and Resting share. A screen must cope with any snapshot (for example `FileDetail` for an
 id no longer in `snap.files`, or `Decision` while `pending_decision` is `None` for a
 frame) without panicking. Every screen with a status area calls
 `status.update(snap)` from `update`: that is how runtime messages appear.
@@ -191,7 +191,9 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
   one-minute wait) and routes `PinAccepted` itself. A `PinAccepted` sent by a screen is
   ignored. Wrong tries and the wait reach the screen in `UiSnapshot::pin`.
 - **Leave commands.** A route can send commands when it goes away (Wi-Fi setup sends
-  `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays).
+  `CancelWifiProvisioning`, File detail sends `StopPlayback` while its recording plays,
+  Bluetooth sends `BtStopPairing`, which ends its pairing window). Resting does not count:
+  the parked route stays on the stack, so a phone can keep pairing while the screen rests.
   The runtime sends them once, when the route leaves the router stack by any path: a button
   or swipe Back, `ToBase`, a base navigate or a meeting takeover (`runtime::gesture::leave_commands`).
   A screen's own Back button may send the same command too; a duplicate is accepted.
@@ -206,8 +208,19 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 - **Call takeover (I3).** While a Bluetooth call rings, `Router::sync` puts `IncomingCall` on
   top of whatever shows, a recording included (it keeps running underneath), and under the
   resting screen when resting. Back dismisses it until that call ends; it stays, as "In a
-  call", once answered; it leaves when the call ends. Never during start-up, first start, an
-  install or power off. `UiSnapshot::in_call` counts an active Bluetooth call.
+  call", once answered; it leaves when the call ends. Once shown for a call it comes back,
+  ringing or answered, after anything that resets the stack under it (a pending decision, USB
+  storage, a base navigate or `ToBase`, a relock on rest), since its Hang up is the only one on
+  the Wave; only Back keeps it away. Never during start-up, first start, an install or power
+  off. `UiSnapshot::in_call` counts an active Bluetooth call.
+- **USB storage takeover (G1).** While `snap.usb_storage.phase` is not Off (Starting, On,
+  Stopping), `Router::sync` makes `UsbStorage` the base and drops everything above it; only
+  `Confirm(StopUsbStorage)`, `Confirm(PowerOff)`, a ringing call and the resting screen go on
+  top, and any other `Navigate` is ignored. When the phase is Off again the meeting base (or
+  first start) returns, with an open stop confirmation gone. The PIN does not guard the
+  takeover or its stop (System's PIN guards the start). Problems arrive as
+  `DeviceEvent::UsbStorageProblem` and show in the status slot (`copy::usb_storage_problem`);
+  the end of a mode that was on says "USB storage stopped".
 
 ## Components
 
@@ -224,7 +237,7 @@ What the runtime (`src/runtime/`) does around screens, so a screen need not.
 | Dial | `Dial::new(root, DIAL_CX, DIAL_CY, DIAL_R, 3).on_tap(..)`, `set_ring`, `set_talker`, `set_gauge`, `set_progress` | Home, Recording, Resting, File detail, Update, Bluetooth (the pairing countdown), Start-up |
 | Rotary list | `RotaryList::new(root, items, on_select)` | Menu, System |
 | Radio list | `RadioList::new(root, RADIO_TOP, options, selected, on_select)`: whole rows only (three from `RADIO_TOP`, y 68–231), snapping to rows when longer; `.scroll_to(index)` puts the row at the top without animation, or shows the last rows | After a recording, Time zone, Dim after |
-| Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)` | Uploads, Display, Date and time |
+| Value / switch rows | `ValueRow::new(..)`, `SwitchRow::new(..)`; a bare `Switch::new(parent, on, on_toggle)` (the same track in a 56 x 44 target) for a row that is not itself the control | Uploads, Display, Date and time, Bluetooth (the switch in the device row) |
 | Value arc | `ValueArc::new(root, cx, cy, r, on_change)` | Volume, Mic level, Display |
 | Audio mode picker | `ModePicker::new(root, glyphs: [Glyph; 6], selected, on_select, on_aim)`; `set_selected`, `set_preview(&Preview)`, `set_aimable`; `AimEvent` reports the aim while dragging and on release. Six round buttons on a ring around a drawn pickup-pattern preview; the preview disc takes aim drags and keeps its gestures (`components/mode_picker.rs`) | Audio mode |
 | Signal arcs | `SignalArcs::new(root, cx, cy)`, `set_bars(lit)` (0-4 of four concentric arcs, innermost first) (`components/wifi.rs`) | Wi-Fi |

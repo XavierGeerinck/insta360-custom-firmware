@@ -1,1 +1,3 @@
 stock firmware 1.1.6.6 — extracted from /etc/dynamic_eq_config_2.json on the device rootfs (fw_v1.1.6.6/rootfs/etc/dynamic_eq_config_2.json in this repo).
+
+Stock 1.2.2.6 loads this file for nothing: libInstaAudio.so only opens /etc/dynamic_eq_config.json (the microphone EQ). waved uses it as the Voice preset's EQ with the file's switches honoured (no HPF, no MBAGC); docs/AUDIO_HARDWARE.md "Stock speaker tuning".

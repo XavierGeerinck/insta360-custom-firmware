@@ -114,7 +114,9 @@ impl MenuRow {
             } else {
                 snap.wifi.ssid.clone()
             }),
-            MenuRow::Bluetooth => Some(if snap.bt.connected {
+            MenuRow::Bluetooth => Some(if !snap.bt.bt_on {
+                "Off".into()
+            } else if snap.bt.connected {
                 if snap.bt.device_name.is_empty() {
                     "Connected".into()
                 } else {
@@ -326,6 +328,8 @@ pub(crate) mod fixture {
         snap.clock = "14:33".into();
         snap.battery.level = 82;
         snap.battery.voltage = 3_800;
+        // Bluetooth on, as config's default once waved-bt has started.
+        snap.bt.bt_on = true;
         snap
     }
 
@@ -430,6 +434,8 @@ mod tests {
         assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("Connected"));
         snap.bt.device_name = "iPhone".into();
         assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("iPhone"));
+        snap.bt.bt_on = false;
+        assert_eq!(MenuRow::Bluetooth.value(&snap).as_deref(), Some("Off"));
         assert_eq!(MenuRow::Bluetooth.route(), Route::Bluetooth);
         lvgl(|lv| {
             let root = lv.screen();

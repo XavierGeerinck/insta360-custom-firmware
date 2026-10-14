@@ -147,6 +147,7 @@ class ExecutionPolicy:
     input_values: tuple[int, ...]
     output_values: tuple[int, ...]
     execution_re: re.Pattern[str]
+    expected_iterations: int = 1
 
 
 POC6_POLICY = ExecutionPolicy(
@@ -448,7 +449,7 @@ def load_manifest(
         expected["input"] != list(policy.input_values)
         or expected["output"] != list(policy.output_values)
         or expected["bytes"] != len(policy.output_values)
-        or expected["iterations"] != 1
+        or expected["iterations"] != policy.expected_iterations
     ):
         raise ExecutionManifestError(
             "expected result differs from fixed PoC 6 policy"
@@ -678,7 +679,7 @@ def parse_result(
     result = {
         "identity": identity,
         "mode": "execute-once",
-        "iterations": 1,
+        "iterations": manifest.policy.expected_iterations,
         "input": list(manifest.policy.input_values),
         "output": list(manifest.policy.output_values),
         "bytes": len(manifest.policy.output_values),
@@ -687,6 +688,13 @@ def parse_result(
     if "graph_us" in measured:
         result["graph_us"] = int(measured["graph_us"])
         result["output_hex"] = measured["output_hex"]
+        try:
+            observed = bytes.fromhex(measured["output_hex"])
+        except ValueError as error:
+            raise ExecutionResultError("native output is not hexadecimal") from error
+        if len(observed) != len(manifest.policy.output_values):
+            raise ExecutionResultError("native output byte count differs from policy")
+        result["output"] = list(observed)
     return result
 
 
@@ -694,6 +702,8 @@ def run_once(
     transport: Any,
     manifest: ExecutionManifest,
     run_id: str,
+    *,
+    preflight_validator=None,
 ) -> tuple[dict[str, Any], Path]:
     if RUN_ID_RE.fullmatch(run_id) is None:
         raise ExecutionLabError(f"run ID must match {RUN_ID_RE.pattern}")
@@ -725,6 +735,8 @@ def run_once(
     )
     try:
         verify_preflight(manifest, preflight)
+        if preflight_validator is not None:
+            preflight_validator(preflight)
     except ExecutionPreflightError as exc:
         envelope["status"] = "PREFLIGHT_FAILED"
         envelope["errors"].append(str(exc))
@@ -750,6 +762,7 @@ def run_once(
     )
 
     postflight = collect_snapshot(transport, manifest)
+    npu_compile_lab.align_native_diagnostics(transport, manifest, preflight, postflight)
     npu_compile_lab._write_json_exclusive(
         run_directory / "postflight.json", postflight
     )

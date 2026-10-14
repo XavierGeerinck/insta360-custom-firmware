@@ -9,7 +9,7 @@
 //! number only"), the factory radio test modes (`0xE2`-`0xE5`) and 2.4 GHz
 //! dongle pairing (`0xCD` / `0xCE`); their bytes are in the doc.
 
-use crate::frame::Frame;
+use crate::frame::{Frame, Prefix};
 
 /// Command bytes on the wire. Requests and the module's replies share one space.
 pub mod id {
@@ -146,10 +146,12 @@ pub enum Command {
     Heartbeat { battery_percent: u8, charging: bool, wifi: bool },
     /// `0x8B`: the advertised name, NUL-padded to [`NAME_LEN`] bytes.
     SetName(String),
-    /// `0xCC`: Bluetooth on. `at_boot` is stock's `is_init` (1 from
-    /// `bt_info_init`, 0 when the user switches it on).
-    OpenBt { at_boot: bool },
-    /// `0xCB`: Bluetooth off.
+    /// `0xCC 00`: Bluetooth on (stock's switch, and at boot when it is on).
+    /// Stock's `is_init` only decides whether the host saves the switch; the
+    /// byte on the wire is always 0 (bt_ctrl_cmd_send 74445-74473).
+    OpenBt,
+    /// `0xCB`: Bluetooth off (stock's switch). Stock then counts the phone as
+    /// gone and ignores `0xB2` bit 0 and `0xB4` until `OpenBt`.
     CloseBt,
     /// `0xA3 00`: drop the phone (stock `bt_disconnect`).
     Disconnect,
@@ -190,7 +192,7 @@ impl Command {
                 vec![battery_step(*battery_percent), u8::from(*charging), u8::from(*wifi)],
             ),
             Command::SetName(name) => (id::SET_NAME, name_bytes(name)),
-            Command::OpenBt { at_boot } => (id::OPEN_BT, vec![u8::from(*at_boot)]),
+            Command::OpenBt => (id::OPEN_BT, vec![0]),
             Command::CloseBt => (id::CLOSE_BT, vec![]),
             Command::Disconnect => (id::DISCONNECT, vec![0]),
             Command::EnterPairing => (id::ENTER_PAIRING, vec![0]),
@@ -219,8 +221,28 @@ impl Command {
     }
 }
 
+/// What the host sends back for a received frame: stock's acknowledgement
+/// ([`ack_for`]) for every `75 45` frame but `0xE0`, nothing for a `75 46`
+/// frame.
+///
+/// The module repeats a `75 45` frame every 500 ms until it is acknowledged.
+/// Its `75 46` frames answer our own requests (`91 00 <version>`, `A9 00`,
+/// `C5 00`, `A7 00`) and come once, acknowledged or not (capture
+/// s1-pair-20261013.bin). Stock acknowledges those too (it never looks at the
+/// prefix); waved does not, because such an acknowledgement carries our own
+/// request's byte back to the module (`75 46 02 A9 00 AB` is GetStatus'
+/// `0xA9`), which may read it as the request again (docs/BLUETOOTH_PROTOCOL.md,
+/// "Acknowledgements and replies").
+pub fn ack_for_frame(frame: &Frame) -> Option<Frame> {
+    match frame.prefix {
+        Prefix::Ack => None,
+        Prefix::Request | Prefix::Legacy => ack_for(frame.cmd),
+    }
+}
+
 /// The acknowledgement stock sends for a received frame with `cmd`
-/// (`bt_msg_recv_thread` 75277: every frame except `0xE0`).
+/// (`bt_msg_recv_thread` 75277: every frame except `0xE0`;
+/// `bt_ctrl_cmd_send_without_ack` 74888 for the bytes).
 pub fn ack_for(cmd: u8) -> Option<Frame> {
     match cmd {
         id::SAVE_FLASH => None,
@@ -259,8 +281,10 @@ mod tests {
     fn connection_control() {
         assert_eq!(wire(Command::Disconnect), "75 45 02 A3 00 A5");
         assert_eq!(wire(Command::EnterPairing), "75 45 02 A7 00 A9");
-        assert_eq!(wire(Command::OpenBt { at_boot: true }), "75 45 02 CC 01 CF");
-        assert_eq!(wire(Command::OpenBt { at_boot: false }), "75 45 02 CC 00 CE");
+        // Stock sends `CC 00` from the switch and at boot alike: `is_init`
+        // only decides whether it saves the switch, then data[0] is set to 0
+        // (bt_ctrl_cmd_send 74445-74473).
+        assert_eq!(wire(Command::OpenBt), "75 45 02 CC 00 CE");
         assert_eq!(wire(Command::CloseBt), "75 45 01 CB CC");
         assert_eq!(wire(Command::AutoReconnect(true)), "75 45 02 D8 01 DB");
         assert_eq!(wire(Command::AutoReconnect(false)), "75 45 02 D8 00 DA");
@@ -356,5 +380,38 @@ mod tests {
         assert_eq!(ack(0xB0).as_deref(), Some("75 46 02 B0 00 B2"));
         // ...and 0xE0 (flash saved) is never acknowledged.
         assert_eq!(ack(0xE0), None);
+    }
+
+    /// Parse one wire frame (fixtures as captured or as stock builds them).
+    fn wire_frame(bytes: &[u8]) -> Frame {
+        let mut p = crate::frame::Parser::default();
+        let frames: Vec<Frame> = bytes.iter().filter_map(|&b| p.feed(b)).collect();
+        assert_eq!(frames.len(), 1, "one valid frame");
+        frames.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn every_module_frame_is_acknowledged_but_not_its_replies() {
+        let ack = |bytes: &[u8]| ack_for_frame(&wire_frame(bytes)).map(|f| hex(&f.encode()));
+        // `75 45` frames: the module repeats them every 500 ms until
+        // acknowledged (device 2026-10-13). Stock's bytes, replies included.
+        assert_eq!(ack(&[0x75, 0x45, 0x03, 0xB2, 0x00, 0x00, 0xB5]).as_deref(), Some("75 46 02 B2 00 B4"));
+        assert_eq!(ack(&[0x75, 0x45, 0x02, 0xAA, 0x01, 0xAD]).as_deref(), Some("75 46 02 AA 00 AC"));
+        let mut name = vec![0x75, 0x45, 0x19, 0xC6, 0x00];
+        name.extend_from_slice(b"Insta360 Wave BT 0A1B2C");
+        name.push(crate::frame::checksum(&name[2..]));
+        assert_eq!(ack(&name).as_deref(), Some("75 46 02 C6 00 C8"));
+        assert_eq!(ack(&[0x75, 0x45, 0x02, 0xD1, 0x00, 0xD3]).as_deref(), Some("75 46 01 D1 D2"));
+        // ...but never 0xE0.
+        assert_eq!(ack(&[0x75, 0x45, 0x01, 0xE0, 0xE1]), None);
+        // `75 46` frames are the module's answers to our requests, sent once
+        // (capture s1-pair-20261013.bin: 91, 93, A9, C5, A7 once each with
+        // nothing acknowledged). Acknowledging one would hand the module our
+        // own request byte back (`75 46 02 A9 00 AB` carries GetStatus).
+        assert_eq!(ack(&[0x75, 0x46, 0x02, 0xA9, 0x00, 0xAB]), None);
+        assert_eq!(ack(&[0x75, 0x46, 0x02, 0xC5, 0x00, 0xC7]), None);
+        assert_eq!(ack(&[0x75, 0x46, 0x02, 0xA7, 0x00, 0xA9]), None);
+        let version = Frame::ack(0x91, b"\x000.0.0.28").encode();
+        assert_eq!(ack(&version), None);
     }
 }

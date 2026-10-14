@@ -14,8 +14,8 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::{sleep, sleep_until, Instant};
 use tracing::{info, warn};
 use waved_state::{
-    AudioState, BatteryState, Command, McuState, MeetingState, OtaPhase, OtaState, PlaybackState,
-    ProvisioningState, StateBus,
+    AudioState, BatteryState, BluetoothState, Command, McuState, MeetingState, OtaPhase, OtaState,
+    PlaybackState, ProvisioningState, StateBus, UsbStorageState,
 };
 
 use crate::fetch::{FetchError, Fetcher};
@@ -40,7 +40,8 @@ pub mod copy {
     pub const OLDER: &str = "The update is older than this version";
     pub const NO_SPACE: &str = "Not enough space on Wave";
     pub const INSTALL_FAILED: &str = "The update could not be installed";
-    /// Neither the package nor Wave has an `S60waved` with `update_guard`.
+    /// Neither the package nor Wave has an `S60waved` with the current
+    /// `update_guard` (`install::has_fall_back`).
     pub const NO_FALLBACK: &str = "Wave can't go back if this update fails";
     pub const INTERRUPTED: &str = "The update stopped before it finished";
 
@@ -94,6 +95,10 @@ pub struct Inputs {
     pub provisioning: watch::Receiver<ProvisioningState>,
     pub battery: watch::Receiver<BatteryState>,
     pub mcu: watch::Receiver<McuState>,
+    /// Phone calls through the Bluetooth module.
+    pub bt: watch::Receiver<BluetoothState>,
+    /// USB storage (G1): the computer has the recordings volume as a drive.
+    pub usb_storage: watch::Receiver<UsbStorageState>,
 }
 
 impl Inputs {
@@ -106,6 +111,8 @@ impl Inputs {
             provisioning: bus.provisioning.subscribe(),
             battery: bus.battery.subscribe(),
             mcu: bus.mcu.subscribe(),
+            bt: bus.bt.subscribe(),
+            usb_storage: bus.usb_storage.subscribe(),
         }
     }
 }
@@ -482,14 +489,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
     async fn wait_until_free(&self, mode: Mode, inputs: &mut Inputs) -> Result<(), Failure> {
         let mut manual = mode == Mode::Manual;
         loop {
-            let activity = Activity::read(
-                &inputs.meeting.borrow(),
-                &inputs.audio.borrow(),
-                &inputs.playback.borrow(),
-                &inputs.provisioning.borrow(),
-                &inputs.battery.borrow(),
-                &inputs.mcu.borrow(),
-            );
+            let activity = Activity::read(inputs);
             let Some(blocker) = gate::blocker(&activity, manual) else {
                 return Ok(());
             };
@@ -522,7 +522,7 @@ impl<F: Fetcher, I: Installer + 'static> UpdateService<F, I> {
             Ok(Err(InstallError::NoFallBack)) => {
                 // Nothing was changed. The same package is refused until the
                 // init script changes, so automatic checks pass over it.
-                warn!("install refused: /etc/init.d/S60waved has no update_guard");
+                warn!("install refused: no current update_guard in the S60waved it boots with");
                 let _ = fs::remove_dir_all(&staging);
                 let _ = trial::skip(&self.paths, version, &build);
                 return Err(Failure::Shown(copy::NO_FALLBACK));
@@ -984,6 +984,75 @@ mod tests {
         assert!(h.installs().is_empty());
         h.bus.meeting.send_modify(|m| m.recording = false);
         h.until_rebooted().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_automatic_install_waits_for_a_phone_call_to_end() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.bus.bt.send_modify(|b| {
+            b.call = waved_state::BtCall::Active {
+                number: "+3212345678".into(),
+            }
+        });
+        let mut settings = h.settings("0.9.3");
+        settings.first_check_after = Duration::from_secs(120);
+        h.spawn(settings);
+        h.until("waiting", |s| s.phase == OtaPhase::Waiting).await;
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        assert!(h.installs().is_empty());
+        // The call ends but its audio is still up (the module reports both).
+        h.bus.bt.send_modify(|b| {
+            b.call = waved_state::BtCall::Idle;
+            b.call_audio = true;
+        });
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        assert!(h.installs().is_empty());
+        h.bus.bt.send_modify(|b| b.call_audio = false);
+        h.until_rebooted().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn even_a_tapped_install_waits_for_a_ringing_phone() {
+        let h = Harness::new();
+        h.publish("0.10.0");
+        h.bus.bt.send_modify(|b| {
+            b.call = waved_state::BtCall::Ringing {
+                number: "+3212345678".into(),
+            }
+        });
+        h.spawn(h.settings("0.9.3"));
+        h.send(Command::InstallUpdate);
+        h.until("waiting", |s| s.phase == OtaPhase::Waiting).await;
+        tokio::time::sleep(Duration::from_secs(600)).await;
+        assert!(h.installs().is_empty());
+        h.bus.bt.send_modify(|b| b.call = waved_state::BtCall::Idle);
+        h.until_rebooted().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn even_a_tapped_install_waits_while_the_computer_has_the_drive() {
+        // The restart would pull the recordings volume from under the
+        // computer (G1, USB storage).
+        use waved_state::UsbStoragePhase;
+        for phase in [
+            UsbStoragePhase::Starting,
+            UsbStoragePhase::On,
+            UsbStoragePhase::Stopping,
+        ] {
+            let h = Harness::new();
+            h.publish("0.10.0");
+            h.bus.usb_storage.send_modify(|u| u.phase = phase);
+            h.spawn(h.settings("0.9.3"));
+            h.send(Command::InstallUpdate);
+            h.until("waiting", |s| s.phase == OtaPhase::Waiting).await;
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            assert!(h.installs().is_empty(), "{phase:?}");
+            h.bus
+                .usb_storage
+                .send_modify(|u| u.phase = UsbStoragePhase::Off);
+            h.until_rebooted().await;
+        }
     }
 
     #[tokio::test(start_paused = true)]

@@ -50,6 +50,14 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
                 Some(MeetingStatus::Recording) if partial => Some(MeetingStatus::ArtifactError),
                 Some(MeetingStatus::LocalOnly | MeetingStatus::Uploaded) if wav && metadata => None,
                 Some(MeetingStatus::AwaitingDecision) if wav && metadata => None,
+                // The files are there again: marked missing while the volume
+                // was away (G1), or put back from a computer. Kept on Wave,
+                // or delivered if it was; never queued again by itself.
+                Some(MeetingStatus::MissingArtifact) if wav && metadata => Some(if row.uploaded {
+                    MeetingStatus::Uploaded
+                } else {
+                    MeetingStatus::LocalOnly
+                }),
                 Some(
                     MeetingStatus::MissingArtifact
                     | MeetingStatus::LegacyUnsupported
@@ -288,6 +296,59 @@ mod tests {
             db::claim_next_upload(&pool, 5).await.unwrap().is_none(),
             "an interrupted artifact became uploadable"
         );
+    }
+
+    #[tokio::test]
+    async fn a_missing_recording_whose_files_are_back_is_kept_again() {
+        // Marked missing while the volume was not mounted (G1), or put back
+        // on the volume from a computer: the files are there again.
+        let (temp, pool) = fixture().await;
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+        let kept = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::MissingArtifact,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        let delivered = insert(
+            &pool,
+            &recordings,
+            MeetingStatus::MissingArtifact,
+            &["audio.wav", "metadata.json"],
+        )
+        .await;
+        sqlx::query("UPDATE meetings SET uploaded_at = datetime('now') WHERE id = ?")
+            .bind(delivered.to_string())
+            .execute(&pool)
+            .await
+            .unwrap();
+        let still_missing =
+            insert(&pool, &recordings, MeetingStatus::MissingArtifact, &["audio.wav"]).await;
+
+        let report = run(&pool, &recordings).await.unwrap();
+
+        assert_eq!(report.normalized, 2);
+        assert_eq!(report.incomplete, 0);
+        for (id, expected) in [
+            (kept, MeetingStatus::LocalOnly),
+            (delivered, MeetingStatus::Uploaded),
+            (still_missing, MeetingStatus::MissingArtifact),
+        ] {
+            let (status,): (String,) =
+                sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, expected.as_str());
+        }
+        assert!(
+            db::claim_next_upload(&pool, 5).await.unwrap().is_none(),
+            "a recording that comes back is never sent by itself"
+        );
+        assert_eq!(run(&pool, &recordings).await.unwrap(), ReconcileReport::default());
     }
 
     #[tokio::test]

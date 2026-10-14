@@ -221,6 +221,52 @@ pub enum PlaybackPreset {
     Media,
 }
 
+/// The speaker amplifier's own EQ preset: ALSA card 0 control `Set EQ MODE`
+/// (acm8625s, INTEGER 0..2). Values are stock's `SPEAKER_PA_EQ_MODE`
+/// (`Insta360_Speaker.h`, `docs/AUDIO_HARDWARE.md` "Stock speaker tuning").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AmpEqMode {
+    /// 0: stock never selects it.
+    Bypass,
+    /// 1: stock while a microphone consumer is active (a call).
+    Meeting,
+    /// 2: the amplifier's power-on value; stock otherwise.
+    #[default]
+    Music,
+}
+
+impl AmpEqMode {
+    /// The value written to `Set EQ MODE`.
+    pub fn value(self) -> i32 {
+        match self {
+            AmpEqMode::Bypass => 0,
+            AmpEqMode::Meeting => 1,
+            AmpEqMode::Music => 2,
+        }
+    }
+
+    pub fn from_value(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(AmpEqMode::Bypass),
+            1 => Some(AmpEqMode::Meeting),
+            2 => Some(AmpEqMode::Music),
+            _ => None,
+        }
+    }
+
+    /// `0`/`1`/`2` or `bypass`/`meeting`/`music` (any case, trimmed).
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim().to_ascii_lowercase();
+        match raw.as_str() {
+            "bypass" => Some(AmpEqMode::Bypass),
+            "meeting" => Some(AmpEqMode::Meeting),
+            "music" => Some(AmpEqMode::Music),
+            other => other.parse().ok().and_then(Self::from_value),
+        }
+    }
+}
+
 /// What happens to a recording when it stops. Lives here (not in waved-config)
 /// so state, commands and config share one type.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -245,6 +291,8 @@ pub struct BluetoothState {
     pub connected: bool,
     pub device_name: String,
     pub mac: String,
+    /// The Bluetooth switch as waved-bt applied it (config `[bluetooth]
+    /// enabled`, `Command::SetBluetooth`); false until the service starts.
     pub bt_on: bool,
     /// The module is in pairing mode (`0xB2` bit 3, seen 2026-10-13).
     pub pairing: bool,
@@ -641,6 +689,237 @@ impl OtaPhase {
     }
 }
 
+/// USB storage (G1, `docs/USB_STORAGE.md`), published by waved-system's
+/// `usb_storage` service: the computer opens the recordings volume as a drive.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsbStorageState {
+    pub phase: UsbStoragePhase,
+}
+
+impl UsbStorageState {
+    /// The recordings volume is not mounted on Wave, or is being handed over:
+    /// nothing may record, upload, play or delete there.
+    pub fn recordings_away(&self) -> bool {
+        self.phase != UsbStoragePhase::Off
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UsbStoragePhase {
+    /// The recordings volume is mounted on Wave (normal use).
+    #[default]
+    Off,
+    /// Unmounting the volume to hand it to the computer.
+    Starting,
+    /// The computer has the volume as a drive.
+    On,
+    /// Taking the volume back: unloading, checking and mounting it.
+    Stopping,
+}
+
+impl UsbStoragePhase {
+    /// The USB storage screen owns the display (G1).
+    pub fn takes_over_screen(self) -> bool {
+        self != Self::Off
+    }
+}
+
+/// Why USB storage did not start or stop (`DeviceEvent::UsbStorageProblem`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbStorageProblem {
+    /// Start refused: a recording is running, paused, finishing or awaiting a decision.
+    Recording,
+    /// Start refused: no computer has the USB connection configured.
+    NoComputer,
+    /// Start refused: the gadget has no removable drive linked
+    /// (`scripts/patch-stock-usbgadget.sh` not applied).
+    Unavailable,
+    /// Start failed: something has a file open on the recordings volume.
+    Busy,
+    /// Stop refused: the computer still holds the drive; eject it there first.
+    EjectFirst,
+    /// The volume could not be mounted on Wave again.
+    NotMounted,
+}
+
+/// The USB gadget switch's hold on waved's files on a gadget device
+/// (`docs/USB_STORAGE.md`). waved-system's `usb_storage` raises it before
+/// any unbind and unbinds only once every registered user confirmed, for
+/// this raise, that it closed its file; while held, a user keeps no file on
+/// the device and opens none. Two on the bus (`StateBus`):
+///
+/// - `hid_hold`, `/dev/hidg0` (waved-hid's key writer, reader and PC link
+///   writer): Linux 5.4 `f_hid` frees `hid.0` at the unbind even while
+///   files are open on it, and a read, write or poll on such a file then
+///   touches freed kernel memory. Raised for the whole storage session.
+/// - `uac_hold`, the UAC card `hw:1` (waved-audio's upstream, which may sit
+///   on an idle PCM it never touches): the f_uac2 unbind (5.4
+///   `g_audio_cleanup` → `snd_card_free`) waits until every file on the card
+///   is closed, so a file nobody closes blocks `echo none > UDC` for good.
+///   Raised only around each unbind and bind.
+///
+/// The signal (held, generation) wakes users through a `watch` channel;
+/// their confirmations are kept apart and wake nobody.
+#[derive(Clone, Default)]
+pub struct GadgetHold {
+    inner: Arc<GadgetHoldInner>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GadgetHoldSignal {
+    /// Raised: no user may have the device open.
+    pub held: bool,
+    /// Bumped by every raise of a lowered hold. A confirmation counts only
+    /// for the generation it was given for.
+    pub generation: u64,
+}
+
+struct GadgetHoldInner {
+    signal: watch::Sender<GadgetHoldSignal>,
+    users: std::sync::Mutex<GadgetHoldUsers>,
+}
+
+impl Default for GadgetHoldInner {
+    fn default() -> Self {
+        Self {
+            signal: watch::channel(GadgetHoldSignal::default()).0,
+            users: std::sync::Mutex::new(GadgetHoldUsers::default()),
+        }
+    }
+}
+
+#[derive(Default)]
+struct GadgetHoldUsers {
+    next_id: u64,
+    /// (id, name, the latest generation it confirmed it has no file for).
+    list: Vec<(u64, &'static str, u64)>,
+}
+
+impl GadgetHoldInner {
+    fn users(&self) -> std::sync::MutexGuard<'_, GadgetHoldUsers> {
+        self.users.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl std::fmt::Debug for GadgetHold {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let signal = self.signal();
+        f.debug_struct("GadgetHold")
+            .field("held", &signal.held)
+            .field("generation", &signal.generation)
+            .field("users", &self.users())
+            .finish()
+    }
+}
+
+impl GadgetHold {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A user of the device; the switch waits for each until it is dropped.
+    /// A new user has no file yet: it counts as closed for a hold that is
+    /// already raised (it must check the hold before it opens the node).
+    pub fn register(&self, name: &'static str) -> GadgetHoldUser {
+        let mut users = self.inner.users();
+        let id = users.next_id;
+        users.next_id += 1;
+        let generation = self.inner.signal.borrow().generation;
+        users.list.push((id, name, generation));
+        GadgetHoldUser { hold: self.clone(), id }
+    }
+
+    /// Raise the hold; returns its generation. Raising a raised hold keeps
+    /// it (and the confirmations it has).
+    pub fn raise(&self) -> u64 {
+        self.inner.signal.send_if_modified(|signal| {
+            if signal.held {
+                return false;
+            }
+            signal.held = true;
+            signal.generation += 1;
+            true
+        });
+        self.inner.signal.borrow().generation
+    }
+
+    /// Lower the hold: the users may open the node again.
+    pub fn lower(&self) {
+        self.inner.signal.send_if_modified(|signal| std::mem::replace(&mut signal.held, false));
+    }
+
+    pub fn signal(&self) -> GadgetHoldSignal {
+        *self.inner.signal.borrow()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<GadgetHoldSignal> {
+        self.inner.signal.subscribe()
+    }
+
+    /// Registered users.
+    pub fn users(&self) -> usize {
+        self.inner.users().list.len()
+    }
+
+    /// The users that have not confirmed the current generation yet, in the
+    /// order they registered.
+    pub fn waiting_for(&self) -> Vec<&'static str> {
+        let generation = self.signal().generation;
+        self.inner
+            .users()
+            .list
+            .iter()
+            .filter(|(_, _, confirmed)| *confirmed < generation)
+            .map(|(_, name, _)| *name)
+            .collect()
+    }
+
+    /// Held, and every user confirmed it closed the node: safe to unbind.
+    pub fn all_closed(&self) -> bool {
+        self.signal().held && self.waiting_for().is_empty()
+    }
+}
+
+/// One user's side of the [`GadgetHold`]. Dropping it unregisters the user.
+pub struct GadgetHoldUser {
+    hold: GadgetHold,
+    id: u64,
+}
+
+impl GadgetHoldUser {
+    /// `Some(generation)` while the hold is raised.
+    pub fn held(&self) -> Option<u64> {
+        let signal = self.hold.signal();
+        signal.held.then_some(signal.generation)
+    }
+
+    /// The user closed its file (and opens none) for the hold of
+    /// `generation`. Give only a generation `held` returned, after closing.
+    pub fn confirm(&self, generation: u64) {
+        let mut users = self.hold.inner.users();
+        if let Some(user) = users.list.iter_mut().find(|(id, _, _)| *id == self.id) {
+            user.2 = user.2.max(generation);
+        }
+    }
+
+    /// Wakes on every raise and lower.
+    pub fn subscribe(&self) -> watch::Receiver<GadgetHoldSignal> {
+        self.hold.subscribe()
+    }
+}
+
+impl Drop for GadgetHoldUser {
+    fn drop(&mut self) {
+        self.hold.inner.users().list.retain(|(id, _, _)| *id != self.id);
+    }
+}
+
+impl std::fmt::Debug for GadgetHoldUser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GadgetHoldUser").field("id", &self.id).finish()
+    }
+}
+
 // --- Discrete Event Types (broadcast channel) ---
 
 #[derive(Clone, Debug, PartialEq)]
@@ -663,6 +942,8 @@ pub enum DeviceEvent {
     },
     LowBattery(u8),
     MotorObstruction,
+    /// USB storage did not start or stop (G1); the UI says why.
+    UsbStorageProblem(UsbStorageProblem),
     /// The power key was pressed (waved-system power_key reader).
     PowerKey(PowerKeyPress),
 }
@@ -692,6 +973,12 @@ pub enum Command {
     SetAudioMode(AudioMode),
     SetNrLevel(NrLevel),
     SetPlaybackPreset(PlaybackPreset),
+    /// Undo a `SetPlaybackPreset` pin: the speaker preset follows the scene
+    /// (music or meeting) again (`waved_audio::playback::scene`).
+    SetPlaybackPresetAuto,
+    /// Pin the speaker amplifier's `Set EQ MODE` (A/B tests); `None` follows
+    /// the scene again.
+    SetAmpEqMode(Option<AmpEqMode>),
     ToggleMicMute,
     ToggleSpeakerMute,
     /// Mute (`true`) or unmute the mic; already in that state = no change.
@@ -759,6 +1046,9 @@ pub enum Command {
     SetPreRecording(bool),
     SetUploadMode(UploadMode),
     SetAlertTones(bool),
+    /// Turn the device PIN off (System -> PIN, D10). Reaching System already
+    /// required the PIN, so no re-entry; the PIN is set again on the setup page.
+    ClearDevicePin,
     /// The first-start screen finished (Wi-Fi set up or skipped).
     MarkFirstRunDone,
     /// Fixed aim for Focused / Narrow / Two sides, degrees clockwise from the
@@ -777,6 +1067,12 @@ pub enum Command {
     // --- System ---
     /// Erase config, recordings, Wi-Fi and Bluetooth pairings, then restart.
     FactoryReset,
+    /// Hand the recordings volume to the computer as a USB drive (G1).
+    /// Refused while recording or with no computer connected.
+    StartUsbStorage,
+    /// Take the recordings volume back from the computer (G1). Refused while
+    /// the computer still holds the drive.
+    StopUsbStorage,
     // --- Updates (waved-update) ---
     /// Ask the update server now instead of waiting for the next check.
     CheckForUpdate,
@@ -785,14 +1081,23 @@ pub enum Command {
     InstallUpdate,
     // --- Bluetooth (waved-bt, I1 / I3) ---
     /// Make Wave visible to a new phone for two minutes: drop the connected
-    /// phone, then pairing mode (stock "Connect a new device").
+    /// phone, then pairing mode (stock "Connect a new device"). Also "Pair
+    /// another phone" while one is connected.
     BtPair,
-    /// Drop the connected phone.
+    /// Drop the connected phone and keep it dropped (the module's reconnect
+    /// to the last phone goes off first).
     BtDisconnect,
     /// Answer the ringing call (button event 3).
     BtAnswerCall,
     /// Decline the ringing call or hang up the active one (button event 0).
     BtDeclineCall,
+    /// End Wave's pairing window (the user left the pairing screen). The
+    /// module has no command to leave pairing mode, so nothing is sent.
+    BtStopPairing,
+    /// Stock's Bluetooth switch: `OpenBt` (`CC 00`) or `CloseBt` (`CB`).
+    /// Persisted as config `[bluetooth] enabled` (waved-settings). Off
+    /// counts the phone as gone at once and ignores it until switched on.
+    SetBluetooth(bool),
 }
 
 // --- State Bus ---
@@ -814,6 +1119,8 @@ pub struct StateBus {
     pub system: Arc<watch::Sender<SystemState>>,
     /// Firmware updates (waved-update).
     pub ota: Arc<watch::Sender<OtaState>>,
+    /// USB storage (waved-system, G1).
+    pub usb_storage: Arc<watch::Sender<UsbStorageState>>,
     pub events: broadcast::Sender<DeviceEvent>,
     pub commands: broadcast::Sender<Command>,
     /// Echo-suppress marker for Wave→Mac HID volume events. When Mac
@@ -824,6 +1131,20 @@ pub struct StateBus {
     /// HID events, breaking the feedback loop (Mac F11 → mixer → state →
     /// HID → Mac F11 again). Sentinel `-1` = no pending host echo.
     pub host_pending_speaker_vol: Arc<AtomicI32>,
+    /// Echo-suppress marker for the HID mute key: a speaker mute change
+    /// the Wave did not make on its own (the phone's volume unmuting the
+    /// speaker, waved-bt). Its writer stores the state it is about to set
+    /// (1 muted, 0 unmuted) before sending the command; `spawn_mute_watch`
+    /// consumes it on that edge and sends no `ConsumerMute`. Sentinel `-1`
+    /// = none.
+    pub pending_speaker_mute: Arc<AtomicI32>,
+    /// The USB gadget switch's hold on `/dev/hidg0` (waved-system
+    /// `usb_storage` raises it for the whole storage session, waved-hid's
+    /// users close the node for it).
+    pub hid_hold: GadgetHold,
+    /// The USB gadget switch's hold on the UAC card `hw:1` (raised around
+    /// each unbind and bind only; waved-audio's upstream closes its PCM).
+    pub uac_hold: GadgetHold,
 }
 
 impl Default for StateBus {
@@ -847,6 +1168,7 @@ impl StateBus {
         let (playback_tx, _) = watch::channel(PlaybackState::default());
         let (system_tx, _) = watch::channel(SystemState::default());
         let (ota_tx, _) = watch::channel(OtaState::default());
+        let (usb_storage_tx, _) = watch::channel(UsbStorageState::default());
         let (events_tx, _) = broadcast::channel(64);
         let (commands_tx, _) = broadcast::channel(64);
 
@@ -864,9 +1186,13 @@ impl StateBus {
             playback: Arc::new(playback_tx),
             system: Arc::new(system_tx),
             ota: Arc::new(ota_tx),
+            usb_storage: Arc::new(usb_storage_tx),
             events: events_tx,
             commands: commands_tx,
             host_pending_speaker_vol: Arc::new(AtomicI32::new(-1)),
+            pending_speaker_mute: Arc::new(AtomicI32::new(-1)),
+            hid_hold: GadgetHold::new(),
+            uac_hold: GadgetHold::new(),
         }
     }
 }
@@ -881,6 +1207,14 @@ mod tests {
         let audio = bus.audio.subscribe();
         assert!(!audio.borrow().mic_muted);
         assert_eq!(audio.borrow().mode, AudioMode::Omni);
+    }
+
+    #[test]
+    fn the_echo_markers_start_empty() {
+        use std::sync::atomic::Ordering;
+        let bus = StateBus::new();
+        assert_eq!(bus.host_pending_speaker_vol.load(Ordering::Acquire), -1);
+        assert_eq!(bus.pending_speaker_mute.load(Ordering::Acquire), -1);
     }
 
     #[test]
@@ -1058,6 +1392,41 @@ mod tests {
             cmd,
             Command::SetPlaybackPreset(PlaybackPreset::Media)
         ));
+    }
+
+    #[test]
+    fn amp_eq_mode_values_follow_stock_speaker_pa_eq_mode() {
+        // Insta360_Speaker.h: SPEAKER_PA_EQ_MODE_{BYPASS, MEETING, MUSIC} = 0, 1, 2.
+        assert_eq!(AmpEqMode::Bypass.value(), 0);
+        assert_eq!(AmpEqMode::Meeting.value(), 1);
+        assert_eq!(AmpEqMode::Music.value(), 2);
+        for mode in [AmpEqMode::Bypass, AmpEqMode::Meeting, AmpEqMode::Music] {
+            assert_eq!(AmpEqMode::from_value(mode.value()), Some(mode));
+        }
+        assert_eq!(AmpEqMode::from_value(3), None);
+        assert_eq!(AmpEqMode::from_value(-1), None);
+    }
+
+    #[test]
+    fn amp_eq_mode_parses_numbers_and_names() {
+        assert_eq!(AmpEqMode::parse("0"), Some(AmpEqMode::Bypass));
+        assert_eq!(AmpEqMode::parse(" 1\n"), Some(AmpEqMode::Meeting));
+        assert_eq!(AmpEqMode::parse("2"), Some(AmpEqMode::Music));
+        assert_eq!(AmpEqMode::parse("Bypass"), Some(AmpEqMode::Bypass));
+        assert_eq!(AmpEqMode::parse("meeting"), Some(AmpEqMode::Meeting));
+        assert_eq!(AmpEqMode::parse("MUSIC"), Some(AmpEqMode::Music));
+        assert_eq!(AmpEqMode::parse("3"), None);
+        assert_eq!(AmpEqMode::parse("auto"), None);
+    }
+
+    #[test]
+    fn speaker_scene_override_commands_route() {
+        assert!(matches!(Command::SetPlaybackPresetAuto, Command::SetPlaybackPresetAuto));
+        assert!(matches!(
+            Command::SetAmpEqMode(Some(AmpEqMode::Meeting)),
+            Command::SetAmpEqMode(Some(AmpEqMode::Meeting))
+        ));
+        assert!(matches!(Command::SetAmpEqMode(None), Command::SetAmpEqMode(None)));
     }
 
     #[test]
@@ -1336,8 +1705,45 @@ mod tests {
             Command::BtDisconnect,
             Command::BtAnswerCall,
             Command::BtDeclineCall,
+            Command::BtStopPairing,
+            Command::SetBluetooth(false),
         ];
-        assert_eq!(commands.clone().len(), 4);
+        assert_eq!(commands.clone().len(), 6);
+    }
+
+    #[test]
+    fn bluetooth_is_off_until_its_service_says_otherwise() {
+        // waved-bt sets `bt_on` from config `[bluetooth] enabled` when it
+        // starts and on `SetBluetooth`; without the module there is no
+        // Bluetooth to offer.
+        assert!(!BluetoothState::default().bt_on);
+        assert_eq!(Command::SetBluetooth(true), Command::SetBluetooth(true));
+        assert_ne!(Command::SetBluetooth(true), Command::SetBluetooth(false));
+    }
+
+    #[test]
+    fn usb_storage_starts_off_with_the_recordings_on_wave() {
+        let bus = StateBus::new();
+        assert_eq!(bus.usb_storage.borrow().phase, UsbStoragePhase::Off);
+        assert!(!bus.usb_storage.borrow().recordings_away());
+        let commands = [Command::StartUsbStorage, Command::StopUsbStorage];
+        assert_ne!(commands[0], commands[1]);
+        let event = DeviceEvent::UsbStorageProblem(UsbStorageProblem::EjectFirst);
+        assert_eq!(event.clone(), event);
+    }
+
+    #[test]
+    fn every_usb_storage_phase_but_off_keeps_the_recordings_away() {
+        for phase in [
+            UsbStoragePhase::Starting,
+            UsbStoragePhase::On,
+            UsbStoragePhase::Stopping,
+        ] {
+            let state = UsbStorageState { phase };
+            assert!(state.recordings_away(), "{phase:?}");
+            assert!(phase.takes_over_screen(), "{phase:?}");
+        }
+        assert!(!UsbStoragePhase::Off.takes_over_screen());
     }
 
     #[test]
@@ -1357,5 +1763,107 @@ mod tests {
         let mut bt = BluetoothState::default();
         bt.call = active;
         assert!(!format!("{bt:?}").contains("470"));
+    }
+
+    #[test]
+    fn the_gadget_holds_start_lowered_with_no_users_and_apart() {
+        let bus = StateBus::new();
+        for hold in [&bus.hid_hold, &bus.uac_hold] {
+            assert_eq!(hold.signal(), GadgetHoldSignal { held: false, generation: 0 });
+            assert_eq!(hold.users(), 0);
+            assert!(!hold.all_closed(), "nothing is held");
+        }
+        bus.hid_hold.raise();
+        assert!(!bus.uac_hold.signal().held, "two holds, raised and lowered on their own");
+    }
+
+    #[test]
+    fn a_raise_waits_for_every_user_to_confirm_it_closed_the_node() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let reader = hold.register("reader");
+        assert_eq!(keys.held(), None);
+        let generation = hold.raise();
+        assert_eq!(keys.held(), Some(generation));
+        assert_eq!(hold.waiting_for(), ["keys", "reader"]);
+        assert!(!hold.all_closed());
+        keys.confirm(generation);
+        assert_eq!(hold.waiting_for(), ["reader"]);
+        reader.confirm(generation);
+        assert!(hold.waiting_for().is_empty());
+        assert!(hold.all_closed());
+        hold.lower();
+        assert_eq!(reader.held(), None);
+        assert!(!hold.all_closed());
+    }
+
+    #[test]
+    fn a_confirm_counts_only_for_the_hold_it_was_given_for() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let first = hold.raise();
+        keys.confirm(first);
+        hold.lower();
+        // Lowered: the user may have opened the node again since.
+        let second = hold.raise();
+        assert!(second > first);
+        assert_eq!(hold.waiting_for(), ["keys"]);
+        keys.confirm(first);
+        assert_eq!(hold.waiting_for(), ["keys"], "a stale confirm");
+        keys.confirm(second);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn raising_a_raised_hold_keeps_its_confirms() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let generation = hold.raise();
+        keys.confirm(generation);
+        assert_eq!(hold.raise(), generation);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn a_user_registered_during_a_hold_has_no_file_yet_and_counts_as_closed() {
+        let hold = GadgetHold::new();
+        let generation = hold.raise();
+        let late = hold.register("late");
+        assert_eq!(late.held(), Some(generation), "it must not open the node");
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn a_user_that_is_gone_is_not_waited_for() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let stuck = hold.register("stuck");
+        let generation = hold.raise();
+        keys.confirm(generation);
+        assert_eq!(hold.waiting_for(), ["stuck"]);
+        drop(stuck);
+        assert_eq!(hold.users(), 1);
+        assert!(hold.all_closed());
+    }
+
+    #[test]
+    fn users_are_woken_by_a_raise_and_a_lower_but_not_by_confirms() {
+        let hold = GadgetHold::new();
+        let keys = hold.register("keys");
+        let mut signal = keys.subscribe();
+        signal.borrow_and_update();
+        let generation = hold.raise();
+        assert!(signal.has_changed().unwrap());
+        assert_eq!(*signal.borrow_and_update(), GadgetHoldSignal { held: true, generation });
+        keys.confirm(generation);
+        hold.raise();
+        assert!(!signal.has_changed().unwrap(), "confirms and a second raise wake nobody");
+        hold.lower();
+        assert!(signal.has_changed().unwrap());
+        assert!(!signal.borrow_and_update().held);
+        let clone = hold.clone();
+        clone.raise();
+        assert!(hold.signal().held, "clones share the hold");
+        assert!(format!("{hold:?}").contains("held: true"));
     }
 }

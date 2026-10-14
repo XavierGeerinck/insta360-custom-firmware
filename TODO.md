@@ -47,6 +47,38 @@ Sources:
 | 2 | A main screens, B settings screens, C recording and audio, D Files, E system services | Parallel, one worktree each | Home, Recording, menus; pause/resume; brightness; power key |
 | 3 | F hardware, G USB storage, H updates, I Bluetooth, J Wave Controller, K security | Parallel, one worktree each | Each feature on the device |
 | 4 | M acceptance, L docs, parity matrix | Parallel | Full regression and the one-hour certification |
+| 5 | "Devialet-style" speaker: measure the speaker with the 8 built-in mics, correct the response, extend the bass safely | After M4 | Listening A/B with the owner |
+
+## Milestone 3 status (device pass 2026-10-13, merged to `main` at 5dc45c1)
+
+Verified on the device: start-up with the boot-counting update guard (2 starts per boot), the LED
+ring (green = volume, red = muted; the owner's choice), speaker scenes (stock passthrough + amp
+`Set EQ MODE`), Bluetooth (pairing, Pair another phone, on/off, module name, calls answered on the
+phone with audio, phone volume → Wave), the PIN (guards and turning it off), Mic height and the
+lift's start height after a power cycle.
+
+In progress:
+- **G1 USB storage**: reworked around stock's own mode switch (adb off while on); host-tested,
+  device pass next (see G1 below).
+- **Wave → phone volume**: the Wave's own volume changes don't reach the phone, so the first phone
+  press after a Wave change jumps (stock sends `0xD0` button events 1/2; unverified what the module
+  does with them).
+
+Deferred (built, not yet checked on the device):
+- **H update cycle**: a signed package from a LAN server, a resumed download, a forced rollback,
+  `/sbin/reboot` from waved, rustls against the owner's HTTPS server (`waved/docs/UPDATES.md`
+  "Device checks").
+- **F3 power-off retract with the new lift code** (the owner saw it work on an older build), and
+  what a firm hand on the lift reports (BLOCK or SENSOR_TRIGGER).
+- **F6 Bluetooth module firmware** 0.0.0.28 → 0.0.0.33 with `waved-bt-flash` (only with the owner
+  present: `check`, then `version`, then `flash --owner-approved`).
+- **J5 Wave Controller** against the official app.
+- **K1 release lockdown** enforcement and the root password (documented in `waved/docs/SECURITY.md`;
+  nothing applied).
+- **Bluetooth leftovers**: the module's pairing-mode timeout, the HID hook-switch to the computer,
+  dongle audio, stock's 5 s heartbeat (`0xB3`) and `0xA5` when an audio path opens.
+- **Speaker volume curve** in dB steps like stock (−38 dB at 0 % to 0 dB at 100 %).
+- **What holds the speaker for the first ~10 s of a boot** (waved now waits for it).
 
 Rules for the parallel milestones:
 - Only the integrator edits the hotspot files.
@@ -62,7 +94,8 @@ Rules for the parallel milestones:
   - Add recording-policy commands: `SetPreRecording(bool)`, `SetUploadMode(UploadMode)`.
   - Add file commands: `DeleteRecording(Uuid)`, `PlayRecording(Uuid)`, `PausePlayback`,
     `SeekPlayback(u32)`, `StopPlayback`.
-  - Add system commands: `FactoryReset`, `StartUsbStorage`, `StopUsbStorage`.
+  - Add system commands: `FactoryReset`, `StartUsbStorage`, `StopUsbStorage` (the USB storage
+    ones landed with G1).
   - Add Bluetooth commands: `BtSetDiscoverable(bool)`, `BtConnect`, `BtDisconnect`, `BtForget`.
   - Add call commands: `AnswerCall`, `DeclineCall`.
   - Add `SetAim(Option<f32>)`, which wraps `SetDoaOverride` and is persisted.
@@ -216,10 +249,11 @@ Rules for the parallel milestones:
   - MeetingService reads `api.upload_mode` and the audio mode for metadata from the boot-time
     config, so `SetUploadMode` and audio-mode changes only apply after a restart.
   - Subscribe to `bus.settings` and the audio watch and use the live values.
-- [ ] **C12 Publish the pre-recording state** (S) — `waved-meeting/src/lib.rs`, needs C2
-  - `MeetingState.pre_recording_active` has no producer yet, so the kit's pre-recording dot in
-    the status pill (Home) never shows on the device.
-  - Set it while the pre-roll buffer is filling: setting on, not recording, not muted.
+- [x] **C12 Publish the pre-recording state** (S) — `waved-meeting/src/lib.rs`. Done:
+  `pre_recording_active(setting_on, recording, audio)` + `publish_pre_recording()` set
+  `MeetingState.pre_recording_active` on the meeting loop (true while the setting is on, not
+  recording, not muted and capture is healthy), reacting to settings and audio changes. The
+  status pill dot and the ambient chip now show it (confirmed in the K4 audit).
 
 - [ ] **C13 Neural noise reduction on the CPU** (M) — the NPU route is parked (user, 2026-10-12): a vendor-compiled model only tied the CPU end to end and our compiler path still can't build Conv/FC layers (`docs/COMPUTE_HARDWARE.md` "Status: parked"). DeepFilterNet on the CPU takes ≈ 84 % of a Cortex-A55 core during speech (≈ 8.5 ms per 10 ms hop, tract, fp32); in series with the DSP chain the UAC2 uplink underran (183 gaps / 20 s), and a dedicated thread didn't help. Its published cost (≈ 3.5 M MACs per hop) suggests the runtime, not the CPU, is the bottleneck. Next: profile it on the device, then try a faster runtime (stock ONNX Runtime 1.15.1, int8 with `asimddp`); a lighter model is the fallback. Noise reduction stays Off until it fits (see `docs/AUDIO_HARDWARE.md` "Uplink Level and CPU").
 - [ ] **C14 Re-measure ERLE after the 48 kHz echo canceller fix** (S) — SP#5/SP#6 figures were taken while Speex assumed 8 kHz. Quick check on 2026-10-06: linear 15.6 dB, effective 23.5 dB with speech from the Wave speaker; residual echo sits ≈ 10 dB under near-end speech in the uplink. Rerun the acceptance script.
@@ -271,10 +305,11 @@ Rules for the parallel milestones:
 
 ## F — Hardware
 
-- [ ] **F1 Physical volume buttons** (M)
-  - Find the real input path. It isn't `ttyS1`, `event0` or `event1`, see
-    `waved/docs/AUDIO_HARDWARE.md:648`.
-  - Wire the buttons to the speaker volume.
+- [x] **F1 Physical volume buttons** (M) — **not on this hardware** (stock 1.2.2.6, 2026-10-13):
+  the power key on the MCU is the Wave's only key; the device tree's mute / vol+ / vol- keys
+  belong to a disabled reference-board node, and stock sets the volume on the screen only
+  (`waved/docs/MCU_PROTOCOL.md` "Physical controls"). Nothing to wire. Device pass: confirm by
+  looking (`waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md`).
 - [ ] **F2 Battery** (S) — host side done 2026-10-12; left: the device checks in
   `waved/docs/superpowers/plans/2026-10-12-m3-f-battery-mic-height.md` ("Device-pass checklist").
   - Level, voltage, temperature and charging now come from the MCU's heartbeats on
@@ -288,7 +323,14 @@ Rules for the parallel milestones:
   - Host side done 2026-10-12: `waved-mcu/src/lift.rs` (move, start height, motor reports,
     polling, blocked / obstructed) and a frame-level MCU simulator (`simulate.rs`) that the
     tests and the `simulate` build run against. Device checks: the plan above, "F3 Motor".
-- [ ] **F4 LEDs** (S) — find out whether the device has status LEDs and drive them from state.
+- [ ] **F4 LEDs** (S) — host side done 2026-10-13; left: the device checks in
+  `waved/docs/superpowers/plans/2026-10-13-m3-f1-f4-buttons-leds.md` ("Device-pass checklist").
+  - Stock drives a 12-LED ring through the MCU (LED_CTRL, cmd 1; a BCT3236 driver in `MCU.bin`)
+    from a fixed event table; waved now does the same (`waved-mcu/src/leds.rs`,
+    `waved/docs/MCU_PROTOCOL.md` "Status LEDs"). Not yet seen on the device: whether the ring is
+    fitted on this unit, where it shows, and whether the MCU answers LED_CTRL.
+  - Stock shows nothing for charging. Not followed yet: screen asleep (half brightness, needs the
+    screen state on the bus), USB disk mode (blue, with the USB storage work).
 - [ ] **F5 Panel type** (S) — the device tree says LCD (D8). Confirm visually by setting the backlight to 0, then
   fix "circular OLED" in `DISPLAY_HARDWARE.md` and `waved/CLAUDE.md`.
 - [x] **F7 Power key through the MCU** (M) — done 2026-10-12: the key arrives on the
@@ -301,13 +343,29 @@ Rules for the parallel milestones:
   splash to `/dev/fb0` (~2 s after power-on instead of ~10–15 s until waved draws).
 - [ ] **F6 Peripheral blobs** (S) — adopt the 1.2.2.6 `BT.bin` and `DONGLE.bin` (MCU is unchanged).
   Note that 1.2.2.6 also changed the root password hash.
+  - [x] Code: stock's send loop (`waved_bt::ota::flash`) and the `waved-bt-flash` tool
+    (`check`, `version`, `flash … --owner-approved`), by hand only, never automatic
+    (host-tested 2026-10-13). Procedure and risks: `waved/docs/BLUETOOTH_PROTOCOL.md`, "Adopting
+    them in waved".
+  - [ ] Device: dry run, then a flash with the owner's approval (checklist T9 in the I1 plan).
 
 ## G — USB storage
 
-- [ ] **G1 Mass-storage mode** (M)
-  - Switch the gadget to mass storage over the recordings volume and pause audio.
-  - Takeover screen with "Stop USB storage".
-  - Recover cleanly on cable pull.
+- [ ] **G1 Mass-storage mode** (M) — reworked after the device pass (2026-10-13) and host-tested; **device pass pending**. The drive next to adb doesn't work on this controller, so waved now runs stock's own `S89usbgadget uac_hid_msc` switch at runtime (verified live by hand, v3): **adb is off while storage is on**, audio stays; waved's HID (keys to the computer, PC link, call LEDs) pauses while it lasts. Nothing unbinds while waved has a file on `/dev/hidg0` or `hw:1` (5.4 `f_hid` use-after-free, `f_uac2` unbind waits for the card's files): the gadget holds, `USB_STORAGE.md`. The boot patch no longer links the drive (and removes an old G1 step).
+  Plan: `waved/docs/superpowers/plans/2026-10-13-m3-g1-usb-storage.md` (R1–R4); design, measurements and
+  device-pass checklist: `waved/docs/USB_STORAGE.md`.
+  - [x] The recordings volume as a drive: unmount first, then stock's switch (unbind, adbd off,
+    drive + HID linked, bind); a switch that doesn't come up goes straight back and remounts.
+  - [x] The way back (Stop, the computer's eject, a pulled cable): unbind, a fresh detached adbd,
+    what was linked before, bind; then fsck and mount, only with the drive read back empty.
+  - [x] Takeover screen with "Stop USB storage"; refused while a take is in progress.
+  - [x] A restarted waved that finds storage mode goes back to normal USB first, then reclaims.
+  - [ ] Device pass (`USB_STORAGE.md`): the real volume, copy + Finder eject, adb and audio back;
+    Stop without eject (does macOS lock the medium?); cable pull; waved restart in storage mode;
+    audio xruns during a large copy.
+  - [ ] waved's own `/dev/hidg0` and `hw:1` mixer handles don't reopen after the switch (HID keys,
+    PC link, Mac volume → Wave likely stop until waved restarts): reopen on error in waved-hid
+    and `uac/control.rs`, once the device pass confirms it.
 
 ## H — Updates (self-hosted, signed)
 
@@ -329,8 +387,10 @@ Rules for the parallel milestones:
   - [x] Disconnect (`BtDisconnect`).
   - Paired list, connect, forget: not built. The module keeps its pairings and has no
     command to list, connect to or forget a phone; the screen shows the connected phone.
-  - [ ] Name from `device.name`: not done (`SetName`'s accepted lengths unverified; the
-    module names itself `Insta360 Wave BT <serial>`).
+  - [x] Name from `device.name` (`SetName` at start, 23 bytes NUL-padded; empty → stock's
+    name). Check on the device (T4): a shorter name is unverified.
+  - [x] Bluetooth switch (stock's `OpenBt` / `CloseBt`, config `[bluetooth] enabled`) and
+    stock's start-up sequence. Pair another phone asks first.
   - [ ] Measure how long the module stays in pairing mode (no known command ends it).
 - [ ] **I2 Audio routing** (L) — A2DP/HFP into the pipeline, with the AEC reference tap.
   - Built on the host 2026-10-13 (`waved-audio` `bt_audio`): `0xB2` bit 1 plays the phone
@@ -343,6 +403,9 @@ Rules for the parallel milestones:
     also during a recording; "In a call" with Hang up once answered.
   - [ ] HID hook-switch to the computer: not done (USB HID side; needs a telephony report).
   - [x] Phone number only, no phone book (`0xB0` dropped unread, never logged).
+  - [x] A call answered on the phone ends on the Wave too (module log lines, the call audio,
+    a 60 s ring timeout); Answer / Decline act at once. Check on the device (T1).
+  - [x] The phone's volume sets the speaker (`0xD5`, stock's mapping). Check (T2).
 - [x] **I4 Bluetooth screen** (S) — `screens_v2/bluetooth.rs`; Menu row; behind the PIN.
 
 ## J — Wave Controller
@@ -368,10 +431,22 @@ Rules for the parallel milestones:
 
 ## K — Security and privacy
 
-- [ ] **K1 Release lockdown** (M)
-  - adb off or authenticated in release builds.
-  - No telnet.
-  - A root password policy.
+- [ ] **K1 Release lockdown** (M) — policy + opt-in flag landed; enforcement + device pass left.
+  Plan: `waved/docs/superpowers/plans/2026-10-13-m3-k-security.md`. Full write-up:
+  `waved/docs/SECURITY.md`.
+  - Findings (what runs today): a default waved unit exposes **no inbound shell** —
+    stock `S89usbgadget`'s `start` branch has `adbd_enable` commented out (adb off on a
+    fresh boot), `inetd`/telnetd is never started, no ssh/dropbear, and
+    `deploy/iptables.rules` drops all inbound but lo/established/DHCP/mDNS. The only dev
+    surface is USB adb, enabled by the owner's own setup (factory devmode or an `/etc`
+    overlay edit), never by waved or `deploy/install.sh`. 1.2.2.6 shipped a new `$5$` root
+    hash (TODO F6).
+  - Done: `security.release_lockdown` config flag (default **off**), exposed on the setup
+    page as the way back; `waved_config::release_lockdown_active`; `SECURITY.md` linked
+    from `waved/CLAUDE.md`. waved never disables adb by default or at deploy.
+  - Left: the opt-in `/etc` overlay enforcement step and the root-password change are
+    documented in `SECURITY.md`, to apply + verify on the device pass (checklist in the
+    plan). No telnet, no inbound shell: confirmed in the rootfs.
 - [x] **K2 PIN lock** (M) (D10) — host-tested; check it in the milestone 3 device pass.
   Plan: `waved/docs/superpowers/plans/2026-10-12-m3-k2-pin-lock.md`.
   - New `screens/pin.rs`: 3 × 4 keypad.
@@ -384,10 +459,29 @@ Rules for the parallel milestones:
     (`libins_entry.so.c:17677`) never receives the PIN: an empty password asks the
     device to show its own PIN page, and a later call returns that page's result
     (0 page showing, 1 verified, 2 not verified).
-- [ ] **K3 Setup network review** (S) — WPA2 setup AP timeout and credential rotation.
-- [ ] **K4 Privacy indicators audit** (S) — recording ring on the resting screen, pre-recording
-  indicator, start and stop tones, and mute that also silences the recording (the current
-  behaviour, keep it).
+- [x] **K3 Setup network review** (S) — reviewed, no gaps; guarantees locked with tests
+  (`waved/docs/WIFI.md` "Security review"). The setup AP is bounded (`PROV_TIMEOUT = 300 s`
+  wraps the whole session, also on cancel), the passphrase is a fresh `gen_passphrase()`
+  per session (rotation), `hostapd.conf` is `0600` in `/tmp` and removed on teardown, and
+  a per-session CSRF token gates `/save` and `/save-connect` (a missing/wrong token → 400,
+  nothing saved). Secrets are write-only; bodies bounded to 32 KiB.
+- [x] **K4 Privacy indicators audit** (S) — audited, all present, no gaps (keep as is):
+  - Recording ring + timer on the resting screen (`waved-ui/src/screens_v2/ambient.rs`);
+    the status pill leads with a teal dot while `MeetingState.pre_recording_active`
+    (`waved-ui/src/kit/components/status`, `kit/README.md`).
+  - Pre-recording indicator: C12 producer **done** — `waved-meeting/src/lib.rs`
+    (`pre_recording_active()` + `publish_pre_recording()` on the meeting loop, reacting to
+    settings/audio changes). The ambient "Pre-recording" chip consumes it.
+  - Start/stop tones: `waved-system/src/tones.rs` (rising start, falling stop), wired in
+    `crates/waved/src/main.rs`, honouring `tones.enabled`.
+  - Mute silences the recording (kept): `apply_mic_mute()` zeroes the capture frame in
+    place (`waved-audio/src/lib.rs`, in `run()`) before it forks to the recorder and the
+    uplink, so a muted stretch is silent in the file too.
+- [ ] **K-System PIN row** (S, D10) — **done (host-tested)**. System → PIN shows On/Off
+  (`waved-ui/src/screens_v2/system.rs`); with a PIN set a tap confirms turning it off
+  (`Command::ClearDevicePin`, reaching System already needed the PIN), with none a tap
+  points to the setup page where the PIN is set. Confirm on the device pass. USB storage is
+  the only System row still hidden (G workstream).
 
 ## L — Docs and cleanup
 

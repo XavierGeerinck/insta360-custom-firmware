@@ -26,6 +26,23 @@ use waved_state::{AudioMode, MotorPosition, NrLevel};
 
 pub const CURRENT_CONFIG_VERSION: u32 = 2;
 
+// The keys milestone 3 added are written only when they differ from their
+// default. The waved before it denies unknown fields in every section and
+// falls back to defaults for a file with any of them, so a config.toml that
+// only has defaults for these stays loadable by it (docs/UPDATES.md, "Going
+// back over adb", lists the settings that still are not). A key added later
+// gets the same treatment.
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+const DEFAULT_MIC_HEIGHT: MotorPosition = MotorPosition::Medium;
+
+fn is_default_mic_height(height: &MotorPosition) -> bool {
+    *height == DEFAULT_MIC_HEIGHT
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("failed to read config: {0}")]
@@ -54,6 +71,9 @@ pub struct WavedConfig {
     pub storage: StorageConfig,
     pub security: SecurityConfig,
     pub ntp: NtpConfig,
+    /// Added in milestone 3: saved only when not the default.
+    #[serde(skip_serializing_if = "BluetoothConfig::is_default")]
+    pub bluetooth: BluetoothConfig,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -64,7 +84,9 @@ pub struct DeviceConfig {
     /// The first-start screen has been finished or skipped.
     pub first_run_done: bool,
     /// The chosen Mic height. waved-mcu also stores it in the MCU as the
-    /// height the lift rises to at power-on.
+    /// height the lift rises to at power-on. Added in milestone 3: saved
+    /// only when not medium.
+    #[serde(skip_serializing_if = "is_default_mic_height")]
     pub mic_height: MotorPosition,
 }
 
@@ -142,14 +164,33 @@ pub struct SecurityConfig {
     /// (`docs/UPDATES.md`).
     pub ota_server: String,
     /// Let a signed package install an older (or the same) version. Set by
-    /// hand in config.toml only: the setup page does not offer it.
+    /// hand in config.toml only: the setup page does not offer it. Added in
+    /// milestone 3: saved only when true.
+    #[serde(skip_serializing_if = "is_false")]
     pub ota_allow_downgrade: bool,
+    /// Opt-in release lockdown (K1, `docs/SECURITY.md`). Default off so a
+    /// development unit never loses access. When on, the documented, opt-in
+    /// `/etc` overlay step keeps adb off (or authenticated) at boot; waved
+    /// itself never disables adb. Turn it back off here or on the setup page
+    /// (reachable over Wi-Fi without adb) — the way back. Added in
+    /// milestone 3: saved only when true.
+    #[serde(skip_serializing_if = "is_false")]
+    pub release_lockdown: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NtpConfig {
     pub servers: Vec<String>,
+}
+
+/// The Bluetooth module (`waved-bt`, docs/BLUETOOTH_PROTOCOL.md).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BluetoothConfig {
+    /// Stock's Bluetooth switch (`INSUTIL_CFG2_BT_IS_OPEN`): `OpenBt` at
+    /// start when on, `CloseBt` when off. Changed from the Bluetooth screen.
+    pub enabled: bool,
 }
 
 impl WavedConfig {
@@ -231,6 +272,14 @@ impl WavedConfig {
     }
 }
 
+/// Whether the device is in release lockdown (K1, `docs/SECURITY.md`). The
+/// documented, opt-in `/etc` overlay step reads this to keep adb off (or
+/// authenticated) at boot. Default off: a development unit never loses access,
+/// and waved itself never disables adb.
+pub fn release_lockdown_active(config: &WavedConfig) -> bool {
+    config.security.release_lockdown
+}
+
 fn backup_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".bak");
@@ -251,7 +300,20 @@ impl Default for WavedConfig {
             storage: StorageConfig::default(),
             security: SecurityConfig::default(),
             ntp: NtpConfig::default(),
+            bluetooth: BluetoothConfig::default(),
         }
+    }
+}
+
+impl Default for BluetoothConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl BluetoothConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -261,7 +323,7 @@ impl Default for DeviceConfig {
             name: "Wave Open".into(),
             language: "en".into(),
             first_run_done: false,
-            mic_height: MotorPosition::Medium,
+            mic_height: DEFAULT_MIC_HEIGHT,
         }
     }
 }
@@ -380,6 +442,27 @@ servers = ["pool.ntp.org"]
     fn default_toml_matches_default_model() {
         let parsed = WavedConfig::parse(include_str!("../../../config/default.toml")).unwrap();
         assert_eq!(parsed, WavedConfig::default());
+    }
+
+    #[test]
+    fn release_lockdown_is_off_by_default_and_round_trips() {
+        // K1: a development unit never loses access, so the default is off.
+        assert!(!SecurityConfig::default().release_lockdown);
+        assert!(!release_lockdown_active(&WavedConfig::default()));
+
+        // A legacy file with no release_lockdown key still loads and stays off.
+        let legacy = WavedConfig::parse(&legacy(true, "omni")).unwrap();
+        assert!(!release_lockdown_active(&legacy));
+
+        // Turning it on is valid and survives a save/load round-trip.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut on = WavedConfig::default();
+        on.security.release_lockdown = true;
+        assert!(validate_config(&on).is_ok());
+        on.save(&path).unwrap();
+        let loaded = WavedConfig::load(&path).unwrap();
+        assert!(release_lockdown_active(&loaded));
     }
 
     #[test]
@@ -588,6 +671,26 @@ device_password = "4821"
     }
 
     #[test]
+    fn bluetooth_is_on_unless_switched_off() {
+        // Stock keeps its switch as INSUTIL_CFG2_BT_IS_OPEN; older waved
+        // files have no [bluetooth] section and keep Bluetooth on.
+        assert!(WavedConfig::default().bluetooth.enabled);
+        let older = WavedConfig::parse(&v2_with("tones", "enabled = true")).unwrap();
+        assert!(older.bluetooth.enabled);
+        let off = WavedConfig::parse(&v2_with("bluetooth", "enabled = false")).unwrap();
+        assert!(!off.bluetooth.enabled);
+        assert_eq!(off.device.name, "Board room", "the rest still loads");
+        assert!(
+            WavedConfig::parse(&v2_with("bluetooth", "auto_pair = true")).is_err(),
+            "unknown fields stay errors"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        off.save(&path).unwrap();
+        assert!(!WavedConfig::load(&path).unwrap().bluetooth.enabled);
+    }
+
+    #[test]
     fn new_installs_show_first_start() {
         assert!(!WavedConfig::default().device.first_run_done);
         assert_eq!(WavedConfig::default().config_version, 2);
@@ -651,6 +754,107 @@ device_password = "4821"
         std::fs::write(&path, "bad {{{").unwrap();
 
         assert_eq!(WavedConfig::load_or_default(&path).device.name, "Backup");
+    }
+
+    /// Every key the waved before milestone 3 knows (`main` at 3cc3707,
+    /// `waved/crates/waved-config/src/lib.rs`). Its sections deny unknown
+    /// fields, so a file with any other key makes it run on defaults
+    /// (first-run screen, PIN off, API token gone).
+    const PRE_M3_KEYS: &[&str] = &[
+        "config_version",
+        "device.name",
+        "device.language",
+        "device.first_run_done",
+        "audio.mode",
+        "audio.speaker_volume",
+        "audio.mic_volume",
+        "audio.nr_level",
+        "audio.beam_aim_deg",
+        "display.brightness_pct",
+        "display.dim_after_s",
+        "display.off_after_s",
+        "time.zone",
+        "time.clock_24h",
+        "recording.pre_recording",
+        "recording.ask_timeout_s",
+        "tones.enabled",
+        "api.endpoint",
+        "api.auth_token",
+        "api.upload_mode",
+        "api.allow_insecure_http",
+        "api.retry_max",
+        "api.retry_backoff_ms",
+        "api.retry_max_backoff_ms",
+        "storage.prune_uploaded_at_percent",
+        "storage.minimum_free_mb",
+        "security.device_password",
+        "security.ota_server",
+        "ntp.servers",
+    ];
+
+    /// `section.key` for every key in `text` (top-level keys as they are).
+    fn keys(text: &str) -> Vec<String> {
+        let value: toml::Value = toml::from_str(text).unwrap();
+        let mut keys = Vec::new();
+        for (name, entry) in value.as_table().unwrap() {
+            match entry.as_table() {
+                Some(section) => keys.extend(section.keys().map(|key| format!("{name}.{key}"))),
+                None => keys.push(name.clone()),
+            }
+        }
+        keys
+    }
+
+    fn unknown_before_m3(text: &str) -> Vec<String> {
+        keys(text)
+            .into_iter()
+            .filter(|key| !PRE_M3_KEYS.contains(&key.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn a_default_config_saves_only_keys_the_previous_waved_knows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        WavedConfig::default().save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(unknown_before_m3(&saved), Vec::<String>::new(), "{saved}");
+        assert_eq!(WavedConfig::load(&path).unwrap(), WavedConfig::default());
+        // The file install.sh writes on a first install, too.
+        let shipped = include_str!("../../../config/default.toml");
+        assert_eq!(unknown_before_m3(shipped), Vec::<String>::new());
+    }
+
+    #[test]
+    fn keys_added_in_m3_are_saved_once_they_differ_from_the_default() {
+        // These are the settings that still stop an older waved from loading
+        // the file (docs/UPDATES.md, "Going back over adb").
+        let mut config = WavedConfig::default();
+        config.device.mic_height = MotorPosition::Low;
+        config.security.ota_allow_downgrade = true;
+        config.security.release_lockdown = true;
+        config.bluetooth.enabled = false;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let mut unknown = unknown_before_m3(&saved);
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            [
+                "bluetooth.enabled",
+                "device.mic_height",
+                "security.ota_allow_downgrade",
+                "security.release_lockdown",
+            ]
+        );
+        assert_eq!(WavedConfig::load(&path).unwrap(), config);
+        for height in [MotorPosition::Medium, MotorPosition::High] {
+            config.device.mic_height = height;
+            config.save(&path).unwrap();
+            assert_eq!(WavedConfig::load(&path).unwrap().device.mic_height, height);
+        }
     }
 
     #[test]

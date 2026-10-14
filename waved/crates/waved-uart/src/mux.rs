@@ -1,9 +1,8 @@
-use crate::frame::{Frame, FrameParser, FrameTarget};
+use crate::frame::{Frame, FrameError, FrameParser, FrameTarget};
 use crossbeam_channel::{bounded, Receiver, Sender};
 use serialport::SerialPort;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, trace, warn};
 
 /// A frame with priority for the write queue.
@@ -27,14 +26,24 @@ impl UartMux {
         let port: Box<dyn SerialPort> = serialport::new(port_path, baud_rate)
             .timeout(Duration::from_millis(100))
             .open()?;
+        Self::from_port(port)
+    }
 
-        let port: Arc<Mutex<Box<dyn SerialPort>>> = Arc::new(Mutex::new(port));
+    /// The mux over an open port (tests hand it one end of a pty pair).
+    ///
+    /// The reader gets its own handle (`try_clone`), as `waved-mcu`'s link
+    /// does. Sharing one handle behind a mutex starved the writer: the reader
+    /// held it through each 100 ms read and took it back at once, so an
+    /// acknowledgement could wait for seconds (1.4 s measured on a quiet pty)
+    /// while the module repeated its frame every 500 ms.
+    pub fn from_port(mut port: Box<dyn SerialPort>) -> Result<Self, serialport::Error> {
+        port.set_timeout(Duration::from_millis(100))?;
+        let reader_port = port.try_clone()?;
 
         let (bt_tx, bt_rx) = bounded::<Frame>(64);
         let (mcu_tx, mcu_rx) = bounded::<Frame>(64);
         let (write_tx, write_rx) = bounded::<PrioritizedFrame>(64);
 
-        let reader_port = Arc::clone(&port);
         let reader_handle = std::thread::Builder::new()
             .name("uart-reader".into())
             .spawn(move || {
@@ -42,11 +51,10 @@ impl UartMux {
             })
             .expect("failed to spawn uart reader thread");
 
-        let writer_port = Arc::clone(&port);
         let writer_handle = std::thread::Builder::new()
             .name("uart-writer".into())
             .spawn(move || {
-                Self::writer_loop(writer_port, write_rx);
+                Self::writer_loop(port, write_rx);
             })
             .expect("failed to spawn uart writer thread");
 
@@ -73,27 +81,20 @@ impl UartMux {
         let _ = self.write_tx.send(PrioritizedFrame { raw, priority });
     }
 
-    fn reader_loop(
-        port: Arc<Mutex<Box<dyn SerialPort>>>,
-        bt_tx: Sender<Frame>,
-        mcu_tx: Sender<Frame>,
-    ) {
+    fn reader_loop(mut port: Box<dyn SerialPort>, bt_tx: Sender<Frame>, mcu_tx: Sender<Frame>) {
         let mut parser = FrameParser::new();
-        let mut buf = [0u8; 1];
+        let mut errors = ParseErrors::default();
+        let mut buf = [0u8; 64];
 
         loop {
-            let read_result = {
-                let mut port = port.lock().unwrap();
-                port.read(&mut buf)
-            };
-
-            match read_result {
-                Ok(1) => {
-                    if handle_byte(buf[0], &mut parser, &bt_tx, &mcu_tx).is_err() {
-                        return;
+            match port.read(&mut buf) {
+                Ok(n) => {
+                    for &byte in &buf[..n] {
+                        if handle_byte(byte, &mut parser, &mut errors, &bt_tx, &mcu_tx).is_err() {
+                            return;
+                        }
                     }
                 }
-                Ok(_) => {}
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
                     // Normal timeout, continue
                 }
@@ -102,17 +103,16 @@ impl UartMux {
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
+            if let Some(line) = errors.due(Instant::now()) {
+                warn!("{line}");
+            }
         }
     }
 
-    fn writer_loop(
-        port: Arc<Mutex<Box<dyn SerialPort>>>,
-        write_rx: Receiver<PrioritizedFrame>,
-    ) {
+    fn writer_loop(mut port: Box<dyn SerialPort>, write_rx: Receiver<PrioritizedFrame>) {
         use std::io::Write;
 
         for pframe in write_rx.iter() {
-            let mut port = port.lock().unwrap();
             if let Err(e) = port.write_all(&pframe.raw) {
                 error!("UART write error: {e}");
             }
@@ -138,6 +138,7 @@ impl UartMux {
 fn handle_byte(
     byte: u8,
     parser: &mut FrameParser,
+    errors: &mut ParseErrors,
     bt_tx: &Sender<Frame>,
     mcu_tx: &Sender<Frame>,
 ) -> Result<(), ()> {
@@ -155,35 +156,119 @@ fn handle_byte(
                 }
             }
             Err(e) => {
-                warn!("frame parse error: {e}");
+                if let Some(line) = errors.on_error(&e, Instant::now()) {
+                    warn!("{line}");
+                }
             }
         }
     }
     Ok(())
 }
 
-/// A frame for the trace log: its command byte and length, never its bytes.
-/// The Bluetooth module sends the phone book, caller numbers and the phone's
-/// name and MAC on this port.
+/// Parse errors in the log at most once a minute. At 921600 a noisy line or
+/// a wrong speed gives thousands a second, and `waved.log` lives on the small
+/// `/data` (S60waved keeps 2 MB and one old copy): the first error is logged
+/// as it comes, every later one is counted, and the count goes to the log at
+/// most once a minute with the last error's text.
+#[derive(Debug, Default)]
+struct ParseErrors {
+    /// When the last line went to the log; `None` until the first error.
+    logged_at: Option<Instant>,
+    /// Errors since that line.
+    unlogged: u64,
+    last: Option<String>,
+}
+
+impl ParseErrors {
+    const EVERY: Duration = Duration::from_secs(60);
+
+    /// The line to log for an error at `now`: the first error only.
+    fn on_error(&mut self, e: &FrameError, now: Instant) -> Option<String> {
+        if self.logged_at.is_none() {
+            self.logged_at = Some(now);
+            return Some(format!(
+                "frame parse error: {e} (further ones are counted, one line a minute)"
+            ));
+        }
+        self.unlogged += 1;
+        self.last = Some(e.to_string());
+        None
+    }
+
+    /// The count line, when errors came since the last line and a minute has
+    /// passed since it. The reader asks after every read (at least every
+    /// 100 ms, its timeout).
+    fn due(&mut self, now: Instant) -> Option<String> {
+        let at = self.logged_at?;
+        let since = now.saturating_duration_since(at);
+        if self.unlogged == 0 || since < Self::EVERY {
+            return None;
+        }
+        let line = format!(
+            "{} more frame parse errors in the last {} s, the last: {}",
+            self.unlogged,
+            since.as_secs(),
+            self.last.take().unwrap_or_default()
+        );
+        self.unlogged = 0;
+        self.logged_at = Some(now);
+        Some(line)
+    }
+}
+
+/// A frame for the trace log: its prefix, command byte and length, never its
+/// bytes. The Bluetooth module sends the phone book, caller numbers and the
+/// phone's name and MAC on this port.
 fn describe(frame: &Frame) -> String {
+    let [p0, p1] = frame.header;
     match frame.data.split_first() {
         Some((cmd, rest)) => format!(
-            "parsed frame: cmd {cmd:#04x}, {} data bytes, target {:?}",
+            "parsed frame: {p0:02x} {p1:02x} cmd {cmd:#04x}, {} data bytes, target {:?}",
             rest.len(),
             frame.target
         ),
-        None => format!("parsed frame: empty, target {:?}", frame.target),
+        None => format!("parsed frame: {p0:02x} {p1:02x} empty, target {:?}", frame.target),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    const REPORT_EVERY: Duration = ParseErrors::EVERY;
 
     fn channels() -> (Sender<Frame>, Receiver<Frame>, Sender<Frame>, Receiver<Frame>) {
         let (bt_tx, bt_rx) = bounded::<Frame>(16);
         let (mcu_tx, mcu_rx) = bounded::<Frame>(16);
         (bt_tx, bt_rx, mcu_tx, mcu_rx)
+    }
+
+    /// Stock acknowledges a frame at once, from its receive thread
+    /// (`bt_msg_recv_thread`). Here the acknowledgement is a write: it must
+    /// reach the wire while the reader sits in a read on a quiet line, not
+    /// after the module has repeated its frame (every 500 ms until
+    /// acknowledged, docs/BLUETOOTH_PROTOCOL.md).
+    #[cfg(unix)]
+    #[test]
+    fn a_write_never_waits_for_the_reader() {
+        use serialport::TTYPort;
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        let (ours, mut module) = TTYPort::pair().expect("pty pair");
+        let mux = UartMux::from_port(Box::new(ours)).expect("mux");
+        module.set_timeout(Duration::from_secs(2)).unwrap();
+        let ack = [0x75, 0x46, 0x02, 0xB2, 0x00, 0xB4];
+        for _ in 0..5 {
+            // A quiet line: the reader is inside a read that times out at 100 ms.
+            std::thread::sleep(Duration::from_millis(30));
+            let start = Instant::now();
+            mux.send(ack.to_vec(), false);
+            let mut got = [0u8; 6];
+            module.read_exact(&mut got).expect("the ack reaches the module");
+            let waited = start.elapsed();
+            assert_eq!(got, ack);
+            assert!(waited < Duration::from_millis(50), "the ack waited {waited:?}");
+        }
     }
 
     #[test]
@@ -197,10 +282,39 @@ mod tests {
             data: vec![0xB1, b'+', b'3', b'2', b'4', b'7', b'0'],
         };
         let line = describe(&frame);
-        assert_eq!(line, "parsed frame: cmd 0xb1, 6 data bytes, target Bluetooth");
+        // The prefix tells the module's repeated frames (75 45) from its
+        // one-shot answers (75 46); it carries nothing personal.
+        assert_eq!(line, "parsed frame: 75 45 cmd 0xb1, 6 data bytes, target Bluetooth");
         assert!(!line.contains("43") && !line.contains("+32"), "{line}");
+        let answer = Frame { header: [0x75, 0x46], target: FrameTarget::Bluetooth, data: vec![0xC5, 0x00] };
+        assert_eq!(describe(&answer), "parsed frame: 75 46 cmd 0xc5, 1 data bytes, target Bluetooth");
         let empty = Frame { header: [0x75, 0x45], target: FrameTarget::Bluetooth, data: vec![] };
-        assert_eq!(describe(&empty), "parsed frame: empty, target Bluetooth");
+        assert_eq!(describe(&empty), "parsed frame: 75 45 empty, target Bluetooth");
+    }
+
+    #[test]
+    fn parse_errors_log_the_first_then_a_count_at_most_once_a_minute() {
+        // At 921600 a noisy line or a wrong speed gives thousands of errors a
+        // second; waved.log lives on the small /data.
+        let bad = || FrameError::ChecksumMismatch { expected: 0x12, actual: 0x34 };
+        let t0 = Instant::now();
+        let mut errors = ParseErrors::default();
+        let first = errors.on_error(&bad(), t0).expect("the first is logged");
+        assert!(first.contains("checksum mismatch"), "{first}");
+        for ms in 1..=5_000 {
+            assert_eq!(errors.on_error(&bad(), t0 + Duration::from_millis(ms)), None);
+        }
+        assert_eq!(errors.due(t0 + REPORT_EVERY - Duration::from_millis(1)), None);
+        let count = errors.due(t0 + REPORT_EVERY).expect("a count after a minute");
+        assert!(count.starts_with("5000 more frame parse errors"), "{count}");
+        assert_eq!(errors.due(t0 + 2 * REPORT_EVERY), None, "nothing new, nothing logged");
+        // A burst later: counted again, reported a minute after the last report.
+        let later = t0 + 3 * REPORT_EVERY;
+        assert_eq!(errors.on_error(&bad(), later), None);
+        let line = errors.due(later).expect("over a minute since the last line");
+        assert!(line.starts_with("1 more frame parse errors"), "{line}");
+        assert_eq!(errors.on_error(&bad(), later + Duration::from_secs(1)), None);
+        assert_eq!(errors.due(later + Duration::from_secs(59)), None);
     }
 
     #[test]
@@ -215,7 +329,7 @@ mod tests {
         for byte in [0x48u8, 0x49, 0x4A] {
             let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
             let mut parser = FrameParser::new();
-            handle_byte(byte, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(byte, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
             assert!(
                 mcu_rx.try_recv().is_err(),
                 "standalone {byte:#04x} must not emit a frame",
@@ -235,7 +349,7 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
 
         let frame = mcu_rx.try_recv().expect("expected the real battery frame");
@@ -255,7 +369,7 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
 
         let frame = mcu_rx.try_recv().expect("expected the real frame");
@@ -267,7 +381,7 @@ mod tests {
     fn heartbeat_byte_does_not_emit_anything() {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
-        handle_byte(0x4B, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        handle_byte(0x4B, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         assert!(mcu_rx.try_recv().is_err());
     }
 
@@ -281,9 +395,9 @@ mod tests {
         let (bt_tx, _bt_rx, mcu_tx, mcu_rx) = channels();
         let mut parser = FrameParser::new();
         for &b in &raw {
-            handle_byte(b, &mut parser, &bt_tx, &mcu_tx).unwrap();
+            handle_byte(b, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
         }
-        handle_byte(0x4A, &mut parser, &bt_tx, &mcu_tx).unwrap();
+        handle_byte(0x4A, &mut parser, &mut ParseErrors::default(), &bt_tx, &mcu_tx).unwrap();
 
         let first = mcu_rx.try_recv().expect("battery frame");
         assert_eq!(first.data, payload.to_vec());

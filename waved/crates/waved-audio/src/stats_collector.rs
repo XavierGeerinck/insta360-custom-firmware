@@ -52,7 +52,19 @@ pub struct AudioStats {
     pub doa_active: bool,
     pub doa_backend_fallback: bool,
     pub mode: AudioMode,
+    /// The preset the playback thread runs (`voice` / `media`); the last
+    /// `SetPlaybackPreset` before playback starts or without playback.
     pub playback_preset: String,
+    /// Speaker scene (`playback::scene`): `music` / `meeting`; null without
+    /// the scene follower.
+    pub speaker_scene: Option<String>,
+    /// The playback preset follows the scene (false = pinned).
+    pub speaker_scene_auto: bool,
+    /// Amplifier `Set EQ MODE` last written (0 bypass, 1 meeting, 2 music);
+    /// null until written, after a failed write, or without the follower.
+    pub amp_eq_mode: Option<u8>,
+    /// The amp mode follows the scene (false = pinned).
+    pub amp_eq_mode_auto: bool,
     pub mbagc_active_gain_db: [f32; 4],
     pub limiter_reduction_db: f32,
     /// Linear mic gain currently applied post-DSP. 1.0 = unity, 2.0 = +6 dB,
@@ -236,10 +248,15 @@ pub fn compute_stats_with_processed(
     } else {
         vec![]
     };
-    let playback_preset = match audio_state.playback_preset {
+    let running = dsp_metrics.and_then(|m| m.active_preset());
+    let playback_preset = match running.unwrap_or(audio_state.playback_preset) {
         waved_state::PlaybackPreset::Voice => "voice".to_string(),
         waved_state::PlaybackPreset::Media => "media".to_string(),
     };
+    let speaker_scene = dsp_metrics.and_then(|m| m.scene()).map(|s| s.as_str().to_string());
+    let speaker_scene_auto = dsp_metrics.is_some_and(|m| m.scene_auto());
+    let amp_eq_mode = dsp_metrics.and_then(|m| m.amp_eq_mode()).map(|m| m.value() as u8);
+    let amp_eq_mode_auto = dsp_metrics.is_some_and(|m| m.amp_eq_mode_auto());
     let (mbagc_active_gain_db, limiter_reduction_db, recording_limiter_reduction_db) =
         if let Some(m) = dsp_metrics {
             let gains = [
@@ -304,6 +321,10 @@ pub fn compute_stats_with_processed(
         doa_backend_fallback: audio_state.doa_backend_fallback,
         mode: audio_state.mode.clone(),
         playback_preset,
+        speaker_scene,
+        speaker_scene_auto,
+        amp_eq_mode,
+        amp_eq_mode_auto,
         mbagc_active_gain_db,
         limiter_reduction_db,
         mic_gain_linear,
@@ -661,6 +682,69 @@ mod tests {
         );
     }
 
+    fn stats_with_metrics(state: &waved_state::AudioState, m: Option<&crate::playback::DspMetrics>) -> AudioStats {
+        let frame = AudioFrame::mic_only(vec![0i16; 8 * 256], 8, 48_000, 0);
+        let cs = CaptureStats::new();
+        compute_stats_with_processed(
+            &frame,
+            &cs,
+            ChannelMapSource::File,
+            None,
+            "none",
+            None,
+            None,
+            state,
+            m,
+            #[cfg(feature = "capture-alsa")]
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn speaker_scene_and_amp_mode_appear_in_stats() {
+        use crate::playback::scene::SpeakerScene;
+        use waved_state::{AmpEqMode, AudioState, PlaybackPreset};
+        let state = AudioState::default(); // playback_preset: voice (the last command)
+        let m = crate::playback::DspMetrics::default();
+        m.set_active_preset(PlaybackPreset::Media);
+        m.set_scene(SpeakerScene::Music, true);
+        m.set_amp_eq_mode(Some(AmpEqMode::Music), false);
+        let stats = stats_with_metrics(&state, Some(&m));
+        assert_eq!(stats.playback_preset, "media", "the preset the playback thread runs");
+        assert_eq!(stats.speaker_scene.as_deref(), Some("music"));
+        assert!(stats.speaker_scene_auto);
+        assert_eq!(stats.amp_eq_mode, Some(2));
+        assert!(!stats.amp_eq_mode_auto);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["speaker_scene"], "music");
+        assert_eq!(json["amp_eq_mode"], 2);
+
+        m.set_scene(SpeakerScene::Meeting, false);
+        m.set_amp_eq_mode(None, true);
+        let stats = stats_with_metrics(&state, Some(&m));
+        assert_eq!(stats.speaker_scene.as_deref(), Some("meeting"));
+        assert!(!stats.speaker_scene_auto);
+        let json = serde_json::to_value(&stats).unwrap();
+        assert!(json["amp_eq_mode"].is_null(), "not written or failed → null");
+    }
+
+    #[test]
+    fn stats_without_a_scene_follower_fall_back() {
+        let state = waved_state::AudioState {
+            playback_preset: waved_state::PlaybackPreset::Media,
+            ..Default::default()
+        };
+        let stats = stats_with_metrics(&state, None);
+        assert_eq!(stats.playback_preset, "media");
+        assert_eq!(stats.speaker_scene, None);
+        assert_eq!(stats.amp_eq_mode, None);
+        let m = crate::playback::DspMetrics::default();
+        let stats = stats_with_metrics(&state, Some(&m));
+        assert_eq!(stats.playback_preset, "media", "playback not started → last command");
+        assert_eq!(stats.speaker_scene, None);
+    }
+
     #[test]
     fn beam_tracker_appears_in_stats() {
         let frame = frame_from(silence_8ch(1)[..8 * 256].to_vec());
@@ -813,6 +897,10 @@ mod tests_hid_wiring {
             doa_backend_fallback: false,
             mode: waved_state::AudioMode::default(),
             playback_preset: "voice".into(),
+            speaker_scene: None,
+            speaker_scene_auto: false,
+            amp_eq_mode: None,
+            amp_eq_mode_auto: false,
             mbagc_active_gain_db: [0.0; 4],
             limiter_reduction_db: 0.0,
             mic_gain_linear: 1.0,

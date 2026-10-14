@@ -91,11 +91,18 @@ fn main() {
                 let bt_events_tx = bus.events.clone();
                 // Pair, disconnect, answer and decline (I1, I3).
                 let bt_cmd_rx = bus.commands.subscribe();
+                // The Bluetooth switch and the module's name from config;
+                // the phone's volume on the speaker (docs/BLUETOOTH_PROTOCOL.md).
+                let bt_settings =
+                    waved_bt::Settings::new(config.bluetooth.enabled, &config.device.name);
+                let bt_speaker = waved_bt::Speaker::from_bus(&bus);
                 std::thread::Builder::new()
                     .name("bt-srv".into())
                     .spawn(move || {
                         let svc = waved_bt::BtService::new(bt_rx, bt_uart, bt_state_tx, bt_events_tx)
-                            .with_commands(bt_cmd_rx);
+                            .with_commands(bt_cmd_rx)
+                            .with_settings(bt_settings)
+                            .with_speaker(bt_speaker);
                         svc.run();
                     })
                     .expect("failed to spawn bt thread");
@@ -116,6 +123,13 @@ fn main() {
                     Arc::clone(&bus.mcu),
                     bus.events.clone(),
                 );
+                // Status LEDs as stock drives them (F4); WAVED_LEDS=0 leaves them alone.
+                let svc = if waved_mcu::leds_enabled() {
+                    svc.with_leds(waved_mcu::LedSources::from_bus(&bus))
+                } else {
+                    info!("WAVED_LEDS=0: leaving the status LEDs alone");
+                    svc
+                };
                 let cmd_rx = bus.commands.subscribe();
                 std::thread::Builder::new()
                     .name("mcu-srv".into())
@@ -134,6 +148,7 @@ fn main() {
             Arc::clone(&bus.mcu),
             bus.events.clone(),
         );
+        let sim_mcu = sim_mcu.with_leds(waved_mcu::LedSources::from_bus(&bus));
         let mcu_cmd_rx = bus.commands.subscribe();
         std::thread::Builder::new()
             .name("sim-mcu".into())
@@ -400,6 +415,8 @@ async fn run_async(
                     Arc::clone(&playback) as Arc<dyn waved_meeting::player::SpeakerOutput>,
                     Arc::clone(&bus.playback),
                 )
+                // Nothing plays while USB storage has the recordings (G1).
+                .with_usb_storage(bus.usb_storage.subscribe())
                 .run(bus.commands.subscribe(), bus.audio.subscribe(), bus.meeting.subscribe()),
             );
             // Recording start and stop tones (E5) through the playback path.
@@ -441,6 +458,27 @@ async fn run_async(
                     }
                 }
             });
+            // Speaker scenes: the preset and the amplifier's Set EQ MODE follow
+            // whether something reads the mic, as stock does
+            // (waved_audio::playback::scene, docs/AUDIO_HARDWARE.md "Speaker scenes").
+            {
+                let amp_card = waved_audio::playback::scene::ctl_card_for(&pb.device);
+                #[cfg(feature = "capture-alsa")]
+                let amp = waved_audio::playback::scene::AlsaAmpEqControl::new(amp_card);
+                #[cfg(not(feature = "capture-alsa"))]
+                let amp = {
+                    let _ = amp_card;
+                    waved_audio::playback::scene::NoAmpEqControl
+                };
+                tokio::spawn(waved_audio::playback::scene::run_scene_follower(
+                    bus.audio.subscribe(),
+                    bus.bt.subscribe(),
+                    bus.commands.subscribe(),
+                    Arc::clone(&playback),
+                    amp,
+                    playback.dsp_metrics(),
+                ));
+            }
             // SP#6: UAC2 routing — host ↔ device speakerphone bridges.
             let uac_cfg = cfg.uac.clone().unwrap_or_default();
             let uac_stats: Arc<waved_audio::uac::UacStats> = Arc::new(waved_audio::uac::UacStats::default());
@@ -470,6 +508,8 @@ async fn run_async(
                     sample_rate: 48_000,
                     period_frames: uac_cfg.period_frames,
                     buffer_periods: uac_cfg.buffer_periods,
+                    // USB storage's switch: the PCM closes before an unbind.
+                    hold: Some(bus.uac_hold.clone()),
                 };
                 let upstream = waved_audio::uac::upstream::UacUpstreamSink::spawn(
                     upstream_cfg,
@@ -563,6 +603,8 @@ async fn run_async(
             let svc_cfg = waved_hid::HidServiceConfig {
                 device: hid_cfg.device.clone(),
                 press_release_gap_ms: hid_cfg.press_release_gap_ms,
+                // USB storage's switch: /dev/hidg0 closes before an unbind.
+                hold: Some(bus.hid_hold.clone()),
             };
             tokio::spawn({
                 let stats = Arc::clone(&hid_stats);
@@ -573,13 +615,19 @@ async fn run_async(
             // report 0x03 (Wave Controller, TODO J) goes to the PC link.
             let (pclink_tx, pclink_rx) = std::sync::mpsc::channel();
             waved_hid::reader::HidReader::spawn_with_vendor(
-                waved_hid::reader::HidReaderConfig { device: hid_cfg.device.clone() },
+                waved_hid::reader::HidReaderConfig {
+                    device: hid_cfg.device.clone(),
+                    hold: Some(bus.hid_hold.clone()),
+                },
                 Arc::clone(&bus.audio),
                 Arc::clone(&hid_stats),
                 Some(pclink_tx),
             );
             waved_hid::pclink::service::spawn(
-                waved_hid::pclink::service::PcLinkConfig { device: hid_cfg.device.clone() },
+                waved_hid::pclink::service::PcLinkConfig {
+                    device: hid_cfg.device.clone(),
+                    hold: Some(bus.hid_hold.clone()),
+                },
                 pclink_rx,
                 waved_hid::pclink::service::PcLinkBus::from_bus(&bus),
                 // The app's PIN goes through the same check as the keypad. No
@@ -601,6 +649,8 @@ async fn run_async(
                 bus.audio.subscribe(),
                 ev_tx.clone(),
                 Arc::clone(&hid_stats),
+                // The phone's volume unmuting the speaker (waved-bt) sends no key.
+                Arc::clone(&bus.pending_speaker_mute),
             );
             let _mmh = waved_hid::watch::spawn_mic_mute_watch(
                 bus.audio.subscribe(),
@@ -755,10 +805,43 @@ async fn run_async(
         tokio::spawn(async move { sim_wifi.run(sim_cmds).await });
     }
 
+    // USB storage (G1, docs/USB_STORAGE.md). First take back a drive that a
+    // waved which exited while exported left with the computer, before the
+    // meeting service reconciles the recordings; then serve Start/Stop.
+    #[cfg(not(feature = "simulate"))]
+    {
+        let mut usb_storage = waved_system::usb_storage::UsbStorage::device(
+            Arc::clone(&bus.usb_storage),
+            bus.events.clone(),
+            bus.commands.clone(),
+        )
+        // No start while a firmware update installs (it restarts Wave).
+        .with_ota(bus.ota.subscribe())
+        // No unbind while waved has a file on /dev/hidg0 or hw:1.
+        .with_holds(bus.hid_hold.clone(), bus.uac_hold.clone());
+        let reclaimed = tokio::task::block_in_place(|| usb_storage.reclaim_at_start());
+        if reclaimed != waved_system::usb_storage::Reclaim::Nothing {
+            warn!("usb storage at start-up: {reclaimed:?}");
+        }
+        let usb_cmd_rx = bus.commands.subscribe();
+        let usb_meeting_rx = bus.meeting.subscribe();
+        std::thread::Builder::new()
+            .name("usb-storage".into())
+            .spawn(move || usb_storage.run(usb_cmd_rx, usb_meeting_rx))
+            .expect("spawn usb-storage");
+    }
+
     // Meeting service. Its task ends once a Shutdown finalized the take,
     // which a power off waits for.
     let mut meeting_task: Option<tokio::task::JoinHandle<()>> = None;
-    match waved_meeting::MeetingService::new_with_integrity(
+    // The recordings are reconciled only on a mounted volume (G1): on the
+    // bare /mnt/udisk every one would be marked missing.
+    #[cfg(not(feature = "simulate"))]
+    let recordings_mounted: waved_meeting::VolumeMounted =
+        Arc::new(waved_system::usb_storage::recordings_mounted);
+    #[cfg(feature = "simulate")]
+    let recordings_mounted: waved_meeting::VolumeMounted = Arc::new(|| true);
+    match waved_meeting::MeetingService::new_on_volume(
         config.clone(),
         DB_PATH,
         PathBuf::from(RECORDINGS_DIR),
@@ -770,6 +853,7 @@ async fn run_async(
             integrity: Arc::clone(&recording_integrity),
             integrity_rx,
         },
+        recordings_mounted,
     ).await {
         Ok(meeting_svc) => {
             let meeting_svc = meeting_svc
@@ -777,7 +861,9 @@ async fn run_async(
                     settings: bus.settings.subscribe(),
                     audio: bus.audio.subscribe(),
                 })
-                .with_files_publisher(Arc::clone(&bus.files));
+                .with_files_publisher(Arc::clone(&bus.files))
+                // No recording or upload while the computer has the volume (G1).
+                .with_usb_storage(bus.usb_storage.subscribe());
             let meeting_cmd_rx = bus.commands.subscribe();
             let wifi_rx = bus.wifi.subscribe();
             meeting_task = Some(tokio::spawn(async move { meeting_svc.run(meeting_cmd_rx, wifi_rx).await }));
@@ -1237,6 +1323,12 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
                 let preset = match raw.trim().to_ascii_lowercase().as_str() {
                     "voice" => Some(waved_state::PlaybackPreset::Voice),
                     "media" => Some(waved_state::PlaybackPreset::Media),
+                    // Release the pin: the preset follows the speaker scene.
+                    "auto" => {
+                        info!("SIGHUP: playback preset → auto");
+                        let _ = commands.send(Command::SetPlaybackPresetAuto);
+                        None
+                    }
                     "" => None,
                     other => {
                         warn!("SIGHUP: unknown playback preset {other:?}");
@@ -1250,6 +1342,28 @@ async fn mode_switch_handler(commands: tokio::sync::broadcast::Sender<Command>) 
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => warn!("SIGHUP: {PRESET_PATH}: {e}"),
+        }
+
+        // Speaker amplifier Set EQ MODE for A/B tests: 0/1/2 (or
+        // bypass/meeting/music) pins it, `auto` follows the speaker scene.
+        const AMP_EQ_PATH: &str = "/tmp/waved-amp-eq-mode";
+        match std::fs::read_to_string(AMP_EQ_PATH) {
+            Ok(raw) => match raw.trim() {
+                "" => {}
+                r if r.eq_ignore_ascii_case("auto") => {
+                    info!("SIGHUP: speaker amp EQ mode → auto");
+                    let _ = commands.send(Command::SetAmpEqMode(None));
+                }
+                r => match waved_state::AmpEqMode::parse(r) {
+                    Some(mode) => {
+                        info!("SIGHUP: speaker amp EQ mode → {mode:?}");
+                        let _ = commands.send(Command::SetAmpEqMode(Some(mode)));
+                    }
+                    None => warn!("SIGHUP: unknown amp EQ mode {r:?}"),
+                },
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => warn!("SIGHUP: {AMP_EQ_PATH}: {e}"),
         }
 
         const VOLUME_PATH: &str = "/tmp/waved-volume";

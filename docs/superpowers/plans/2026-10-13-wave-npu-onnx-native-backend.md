@@ -66,7 +66,7 @@ JSON excluding itself. `independent_oracle(record, inputs: dict) -> dict`
 returns arrays in the ONNX output contract. `generate_native_fixtures(path)`
 writes four controls from the spec and a deterministic manifest.
 
-- [ ] Write the layout and changed-weight tests before implementation:
+- [x] Write the layout and changed-weight tests before implementation:
 
   ```python
   record = import_native_model(fixtures / "17b2.onnx")
@@ -80,12 +80,12 @@ writes four controls from the spec and a deterministic manifest.
   Add refusal cases for dynamic shapes, wrong dtypes/quantizers, unknown
   attributes, overridable/external/nested constants, opsets/domains and
   changed model signature. Observe the missing-module failure.
-- [ ] Reuse the existing auditor; validate exact profile contracts and
+- [x] Reuse the existing auditor; validate exact profile contracts and
   convert/repack actual initializer bytes. Preserve half bits and exact
   FLOAT16→FLOAT32 bias conversion; emit immutable canonical identities.
-- [ ] Generate all four fixtures with IR 10/opset 13 and compare ORT CPU
+- [x] Generate all four fixtures with IR 10/opset 13 and compare ORT CPU
   outputs to independent NumPy outputs bit for bit. Track fixture hashes.
-- [ ] Run focused tests and affected existing ONNX tests, lint/format,
+- [x] Run focused tests and affected existing ONNX tests, lint/format,
   record results and commit only owned files for independent review.
 
 ## Task 2: Generated native package and bounded build
@@ -102,22 +102,22 @@ fixed constructor/runner sources. The bridge exposes `import_package`,
 and lowering record. `execute_package` returns a dict containing raw output
 bytes and a run envelope; it never runs an unqualified NBG.
 
-- [ ] Write host refusal tests for modified constants/source/hash, unsafe
+- [x] Write host refusal tests for modified constants/source/hash, unsafe
   remote paths, extra native calls, early alarm cancellation and output
   canary ordering. Use the existing source-policy testing pattern.
-- [ ] Generate compiler constants from numeric byte patterns only. Reuse
+- [x] Generate compiler constants from numeric byte patterns only. Reuse
   the PoC 16 identity/env/atomic export/alarm lifecycle, with package-derived
   fixed roots and metadata instead of copied fixture constants.
-- [ ] Implement reusable input-file runners: exact regular-file length,
+- [x] Implement reusable input-file runners: exact regular-file length,
   fixed NBG size/v2/target, one Compile/Run, device canary, guarded readback,
   atomic exclusive output, teardown before PASS and no alarm cancellation.
-- [ ] Cross-build in the pinned image with `--network=none`; inspect
+- [x] Cross-build in the pinned image with `--network=none`; inspect
   AArch64 ELF/dependencies/version floors and retain full build provenance.
   No vendor compiler/model binary executes on the Mac.
-- [ ] Use subclassed existing compile policies, exact system hashes and
+- [x] Use subclassed existing compile policies, exact system hashes and
   package pins. Stage only new files, capture health and explicit NN target
   logs, qualify NBG metadata/CRCs, and clean exact owned inventories.
-- [ ] Run host mocked stage/refusal/health tests plus affected lab/parser
+- [x] Run host mocked stage/refusal/health tests plus affected lab/parser
   controls, and independently review before any live native operation.
 
 ## Task 3: Explicit backend session, policy and CLI
@@ -132,7 +132,7 @@ Task 2's validated qualification ledger. A `NativeSession` implements
 Actual calls invoke the bridge's `execute_package`, with exact package/model
 and input evidence. Retain CPU defaults and deterministic output NPZ.
 
-- [ ] Write tests for unqualified/changed packages before native calls,
+- [x] Write tests for unqualified/changed packages before native calls,
   unsupported models returning CPU fallback, strict refusal without CPU,
   malformed outputs and failed-run latching:
 
@@ -145,13 +145,13 @@ and input evidence. Retain CPU defaults and deterministic output NPZ.
   np.testing.assert_array_equal(second[output_name], cpu_output)
   ```
 
-- [ ] Add `import-native`, `build-native`, `compile-native`, `qualify-native`
+- [x] Add `import-native`, `build-native`, `compile-native`, `qualify-native`
   commands and `run --backend wave-native --package ... --run-id ...`.
   Run/input/output paths are exclusive and validated before device contact.
-- [ ] Return actual backend/call/fallback/qualification evidence; never
+- [x] Return actual backend/call/fallback/qualification evidence; never
   label CPU outputs as NPU. Native strict success requires qualified NBG
   hashes and exact output contract; hybrid failure makes no NPU retry.
-- [ ] Run native backend/CLI tests and existing ONNX CPU/hybrid regression,
+- [x] Run native backend/CLI tests and existing ONNX CPU/hybrid regression,
   lint/format, commit and independently review.
 
 ## Task 4: Four live controls and durable evidence
@@ -159,16 +159,16 @@ and input evidence. Retain CPU defaults and deterministic output NPZ.
 **Files:** raw artifacts under `artifacts/npu/poc17/` and `runs/`; new
 PoC 17 notebook; ONNX README, package README and durable NPU status updates.
 
-- [ ] Freeze model, package, binary, input and CPU-oracle hashes for each
+- [x] Freeze model, package, binary, input and CPU-oracle hashes for each
   of 17A1/17A2/17B1/17B2. All host/source/build reviews pass first.
-- [ ] Sequentially compile each once; validate exact native NBG and NN
+- [x] Sequentially compile each once; validate exact native NBG and NN
   target logs; execute each qualifying artifact once against its oracle.
   Record any clean negative; do not retry a candidate or continue on a fault.
-- [ ] Clean each staging root promptly and verify final hashes, boot,
+- [x] Clean each staging root promptly and verify final hashes, boot,
   NPU settings, service identities, holder state and diagnostic markers.
-- [ ] Record actual operator/shape coverage and exact reproduction commands,
+- [x] Record actual operator/shape coverage and exact reproduction commands,
   limitations, failures, model/build/NBG/output digests and test evidence.
-- [ ] Complete final independent source/evidence review; commit owned
+- [x] Complete final independent source/evidence review; commit owned
   changes without push, merge, service deployment or unrelated edits.
 
 ## Execution record
@@ -177,3 +177,11 @@ Owner approved the design, implementation and bounded live sequence with
 `go`. Work stays on the existing `feat/m3` feature workspace so ignored
 exact-device SDK/runtime evidence remains available. Preserve other edits.
 Progress and reviews are recorded under `artifacts/npu/poc17/progress.md`.
+
+Completed 2026-10-13. Four NN compiles and four byte-exact inferences passed,
+with all eight staging roots removed and captured health unchanged.
+Independent source and device-evidence reviews passed. Validation: 108
+affected host tests, 345 ONNX package tests, and two real-package integrity
+integration tests. Commands, full hashes and limitations are recorded in
+`docs/npu/onnx/native-backend.md`, `native-poc17-results.json` and the PoC 17
+notebook. Default PoC 9 policy remains unchanged.

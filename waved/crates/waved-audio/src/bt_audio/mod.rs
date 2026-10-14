@@ -34,7 +34,8 @@ use crate::playback::{PlaybackError, PlaybackService};
 /// Which `hw:0,0` streams the Bluetooth state asks for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Paths {
-    /// Capture open: phone audio plays on the speaker (`phone_audio`).
+    /// Capture open: phone audio plays on the speaker (`phone_audio`, or a
+    /// call: `call_audio`).
     pub speaker: bool,
     /// Playback open: in a call, or during phone audio with the clock switch.
     pub playback: bool,
@@ -47,7 +48,9 @@ impl Paths {
     /// `hw:0,0` playback running whenever phone audio plays, writing silence
     /// outside a call, in case TDM-A capture needs it for its clocks.
     pub fn from_state(state: &BluetoothState, playback_clock: bool) -> Self {
-        let speaker = state.phone_audio;
+        // A call plays the caller too: an iPhone call reported only bit 2
+        // (0xB2 = 0x05, seen 2026-10-13), never bit 1.
+        let speaker = state.phone_audio || state.call_audio;
         let mic = state.call_audio;
         Self { speaker, mic, playback: mic || (playback_clock && speaker) }
     }
@@ -223,6 +226,16 @@ mod tests {
             Paths::from_state(&state(true, true), false),
             Paths { speaker: true, playback: true, mic: true },
             "a call: both ways"
+        );
+    }
+
+    #[test]
+    fn a_call_without_bit_1_still_plays_the_caller() {
+        // Seen on the device 2026-10-13: an iPhone call reported 0xB2 = 0x05
+        // (connected + call audio, bit 1 clear); the caller was never played.
+        assert_eq!(
+            Paths::from_state(&state(false, true), false),
+            Paths { speaker: true, playback: true, mic: true }
         );
     }
 

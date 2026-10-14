@@ -1,13 +1,30 @@
 # wave-onnx-hybrid
 
-Host-only ONNX admission, capability reporting, deterministic CPU inference,
-and fail-closed fallback for the Insta360 Wave NPU research program.
+ONNX admission, deterministic CPU inference, and an explicit native backend
+for the Insta360 Wave NPU research program.
 
 The general PoC 9 policy approves no NPU signatures. PoC 13 separately
 qualifies one exact U8 `[481]` Erf NBG through a sealed partition policy.
-This Python package still never contacts the Wave, ADB, `/dev/galcore`,
-TIM-VX, OpenVX, or a compiler; fixed harnesses outside this package transport
-its sealed tensors to and from the device.
+The default backend retains that policy. The separate `wave-native` backend
+imports single-node FP16 Conv or U8 QLinearMatMul graphs and delegates
+hash-bound compilation and execution to the repository's bounded ADB lab
+bridge. Each exact model needs its own successful device qualification.
+
+The bounded `fp16-marblenet-v1` graph profile also imports actual trained
+Conv/Add/Relu graphs. PoC18 qualified MarbleNet's pointwise and first
+residual blocks; its K29/dilation2 depthwise control was rejected. The
+original full package uses the explicit file-oriented hybrid CPU frontend,
+and strict mode refuses that unqualified package. PoC19's separate
+`fp16-marblenet-pad-v1` exact rewrite now qualifies the complete trained model
+on NN/TP. All800 frozen frame decisions match original FP32; the paired
+prepared-feature boundary is10.399× faster than one-thread Wave CPU inference.
+The qualified19f WAV frontend runs strictly on native with zero CPU neural
+sessions; it retains the fixed3.99-second window and future-context limits. See the
+[MarbleNet guide](../../../docs/npu/onnx/marblenet.md) for the command,
+optional Torch feature environment, fixed window and evidence.
+
+Use the [native backend guide](../../../docs/npu/onnx/native-backend.md) for
+the supported tensor contracts, package lifecycle and device commands.
 
 The complete result, evidence hashes, limitations, and promotion gate are in
 [`docs/npu/onnx/README.md`](../../../docs/npu/onnx/README.md).
@@ -54,9 +71,11 @@ cd waved/tools/onnx-hybrid
 uv sync --python 3.12 --dev
 ```
 
-The project is self-contained. Use its tracked `uv.lock`; do not install its
-host dependencies into the Wave root filesystem or the repository's other
-Python environments.
+Use the tracked `uv.lock` and the repository editable installation. Native
+commands also need `waved/scripts/npu/`, the checked-in C++ templates, the
+exact local SDK/runtime evidence and the pinned Docker image. A standalone
+wheel does not include these resources. Host dependencies stay in this
+environment.
 
 ## Commands
 
@@ -96,9 +115,11 @@ uv run wave-onnx-hybrid run \
   --evidence /tmp/wave-spectral-hybrid.json
 ```
 
-Current hybrid behavior is exactly one CPU session and zero NPU attempts.
+Default-backend hybrid behavior is exactly one CPU session and zero NPU
+attempts. Explicit `--backend wave-native` uses a qualified package or
+reports CPU fallback.
 
-Strict mode must fail before session construction:
+Default-backend strict mode must fail before session construction:
 
 ```bash
 uv run wave-onnx-hybrid run \
@@ -119,6 +140,11 @@ src/wave_onnx_hybrid/
   runtime.py     CPU session and one-attempt fallback semantics
   fixtures.py    deterministic ONNX and NPZ controls
   cli.py         exclusive file-oriented command boundary
+  native_import.py   exact ONNX profiles and independent numerical oracle
+  native_sources.py  immutable native compile and execution templates
+  native_backend.py qualification-bound session and latched fallback
+  native_cli.py     import/build/compile/qualify command boundary
+  native_fixtures.py four ONNX-derived native controls
   errors.py      stable machine error categories
   erf_mask_signal.py         framing, estimator, quantization, synthesis
   erf_mask_corpus.py         deterministic procedural/natural corpus
@@ -153,7 +179,11 @@ tests/
   attributes.
 - External tensor data is always rejected.
 - Audit mode creates no session.
-- Current hybrid creates one CPU-only session and makes no NPU call.
+- Default-backend hybrid creates one CPU-only session and makes no NPU call.
+- Native eligibility binds the supplied ONNX, lowering, source, ELF, NBG,
+  CPU qualification evidence, actual readback and cleanup evidence.
+- Native strict loading creates no CPU session. Hybrid execution failure
+  latches CPU fallback without a second device dispatch.
 - Strict mode never silently changes into CPU mode.
 - A future NPU constructor gets at most one attempt.
 - ONNX Runtime must report only `CPUExecutionProvider`.

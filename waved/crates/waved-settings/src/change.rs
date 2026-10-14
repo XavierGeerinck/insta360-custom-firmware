@@ -15,6 +15,9 @@ pub enum Change {
     PreRecording(bool),
     UploadMode(UploadMode),
     Tones(bool),
+    /// Turn the device PIN off: clear the stored record and the pin_enabled
+    /// mirror (System -> PIN, D10).
+    ClearDevicePin,
     FirstRunDone,
     AudioMode(AudioMode),
     NrLevel(NrLevel),
@@ -23,6 +26,8 @@ pub enum Change {
     BeamAim(f32),
     /// The chosen Mic height; waved-mcu moves the lift for the same command.
     MicHeight(MotorPosition),
+    /// The Bluetooth switch; waved-bt applies it for the same command.
+    Bluetooth(bool),
 }
 
 impl Change {
@@ -39,6 +44,7 @@ impl Change {
             Command::SetPreRecording(value) => Change::PreRecording(*value),
             Command::SetUploadMode(mode) => Change::UploadMode(*mode),
             Command::SetAlertTones(value) => Change::Tones(*value),
+            Command::ClearDevicePin => Change::ClearDevicePin,
             Command::MarkFirstRunDone => Change::FirstRunDone,
             Command::SetAudioMode(mode) => Change::AudioMode(mode.clone()),
             Command::SetNrLevel(level) => Change::NrLevel(level.clone()),
@@ -47,6 +53,7 @@ impl Change {
             Command::SetBeamAim(degrees) => Change::BeamAim(wrap_beam_aim(*degrees)?),
             Command::SetMotorPosition(MotorPosition::Moving) => return None,
             Command::SetMotorPosition(height) => Change::MicHeight(*height),
+            Command::SetBluetooth(on) => Change::Bluetooth(*on),
             _ => return None,
         })
     }
@@ -64,6 +71,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::PreRecording(value) => config.recording.pre_recording = *value,
         Change::UploadMode(mode) => config.api.upload_mode = *mode,
         Change::Tones(value) => config.tones.enabled = *value,
+        Change::ClearDevicePin => config.security.device_password.clear(),
         Change::FirstRunDone => config.device.first_run_done = true,
         Change::AudioMode(mode) => config.audio.mode = mode.clone(),
         Change::NrLevel(level) => config.audio.nr_level = level.clone(),
@@ -71,6 +79,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::MicVolume(value) => config.audio.mic_volume = *value,
         Change::BeamAim(degrees) => config.audio.beam_aim_deg = *degrees,
         Change::MicHeight(height) => config.device.mic_height = *height,
+        Change::Bluetooth(on) => config.bluetooth.enabled = *on,
     }
 }
 
@@ -87,13 +96,16 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         Change::PreRecording(value) => settings.pre_recording = *value,
         Change::UploadMode(mode) => settings.upload_mode = *mode,
         Change::Tones(value) => settings.tones_enabled = *value,
+        Change::ClearDevicePin => settings.pin_enabled = false,
         Change::FirstRunDone => settings.first_run_done = true,
         Change::MicHeight(height) => settings.mic_height = *height,
         Change::AudioMode(_)
         | Change::NrLevel(_)
         | Change::SpeakerVolume(_)
         | Change::MicVolume(_)
-        | Change::BeamAim(_) => {}
+        | Change::BeamAim(_)
+        // waved-bt owns the live switch (BluetoothState::bt_on).
+        | Change::Bluetooth(_) => {}
     }
 }
 
@@ -178,6 +190,23 @@ mod tests {
     }
 
     #[test]
+    fn the_bluetooth_switch_is_kept_in_config_only() {
+        // waved-bt owns the live switch (`BluetoothState::bt_on`); the
+        // settings service only persists it for the next start.
+        let change = Change::from_command(&Command::SetBluetooth(false));
+        assert_eq!(change, Some(Change::Bluetooth(false)));
+        let mut config = WavedConfig::default();
+        let mut settings = SettingsState::default();
+        apply_to_config(&mut config, &change.unwrap());
+        apply_to_settings(&mut settings, &Change::Bluetooth(false));
+        assert!(!config.bluetooth.enabled);
+        assert_eq!(settings, SettingsState::default());
+        apply_to_config(&mut config, &Change::Bluetooth(true));
+        assert!(config.bluetooth.enabled);
+        assert!(waved_config::validate_config(&config).is_ok());
+    }
+
+    #[test]
     fn beam_aim_is_normalised_to_positive_zero() {
         for degrees in [-0.0_f32, -360.0, 360.0, -1e-9, 720.0] {
             match Change::from_command(&Command::SetBeamAim(degrees)) {
@@ -241,6 +270,28 @@ mod tests {
         apply_to_config(&mut config, &Change::DimAfter(600));
         assert_eq!(config.display.dim_after_s, 600);
         assert_eq!(config.display.off_after_s, 600, "never off before dimming");
+        assert!(waved_config::validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn clearing_the_pin_removes_the_record_and_the_mirror() {
+        // System -> PIN turn-off (D10): the stored record is cleared and
+        // pin_enabled drops to false so the router stops gating at once.
+        assert_eq!(
+            Change::from_command(&Command::ClearDevicePin),
+            Some(Change::ClearDevicePin)
+        );
+        let mut config = WavedConfig::default();
+        config.security.device_password = waved_config::hash_pin("4821");
+        let mut settings = SettingsState {
+            pin_enabled: true,
+            ..SettingsState::default()
+        };
+        let change = Change::ClearDevicePin;
+        apply_to_config(&mut config, &change);
+        apply_to_settings(&mut settings, &change);
+        assert!(config.security.device_password.is_empty());
+        assert!(!settings.pin_enabled);
         assert!(waved_config::validate_config(&config).is_ok());
     }
 

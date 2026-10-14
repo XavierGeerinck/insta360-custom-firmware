@@ -85,6 +85,18 @@ logs every call, so no Wave is needed. It covers the order of the steps, a
 copy that doesn't match, a full `/data`, a missing Wave and the ADB-at-boot
 check.
 
+The USB gadget patch the installer runs on the Wave has its own test. It
+patches copies of an `S89usbgadget`-shaped script under busybox, the shell the
+Wave uses, and checks ADB at boot, the volume ranges, the HID controls, that a
+second run changes nothing, and that an older USB-storage boot step is removed:
+
+```bash
+docker run --rm --network none -v "$PWD/scripts:/w:ro" busybox:1.36 sh /w/test-patch-stock-usbgadget.sh
+```
+
+Set `STOCK_S89` to a stock rootfs copy of the script, mounted into the
+container, to patch that too.
+
 ## The site
 
 From the repository root:
@@ -130,7 +142,6 @@ feature:
 | `test-recording-resilience.sh` | A long recording, storage pruning, and reboots during a recording. It reboots the Wave three times (`ALLOW_DEVICE_REBOOT=yes`) and needs builds with `recording-integrity-test-hooks`; `DURATION_SECONDS=3600` is the one-hour run |
 | `test-recording-integrity.sh` | Recording when the audio pipeline fails; needs a build with `recording-integrity-test-hooks` |
 | `test-wifi-provisioning.sh` | Wi-Fi setup end to end |
-| `tests/test-patch-usbgadget-on-device.sh` | The USB gadget patch, on a copy in `/tmp` |
 
 `waved-device-test` and `scripts/hil.sh` are older. `waved-device-test` runs
 on the Wave and checks the serial port, the HID device, a Wi-Fi scan, the

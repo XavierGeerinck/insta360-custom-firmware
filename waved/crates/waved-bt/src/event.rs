@@ -155,6 +155,11 @@ pub enum Event {
     /// `0xF0`: the module's own log line. It can name the phone and its MAC
     /// (`app_set_bt_last_addr`), so it is logged at trace only.
     Log(String),
+    /// `0xAE [ready]`: the phone book's link (PBAP). Stock asks for the phone
+    /// book when it is 1 (75716); waved never does. On the device (module
+    /// 0.0.0.28, 2026-10-13) it came about every 14 s with an iPhone
+    /// connected, without being asked (`0xAD` is never sent).
+    PbapStatus(u8),
     /// `0xB0`: one phone-book contact (PBAP), pushed by the module right
     /// after a phone connects. Dropped unread: it carries nothing, so no
     /// contact can reach a log or the state (TODO "Not planned").
@@ -202,6 +207,7 @@ pub fn decode(frame: &Frame) -> Event {
         id::NAME if !d.is_empty() => Some(Event::Name(text(&d[1..d.len().min(1 + crate::command::NAME_LEN)]))),
         id::PHONE_MAC => phone_mac(d).map(Event::PhoneMac),
         id::PHONE_BOOK_ENTRY => Some(Event::PhoneBookEntry),
+        id::PBAP_STATUS => d.first().map(|&b| Event::PbapStatus(b)),
         id::GET_VERSION => Some(Event::Version(text(d.get(1..).unwrap_or(&[])))),
         id::GET_BUILD_TIME => Some(Event::BuildTime(text(d.get(1..).unwrap_or(&[])))),
         id::AUDIO_MODE_SWITCHED => d.get(1).map(|&m| Event::AudioModeSwitched(m)),
@@ -220,7 +226,8 @@ pub fn decode(frame: &Frame) -> Event {
         id::OTA_REQUEST => Some(Event::Ota(OtaReply::Ready)),
         id::OTA_FW_INFO_DONE | id::DONGLE_OTA_FW_INFO_DONE => Some(Event::Ota(OtaReply::FwInfo)),
         id::OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.first() != Some(&3) })),
-        id::DONGLE_OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.first().is_none_or(|&b| b == 0) })),
+        // Stock reads the dongle's verdict from byte 4 (bt_ota_cmd_send 74854).
+        id::DONGLE_OTA_PACKET_DONE => Some(Event::Ota(OtaReply::Packet { ok: d.get(4).is_none_or(|&b| b == 0) })),
         id::OTA_CRC => Some(Event::Ota(OtaReply::Crc { ok: d.first() == Some(&1) })),
         id::DONGLE_OTA_CRC_DONE => Some(Event::Ota(OtaReply::Crc { ok: d.first().is_none_or(|&b| b == 0) })),
         id::OTA_RESET => Some(Event::Ota(OtaReply::Reset)),
@@ -546,11 +553,21 @@ mod tests {
         assert_eq!(ev(0xA0, &[0]), Event::Ota(OtaReply::Packet { ok: true }));
         assert_eq!(ev(0xA0, &[3]), Event::Ota(OtaReply::Packet { ok: false }));
         assert_eq!(ev(0xDC, &[0]), Event::Ota(OtaReply::Packet { ok: true }));
-        assert_eq!(ev(0xDC, &[1]), Event::Ota(OtaReply::Packet { ok: false }));
+        // The dongle's verdict is byte 4 (stock 74854), not byte 0.
+        assert_eq!(ev(0xDC, &[1, 0, 0, 0, 0]), Event::Ota(OtaReply::Packet { ok: true }));
+        assert_eq!(ev(0xDC, &[0, 0, 0, 0, 1]), Event::Ota(OtaReply::Packet { ok: false }));
         assert_eq!(ev(0xA1, &[1]), Event::Ota(OtaReply::Crc { ok: true }));
         assert_eq!(ev(0xA1, &[0]), Event::Ota(OtaReply::Crc { ok: false }));
         assert_eq!(ev(0xDE, &[0]), Event::Ota(OtaReply::Crc { ok: true }));
         assert_eq!(ev(0xA2, &[0]), Event::Ota(OtaReply::Reset));
+    }
+
+    #[test]
+    fn the_phone_books_link_status() {
+        // Device 2026-10-13: 175 of these in 40 minutes, one data byte each.
+        assert_eq!(wire(&[0x75, 0x45, 0x02, 0xAE, 0x00, 0xB0]), Event::PbapStatus(0));
+        assert_eq!(ev(0xAE, &[1]), Event::PbapStatus(1));
+        assert!(matches!(ev(0xAE, &[]), Event::Other { .. }));
     }
 
     #[test]
