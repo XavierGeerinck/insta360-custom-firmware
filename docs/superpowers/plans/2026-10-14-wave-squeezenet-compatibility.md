@@ -132,5 +132,9 @@ private report poc20/audio-model-research.md and tracked sourced model guide.
   30 with exact planned28. No budget borrowed from PoC19.
 - Full224 pool ceil/floor coincidence cannot qualify general ceiling behavior;
   the profile admits only observed equivalent geometries.
+- Pool-only20b may establish TP-only; every Conv-containing candidate still
+  requires NN and onlyNN/TP routes. Preserve actual target in compiled receipt.
+- Independent NumPy FP16 is native reference authority; actual ORT must pass
+  the same frozen element policy on every prepared input before device work.
 - First Grace Hopper download URL404 remains retained; replacement comes from
   pinned matplotlibv3.10.0 with full hash. No native retry is involved.

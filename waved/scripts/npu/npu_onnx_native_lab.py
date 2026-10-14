@@ -34,9 +34,13 @@ RUNTIME_PROVENANCE_SHA256 = (
 )
 IMAGE = "sha256:a45f1308adfe3fc3b90e329e72d5efe9d743e6cc77017254d28bbba1c689586a"
 TIM_COMMIT = "702715d714277376d7ff466b7b72833ff57564c1"
-ROOT_RE = re.compile(r"/tmp/wave-npu-onnx(?:17|18)-[0-9a-f]{16}-(?:compile|execute)\Z")
+ROOT_RE = re.compile(
+    r"/tmp/wave-npu-onnx(?:17|18|20)-[0-9a-f]{16}-(?:compile|execute)\Z"
+)
 GRAPH_PROFILE = "fp16-marblenet-v1"
-GRAPH_PROFILES = frozenset({GRAPH_PROFILE, "fp16-marblenet-pad-v1"})
+VISION_PROFILE = "fp16-squeezenet-v1"
+GRAPH_PROFILES = frozenset({GRAPH_PROFILE, "fp16-marblenet-pad-v1", VISION_PROFILE})
+PHASE_PROFILES = frozenset({"fp16-marblenet-pad-v1", VISION_PROFILE})
 MAXIMUM_GRAPH_TENSOR_BYTES = 8 * 1024 * 1024
 SYSTEM_HASHES = {
     path: digest
@@ -89,17 +93,20 @@ def _phase_guarded(function):
             raise
         finally:
             _ACTIVE_PHASE.reset(token)
+
     return guarded
 
 
 def _activate_phase(package):
-    if package.get("record", {}).get("profile_id") != "fp16-marblenet-pad-v1":
+    if package.get("record", {}).get("profile_id") not in PHASE_PROFILES:
         return
     path = Path(package["directory"]).parent / "native-phase.json"
     current = _ACTIVE_PHASE.get()
     if current is not None:
         if current.path != path:
-            raise NativeLabError("nested native operation changed the shared phase path")
+            raise NativeLabError(
+                "nested native operation changed the shared phase path"
+            )
         return
     manifest = _system_manifest(_compile_manifest(package))
     _ACTIVE_PHASE.set(npu_native_phase.NativePhase(path, manifest, SYSTEM_HASHES))
@@ -176,11 +183,17 @@ def _write_json(path: Path, value: Any) -> None:
     _write(path, _canonical(value))
 
 
+def _poc_id(record: dict) -> str:
+    if record.get("profile_id") == VISION_PROFILE:
+        return "20"
+    return "18" if record.get("profile_id") in GRAPH_PROFILES else "17"
+
+
 def remote_root(record: dict, kind: str) -> str:
     digest = record.get("lowering_sha256", "")
     if kind not in ("compile", "execute") or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise NativeLabError("invalid native root identity")
-    poc = "18" if record.get("profile_id") in GRAPH_PROFILES else "17"
+    poc = _poc_id(record)
     return f"/tmp/wave-npu-onnx{poc}-{digest[:16]}-{kind}"
 
 
@@ -201,7 +214,10 @@ def _compare_output(record: dict, expected: bytes, observed: bytes) -> dict:
         raise NativeLabError("native output length differs from its tensor contract")
     if record.get("profile_id") in GRAPH_PROFILES:
         _host()
-        from wave_onnx_hybrid.marblenet_graph import validate_graph_output
+        if record.get("profile_id") == VISION_PROFILE:
+            from wave_onnx_hybrid.vision_graph import validate_graph_output
+        else:
+            from wave_onnx_hybrid.marblenet_graph import validate_graph_output
 
         try:
             return validate_graph_output(record, expected, observed)
@@ -306,9 +322,10 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
     if (root / "compiled.json").exists():
         compiled = _json(root / "compiled.json")
         _bound(loaded, compiled)
-        if (
-            compiled.get("status") != "PASS"
-            or compiled.get("nn_target") != "VXNNE_OPERATION_TARGET_NN"
+        if compiled.get("status") != "PASS" or compiled.get("nn_target") not in (
+            {"VXNNE_OPERATION_TARGET_NN", "VXNNE_OPERATION_TARGET_TP"}
+            if record["profile_id"] == VISION_PROFILE and record["control_id"] == "20b"
+            else {"VXNNE_OPERATION_TARGET_NN"}
         ):
             raise NativeLabError("native compile evidence is not a qualified NN export")
         if (
@@ -350,9 +367,9 @@ def load_package(package_dir: Path | str, require_qualification: bool = False) -
         ):
             raise NativeLabError("compile envelope does not bind this NBG")
         stdout = _regular(root / "evidence/compile/stdout.txt").decode()
-        if _digest(stdout.encode()) != compiled.get("stdout_sha256") or not _nn_target(
-            stdout, allow_tp=record["profile_id"] in GRAPH_PROFILES
-        ):
+        if _digest(stdout.encode()) != compiled.get(
+            "stdout_sha256"
+        ) or _qualified_target(record, stdout) != compiled.get("nn_target"):
             raise NativeLabError("NN target evidence changed or absent")
         cleanup = _json(root / "evidence/compile/cleanup.json")
         if (
@@ -778,7 +795,7 @@ def _tensor_expectation(tensor: dict) -> compile_lab.TensorExpectation:
 def _compile_policy(package: dict) -> npu_op_dtype_lab.DiagnosticCompilePolicy:
     record = package["record"]
     root = remote_root(record, "compile")
-    poc = "18" if record["profile_id"] in GRAPH_PROFILES else "17"
+    poc = _poc_id(record)
     return npu_op_dtype_lab.DiagnosticCompilePolicy(
         poc_id=poc,
         experiment=f"wave-npu-poc{poc}-onnx-compile",
@@ -1117,18 +1134,42 @@ def _cleanup(
     return result
 
 
-def _nn_target(stdout: str, allow_tp: bool = False) -> bool:
+def _nn_target(stdout: str, allow_tp: bool = False, *, require_nn: bool = True) -> bool:
     lines = [line for line in stdout.splitlines() if "operation target " in line]
     targets = (
         ("VXNNE_OPERATION_TARGET_NN", "VXNNE_OPERATION_TARGET_TP")
         if allow_tp
         else ("VXNNE_OPERATION_TARGET_NN",)
     )
-    return any(
-        "operation target VXNNE_OPERATION_TARGET_NN," in line for line in lines
-    ) and all(
-        any(f"operation target {target}," in line for target in targets)
-        for line in lines
+    return (
+        bool(lines)
+        and (
+            not require_nn
+            or any(
+                "operation target VXNNE_OPERATION_TARGET_NN," in line for line in lines
+            )
+        )
+        and all(
+            any(f"operation target {target}," in line for target in targets)
+            for line in lines
+        )
+    )
+
+
+def _qualified_target(record: dict, stdout: str) -> str | None:
+    pool_control = (
+        record.get("profile_id") == VISION_PROFILE and record.get("control_id") == "20b"
+    )
+    if not _nn_target(
+        stdout,
+        allow_tp=record.get("profile_id") in GRAPH_PROFILES,
+        require_nn=not pool_control,
+    ):
+        return None
+    return (
+        "VXNNE_OPERATION_TARGET_NN"
+        if "operation target VXNNE_OPERATION_TARGET_NN," in stdout
+        else "VXNNE_OPERATION_TARGET_TP"
     )
 
 
@@ -1201,9 +1242,8 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
         raise NativeLabError(f"native compilation did not pass; evidence: {run_dir}")
     _successful_run(envelope)
     stdout = _regular(run_dir / "stdout.txt").decode()
-    if not _nn_target(
-        stdout, allow_tp=package["record"]["profile_id"] in GRAPH_PROFILES
-    ):
+    target = _qualified_target(package["record"], stdout)
+    if target is None:
         raise NativeLabError(
             "native compiler did not establish exclusive NN target selection"
         )
@@ -1219,7 +1259,7 @@ def compile_package(package_dir: Path | str, run_id: str) -> dict:
         "compiler_sha256": package["build"]["binary_sha256"],
         "nbg_sha256": _digest(nbg),
         "nbg_bytes": len(nbg),
-        "nn_target": "VXNNE_OPERATION_TARGET_NN",
+        "nn_target": target,
         "manifest_sha256": manifest.sha256,
         "run_sha256": _digest(_regular(run_dir / "run.json")),
         "stdout_sha256": _digest(stdout.encode()),
@@ -1315,15 +1355,16 @@ def _execute_manifest(
         if path.startswith(root + "/")
     }
     numerical = record["profile_id"] in GRAPH_PROFILES
-    operation = (
-        "fp16-marblenet-pad"
-        if record["profile_id"] == "fp16-marblenet-pad-v1"
-        else (
+    if record["profile_id"] == VISION_PROFILE:
+        operation = "fp16-squeezenet"
+    elif record["profile_id"] == "fp16-marblenet-pad-v1":
+        operation = "fp16-marblenet-pad"
+    else:
+        operation = (
             "fp16-marblenet"
             if numerical
             else ("fp16-conv" if record["profile_id"] == "fp16-conv-v1" else "u8-fc")
         )
-    )
     result_re = re.compile(
         r"^EXECUTION status=PASS mode=execute-once target=wave operation="
         + operation
@@ -1333,10 +1374,8 @@ def _execute_manifest(
         + r") cleanup=0$"
     )
     policy = execution.ExecutionPolicy(
-        poc_id="18" if numerical else "17",
-        experiment="wave-npu-poc18-onnx-execute"
-        if numerical
-        else "wave-npu-poc17-onnx-execute",
+        poc_id=_poc_id(record),
+        experiment=f"wave-npu-poc{_poc_id(record)}-onnx-execute",
         manifest_path=run_dir / "execution-manifest.json",
         remote_root=root,
         remote_executable=root + "/bin/wave-npu-onnx-execute-v1",
@@ -1512,7 +1551,7 @@ def qualify_package(
             "this package already has a qualification attempt; no retry"
         )
     if (
-        package["record"]["profile_id"] == "fp16-marblenet-pad-v1"
+        package["record"]["profile_id"] in PHASE_PROFILES
         and package["compiled"] is None
     ):
         raise NativeLabError("package has no qualified native compile artifact")

@@ -61,6 +61,9 @@ controls deliberately have small outputs. Executors must keep stack usage
 bounded, prime output with half NaNs, enforce finite/readback/guard checks,
 and keep the alarm armed through teardown. NN and TP routes are candidates;
 SH/EVIS/SW/CPU neural fallback does not count as full native compatibility.
+The tensor-only20b Pool control may establish TP-only execution. Every
+Conv-containing control and the full model still require at least one NN
+route and exclusively NN/TP targets. Record the observed route faithfully.
 
 ## Numerical and performance contract
 
@@ -74,6 +77,9 @@ identical top1 and at least4/5 top5 overlap against the original FP32 result
 for each of the four frozen inputs. Record reference class margins. These
 are parity checks, not ImageNet accuracy measurement. Do not relax limits
 after observing native output.
+Independent NumPy step-rounded FP16 bytes are authoritative for native
+qualification. Actual host ORT bytes must pass the same immutable element
+policy against that oracle on every prepared control/full input before launch.
 
 After full four-input qualification, one paired benchmark may repeat the first
 image with4 warm-up and16 measured pairs, alternating FP32 CPU and FP16 native.
