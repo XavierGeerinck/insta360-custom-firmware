@@ -3931,7 +3931,6 @@ name = "waved-meeting"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "hound",
  "nix 0.29.0",
  "reqwest",
  "serde",
@@ -3945,6 +3944,7 @@ dependencies = [
  "tracing",
  "uuid",
  "waved-audio",
+ "waved-codec",
  "waved-config",
  "waved-settings",
  "waved-state",

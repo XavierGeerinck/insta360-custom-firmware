@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, watch, Notify};
 use tracing::{error, info, warn};
+use waved_codec::AudioFormat;
 use waved_config::{ApiConfig, StorageConfig};
-use waved_state::{DeviceEvent, MeetingState, UsbStorageState, WifiState};
+use waved_state::{DeviceEvent, MeetingState, SettingsState, UsbStorageState, WifiState};
 
 pub struct UploadWorker {
     pool: SqlitePool,
@@ -24,6 +25,8 @@ pub struct UploadWorker {
     /// USB storage (G1): no upload while the computer has the recordings
     /// volume. An upload then would find the file gone and mark it missing.
     usb_storage: Option<watch::Receiver<UsbStorageState>>,
+    /// The recording format, for the webhook test's audio.
+    settings: Option<watch::Receiver<SettingsState>>,
 }
 
 pub struct WorkerSettings {
@@ -53,6 +56,7 @@ impl UploadWorker {
             events_tx,
             wake,
             usb_storage: None,
+            settings: None,
         }
     }
 
@@ -60,6 +64,23 @@ impl UploadWorker {
     pub fn with_usb_storage(mut self, usb_storage: Option<watch::Receiver<UsbStorageState>>) -> Self {
         self.usb_storage = usb_storage;
         self
+    }
+
+    /// Follow the settings: the webhook test is sent in the format the next
+    /// recording will have.
+    pub fn with_settings(mut self, settings: watch::Receiver<SettingsState>) -> Self {
+        self.settings = Some(settings);
+        self
+    }
+
+    #[cfg_attr(feature = "simulate", allow(dead_code))]
+    fn test_format(&self) -> AudioFormat {
+        let format = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.borrow().recording_format)
+            .unwrap_or_default();
+        crate::recorder::audio_format(format)
     }
 
     fn recordings_away(&self) -> bool {
@@ -117,6 +138,7 @@ impl UploadWorker {
                         &self.api.auth_token,
                         &self.device_id,
                         &self.recordings_dir,
+                        self.test_format(),
                     )
                     .await;
                 #[cfg(feature = "simulate")]
@@ -143,7 +165,11 @@ impl UploadWorker {
                     }
                 };
                 self.refresh_counts().await;
-                let audio_path = PathBuf::from(&candidate.dir).join("audio.wav");
+                // Any format; none at all fails as NotFound → missing_artifact.
+                let dir = PathBuf::from(&candidate.dir);
+                let audio_path = waved_codec::find_audio(&dir)
+                    .map(|(_, path)| path)
+                    .unwrap_or_else(|| dir.join(AudioFormat::Wav.file_name()));
                 let result = {
                     #[cfg(not(feature = "simulate"))]
                     {

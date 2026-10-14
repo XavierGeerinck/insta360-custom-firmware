@@ -3,6 +3,7 @@ use reqwest::{multipart, redirect, Client, StatusCode};
 use std::path::Path;
 use tokio_util::io::ReaderStream;
 use tracing::info;
+use waved_codec::AudioFormat;
 
 const MAX_METADATA_BYTES: u64 = 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024;
@@ -57,13 +58,13 @@ impl WebhookClient {
         serde_json::from_slice::<serde_json::Value>(&metadata)
             .map_err(|error| UploadError::Configuration(format!("invalid metadata: {error}")))?;
 
-        let audio_filename = format!("{meeting_id}.wav");
+        let (audio_filename, content_type) = audio_part(meeting_id, audio_path);
         let audio_part = multipart::Part::stream_with_length(
             reqwest::Body::wrap_stream(ReaderStream::new(audio)),
             audio_length,
         )
         .file_name(audio_filename)
-        .mime_str("audio/wav")
+        .mime_str(content_type)
         .map_err(UploadError::Http)?;
         let metadata_part = multipart::Part::bytes(metadata)
             .file_name("metadata.json")
@@ -115,19 +116,36 @@ impl WebhookClient {
         }
     }
 
+    /// Send `webhook.test` with 100 ms of silence in `format`, the format
+    /// the next recording will have.
     pub async fn send_test(
         &self,
         endpoint: &str,
         auth_token: &str,
         device_id: &str,
         work_dir: &Path,
+        format: AudioFormat,
     ) -> Result<(), UploadError> {
         let test_id = uuid::Uuid::new_v4().to_string();
         let dir = work_dir.join(format!(".webhook-test-{test_id}"));
         tokio::fs::create_dir_all(&dir).await?;
-        let audio_path = dir.join("audio.wav");
+        let audio_path = dir.join(format.file_name());
         let result = async {
-            tokio::fs::write(&audio_path, silent_wav()).await?;
+            let clip = audio_path.clone();
+            tokio::task::spawn_blocking(move || write_silent_clip(format, &clip))
+                .await
+                .map_err(std::io::Error::other)??;
+            let mut audio = serde_json::json!({
+                "filename": format!("{test_id}.{}", format.extension()),
+                "content_type": format.content_type(),
+                "codec": format.codec(),
+                "sample_rate_hz": 48_000,
+                "channels": 1,
+                "bit_depth": 16
+            });
+            if let Some(bitrate) = format.bitrate_bps() {
+                audio["bitrate_bps"] = bitrate.into();
+            }
             let metadata = serde_json::json!({
                 "schema_version": 1,
                 "event": "webhook.test",
@@ -136,14 +154,7 @@ impl WebhookClient {
                     "id": device_id,
                     "software_version": env!("CARGO_PKG_VERSION")
                 },
-                "audio": {
-                    "filename": format!("{test_id}.wav"),
-                    "content_type": "audio/wav",
-                    "codec": "pcm_s16le",
-                    "sample_rate_hz": 48_000,
-                    "channels": 1,
-                    "bit_depth": 16
-                }
+                "audio": audio
             });
             tokio::fs::write(
                 dir.join("metadata.json"),
@@ -166,24 +177,24 @@ impl WebhookClient {
     }
 }
 
-fn silent_wav() -> Vec<u8> {
-    const SAMPLE_COUNT: u32 = 4_800;
-    const DATA_BYTES: u32 = SAMPLE_COUNT * 2;
-    let mut bytes = Vec::with_capacity((44 + DATA_BYTES) as usize);
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + DATA_BYTES).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16_u32.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
-    bytes.extend_from_slice(&48_000_u32.to_le_bytes());
-    bytes.extend_from_slice(&(48_000_u32 * 2).to_le_bytes());
-    bytes.extend_from_slice(&2_u16.to_le_bytes());
-    bytes.extend_from_slice(&16_u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&DATA_BYTES.to_le_bytes());
-    bytes.resize((44 + DATA_BYTES) as usize, 0);
-    bytes
+/// The `audio` part's file name and content type: `<meeting-id>.<ext>`
+/// and the MIME type of the file's format (docs/WEBHOOKS.md). A path with
+/// no known extension is sent as WAV, as everything was before 2026-10-14.
+pub fn audio_part(meeting_id: &str, audio_path: &Path) -> (String, &'static str) {
+    let format = AudioFormat::from_path(audio_path).unwrap_or(AudioFormat::Wav);
+    (
+        format!("{meeting_id}.{}", format.extension()),
+        format.content_type(),
+    )
+}
+
+/// 100 ms of silence in `format`, for the webhook test.
+fn write_silent_clip(format: AudioFormat, path: &Path) -> std::io::Result<()> {
+    const SAMPLES: usize = 4_800;
+    let mut writer = waved_codec::create_writer(format, std::fs::File::create(path)?)?;
+    writer.write(&[0; SAMPLES])?;
+    writer.finish()?;
+    Ok(())
 }
 
 fn header_value(value: &str, name: &str) -> Result<HeaderValue, UploadError> {
@@ -295,15 +306,28 @@ mod tests {
     }
 
     #[test]
-    fn test_payload_is_a_valid_pcm_wav() {
-        let bytes = silent_wav();
-        assert_eq!(&bytes[..4], b"RIFF");
-        assert_eq!(&bytes[8..12], b"WAVE");
-        assert_eq!(
-            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
-            48_000
-        );
-        assert_eq!(u16::from_le_bytes(bytes[34..36].try_into().unwrap()), 16);
-        assert_eq!(bytes.len(), 9_644);
+    fn the_test_clip_is_valid_in_each_format() {
+        for format in AudioFormat::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format.file_name());
+            write_silent_clip(format, &path).unwrap();
+            let mut reader = waved_codec::open_reader(format, &path).unwrap();
+            assert_eq!(reader.total_samples(), 4_800, "{format:?}");
+            let samples = waved_codec::read_to_end(reader.as_mut()).unwrap();
+            assert!(samples.iter().all(|&sample| sample.abs() < 8), "{format:?} is silent");
+        }
+    }
+
+    #[test]
+    fn the_audio_part_follows_the_file_format() {
+        let id = "21b17c4c-7390-4d52-8cbf-477fab102bc0";
+        for (path, filename, content_type) in [
+            ("/r/x/audio.opus", format!("{id}.opus"), "audio/ogg; codecs=opus"),
+            ("/r/x/audio.flac", format!("{id}.flac"), "audio/flac"),
+            ("/r/x/audio.wav", format!("{id}.wav"), "audio/wav"),
+            ("/r/x/audio", format!("{id}.wav"), "audio/wav"),
+        ] {
+            assert_eq!(audio_part(id, Path::new(path)), (filename, content_type), "{path}");
+        }
     }
 }

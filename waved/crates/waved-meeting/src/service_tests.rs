@@ -5,9 +5,10 @@
 use super::*;
 use std::time::Duration;
 use waved_audio::integrity::{IntegritySignal, RecordingIntegrity};
+use waved_codec::AudioFormat;
 use waved_state::{
-    AudioMode, AudioState, FilesState, SettingsState, UploadMode, UsbStoragePhase,
-    UsbStorageState, WifiState,
+    AudioMode, AudioState, FilesState, RecordingFormat, SettingsState, UploadMode,
+    UsbStoragePhase, UsbStorageState, WifiState,
 };
 
 pub(crate) fn quiet_config(upload_mode: UploadMode) -> WavedConfig {
@@ -242,11 +243,42 @@ impl Rig {
             .unwrap()
     }
 
-    pub fn wav_samples(&self, id: Uuid) -> u32 {
-        hound::WavReader::open(self.dir(id).join("audio.wav"))
+    /// Samples in a take's finalized audio, whatever its format.
+    pub fn audio_samples(&self, id: Uuid) -> u32 {
+        waved_codec::open_audio(&self.dir(id))
             .unwrap()
-            .duration()
+            .total_samples() as u32
     }
+
+    pub fn audio_format(&self, id: Uuid) -> Option<AudioFormat> {
+        waved_codec::find_audio(&self.dir(id)).map(|(format, _)| format)
+    }
+}
+
+#[tokio::test]
+async fn each_take_has_the_format_set_when_it_started() {
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    let first = rig.start().await;
+    rig.feed(20, 0.1).await;
+    // Changed during the take: the take keeps its format.
+    rig.settings.send_modify(|s| s.recording_format = RecordingFormat::Flac);
+    rig.feed(20, 0.1).await;
+    rig.stop().await;
+    assert_eq!(rig.audio_format(first), Some(AudioFormat::Opus), "the default");
+    assert_eq!(rig.audio_samples(first), 40 * 480);
+    let metadata = rig.metadata(first);
+    assert_eq!(metadata.audio.codec, "opus");
+    assert_eq!(metadata.audio.filename, format!("{first}.opus"));
+    assert_eq!(metadata.audio.bitrate_bps, Some(32_000));
+    assert_eq!(metadata.recording.audio_duration_ms, 400);
+
+    let second = rig.start().await;
+    rig.feed(10, 0.1).await;
+    rig.stop().await;
+    assert_eq!(rig.audio_format(second), Some(AudioFormat::Flac), "the next take");
+    assert_eq!(rig.audio_samples(second), 10 * 480);
+    assert_eq!(rig.metadata(second).audio.content_type, "audio/flac");
+    assert_eq!(rig.status(second).await.as_deref(), Some("local_only"));
 }
 
 #[tokio::test]
@@ -294,7 +326,7 @@ async fn pre_roll_follows_the_setting() {
     rig.feed(20, 0.25).await;
     rig.stop().await;
     assert_eq!(rig.metadata(first).recording.pre_roll_duration_ms, 500);
-    assert_eq!(rig.wav_samples(first), 70 * 480);
+    assert_eq!(rig.audio_samples(first), 70 * 480);
 
     // Off right before Record: the buffer is dropped and stays empty.
     rig.feed(50, 0.5).await;
@@ -304,7 +336,7 @@ async fn pre_roll_follows_the_setting() {
     rig.feed(20, 0.25).await;
     rig.stop().await;
     assert_eq!(rig.metadata(second).recording.pre_roll_duration_ms, 0);
-    assert_eq!(rig.wav_samples(second), 20 * 480);
+    assert_eq!(rig.audio_samples(second), 20 * 480);
 }
 
 /// The setting change and Record are both ready when the service looks, and
@@ -331,7 +363,7 @@ async fn pre_roll_off_then_record_back_to_back_never_splices_old_audio() {
             0,
             "round {round}"
         );
-        assert_eq!(rig.wav_samples(id), 5 * 480, "round {round}");
+        assert_eq!(rig.audio_samples(id), 5 * 480, "round {round}");
     }
 }
 
@@ -394,7 +426,7 @@ async fn pause_and_resume_cut_the_paused_audio_and_freeze_the_timer() {
     rig.wait_for("resumed", |s| !s.paused).await;
     rig.feed(100, 0.75).await;
     rig.stop().await;
-    assert_eq!(rig.wav_samples(id), 200 * 480);
+    assert_eq!(rig.audio_samples(id), 200 * 480);
     let pauses = rig.metadata(id).recording.pauses;
     assert_eq!(pauses.len(), 1);
     assert_eq!(pauses[0].offset_ms, 1_000);
@@ -486,13 +518,10 @@ async fn a_drop_before_the_pause_still_ends_the_take() {
     rig.wait_status(id, Some("artifact_error")).await;
 }
 
-/// All samples of a take's WAV, as written.
-fn wav_values(rig: &Rig, id: Uuid) -> Vec<i16> {
-    hound::WavReader::open(rig.dir(id).join("audio.wav"))
-        .unwrap()
-        .samples::<i16>()
-        .map(Result::unwrap)
-        .collect()
+/// All samples of a take, decoded. Compare values only on lossless takes.
+fn audio_values(rig: &Rig, id: Uuid) -> Vec<i16> {
+    let mut reader = waved_codec::open_audio(&rig.dir(id)).unwrap();
+    waved_codec::read_to_end(reader.as_mut()).unwrap()
 }
 
 /// Frames still queued when Resume is handled were captured during the
@@ -502,7 +531,12 @@ fn wav_values(rig: &Rig, id: Uuid) -> Vec<i16> {
 /// are all ready at once; ten rounds make the old orders show up.
 #[tokio::test]
 async fn frames_and_drops_queued_at_resume_stay_in_the_pause() {
-    let rig = start_rig(quiet_config(UploadMode::LocalOnly), no_pre_roll(UploadMode::LocalOnly)).await;
+    // FLAC: lossless, so a value from a pause would show.
+    let settings = SettingsState {
+        recording_format: RecordingFormat::Flac,
+        ..no_pre_roll(UploadMode::LocalOnly)
+    };
+    let rig = start_rig(quiet_config(UploadMode::LocalOnly), settings).await;
     let id = rig.start().await;
     rig.feed(10, 0.25).await;
     for round in 0..10 {
@@ -520,7 +554,7 @@ async fn frames_and_drops_queued_at_resume_stay_in_the_pause() {
     }
     rig.stop().await;
     assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
-    let values = wav_values(&rig, id);
+    let values = audio_values(&rig, id);
     assert_eq!(values.len(), 110 * 480, "only the frames from outside the pauses");
     assert!(
         values.iter().all(|&v| v == values[0]),
@@ -562,7 +596,7 @@ async fn frames_queued_at_pause_are_written() {
     }
     rig.stop().await;
     assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
-    assert_eq!(rig.wav_samples(id), 200 * 480);
+    assert_eq!(rig.audio_samples(id), 200 * 480);
     assert_eq!(rig.metadata(id).recording.pauses.len(), 10);
 }
 
@@ -578,7 +612,7 @@ async fn repeated_pause_and_stray_resume_are_no_ops() {
     rig.feed(10, 0.25).await;
     assert!(!rig.meeting.borrow().paused);
     rig.stop().await;
-    assert_eq!(rig.wav_samples(first), 20 * 480);
+    assert_eq!(rig.audio_samples(first), 20 * 480);
     assert!(rig.metadata(first).recording.pauses.is_empty());
     assert_eq!(rig.status(first).await.as_deref(), Some("local_only"));
 
@@ -597,7 +631,7 @@ async fn repeated_pause_and_stray_resume_are_no_ops() {
     rig.wait_for("resumed", |s| !s.paused).await;
     rig.feed(10, 0.25).await;
     rig.stop().await;
-    assert_eq!(rig.wav_samples(second), 20 * 480);
+    assert_eq!(rig.audio_samples(second), 20 * 480);
     let pauses = rig.metadata(second).recording.pauses;
     assert_eq!(pauses.len(), 1, "{pauses:?}");
     assert_eq!(pauses[0].offset_ms, 100);
@@ -630,7 +664,7 @@ async fn stop_while_paused_with_a_queued_drop_keeps_the_take() {
             .unwrap();
         rig.stop().await;
         assert_eq!(rig.status(id).await.as_deref(), Some("local_only"), "round {round}");
-        assert_eq!(rig.wav_samples(id), 10 * 480, "round {round}");
+        assert_eq!(rig.audio_samples(id), 10 * 480, "round {round}");
         let pauses = rig.metadata(id).recording.pauses;
         assert_eq!(pauses.len(), 1, "round {round}: {pauses:?}");
         assert_eq!(pauses[0].offset_ms, 100, "round {round}");
@@ -650,7 +684,7 @@ async fn stop_while_paused_after_an_unsignalled_drop_keeps_the_take() {
     rig.integrity.record_fault(RecordingIntegrityFault::ProcessedFrameDropped);
     rig.stop().await;
     assert_eq!(rig.status(id).await.as_deref(), Some("local_only"));
-    assert_eq!(rig.wav_samples(id), 10 * 480);
+    assert_eq!(rig.audio_samples(id), 10 * 480);
     let pauses = rig.metadata(id).recording.pauses;
     assert_eq!(pauses.len(), 1, "{pauses:?}");
     assert!(pauses[0].duration_ms > 0, "{pauses:?}");
@@ -932,7 +966,7 @@ async fn delete_is_refused_while_uploading() {
     db::set_status(&rig.pool().await, &id, MeetingStatus::Uploading).await.unwrap();
     rig.send(Command::DeleteRecording(id));
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(rig.dir(id).join("audio.wav").exists());
+    assert!(rig.audio_format(id).is_some());
     assert_eq!(rig.status(id).await.as_deref(), Some("uploading"));
 }
 
@@ -1051,7 +1085,7 @@ async fn deleting_another_recording_keeps_the_running_take() {
     rig.feed(5, 0.4).await;
     rig.stop().await;
     assert_eq!(rig.status(take).await.as_deref(), Some("local_only"));
-    assert_eq!(rig.wav_samples(take), 35 * 480);
+    assert_eq!(rig.audio_samples(take), 35 * 480);
 }
 
 /// A Delete of the pending take that fails after its claim still answers
@@ -1172,7 +1206,7 @@ async fn a_discard_whose_claim_fails_is_still_never_kept() {
     }
     let trash = rig.recordings_dir.join(format!("{}{id}", removal::DELETED_PREFIX));
     assert!(!rig.dir(id).exists(), "files moved aside before the answer");
-    assert!(trash.join("audio.wav").exists());
+    assert!(waved_codec::find_audio(&trash).is_some());
     // Read through the lock holder: the claim never landed.
     let (status,): (String,) = sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
         .bind(id.to_string())
@@ -1404,7 +1438,7 @@ async fn a_stuck_files_refresh_never_holds_up_the_take() {
     rig.feed(50, 0.2).await;
     rig.stop().await;
     assert_eq!(rig.status(take).await.as_deref(), Some("local_only"));
-    assert_eq!(rig.wav_samples(take), 60 * 480);
+    assert_eq!(rig.audio_samples(take), 60 * 480);
 }
 
 #[tokio::test]

@@ -22,8 +22,9 @@ docker run --rm \
   -e RUSTC_WRAPPER= \
   "$IMAGE" bash -c '
     set -euo pipefail
-    if ! dpkg -s libclang-dev libasound2-dev >/dev/null 2>&1; then
-      apt-get update -qq && apt-get install -y -qq libclang-dev libasound2-dev pkg-config >/dev/null
+    # cmake: waved-codec builds libopus from source (opusic-sys).
+    if ! dpkg -s libclang-dev libasound2-dev cmake >/dev/null 2>&1; then
+      apt-get update -qq && apt-get install -y -qq libclang-dev libasound2-dev pkg-config cmake >/dev/null
     fi
     # rust-toolchain.toml pins "stable"; the waved-rustup volume keeps it (and
     # clippy) between --rm runs instead of downloading ~600 MB each time.

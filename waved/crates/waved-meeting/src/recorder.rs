@@ -1,10 +1,15 @@
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::BufWriter;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::fs;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
+use waved_codec::{create_writer, AudioFormat, RecordingWriter};
+use waved_state::RecordingFormat;
 
 /// Seconds of pre-record audio kept in [`PreBuffer`] during idle.
 /// Bumping this is a one-line change; see the design doc for the memory tradeoff.
@@ -97,7 +102,95 @@ impl PreBuffer {
     }
 }
 
-pub const RECORDING_SAMPLE_RATE: u32 = 48_000;
+pub const RECORDING_SAMPLE_RATE: u32 = waved_codec::SAMPLE_RATE;
+
+/// The file format of a new take with this setting.
+pub fn audio_format(format: RecordingFormat) -> AudioFormat {
+    match format {
+        RecordingFormat::Opus => AudioFormat::Opus,
+        RecordingFormat::Flac => AudioFormat::Flac,
+    }
+}
+
+/// Hours of recording `free_bytes` holds in `format`, for the start log
+/// (there is no "time left" display).
+pub fn hours_left(free_bytes: u64, format: AudioFormat) -> f64 {
+    free_bytes as f64 / format.estimated_bytes_per_hour() as f64
+}
+
+/// A backlog (the pre-roll spliced in at Record) drains at this many times
+/// the audio arriving: each append encodes its own samples plus twice as
+/// many from the backlog. On an A55 that keeps encoding under ~a third of
+/// each frame's time; 30 s of pre-roll is on disk ~15 s after Record.
+const CATCH_UP_FACTOR: usize = 2;
+/// Pre-roll written at once by `append_pre_roll` (100 ms), so a medium that
+/// cannot be written fails the start, as with WAV.
+const PRE_ROLL_FIRST_WRITE: usize = 4_800;
+/// How often the take's file is pushed to the medium (fdatasync), off the
+/// meeting task. A power cut loses at most this plus the writer's last
+/// second.
+const SYNC_INTERVAL: Duration = Duration::from_secs(2);
+
+fn to_i16(sample: f32) -> i16 {
+    (sample * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
+/// Calls `fdatasync` on the take's file every [`SYNC_INTERVAL`] from its own
+/// thread, so the meeting task never waits on flash. A failure is kept and
+/// fails the next write: storage that cannot be synced is not trusted.
+struct Syncer {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    failure: Arc<Mutex<Option<io::Error>>>,
+}
+
+impl Syncer {
+    fn start(file: File, interval: Duration) -> io::Result<Self> {
+        let (stop, stopped) = mpsc::channel::<()>();
+        let failure = Arc::new(Mutex::new(None));
+        let failed = Arc::clone(&failure);
+        let thread = std::thread::Builder::new()
+            .name("recording-sync".into())
+            .spawn(move || loop {
+                match stopped.recv_timeout(interval) {
+                    Err(RecvTimeoutError::Timeout) => {
+                        if let Err(error) = file.sync_data() {
+                            *failed
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+                            return;
+                        }
+                    }
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+                }
+            })?;
+        Ok(Self {
+            stop: Some(stop),
+            thread: Some(thread),
+            failure,
+        })
+    }
+
+    fn failure(&self) -> Option<io::Error> {
+        self.failure
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+
+    fn stop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Syncer {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
 
 /// One pause in a take. `offset_ms` is where the pause began on the
 /// recording timeline (pre-roll excluded, like bookmark offsets);
@@ -116,16 +209,25 @@ pub struct ActiveRecording {
     pub audio_mode: String,
     pub started_at: Option<String>,
     pub clock_synchronized: bool,
+    format: AudioFormat,
     integrity_epoch: u64,
+    /// Samples taken into the take (the timer); `written` of them are in
+    /// the encoder, the rest wait in `backlog`.
     total_samples: u64,
     pre_roll_samples: u64,
     pauses: Vec<PauseSpan>,
     /// Set while paused: when the pause began and its recording-timeline offset.
     paused_since: Option<(std::time::Instant, u64)>,
-    /// Open WAV writer. `Some` while recording, `None` once finalized.
-    /// We keep the writer hot so each `ProcessedAudioFrame` appends with
-    /// no per-frame open/seek overhead.
-    writer: Option<hound::WavWriter<BufWriter<File>>>,
+    /// The take's encoder. `Some` while recording, `None` once finalized.
+    /// Kept hot so each `ProcessedAudioFrame` appends with no per-frame
+    /// open/seek overhead; it encodes on the meeting task.
+    writer: Option<Box<dyn RecordingWriter>>,
+    /// Samples taken but not encoded yet: the pre-roll, draining.
+    backlog: VecDeque<i16>,
+    written: u64,
+    /// A write failed: the writer is not trusted with the backlog any more.
+    write_failed: bool,
+    syncer: Option<Syncer>,
     #[cfg(test)]
     fail_writes_after_samples: Option<u64>,
 }
@@ -133,6 +235,7 @@ pub struct ActiveRecording {
 pub struct FinalizedRecording {
     pub id: Uuid,
     pub dir: PathBuf,
+    pub format: AudioFormat,
     pub audio_path: PathBuf,
     pub audio_mode: String,
     pub started_at: Option<String>,
@@ -158,34 +261,38 @@ impl FinalizedRecording {
 }
 
 impl ActiveRecording {
-    pub async fn start(base_dir: &Path, audio_mode: &str) -> std::io::Result<Self> {
-        Self::start_with_integrity_epoch(base_dir, audio_mode, 0).await
+    pub async fn start(
+        base_dir: &Path,
+        audio_mode: &str,
+        format: AudioFormat,
+    ) -> std::io::Result<Self> {
+        Self::start_with_integrity_epoch(base_dir, audio_mode, 0, format).await
     }
 
     pub async fn start_with_integrity_epoch(
         base_dir: &Path,
         audio_mode: &str,
         integrity_epoch: u64,
+        format: AudioFormat,
     ) -> std::io::Result<Self> {
         let id = Uuid::new_v4();
         let dir = base_dir.join(id.to_string());
         fs::create_dir_all(&dir).await?;
 
-        // Create the WAV file synchronously — `hound::WavWriter` is sync, and
-        // open is cheap (one ~44-byte header write). The hot path is
-        // `append_samples`, also sync. 16-bit PCM: the capture/AEC pipeline is
-        // 16-bit (see docs/AUDIO_HARDWARE.md "Recording bit depth"), so a wider
-        // sample format would carry no extra resolution.
-        let wav_path = dir.join("audio.wav.partial");
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: RECORDING_SAMPLE_RATE,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let writer = hound::WavWriter::create(&wav_path, spec).map_err(std::io::Error::other)?;
+        // Create the file synchronously: opening it and writing the stream
+        // header is cheap; the hot path is `append_samples`, also sync.
+        // 16-bit PCM in: the capture/AEC pipeline is 16-bit (see
+        // docs/AUDIO_HARDWARE.md "Recording bit depth").
+        let file = File::create(dir.join(format.partial_file_name()))?;
+        let sync_handle = file.try_clone()?;
+        let writer = create_writer(format, file)?;
+        let syncer = Syncer::start(sync_handle, SYNC_INTERVAL)?;
 
-        info!("recording started: {} at {}", id, dir.display());
+        info!(
+            "recording started: {} at {} ({format:?})",
+            id,
+            dir.display()
+        );
         let now = chrono::Utc::now();
         let clock_synchronized = now.timestamp() >= 1_577_836_800;
         Ok(Self {
@@ -194,15 +301,24 @@ impl ActiveRecording {
             audio_mode: audio_mode.to_string(),
             started_at: clock_synchronized.then(|| now.to_rfc3339()),
             clock_synchronized,
+            format,
             integrity_epoch,
             total_samples: 0,
             pre_roll_samples: 0,
             pauses: Vec::new(),
             paused_since: None,
             writer: Some(writer),
+            backlog: VecDeque::new(),
+            written: 0,
+            write_failed: false,
+            syncer: Some(syncer),
             #[cfg(test)]
             fail_writes_after_samples: None,
         })
+    }
+
+    pub fn format(&self) -> AudioFormat {
+        self.format
     }
 
     pub fn duration_secs(&self) -> u32 {
@@ -241,12 +357,14 @@ impl ActiveRecording {
         true
     }
 
+    /// The finalized file: `audio.<ext>`.
     pub fn audio_path(&self) -> PathBuf {
-        self.dir.join("audio.wav")
+        self.dir.join(self.format.file_name())
     }
 
+    /// The file while recording, and after an interruption.
     pub fn partial_audio_path(&self) -> PathBuf {
-        self.dir.join("audio.wav.partial")
+        self.dir.join(self.format.partial_file_name())
     }
 
     pub fn integrity_epoch(&self) -> u64 {
@@ -258,45 +376,81 @@ impl ActiveRecording {
         self.integrity_epoch = epoch;
     }
 
+    /// Splice the pre-roll in front of the take. It joins the backlog and
+    /// drains with the frames that follow; the first 100 ms are written now.
     pub fn append_pre_roll(&mut self, samples: &[f32]) -> std::io::Result<u64> {
-        let written = self.append_samples_inner(samples)?;
-        self.pre_roll_samples = self.pre_roll_samples.saturating_add(written);
-        Ok(written)
+        let accepted = self.accept(samples);
+        self.pre_roll_samples = self.pre_roll_samples.saturating_add(accepted);
+        self.drain(PRE_ROLL_FIRST_WRITE)?;
+        Ok(accepted)
     }
 
-    /// Append a block of f32 mono samples in [-1.0, 1.0], saturating to S16.
-    /// Any write error is returned so the meeting service can fail the take
-    /// closed and preserve the partial WAV for diagnosis.
+    /// Append a block of f32 mono samples in [-1.0, 1.0], saturating to S16,
+    /// and encode it with up to twice as many backlog samples. Any write
+    /// error is returned so the meeting service can fail the take closed and
+    /// preserve the partial file for diagnosis.
     pub fn append_samples(&mut self, samples: &[f32]) -> std::io::Result<u64> {
         if self.is_paused() {
-            // Paused audio never reaches the file (C1).
+            // Paused audio never reaches the file (C1); a backlog still drains.
+            self.drain(samples.len() * CATCH_UP_FACTOR)?;
             return Ok(0);
         }
-        self.append_samples_inner(samples)
+        let accepted = self.accept(samples);
+        self.drain(samples.len() * (1 + CATCH_UP_FACTOR))?;
+        Ok(accepted)
     }
 
-    fn append_samples_inner(&mut self, samples: &[f32]) -> std::io::Result<u64> {
+    fn accept(&mut self, samples: &[f32]) -> u64 {
+        self.backlog
+            .extend(samples.iter().map(|&sample| to_i16(sample)));
+        self.total_samples = self.total_samples.saturating_add(samples.len() as u64);
+        samples.len() as u64
+    }
+
+    /// Encode up to `budget` backlog samples, oldest first.
+    fn drain(&mut self, budget: usize) -> std::io::Result<()> {
+        if let Some(error) = self.syncer.as_ref().and_then(Syncer::failure) {
+            self.write_failed = true;
+            return Err(error);
+        }
+        let wanted = budget.min(self.backlog.len());
+        if wanted == 0 {
+            return Ok(());
+        }
+        // Tests stop writing after a set number of samples and fail.
         #[cfg(test)]
-        let fail_after_samples = self.fail_writes_after_samples;
+        let (count, injected) = match self.fail_writes_after_samples {
+            Some(limit) if (limit.saturating_sub(self.written) as usize) < wanted => {
+                (limit.saturating_sub(self.written) as usize, true)
+            }
+            _ => (wanted, false),
+        };
+        #[cfg(not(test))]
+        let count = wanted;
         let Some(writer) = self.writer.as_mut() else {
             return Err(std::io::Error::other("recording writer unavailable"));
         };
-        let mut written = 0_u64;
-        for &s in samples {
-            #[cfg(test)]
-            if fail_after_samples.is_some_and(|limit| self.total_samples + written >= limit) {
-                self.total_samples = self.total_samples.saturating_add(written);
-                return Err(std::io::Error::other("injected wav write failure"));
-            }
-            let clamped = (s * 32768.0).clamp(i16::MIN as f32, i16::MAX as f32);
-            if let Err(error) = writer.write_sample(clamped as i16) {
-                self.total_samples = self.total_samples.saturating_add(written);
-                return Err(std::io::Error::other(error));
-            }
-            written += 1;
+        let (front, back) = self.backlog.as_slices();
+        let from_front = count.min(front.len());
+        let result = writer
+            .write(&front[..from_front])
+            .and_then(|()| writer.write(&back[..count - from_front]));
+        if let Err(error) = result {
+            self.write_failed = true;
+            return Err(error);
         }
-        self.total_samples = self.total_samples.saturating_add(written);
-        Ok(written)
+        self.backlog.drain(..count);
+        self.written += count as u64;
+        #[cfg(test)]
+        if injected {
+            self.write_failed = true;
+            return Err(std::io::Error::other("injected recording write failure"));
+        }
+        Ok(())
+    }
+
+    fn drain_all(&mut self) -> std::io::Result<()> {
+        self.drain(self.backlog.len())
     }
 
     #[cfg(test)]
@@ -304,34 +458,58 @@ impl ActiveRecording {
         self.fail_writes_after_samples = Some(samples);
     }
 
+    #[cfg(test)]
+    pub(crate) fn backlog_len(&self) -> usize {
+        self.backlog.len()
+    }
+
+    /// Write what is still waiting (unless writing already failed), close
+    /// the stream and stop syncing. The first error wins.
+    fn close(&mut self) -> std::io::Result<()> {
+        let mut first_error = None;
+        if !self.write_failed {
+            first_error = self.drain_all().err();
+        }
+        match self.writer.take() {
+            Some(mut writer) => {
+                if let Err(error) = writer.finish() {
+                    first_error.get_or_insert(error);
+                }
+            }
+            None => {
+                first_error.get_or_insert(std::io::Error::other("recording already closed"));
+            }
+        }
+        if let Some(mut syncer) = self.syncer.take() {
+            syncer.stop();
+            if let Some(error) = syncer.failure() {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
     /// Make an interrupted take inspectable without exposing it as a complete
-    /// or uploadable artifact.
+    /// or uploadable artifact: the stream is closed (a playable file) under
+    /// its `.partial` name.
     pub fn abort(mut self) -> std::io::Result<PathBuf> {
-        let writer = self
-            .writer
-            .take()
-            .ok_or_else(|| std::io::Error::other("recording already closed"))?;
-        let finalize_error = writer.finalize().err().map(std::io::Error::other);
+        let close_error = self.close().err();
         let partial = self.partial_audio_path();
         let file_sync_error = File::open(&partial).and_then(|file| file.sync_all()).err();
         let dir_sync_error = File::open(&self.dir).and_then(|dir| dir.sync_all()).err();
-        if let Some(error) = finalize_error.or(file_sync_error).or(dir_sync_error) {
+        if let Some(error) = close_error.or(file_sync_error).or(dir_sync_error) {
             return Err(error);
         }
         Ok(partial)
     }
 
-    /// Close and sync the WAV, then atomically expose it as `audio.wav`.
+    /// Close and sync the file, then atomically expose it as `audio.<ext>`.
     pub fn finalize(mut self) -> std::io::Result<FinalizedRecording> {
         if self.is_paused() {
             // Stop while paused: close the span at the moment of Stop.
             self.resume_at(std::time::Instant::now());
         }
-        let writer = self
-            .writer
-            .take()
-            .ok_or_else(|| std::io::Error::other("recording already finalized"))?;
-        writer.finalize().map_err(std::io::Error::other)?;
+        self.close()?;
 
         let partial = self.partial_audio_path();
         let final_path = self.audio_path();
@@ -342,6 +520,7 @@ impl ActiveRecording {
         Ok(FinalizedRecording {
             id: self.id,
             dir: self.dir.clone(),
+            format: self.format,
             audio_path: final_path,
             audio_mode: self.audio_mode.clone(),
             started_at: self.started_at.clone(),
@@ -356,11 +535,11 @@ impl ActiveRecording {
 
 impl Drop for ActiveRecording {
     fn drop(&mut self) {
-        // Safety net: make an interrupted partial WAV inspectable, but never
+        // Safety net: make an interrupted partial file inspectable, but never
         // rename it to the finalized filename or make it uploadable.
-        if let Some(writer) = self.writer.take() {
-            if let Err(error) = writer.finalize() {
-                tracing::warn!("partial wav finalize error: {error}");
+        if self.writer.is_some() {
+            if let Err(error) = self.close() {
+                warn!("partial recording close error: {error}");
             }
         }
     }
@@ -373,40 +552,148 @@ fn samples_to_ms(samples: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use waved_codec::testsignal::{snr_db, speech_like};
+    use waved_codec::{open_reader, read_to_end};
 
-    #[tokio::test]
-    async fn active_recording_creates_only_a_partial_wav() {
-        let dir = tempfile::tempdir().unwrap();
-        let rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+    fn decoded(format: AudioFormat, path: &Path) -> Vec<i16> {
+        let mut reader = open_reader(format, path).unwrap();
+        read_to_end(reader.as_mut()).unwrap()
+    }
 
-        assert!(rec.dir.exists());
-        assert!(rec.dir.join("audio.wav.partial").exists());
-        assert!(!rec.dir.join("audio.wav").exists());
-        assert!(!rec.dir.join("metadata.json").exists());
+    fn finalized_samples(finalized: &FinalizedRecording) -> Vec<i16> {
+        decoded(finalized.format, &finalized.audio_path)
+    }
+
+    /// Speech-like audio as the f32 the pipeline delivers; `to_i16` gives
+    /// back exactly the i16 it came from.
+    fn speech_f32(seconds: f64, seed: u64) -> (Vec<f32>, Vec<i16>) {
+        let samples = speech_like(seconds, seed);
+        let f32s = samples.iter().map(|&s| f32::from(s) / 32768.0).collect();
+        (f32s, samples)
+    }
+
+    #[test]
+    fn each_setting_records_its_format() {
+        assert_eq!(audio_format(RecordingFormat::Opus), AudioFormat::Opus);
+        assert_eq!(audio_format(RecordingFormat::Flac), AudioFormat::Flac);
+    }
+
+    #[test]
+    fn hours_left_uses_the_format_byte_rate() {
+        let free = 12_000_000_000;
+        assert!(hours_left(free, AudioFormat::Opus) > 800.0);
+        assert!((hours_left(free, AudioFormat::Wav) - 34.7).abs() < 0.1);
+        assert!(hours_left(free, AudioFormat::Flac) > hours_left(free, AudioFormat::Wav));
     }
 
     #[tokio::test]
-    async fn audio_path_returns_correct_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
-        assert_eq!(rec.audio_path(), rec.dir.join("audio.wav"));
+    async fn active_recording_creates_only_a_partial_file() {
+        for format in AudioFormat::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let rec = ActiveRecording::start(dir.path(), "Omni", format)
+                .await
+                .unwrap();
+            assert_eq!(rec.format(), format);
+            assert!(rec.dir.join(format.partial_file_name()).exists());
+            assert!(!rec.dir.join(format.file_name()).exists());
+            assert!(!rec.dir.join("metadata.json").exists());
+            assert_eq!(rec.audio_path(), rec.dir.join(format.file_name()));
+            assert_eq!(
+                rec.partial_audio_path(),
+                rec.dir.join(format.partial_file_name())
+            );
+        }
     }
 
     #[tokio::test]
-    async fn append_then_finalize_produces_readable_wav() {
+    async fn every_format_plays_the_take_back_at_its_exact_length() {
+        let (input, samples) = speech_f32(3.0, 1);
+        for format in AudioFormat::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let mut rec = ActiveRecording::start(dir.path(), "Omni", format)
+                .await
+                .unwrap();
+            rec.append_pre_roll(&input[..48_000]).unwrap();
+            for frame in input[48_000..].chunks(480) {
+                rec.append_samples(frame).unwrap();
+            }
+            let finalized = rec.finalize().unwrap();
+            assert_eq!(finalized.format, format);
+            assert_eq!(finalized.audio_path, finalized.dir.join(format.file_name()));
+            assert!(!finalized.dir.join(format.partial_file_name()).exists());
+            assert_eq!(finalized.total_samples, 144_000);
+            assert_eq!(finalized.pre_roll_samples, 48_000);
+            assert_eq!(
+                finalized.size_bytes,
+                std::fs::metadata(&finalized.audio_path).unwrap().len()
+            );
+            let back = finalized_samples(&finalized);
+            assert_eq!(back.len(), samples.len(), "{format:?}");
+            match format {
+                AudioFormat::Opus => assert!(snr_db(&samples, &back) > 8.0),
+                AudioFormat::Wav | AudioFormat::Flac => assert_eq!(back, samples, "{format:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_killed_take_keeps_what_reached_the_file() {
+        // kill -9 leaves exactly what the process handed to the OS: read the
+        // partial while the take is still open.
+        let (input, samples) = speech_f32(3.0, 2);
+        for format in [AudioFormat::Opus, AudioFormat::Flac] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut rec = ActiveRecording::start(dir.path(), "Omni", format)
+                .await
+                .unwrap();
+            for frame in input.chunks(480) {
+                rec.append_samples(frame).unwrap();
+            }
+            let partial = rec.partial_audio_path();
+            let back = decoded(format, &partial);
+            assert!(
+                back.len() >= 91_000,
+                "{format:?}: {} samples survive a kill after 3 s",
+                back.len()
+            );
+            if format == AudioFormat::Flac {
+                assert_eq!(back, samples[..back.len()]);
+            }
+            drop(rec);
+            assert_eq!(
+                decoded(format, &partial).len(),
+                samples.len(),
+                "closed on drop"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pre_roll_drains_with_the_frames_that_follow() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
-        // 100 ms of silence
-        let n = (RECORDING_SAMPLE_RATE / 10) as usize;
-        let zeros = vec![0.0f32; n];
-        rec.append_samples(&zeros).unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni", AudioFormat::Opus)
+            .await
+            .unwrap();
+        let (input, _) = speech_f32(31.0, 3);
+        rec.append_pre_roll(&input[..1_440_000]).unwrap();
+        assert_eq!(
+            rec.backlog_len(),
+            1_440_000 - 4_800,
+            "only 100 ms written at once"
+        );
+        for frame in input[1_440_000..].chunks(480) {
+            rec.append_samples(frame).unwrap();
+        }
+        // 100 frames of 10 ms, each taking two frames' worth off the backlog.
+        assert_eq!(rec.backlog_len(), 1_440_000 - 4_800 - 100 * 960);
+        assert_eq!(
+            rec.duration_secs(),
+            1,
+            "the timer counts the take, not the file"
+        );
         let finalized = rec.finalize().unwrap();
-
-        let reader = hound::WavReader::open(finalized.audio_path).unwrap();
-        assert_eq!(reader.spec().sample_rate, 48_000);
-        assert_eq!(reader.spec().channels, 1);
-        assert_eq!(reader.spec().bits_per_sample, 16);
-        assert_eq!(reader.duration() as usize, n);
+        assert_eq!(finalized.total_samples, 1_488_000);
+        assert_eq!(finalized_samples(&finalized).len(), 1_488_000);
     }
 
     #[test]
@@ -477,7 +764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prebuffer_splice_then_live_produces_correct_wav() {
+    async fn prebuffer_splice_then_live_produces_correct_audio() {
         // PreBuffer capacity of 2 s @ 48 kHz mono = 96_000 samples.
         let mut pb = PreBuffer::new(2, RECORDING_SAMPLE_RATE, 1);
 
@@ -487,19 +774,16 @@ mod tests {
         assert_eq!(pb.len(), 2 * RECORDING_SAMPLE_RATE as usize);
 
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test", AudioFormat::Flac)
+            .await
+            .unwrap();
 
         // Splice prebuffer prefix, then write 1 s of live audio at 0.75.
         rec.append_pre_roll(&pb.drain_all()).unwrap();
         rec.append_samples(&vec![0.75_f32; RECORDING_SAMPLE_RATE as usize])
             .unwrap();
         let finalized = rec.finalize().unwrap();
-
-        let mut reader = hound::WavReader::open(finalized.audio_path).unwrap();
-        let samples: Vec<i16> = reader
-            .samples::<i16>()
-            .collect::<Result<_, _>>()
-            .expect("wav decode");
+        let samples = finalized_samples(&finalized);
 
         let prefix_len = 2 * RECORDING_SAMPLE_RATE as usize; // 96_000
         let live_len = RECORDING_SAMPLE_RATE as usize; // 48_000
@@ -533,17 +817,14 @@ mod tests {
         pb.push(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize]); // 1 s
 
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test", AudioFormat::Flac)
+            .await
+            .unwrap();
         rec.append_pre_roll(&pb.drain_all()).unwrap();
         rec.append_samples(&vec![0.5_f32; RECORDING_SAMPLE_RATE as usize])
             .unwrap(); // 1 s live
         let finalized = rec.finalize().unwrap();
-
-        let mut reader = hound::WavReader::open(finalized.audio_path).unwrap();
-        let samples: Vec<i16> = reader
-            .samples::<i16>()
-            .collect::<Result<_, _>>()
-            .expect("wav decode");
+        let samples = finalized_samples(&finalized);
 
         // 1 s prefix + 1 s live = 2 s total. No padding, no duplication.
         assert_eq!(samples.len(), 2 * RECORDING_SAMPLE_RATE as usize);
@@ -552,36 +833,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn injected_write_failure_is_reported_and_abort_preserves_partial_wav() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start_with_integrity_epoch(dir.path(), "Test", 7)
-            .await
-            .unwrap();
-        rec.fail_writes_after(2);
+    async fn injected_write_failure_is_reported_and_abort_preserves_the_partial() {
+        for format in AudioFormat::ALL {
+            let dir = tempfile::tempdir().unwrap();
+            let mut rec =
+                ActiveRecording::start_with_integrity_epoch(dir.path(), "Test", 7, format)
+                    .await
+                    .unwrap();
+            rec.fail_writes_after(2);
 
-        let error = rec.append_samples(&[0.25, 0.5, 0.75]).unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert_eq!(rec.integrity_epoch(), 7);
+            let error = rec.append_samples(&[0.25, 0.5, 0.75]).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Other);
+            assert_eq!(rec.integrity_epoch(), 7);
 
-        let partial = rec.abort().unwrap();
-        assert!(partial.exists());
-        assert!(!partial.with_file_name("audio.wav").exists());
-        let reader = hound::WavReader::open(partial).unwrap();
-        assert_eq!(reader.duration(), 2);
+            let partial = rec.abort().unwrap();
+            assert!(partial.exists());
+            assert_eq!(partial, partial.with_file_name(format.partial_file_name()));
+            assert!(!partial.with_file_name(format.file_name()).exists());
+            assert_eq!(
+                decoded(format, &partial).len(),
+                2,
+                "{format:?}: what was written before the failure, closed"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn injected_pre_roll_failure_is_returned_without_exposing_a_final_wav() {
+    async fn injected_pre_roll_failure_is_returned_without_exposing_a_final_file() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Test").await.unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test", AudioFormat::Flac)
+            .await
+            .unwrap();
         rec.fail_writes_after(1);
 
         rec.append_pre_roll(&[0.1, 0.2]).unwrap_err();
         let partial = rec.abort().unwrap();
 
         assert!(partial.exists());
-        assert!(!partial.with_file_name("audio.wav").exists());
-        assert_eq!(hound::WavReader::open(partial).unwrap().duration(), 1);
+        assert!(!partial.with_file_name("audio.flac").exists());
+        assert_eq!(decoded(AudioFormat::Flac, &partial).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_aborted_opus_take_is_a_playable_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test", AudioFormat::Opus)
+            .await
+            .unwrap();
+        let (input, _) = speech_f32(1.1, 4);
+        rec.append_pre_roll(&input[..48_000]).unwrap();
+        for frame in input[48_000..].chunks(480) {
+            rec.append_samples(frame).unwrap();
+        }
+        assert!(rec.backlog_len() > 0, "part of the pre-roll still waits");
+        // An integrity fault (not a write error): the backlog is written too.
+        let partial = rec.abort().unwrap();
+        assert_eq!(decoded(AudioFormat::Opus, &partial).len(), 52_800);
     }
 
     #[test]
@@ -602,7 +909,9 @@ mod tests {
     async fn paused_audio_never_reaches_the_file() {
         use std::time::{Duration, Instant};
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni", AudioFormat::Flac)
+            .await
+            .unwrap();
         let t0 = Instant::now();
         rec.append_samples(&vec![0.25; 48_000]).unwrap();
         assert!(rec.pause_at(t0));
@@ -626,8 +935,7 @@ mod tests {
                 duration_ms: 5_000
             }]
         );
-        let mut reader = hound::WavReader::open(&finalized.audio_path).unwrap();
-        let samples: Vec<i16> = reader.samples::<i16>().map(Result::unwrap).collect();
+        let samples = finalized_samples(&finalized);
         assert_eq!(samples.len(), 96_000);
         // 0.5 * 32768 = 0x4000: the paused value must not appear.
         assert!(samples.iter().all(|&s| s != 0x4000));
@@ -636,7 +944,9 @@ mod tests {
     #[tokio::test]
     async fn stop_while_paused_closes_the_span() {
         let dir = tempfile::tempdir().unwrap();
-        let mut rec = ActiveRecording::start(dir.path(), "Omni").await.unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Omni", AudioFormat::Opus)
+            .await
+            .unwrap();
         rec.append_pre_roll(&vec![0.1; 4_800]).unwrap();
         rec.append_samples(&vec![0.1; 24_000]).unwrap();
         rec.pause_at(std::time::Instant::now());

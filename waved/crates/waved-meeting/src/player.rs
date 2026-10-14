@@ -9,13 +9,13 @@
 
 use crate::metadata::marks_from_metadata;
 use crate::recorder::RECORDING_SAMPLE_RATE;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
+use waved_codec::PcmReader;
 use waved_state::{AudioState, Command, MeetingState, PlaybackState, UsbStorageState};
 
 /// Periods kept queued ahead of the speaker: enough to ride out a late tick,
@@ -50,36 +50,29 @@ impl SpeakerOutput for waved_audio::playback::PlaybackService {
     }
 }
 
-/// One recording opened for playback.
+/// One recording opened for playback: Opus, FLAC or (made before
+/// 2026-10-14) WAV, decoded as it plays.
 pub struct Track {
     id: Uuid,
-    reader: hound::WavReader<BufReader<std::fs::File>>,
+    reader: Box<dyn PcmReader>,
     position: u32,
     total: u32,
     marks_ms: Vec<u32>,
+    period: Vec<i16>,
 }
 
 impl Track {
     pub fn open(recordings_dir: &Path, id: Uuid) -> std::io::Result<Self> {
         let dir = recordings_dir.join(id.to_string());
-        let reader = hound::WavReader::open(dir.join("audio.wav")).map_err(to_io)?;
-        let spec = reader.spec();
-        if spec.channels != 1
-            || spec.sample_rate != RECORDING_SAMPLE_RATE
-            || spec.bits_per_sample != 16
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unsupported recording format {spec:?}"),
-            ));
-        }
-        let total = reader.duration();
+        let reader = waved_codec::open_audio(&dir)?;
+        let total = reader.total_samples().min(u64::from(u32::MAX)) as u32;
         Ok(Self {
             id,
             reader,
             position: 0,
             total,
             marks_ms: marks_from_metadata(&dir.join("metadata.json")),
+            period: Vec::new(),
         })
     }
 
@@ -106,7 +99,7 @@ impl Track {
     /// Move the next period to `ms` from the start, clamped to the end.
     pub fn seek_ms(&mut self, ms: u32) -> std::io::Result<()> {
         let frame = ms_to_frames(ms).min(self.total);
-        self.reader.seek(frame)?;
+        self.reader.seek(u64::from(frame))?;
         self.position = frame;
         Ok(())
     }
@@ -121,12 +114,18 @@ impl Track {
         if self.at_end() {
             return Ok(None);
         }
-        let mut out = vec![0i16; frames * channels];
+        self.period.resize(frames, 0);
         let mut read = 0usize;
-        for (index, sample) in self.reader.samples::<i16>().take(frames).enumerate() {
-            let sample = sample.map_err(to_io)?;
+        while read < frames {
+            let got = self.reader.read(&mut self.period[read..frames])?;
+            if got == 0 {
+                break;
+            }
+            read += got;
+        }
+        let mut out = vec![0i16; frames * channels];
+        for (index, &sample) in self.period[..read].iter().enumerate() {
             out[index * channels..(index + 1) * channels].fill(sample);
-            read += 1;
         }
         self.position = if read < frames {
             self.total
@@ -143,13 +142,6 @@ fn frames_to_ms(frames: u32) -> u32 {
 
 fn ms_to_frames(ms: u32) -> u32 {
     (u64::from(ms) * u64::from(RECORDING_SAMPLE_RATE) / 1_000).min(u64::from(u32::MAX)) as u32
-}
-
-fn to_io(error: hound::Error) -> std::io::Error {
-    match error {
-        hound::Error::IoError(io) => io,
-        other => std::io::Error::new(std::io::ErrorKind::InvalidData, other),
-    }
 }
 
 fn is_blocked(audio: &AudioState, meeting: &MeetingState) -> bool {
@@ -379,6 +371,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use waved_codec::AudioFormat;
 
     struct FakeOutput {
         submitted: Mutex<Vec<Vec<i16>>>,
@@ -424,21 +417,25 @@ mod tests {
         (0..n).map(|i| (i % 30_000) as i16).collect()
     }
 
+    /// A WAV recording, as every one made before 2026-10-14.
     fn fixture(dir: &Path, samples: &[i16], pre_roll_ms: u64, bookmarks_ms: &[u64]) -> Uuid {
+        fixture_in(AudioFormat::Wav, dir, samples, pre_roll_ms, bookmarks_ms)
+    }
+
+    fn fixture_in(
+        format: AudioFormat,
+        dir: &Path,
+        samples: &[i16],
+        pre_roll_ms: u64,
+        bookmarks_ms: &[u64],
+    ) -> Uuid {
         let id = Uuid::new_v4();
         let rec = dir.join(id.to_string());
         std::fs::create_dir_all(&rec).unwrap();
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 48_000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(rec.join("audio.wav"), spec).unwrap();
-        for &sample in samples {
-            writer.write_sample(sample).unwrap();
-        }
-        writer.finalize().unwrap();
+        let file = std::fs::File::create(rec.join(format.file_name())).unwrap();
+        let mut writer = waved_codec::create_writer(format, file).unwrap();
+        writer.write(samples).unwrap();
+        writer.finish().unwrap();
         let metadata = serde_json::json!({
             "schema_version": 1,
             "event": "meeting.recording.completed",
@@ -509,6 +506,35 @@ mod tests {
         assert_eq!(s.recording, Some(id));
         assert!(s.playing);
         assert_eq!(s.duration_ms, 20);
+    }
+
+    #[test]
+    fn opus_and_flac_recordings_play_and_seek() {
+        for format in [AudioFormat::Flac, AudioFormat::Opus] {
+            let tmp = tempfile::tempdir().unwrap();
+            let samples = waved_codec::testsignal::speech_like(1.0, 9);
+            let id = fixture_in(format, tmp.path(), &samples, 0, &[]);
+            let out = FakeOutput::new(100);
+            let (mut p, state) = player(tmp.path(), &out);
+            p.handle(&Command::PlayRecording(id));
+            let s = state.borrow().clone();
+            assert!(s.playing, "{format:?}");
+            assert_eq!(s.duration_ms, 1_000, "{format:?}");
+            let periods = out.submitted();
+            assert_eq!(periods.len(), 2);
+            if format == AudioFormat::Flac {
+                let expected: Vec<i16> = samples[..100].iter().flat_map(|&v| [v, v]).collect();
+                assert_eq!(periods[0], expected, "lossless");
+            }
+            p.handle(&Command::SeekPlayback(500));
+            assert_eq!(state.borrow().position_ms, 500);
+            out.drain();
+            p.pump();
+            if format == AudioFormat::Flac {
+                assert_eq!(out.submitted()[2][..2], [samples[24_000], samples[24_000]]);
+            }
+            assert_eq!(out.submitted()[2].len(), 200, "{format:?}");
+        }
     }
 
     #[test]
