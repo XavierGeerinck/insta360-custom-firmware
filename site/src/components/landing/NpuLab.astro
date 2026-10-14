@@ -1,0 +1,173 @@
+---
+// The NPU milestone: a complete trained model running on the Wave's neural
+// accelerator. Numbers from waved/docs/COMPUTE_HARDWARE.md (PoC19, 2026-10-14):
+// the same-device paired benchmark, median over 32 measured runs, per
+// four-second window of prepared features. Feature extraction, conversion,
+// setup and orchestration are excluded; energy and streaming latency were not
+// measured. Emphasis chart: the NPU in the accent, the CPU in recessive grey.
+import { href } from './href';
+
+const npuMs = 0.833188;
+const cpuMs = 8.664375;
+const speedup = cpuMs / npuMs;
+const bars = [
+	{ name: 'NPU', detail: 'native backend', ms: npuMs, emphasis: true },
+	{ name: 'CPU', detail: 'one Cortex-A55 core', ms: cpuMs, emphasis: false },
+];
+const fmt = (ms: number) => `${ms.toFixed(2)} ms`;
+---
+
+<section class="lab" aria-labelledby="lab-title">
+	<div class="inner">
+		<div class="copy">
+			<h2 id="lab-title">A neural network on the Wave's own NPU</h2>
+			<p>
+				Next to its CPU, the Wave has a neural accelerator that the stock software
+				uses for its speech models. Through this project's own native backend,
+				NVIDIA's MarbleNet voice-activity model now runs on it in full, and all 800
+				of its test decisions match the original model.
+			</p>
+			<p class="pending">
+				A research milestone: it runs on fixed four-second windows, and waved
+				doesn't use it yet.
+			</p>
+			<ul class="links">
+				<li><a href={href('research/npu/onnx/marblenet/')}>How MarbleNet runs on the NPU</a></li>
+				<li><a href={href('research/npu/')}>All NPU research</a></li>
+			</ul>
+		</div>
+
+		<figure class="chart">
+			<figcaption>Time to run MarbleNet on one four-second window</figcaption>
+			<ul class="bars">
+				{
+					bars.map((b) => (
+						<li class:list={['row', { emphasis: b.emphasis }]}>
+							<span class="name">
+								{b.name}
+								<span class="detail">{b.detail}</span>
+							</span>
+							<span class="track">
+								<span class="bar" style={`width:${((b.ms / cpuMs) * 100).toFixed(1)}%`} />
+							</span>
+							<span class="value">{fmt(b.ms)}</span>
+						</li>
+					))
+				}
+			</ul>
+			<p class="note">
+				{speedup.toFixed(1)}× faster. Median of 32 paired runs on the same Wave; feature
+				extraction and setup are not included.
+			</p>
+		</figure>
+	</div>
+</section>
+
+<style>
+	.lab {
+		border-top: 1px solid var(--wave-line);
+	}
+	.inner {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+		gap: 3.5rem;
+		align-items: center;
+		max-width: 70rem;
+		margin: 0 auto;
+		padding: 5rem 1.5rem;
+	}
+	h2 {
+		margin: 0 0 1.25rem;
+		font: 600 clamp(1.9rem, 3.2vw, 2.6rem) / 1.1 var(--wave-font-display);
+		color: var(--wave-text);
+	}
+	.copy p {
+		margin: 0 0 1rem;
+		max-width: 34rem;
+		color: var(--wave-text-2);
+		line-height: 1.55;
+	}
+	.copy p.pending {
+		color: var(--wave-warn);
+		font-size: 0.95rem;
+	}
+	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 1.75rem;
+		margin: 1.5rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.chart {
+		margin: 0;
+	}
+	figcaption {
+		margin-bottom: 1.25rem;
+		color: var(--wave-text);
+		font: 600 1.1rem/1.3 var(--wave-font-display);
+	}
+	.bars {
+		display: grid;
+		gap: 1.1rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.row {
+		display: grid;
+		grid-template-columns: 7.5rem minmax(0, 1fr) 4.5rem;
+		align-items: center;
+		gap: 0.9rem;
+	}
+	.name {
+		color: var(--wave-text);
+		font: 600 1rem/1.2 var(--wave-font-display);
+	}
+	.detail {
+		display: block;
+		color: var(--wave-text-3);
+		font: 400 0.82rem/1.3 var(--wave-font);
+	}
+	/* Thin bars anchored at the baseline, rounded only at the data end. */
+	.track {
+		display: block;
+		border-left: 1px solid var(--wave-line);
+	}
+	.bar {
+		display: block;
+		height: 0.75rem;
+		min-width: 4px;
+		border-radius: 0 4px 4px 0;
+		background: #5d6a6a;
+	}
+	.emphasis .bar {
+		background: var(--wave-live);
+	}
+	.value {
+		color: var(--wave-text);
+		font: 600 1rem/1.2 var(--wave-font-display);
+		font-variant-numeric: tabular-nums;
+		text-align: right;
+	}
+	.note {
+		margin: 1.25rem 0 0;
+		color: var(--wave-text-2);
+		font-size: 0.92rem;
+		line-height: 1.5;
+	}
+
+	@media (max-width: 56rem) {
+		.inner {
+			grid-template-columns: minmax(0, 1fr);
+			gap: 2.5rem;
+		}
+	}
+	@media (max-width: 30rem) {
+		.row {
+			grid-template-columns: 5.5rem minmax(0, 1fr) 4rem;
+			gap: 0.6rem;
+		}
+	}
+</style>

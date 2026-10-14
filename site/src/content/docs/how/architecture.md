@@ -70,7 +70,10 @@ commands.
 
 `waved-audio` also links `waved-npu`, which holds the DeepFilterNet noise
 reduction. Despite its name, that runs on the CPU: nothing in waved uses the
-NPU today.
+NPU today. The NPU work happens next to waved, in `waved/scripts/npu` and
+`waved/tools`: it already runs NVIDIA's MarbleNet voice-activity model on the
+NPU in full, on fixed four-second windows
+([MarbleNet on the NPU](/insta360-custom-firmware/research/npu/onnx/marblenet/)).
 
 The other crates are tools and probes, not part of the installed program:
 `waved-aec-probe`, `waved-latency-probe` and `waved-wakeup-probe` measure

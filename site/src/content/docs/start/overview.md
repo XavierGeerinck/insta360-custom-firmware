@@ -46,6 +46,7 @@ its tests on a computer but has not run on a Wave yet.
 | Touch screens: Home, Recording, Files, Menu and settings | Works, on the Wave | [Features](/insta360-custom-firmware/features/) |
 | USB speakerphone (UAC2) with echo cancellation | Works, on the Wave, with macOS | [Audio hardware](/insta360-custom-firmware/reference/audio-hardware/#uac2-routing-sp6) |
 | Noise reduction | Off for now: too slow on the CPU | [Audio hardware](/insta360-custom-firmware/reference/audio-hardware/#uplink-level-and-cpu-device-pass-2026-10-06) |
+| Neural models on the NPU | Research: NVIDIA's MarbleNet voice-activity model runs completely on the NPU, 10.4× faster than one CPU core per four-second window, and matches the original model on all 800 test decisions. Not used by waved yet. | [MarbleNet on the NPU](/insta360-custom-firmware/research/npu/onnx/marblenet/) |
 | Recording on the Wave | Works, on the Wave. The one-hour and power-loss certification is still to do. | [Recording webhooks](/insta360-custom-firmware/guides/webhooks/) |
 | Uploading recordings to your own server | Works, on the Wave. The full failure-and-recovery test is still to do. | [Recording webhooks](/insta360-custom-firmware/guides/webhooks/) |
 | Wi-Fi setup with a QR code | Works, on the Wave | [Wi-Fi](/insta360-custom-firmware/guides/wifi/) |
