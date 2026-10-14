@@ -287,6 +287,18 @@ def import_native_model(path: Path) -> dict[str, Any]:
     # Lower the same audited bytes, retaining the source's declared I/O shapes.
     model = onnx.load_model_from_string(payload)
     graph = model.graph
+    vision_markers = [
+        p.value for p in model.metadata_props if p.key == "wave.native_profile"
+    ]
+    if "fp16-squeezenet-v1" in vision_markers:
+        _require(
+            vision_markers == ["fp16-squeezenet-v1"],
+            "duplicate native vision profile marker",
+            ErrorCode.ONNX_OPERATOR_UNSUPPORTED,
+        )
+        from .vision_graph import import_graph as import_vision
+
+        return import_vision(path)
     # Preserve the two original profile admissions; route only bounded NCW
     # graph candidates to the separate, independently validated importer.
     if len(graph.node) > 1 or (
@@ -373,6 +385,10 @@ def independent_oracle(
     Conv accumulates three half operands in FP32 then rounds once to FP16.
     FC widens before multiplication and saturates the integer sum to UINT8.
     """
+    if record.get("profile_id") == "fp16-squeezenet-v1":
+        from .vision_graph import independent_graph_oracle as vision_oracle
+
+        return vision_oracle(record, inputs)
     if record.get("profile_id") in {"fp16-marblenet-v1", "fp16-marblenet-pad-v1"}:
         from .marblenet_graph import independent_graph_oracle
 
