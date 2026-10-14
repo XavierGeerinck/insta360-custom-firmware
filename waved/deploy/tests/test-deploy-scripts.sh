@@ -321,9 +321,6 @@ wave_running_waved() {
     : > "$W/run/waved"
 }
 
-upper_state() {
-    (cd "$W/data/overlay/upper" && find . | sort && find . -type f | sort | while read -r f; do cat "$f"; done)
-}
 # Both stubs are in the upper dir and show through the mounts as they are there.
 stubs_in_upper() {
     local f
@@ -339,7 +336,6 @@ run_install() {
         cp "$T/gadget-$FAKE_GADGET" "$W/etc/init.d/S89usbgadget"
         chmod 755 "$W/etc/init.d/S89usbgadget"
     fi
-    UPPER_BEFORE="$(upper_state)"
     "$DEPLOY/install.sh" > "$T/out" 2>&1 < /dev/null
     rc=$?
 }

@@ -276,11 +276,10 @@ impl FakeWave {
                 "#!/bin/sh\n",
                 0o755,
             );
-            fs::copy(
-                stub_lib(),
-                wave.wave(&format!("{dir}usr/lib/libapplogrs.so")),
-            )
-            .unwrap();
+            let lib = wave.wave(&format!("{dir}usr/lib/libapplogrs.so"));
+            fs::create_dir_all(lib.parent().unwrap()).unwrap();
+            fs::copy(stub_lib(), &lib)
+                .unwrap_or_else(|e| panic!("{} -> {}: {e}", stub_lib().display(), lib.display()));
         }
         wave.spawn("watchdog");
         wave.spawn("waved");
