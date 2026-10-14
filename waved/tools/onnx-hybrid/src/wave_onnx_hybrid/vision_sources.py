@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import HybridError
-from .marblenet_sources import _constants, _shape, _tensor_creation
+from .marblenet_sources import _constants, _patterns, _shape, _tensor_creation
 from .native_sources import _definition
 from .native_sources import _template as _execute_template
 from .vision_graph import PROFILE_ID, native_shape, validate_graph_record
@@ -22,22 +22,30 @@ _COMPILE_TEMPLATE_SHA256 = (
 _MAX_SOURCE_BYTES = 48 * 1024 * 1024
 _MAX_EMITTED_CONSTANT_BYTES = 8 * 1024 * 1024
 _MAX_STACK_PAYLOAD_BYTES = 128 * 1024
+_MEAN_PROFILE = "fp16-squeezenet-mean-v1"
 
 
-def _root(value: str, mode: str) -> str:
+def _root(value: str, mode: str, profile_id: str = PROFILE_ID) -> str:
+    version = 21 if profile_id == _MEAN_PROFILE else 20
     if not isinstance(value, str) or not re.fullmatch(
-        rf"/tmp/wave-npu-onnx20-[0-9a-f]{{16}}-{mode}", value
+        rf"/tmp/wave-npu-onnx{version}-[0-9a-f]{{16}}-{mode}", value
     ):
         raise ValueError(f"unsafe {mode} remote root")
     return value
 
 
 def _record(record: dict[str, Any]) -> None:
+    mean = isinstance(record, dict) and record.get("profile_id") == _MEAN_PROFILE
     try:
-        validate_graph_record(record)
+        if mean:
+            from .vision_mean import validate_graph_record as validate_mean
+
+            validate_mean(record)
+        else:
+            validate_graph_record(record)
     except HybridError as error:
         raise ValueError(f"invalid vision lowering record: {error}") from error
-    if record["profile_id"] != PROFILE_ID:
+    if record["profile_id"] not in (PROFILE_ID, _MEAN_PROFILE):
         raise ValueError("unsupported vision source profile")
     emitted = sum(
         record["constants"][n["weights"]]["byte_size"] + 4 * n["output_shape"][1]
@@ -51,6 +59,14 @@ def _record(record: dict[str, Any]) -> None:
     bias_bytes = sum(
         4 * n["output_shape"][1] for n in record["nodes"] if n["type"] == "Conv"
     )
+    if mean:
+        for node in record["nodes"]:
+            if node["type"] == "GlobalAveragePool":
+                channels = node["input_shape"][1]
+                emitted += 169 * channels * 2 + channels * 4
+                bias_bytes += channels * 4
+        if emitted > _MAX_EMITTED_CONSTANT_BYTES:
+            raise ValueError("emitted derived mean constant byte bound exceeded")
     if (
         3 * record["native_output"]["byte_size"] + 64 + bias_bytes
         > _MAX_STACK_PAYLOAD_BYTES
@@ -66,9 +82,13 @@ def _bounded(source: str) -> str:
 
 def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     nodes = record["nodes"]
+    mean_profile = record["profile_id"] == _MEAN_PROFILE
     ids = {record["onnx_input"]["name"]: 0}
     ids.update({n["output"]: i + 1 for i, n in enumerate(nodes)})
-    count = sum(n["type"] == "Conv" for n in nodes)
+    count = sum(
+        n["type"] == "Conv" or (mean_profile and n["type"] == "GlobalAveragePool")
+        for n in nodes
+    )
     lines = [
         "    std::vector<std::shared_ptr<tim::vx::Tensor>> tensors;",
         "    std::vector<std::shared_ptr<tim::vx::Operation>> operations;",
@@ -97,9 +117,25 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
             "output": output,
         }
         typ = n["type"]
-        if typ == "Conv":
+        mean = mean_profile and typ == "GlobalAveragePool"
+        if mean:
+            n = {
+                **n,
+                "kernel": [13, 13],
+                "pads": [0, 0, 0, 0],
+                "strides": [1, 1],
+                "dilations": [1, 1],
+            }
+        if typ == "Conv" or mean:
             co = n["output_shape"][1]
-            weight_shape = [n["kernel"][1], n["kernel"][0], n["input_shape"][1], co]
+            weight_shape = (
+                [13, 13, co, 1]
+                if mean
+                else [n["kernel"][1], n["kernel"][0], n["input_shape"][1], co]
+            )
+            weight_name = f"kMeanWeights{i}" if mean else f"kWeights{i}"
+            bias_name = f"kMeanBiasBits{i}" if mean else f"kBiasBits{i}"
+            multiplier = 1 if mean else 0
             pads = [n["pads"][1], n["pads"][3], n["pads"][0], n["pads"][2]]
             strides, dilations = n["strides"][::-1], n["dilations"][::-1]
             lines.extend(
@@ -110,7 +146,7 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                     "        tim::vx::DataType::FLOAT16,",
                     f"        weight_shape{i}, tim::vx::TensorAttribute::CONSTANT);",
                     "    tensors.push_back(graph->CreateTensor("
-                    f"weight_spec{i}, kWeights{i}.data()));",
+                    f"weight_spec{i}, {weight_name}.data()));",
                     "    if (!tensors.back()) {",
                     '        std::fprintf(stderr, "wave_npu_onnx_compile: '
                     'weight create failed\\n");',
@@ -122,7 +158,7 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                     f"        bias_shape{i}, tim::vx::TensorAttribute::CONSTANT);",
                     f"    std::array<float, {co}> bias_values{i}{{}};",
                     f"    std::memcpy(bias_values{i}.data(), "
-                    f"kBiasBits{i}.data(), sizeof(kBiasBits{i}));",
+                    f"{bias_name}.data(), sizeof({bias_name}));",
                     "    tensors.push_back(graph->CreateTensor("
                     f"bias_spec{i}, bias_values{i}.data()));",
                     "    if (!tensors.back()) {",
@@ -137,7 +173,7 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                     f"dilation{i}{{{_shape(dilations)}}};",
                     "    operations.push_back(graph->CreateOperation<"
                     "tim::vx::ops::Conv2d>(",
-                    f"        pad{i}, stride{i}, dilation{i}, 0));",
+                    f"        pad{i}, stride{i}, dilation{i}, {multiplier}));",
                 ]
             )
             inputs.extend([ci, ci + 1])
@@ -148,9 +184,18 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
                 pads=pads,
                 stride=strides,
                 dilation=dilations,
-                multiplier=0,
-                bias_promotion="exact-f16-to-f32",
+                multiplier=multiplier,
+                bias_promotion="fixed-f32-positive-zero"
+                if mean
+                else "exact-f16-to-f32",
             )
+            if mean:
+                definition.update(
+                    native_operation="Conv2d",
+                    effective_group=co,
+                    derived_weight_half_bits=record["native_policy"]["half_bits"],
+                    numerical_mean_approximation=True,
+                )
         elif typ in {"MaxPool", "GlobalAveragePool"}:
             maximum = typ == "MaxPool"
             kernel = (
@@ -223,7 +268,7 @@ def _graph(record: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
 
 def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
     """Emit numeric IDs/actual bits and one size query plus one binary export."""
-    root = _root(remote_root, "compile")
+    root = _root(remote_root, "compile", record.get("profile_id"))
     _record(record)
     data = (_TEMPLATE_ROOT / "compile_fp16_graph.cc.in").read_bytes()
     if hashlib.sha256(data).hexdigest() != _COMPILE_TEMPLATE_SHA256:
@@ -240,7 +285,7 @@ def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
         },
         "operation": "VisionGraph",
         "backend_required": "OPENVX",
-        "model": PROFILE_ID,
+        "model": record["profile_id"],
         "data_type": "FLOAT16",
         "executes_graph": False,
         "input": {"dtype": "FLOAT16", "shape": record["native_input"]["shape"]},
@@ -257,6 +302,26 @@ def generate_compile_source(record: dict[str, Any], remote_root: str) -> str:
         "ONNX OIK bytes already match native K1IO",
         "ONNX OIHW bytes already match native WHIO",
     )
+    if record["profile_id"] == _MEAN_PROFILE:
+        definition["source_original_model_sha256"] = record[
+            "source_original_model_sha256"
+        ]
+        derived = []
+        for index, node in enumerate(record["nodes"]):
+            if node["type"] == "GlobalAveragePool":
+                channels = node["input_shape"][1]
+                derived.extend(
+                    [
+                        _patterns(
+                            f"kMeanWeights{index}",
+                            (record["native_policy"]["half_bits"],) * (169 * channels),
+                            4,
+                        ),
+                        _patterns(f"kMeanBiasBits{index}", (0,) * channels, 8),
+                    ]
+                )
+        constants += "\n// Fixed native mean approximation; learned bits unchanged.\n"
+        constants += "\n".join(derived)
     source = data.decode("utf-8")
     for key, value in {
         "ROOT": root,
@@ -272,10 +337,15 @@ def generate_execute_source(
     record: dict[str, Any], remote_root: str, nbg_bytes: int
 ) -> str:
     """Run one fixed NBG with a half-NaN output prime and actual byte readback."""
-    root = _root(remote_root, "execute")
+    root = _root(remote_root, "execute", record.get("profile_id"))
     _record(record)
     if type(nbg_bytes) is not int or not 513 <= nbg_bytes <= 64 * 1024 * 1024:
         raise ValueError("invalid fixed NBG byte size")
+    operation = (
+        "fp16-squeezenet-mean"
+        if record["profile_id"] == _MEAN_PROFILE
+        else "fp16-squeezenet"
+    )
     tensors = []
     for direction, attribute in (("input", "INPUT"), ("output", "OUTPUT")):
         tensors.extend(
@@ -293,7 +363,7 @@ def generate_execute_source(
         "operation": "NBG",
         "model": f"{root}/model/model.nbg",
         "model_bytes": nbg_bytes,
-        "model_operation": "fp16-squeezenet",
+        "model_operation": operation,
         "input_file": f"{root}/input/input.bin",
         "output_file": f"{root}/output/output.bin",
         "inputs": [{"type": "FLOAT16", "shape": record["native_input"]["shape"]}],
@@ -304,6 +374,10 @@ def generate_execute_source(
         "control_id": record["control_id"],
         "lowering_sha256": record["lowering_sha256"],
     }
+    if record["profile_id"] == _MEAN_PROFILE:
+        definition["source_original_model_sha256"] = record[
+            "source_original_model_sha256"
+        ]
     source = _execute_template(
         "execute.cc.in",
         {
@@ -312,7 +386,7 @@ def generate_execute_source(
             "INPUT_BYTES": str(record["native_input"]["byte_size"]),
             "OUTPUT_BYTES": str(record["native_output"]["byte_size"]),
             "TENSORS": "\n".join(tensors),
-            "OPERATION": "fp16-squeezenet",
+            "OPERATION": operation,
             "DEFINITION": _definition(definition),
         },
     )

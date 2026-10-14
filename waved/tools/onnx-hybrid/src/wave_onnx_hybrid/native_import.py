@@ -290,6 +290,15 @@ def import_native_model(path: Path) -> dict[str, Any]:
     vision_markers = [
         p.value for p in model.metadata_props if p.key == "wave.native_profile"
     ]
+    if "fp16-squeezenet-mean-v1" in vision_markers:
+        _require(
+            vision_markers == ["fp16-squeezenet-mean-v1"],
+            "duplicate native mean profile marker",
+            ErrorCode.ONNX_OPERATOR_UNSUPPORTED,
+        )
+        from .vision_mean import import_graph as import_mean
+
+        return import_mean(path)
     if "fp16-squeezenet-v1" in vision_markers:
         _require(
             vision_markers == ["fp16-squeezenet-v1"],
@@ -385,6 +394,10 @@ def independent_oracle(
     Conv accumulates three half operands in FP32 then rounds once to FP16.
     FC widens before multiplication and saturates the integer sum to UINT8.
     """
+    if record.get("profile_id") == "fp16-squeezenet-mean-v1":
+        from .vision_mean import independent_graph_oracle as mean_oracle
+
+        return mean_oracle(record, inputs)
     if record.get("profile_id") == "fp16-squeezenet-v1":
         from .vision_graph import independent_graph_oracle as vision_oracle
 
