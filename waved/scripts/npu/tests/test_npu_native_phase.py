@@ -206,6 +206,7 @@ def test_exact_retained_usb_warning_blocks_staging_before_mutation(
             lab._stage(manifest(), {}, "/tmp/test", run_dir, phase=guard)
         transport.assert_not_called()
     assert json.loads(guard.path.read_bytes())["state"] == "HALTED"
+    assert json.loads((run_dir / "stage-before.json").read_bytes()) == warning
 
 
 @pytest.mark.parametrize("which", ["compile", "execute"])

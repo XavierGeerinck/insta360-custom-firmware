@@ -945,6 +945,7 @@ def _stage(
     baseline = _system_manifest(manifest)
     transport = npu_lab.AdbTransport()
     before = compile_lab.collect_snapshot(transport, baseline)
+    _write_json(run_dir / "stage-before.json", before)
     phase = phase or _ACTIVE_PHASE.get()
     if phase is not None:
         phase.check(before, "before-staging-mutations")
@@ -963,7 +964,6 @@ def _stage(
         manifest, "shell", "ps | grep -E '[w]ave-npu-onnx-(compile|execute)-v1' || true"
     ):
         raise NativeLabError("a native ONNX process is already present")
-    _write_json(run_dir / "stage-before.json", before)
     inventory = expected_inventory(root, payloads)
     directories = sorted(
         (path for path, mode in inventory.items() if mode.startswith("D ")),
