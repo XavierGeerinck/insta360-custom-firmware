@@ -265,6 +265,21 @@ Rules for the parallel milestones:
   - Cardioid aimed at a mic diagonal has an on-axis null near 3.4 kHz (Stereo sides always); needs a different beam above ~2 kHz
 - [x] **C19 Show the Whole room tracker in the stats** (host-verified; confirm on device) (S) — Whole room delay-and-sums on the tracked talker and falls back to the plain average (−12 to −25 dB at 4 kHz) while no direction is confident. Publish `omni_mix` and the steered direction in `/tmp/audio_stats.json` to check it engages in real rooms.
 
+- [ ] **C20 Recording formats: Opus by default, FLAC as a setting** (M) — owner's decision
+  2026-10-14 (a 1 h 30 WAV hit the webhook's 413). Host-done 2026-10-14, not merged yet:
+  `waved-codec` (Ogg Opus 32 kbps / FLAC writers and readers, crash-safe pages/frames, seek),
+  the recorder on a `RecordingWriter`, reconcile/Files/player/uploads for every format (WAV
+  recordings keep working), `recording.format` + System → Recording format + setup page,
+  per-format `Content-Type` and metadata (`waved/docs/WEBHOOKS.md`). Plan and device-pass
+  checklist: `waved/docs/superpowers/plans/2026-10-14-recording-formats.md`; numbers and why:
+  `waved/docs/AUDIO_HARDWARE.md` "Recording formats".
+  - Device pass: 10 min in each format (size, CPU in `top`, no dropped frames with a 30 s
+    pre-roll), playback and seek on the Wave, upload to the local receiver, `kill -9` and a
+    power cut mid-take.
+  - Run `scripts/test-recording-resilience.sh` (now format-aware, not yet run on a device).
+  - libopus is built without NEON (the cross image's GCC 4.8.5); a newer cross compiler would
+    allow NEON and libopus 1.6.
+
 ## D — Files
 
 - [ ] **D1 Files list** (M) — new `screens/files.rs`
@@ -499,8 +514,8 @@ Rules for the parallel milestones:
   - Run it with `DURATION_SECONDS=3600`.
   - Repeat the active and finalization cases with physical power removal.
 - [ ] **M2 Webhook acceptance script** (M) — `scripts/test-webhook-setup.sh`
-  - Cover the setup form, the three upload modes, auth redaction, multipart metadata, WAV
-    properties and idempotency.
+  - Cover the setup form, the three upload modes, auth redaction, multipart metadata, audio
+    properties per format (Opus, FLAC; WAV for old recordings) and idempotency.
 - [ ] **M3 Failure and recovery matrix** (M)
   - Offline recording, Wi-Fi loss during upload, retries, permanent 400.
   - Redirect rejection, retry exhaustion, endpoint change, reboot during upload.
