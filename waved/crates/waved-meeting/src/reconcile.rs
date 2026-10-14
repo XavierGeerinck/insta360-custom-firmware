@@ -27,33 +27,35 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
             continue;
         };
         let dir = PathBuf::from(&row.dir);
-        let wav = dir.join("audio.wav").is_file();
+        // Finalized audio in any format (WAV, Opus, FLAC).
+        let audio = waved_codec::find_audio(&dir).is_some();
         let metadata = dir.join("metadata.json").is_file();
-        let partial = dir.join("audio.wav.partial").is_file();
-        let legacy_opus = dir.join("audio.opus").is_file();
+        let partial = waved_codec::find_partial(&dir).is_some();
+        // The 2026-03 prototype's empty audio.opus.
+        let legacy_opus = waved_codec::is_legacy_placeholder(&dir);
         let current = MeetingStatus::parse(&row.status);
         let legacy_status = matches!(row.status.as_str(), "pending" | "upload_failed");
         let metadata_v1 =
             legacy_status && metadata && metadata_schema_is_v1(&dir.join("metadata.json")).await;
 
         let repaired = match row.status.as_str() {
-            "pending" if wav && metadata_v1 => Some(MeetingStatus::Queued),
-            "upload_failed" if wav && metadata_v1 => Some(MeetingStatus::RetryWait),
-            "pending" | "upload_failed" if wav && metadata => {
+            "pending" if audio && metadata_v1 => Some(MeetingStatus::Queued),
+            "upload_failed" if audio && metadata_v1 => Some(MeetingStatus::RetryWait),
+            "pending" | "upload_failed" if audio && metadata => {
                 Some(MeetingStatus::LegacyUnsupported)
             }
             _ => match current {
-                Some(MeetingStatus::Uploading) if wav && metadata => Some(MeetingStatus::Queued),
-                Some(MeetingStatus::Queued) if wav && metadata => None,
-                Some(MeetingStatus::RetryWait) if wav && metadata => None,
-                Some(MeetingStatus::Recording) if wav && metadata => Some(MeetingStatus::LocalOnly),
+                Some(MeetingStatus::Uploading) if audio && metadata => Some(MeetingStatus::Queued),
+                Some(MeetingStatus::Queued) if audio && metadata => None,
+                Some(MeetingStatus::RetryWait) if audio && metadata => None,
+                Some(MeetingStatus::Recording) if audio && metadata => Some(MeetingStatus::LocalOnly),
                 Some(MeetingStatus::Recording) if partial => Some(MeetingStatus::ArtifactError),
-                Some(MeetingStatus::LocalOnly | MeetingStatus::Uploaded) if wav && metadata => None,
-                Some(MeetingStatus::AwaitingDecision) if wav && metadata => None,
+                Some(MeetingStatus::LocalOnly | MeetingStatus::Uploaded) if audio && metadata => None,
+                Some(MeetingStatus::AwaitingDecision) if audio && metadata => None,
                 // The files are there again: marked missing while the volume
                 // was away (G1), or put back from a computer. Kept on Wave,
                 // or delivered if it was; never queued again by itself.
-                Some(MeetingStatus::MissingArtifact) if wav && metadata => Some(if row.uploaded {
+                Some(MeetingStatus::MissingArtifact) if audio && metadata => Some(if row.uploaded {
                     MeetingStatus::Uploaded
                 } else {
                     MeetingStatus::LocalOnly
@@ -67,9 +69,9 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
                 // An unfinished delete: removal::finish_interrupted retries it
                 // at the next boot. It never comes back as a recording.
                 Some(MeetingStatus::Deleting) => None,
-                _ if legacy_opus && !wav => Some(MeetingStatus::LegacyUnsupported),
-                _ if partial && !wav => Some(MeetingStatus::ArtifactError),
-                _ if !wav || !metadata => Some(MeetingStatus::MissingArtifact),
+                _ if legacy_opus && !audio => Some(MeetingStatus::LegacyUnsupported),
+                _ if partial && !audio => Some(MeetingStatus::ArtifactError),
+                _ if !audio || !metadata => Some(MeetingStatus::MissingArtifact),
                 _ => None,
             },
         };
@@ -102,7 +104,7 @@ pub async fn run(pool: &SqlitePool, recordings_dir: &Path) -> Result<ReconcileRe
                 continue;
             };
             let dir = entry.path();
-            if dir.join("audio.wav").is_file() && dir.join("metadata.json").is_file() {
+            if waved_codec::find_audio(&dir).is_some() && dir.join("metadata.json").is_file() {
                 db::import_local_artifact(pool, &id, &dir.to_string_lossy()).await?;
                 report.imported += 1;
             }
@@ -179,6 +181,10 @@ mod tests {
             &["audio.opus"],
         )
         .await;
+        // The prototype only ever created it empty.
+        tokio::fs::write(recordings.join(legacy.to_string()).join("audio.opus"), b"")
+            .await
+            .unwrap();
         let partial = insert(
             &pool,
             &recordings,
@@ -211,6 +217,53 @@ mod tests {
                     .unwrap();
             assert_eq!(status, expected.as_str());
         }
+    }
+
+    #[tokio::test]
+    async fn opus_and_flac_takes_reconcile_like_wav() {
+        let (temp, pool) = fixture().await;
+        let recordings = temp.path().join("recordings");
+        tokio::fs::create_dir_all(&recordings).await.unwrap();
+        let cases = [
+            (MeetingStatus::Uploading, &["audio.opus", "metadata.json"][..], MeetingStatus::Queued),
+            (MeetingStatus::Recording, &["audio.flac", "metadata.json"][..], MeetingStatus::LocalOnly),
+            (MeetingStatus::Recording, &["audio.opus.partial"][..], MeetingStatus::ArtifactError),
+            (MeetingStatus::Recording, &["audio.flac.partial"][..], MeetingStatus::ArtifactError),
+            (MeetingStatus::Recording, &["audio.flac"][..], MeetingStatus::MissingArtifact),
+            (MeetingStatus::LocalOnly, &["audio.opus", "metadata.json"][..], MeetingStatus::LocalOnly),
+            (
+                MeetingStatus::MissingArtifact,
+                &["audio.flac", "metadata.json"][..],
+                MeetingStatus::LocalOnly,
+            ),
+        ];
+        let mut ids = Vec::new();
+        for (status, files, _) in &cases {
+            ids.push(insert(&pool, &recordings, *status, files).await);
+        }
+        let orphan = Uuid::new_v4();
+        let orphan_dir = recordings.join(orphan.to_string());
+        tokio::fs::create_dir_all(&orphan_dir).await.unwrap();
+        tokio::fs::write(orphan_dir.join("audio.opus"), b"OggS").await.unwrap();
+        tokio::fs::write(orphan_dir.join("metadata.json"), b"{}").await.unwrap();
+
+        let report = run(&pool, &recordings).await.unwrap();
+        assert_eq!(report.imported, 1, "an orphan Opus pair is imported");
+        for (id, (_, files, expected)) in ids.iter().zip(&cases) {
+            let (status,): (String,) =
+                sqlx::query_as("SELECT upload_status FROM meetings WHERE id = ?")
+                    .bind(id.to_string())
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(status, expected.as_str(), "{files:?}");
+        }
+        assert_eq!(run(&pool, &recordings).await.unwrap(), ReconcileReport::default());
+        assert_eq!(
+            db::claim_next_upload(&pool, 5).await.unwrap().map(|row| row.id),
+            Some(ids[0]),
+            "only the interrupted upload is queued again"
+        );
     }
 
     #[tokio::test]

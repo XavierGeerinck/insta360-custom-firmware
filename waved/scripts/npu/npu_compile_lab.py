@@ -809,7 +809,7 @@ def _new_dmesg_lines(
 
 def align_native_diagnostics(transport, manifest, before: dict, after: dict) -> None:
     """Preserve native ONNX markers when busy logs exceed the short snapshot."""
-    if not getattr(manifest.policy, "poc_id", "").startswith(("17", "18")):
+    if not getattr(manifest.policy, "poc_id", "").startswith(("17", "18", "20", "21")):
         return
     _, aligned = _new_dmesg_lines(before.get("dmesg_tail", []), after.get("dmesg_tail", []))
     if aligned or before.get("dmesg_tail") == after.get("dmesg_tail"):
@@ -854,7 +854,7 @@ def compare_health(
     alerts = [line for line in new_lines if KERNEL_ALERT_RE.search(line)]
     if alerts:
         differences.append("new kernel warning/error diagnostics were observed")
-    if getattr(manifest.policy, "poc_id", "").startswith(("17", "18")):
+    if getattr(manifest.policy, "poc_id", "").startswith(("17", "18", "20", "21")):
         def services(snapshot):
             return sorted(
                 re.sub(r"\s+", " ", line.strip())

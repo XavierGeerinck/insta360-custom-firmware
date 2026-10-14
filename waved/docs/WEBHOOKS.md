@@ -47,7 +47,24 @@ three parts:
 |---|---|---|---|
 | `meeting_id` | text | — | Stable meeting UUID |
 | `metadata` | `application/json` | `metadata.json` | Versioned metadata below |
-| `audio` | `audio/wav` | `<meeting-id>.wav` | Mono PCM S16LE, 48 kHz |
+| `audio` | see below | `<meeting-id>.<ext>` | The recording, mono, 48 kHz |
+
+The `audio` part is in the format the recording was made in (the setting
+`recording.format`, System → Recording format; since 2026-10-14):
+
+| Format | `Content-Type` | Extension | `audio.codec` | About per hour |
+|---|---|---|---|---|
+| Ogg Opus, 32 kbps VBR (default) | `audio/ogg; codecs=opus` | `.opus` | `opus` | 15 MB |
+| FLAC, 16-bit, lossless | `audio/flac` | `.flac` | `flac` | 170–210 MB |
+| WAV, PCM S16LE (recordings made before 2026-10-14) | `audio/wav` | `.wav` | `pcm_s16le` | 346 MB |
+
+A receiver should take the format from the part's `Content-Type` or from
+`audio.filename` / `audio.codec` in the metadata, not assume WAV. All three are
+standard: ffmpeg, Whisper-style transcription tools, `opusdec` and `flac` read
+them directly. The Opus file carries its pre-skip and end trimming (RFC 7845),
+so it decodes to exactly `audio_duration_ms`; FLAC carries an MD5 of the
+samples (`flac -t` checks it). Request-size limits: a 1 h 30 Opus recording is
+about 22 MB, the same in FLAC about 300 MB.
 
 Headers:
 
@@ -91,13 +108,14 @@ Example (values abbreviated):
     "audio_mode": "omni"
   },
   "audio": {
-    "filename": "21b17c4c-7390-4d52-8cbf-477fab102bc0.wav",
-    "content_type": "audio/wav",
-    "codec": "pcm_s16le",
+    "filename": "21b17c4c-7390-4d52-8cbf-477fab102bc0.opus",
+    "content_type": "audio/ogg; codecs=opus",
+    "codec": "opus",
     "sample_rate_hz": 48000,
     "channels": 1,
     "bit_depth": 16,
-    "size_bytes": 348480044,
+    "bitrate_bps": 32000,
+    "size_bytes": 14850212,
     "sha256": "..."
   },
   "bookmarks": [
@@ -118,8 +136,13 @@ Until network time is trustworthy, `started_at` is `null` and
 `clock_synchronized` is `false`. Durations are sample-derived and remain
 accurate.
 
-The `webhook.test` event uses the same multipart shape with a short valid
-silent WAV. Consumers should accept the event without treating it as a real
+`audio.bit_depth` is the depth of the source PCM, 16 for every format.
+`audio.bitrate_bps` (added 2026-10-14) is present for Opus only. The schema
+stays version 1: the new values and the optional field are additive.
+
+The `webhook.test` event uses the same multipart shape with 100 ms of silence
+in the format the next recording will have, so a test exercises the same
+`Content-Type`. Consumers should accept the event without treating it as a real
 meeting.
 
 ## Local test receiver

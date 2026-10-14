@@ -46,10 +46,12 @@ async fn receiver(status: &str) -> (String, tokio::task::JoinHandle<Vec<u8>>) {
 }
 
 async fn artifact(dir: &Path) -> std::path::PathBuf {
-    let audio = dir.join("audio.wav");
-    tokio::fs::write(&audio, b"RIFF----WAVEfixture")
-        .await
-        .unwrap();
+    artifact_named(dir, "audio.wav", b"RIFF----WAVEfixture").await
+}
+
+async fn artifact_named(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+    let audio = dir.join(name);
+    tokio::fs::write(&audio, bytes).await.unwrap();
     tokio::fs::write(
         dir.join("metadata.json"),
         br#"{"schema_version":1,"event":"meeting.recording.completed"}"#,
@@ -90,6 +92,31 @@ async fn multipart_contract_streams_named_audio_metadata_and_headers() {
     assert!(text.contains("name=\"audio\"; filename=\"21b17c4c-7390-4d52-8cbf-477fab102bc0.wav\""));
     assert!(text.contains("Content-Type: audio/wav"));
     assert!(text.contains("RIFF----WAVEfixture"));
+}
+
+#[tokio::test]
+async fn opus_and_flac_parts_carry_their_extension_and_content_type() {
+    for (name, extension, content_type) in [
+        ("audio.opus", "opus", "audio/ogg; codecs=opus"),
+        ("audio.flac", "flac", "audio/flac"),
+    ] {
+        let (endpoint, request_task) = receiver("204 No Content").await;
+        let temp = tempfile::tempdir().unwrap();
+        let audio = artifact_named(temp.path(), name, b"fixture-audio").await;
+        WebhookClient::new()
+            .unwrap()
+            .upload_recording(&endpoint, "", "wave-device-1", "meeting-1", &audio)
+            .await
+            .unwrap();
+        let request = request_task.await.unwrap();
+        let text = String::from_utf8_lossy(&request);
+        assert!(
+            text.contains(&format!("name=\"audio\"; filename=\"meeting-1.{extension}\"")),
+            "{name}"
+        );
+        assert!(text.contains(&format!("Content-Type: {content_type}")), "{name}");
+        assert!(text.contains("fixture-audio"));
+    }
 }
 
 #[tokio::test]

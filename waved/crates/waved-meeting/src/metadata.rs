@@ -52,7 +52,11 @@ pub struct AudioMetadata {
     pub codec: String,
     pub sample_rate_hz: u32,
     pub channels: u16,
+    /// The PCM depth of the source: 16 for every format (Opus decodes to it).
     pub bit_depth: u16,
+    /// Target bitrate of a lossy codec (Opus); absent for lossless audio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate_bps: Option<u32>,
     pub size_bytes: u64,
     pub sha256: String,
 }
@@ -78,7 +82,8 @@ pub async fn build_and_write(
     segments: Vec<SpeakerSegmentRecord>,
 ) -> Result<WebhookMetadata, MetadataError> {
     let sha256 = sha256_file(&recording.audio_path).await?;
-    let filename = format!("{}.wav", recording.id);
+    let format = recording.format;
+    let filename = format!("{}.{}", recording.id, format.extension());
     let metadata = WebhookMetadata {
         schema_version: 1,
         event: "meeting.recording.completed".into(),
@@ -106,11 +111,12 @@ pub async fn build_and_write(
         },
         audio: AudioMetadata {
             filename,
-            content_type: "audio/wav".into(),
-            codec: "pcm_s16le".into(),
+            content_type: format.content_type().into(),
+            codec: format.codec().into(),
             sample_rate_hz: RECORDING_SAMPLE_RATE,
             channels: 1,
             bit_depth: 16,
+            bitrate_bps: format.bitrate_bps(),
             size_bytes: recording.size_bytes,
             sha256,
         },
@@ -234,11 +240,14 @@ pub enum MetadataError {
 mod tests {
     use super::*;
     use crate::recorder::ActiveRecording;
+    use waved_codec::AudioFormat;
 
     #[tokio::test]
     async fn complete_metadata_uses_samples_and_never_empty_device_id() {
         let dir = tempfile::tempdir().unwrap();
-        let mut recording = ActiveRecording::start(dir.path(), "omni").await.unwrap();
+        let mut recording = ActiveRecording::start(dir.path(), "omni", AudioFormat::Opus)
+            .await
+            .unwrap();
         recording.append_pre_roll(&vec![0.0; 48_000]).unwrap();
         recording.append_samples(&vec![0.0; 96_000]).unwrap();
         let finalized = recording.finalize().unwrap();
@@ -269,10 +278,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_audio_block_names_the_format_of_the_file() {
+        let rows = [
+            (AudioFormat::Opus, "opus", "audio/ogg; codecs=opus", "opus", Some(32_000)),
+            (AudioFormat::Flac, "flac", "audio/flac", "flac", None),
+            (AudioFormat::Wav, "wav", "audio/wav", "pcm_s16le", None),
+        ];
+        for (format, extension, content_type, codec, bitrate) in rows {
+            let dir = tempfile::tempdir().unwrap();
+            let mut recording = ActiveRecording::start(dir.path(), "omni", format)
+                .await
+                .unwrap();
+            recording.append_samples(&vec![0.1; 48_000]).unwrap();
+            let finalized = recording.finalize().unwrap();
+            let config = WavedConfig::default();
+            let metadata = build_and_write(&finalized, &config, "wave-test", vec![], vec![])
+                .await
+                .unwrap();
+            let audio = &metadata.audio;
+            assert_eq!(audio.filename, format!("{}.{extension}", finalized.id));
+            assert_eq!(audio.content_type, content_type);
+            assert_eq!(audio.codec, codec);
+            assert_eq!(audio.bitrate_bps, bitrate);
+            assert_eq!((audio.sample_rate_hz, audio.channels, audio.bit_depth), (48_000, 1, 16));
+            assert_eq!(audio.size_bytes, finalized.size_bytes);
+            assert_eq!(metadata.recording.audio_duration_ms, 1_000, "from samples written");
+            let json = std::fs::read_to_string(finalized.dir.join("metadata.json")).unwrap();
+            assert_eq!(json.contains("bitrate_bps"), bitrate.is_some());
+        }
+        // Metadata written before 2026-10-14 has no bitrate.
+        let old = r#"{"filename":"x.wav","content_type":"audio/wav","codec":"pcm_s16le",
+            "sample_rate_hz":48000,"channels":1,"bit_depth":16,"size_bytes":1,"sha256":""}"#;
+        assert_eq!(serde_json::from_str::<AudioMetadata>(old).unwrap().bitrate_bps, None);
+    }
+
+    #[tokio::test]
     async fn pauses_are_written_and_old_metadata_still_parses() {
         use std::time::{Duration, Instant};
         let dir = tempfile::tempdir().unwrap();
-        let mut recording = ActiveRecording::start(dir.path(), "omni").await.unwrap();
+        let mut recording = ActiveRecording::start(dir.path(), "omni", AudioFormat::Opus)
+            .await
+            .unwrap();
         let t0 = Instant::now();
         recording.append_samples(&vec![0.0; 48_000]).unwrap();
         recording.pause_at(t0);
@@ -302,7 +348,9 @@ mod tests {
     #[tokio::test]
     async fn marks_are_offsets_from_the_start_of_the_file() {
         let dir = tempfile::tempdir().unwrap();
-        let mut recording = ActiveRecording::start(dir.path(), "omni").await.unwrap();
+        let mut recording = ActiveRecording::start(dir.path(), "omni", AudioFormat::Opus)
+            .await
+            .unwrap();
         recording.append_pre_roll(&vec![0.0; 48_000]).unwrap();
         recording.append_samples(&vec![0.0; 96_000]).unwrap();
         let finalized = recording.finalize().unwrap();

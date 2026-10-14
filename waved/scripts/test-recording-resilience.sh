@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configurable P0 recording-resilience acceptance.
+# Configurable P0 recording-resilience acceptance. Works with the recording
+# format set on the Wave (Opus or FLAC; WAV from older builds).
 #
 # Required build artifacts:
 #   cross build --release --target aarch64-unknown-linux-gnu \
@@ -271,46 +272,109 @@ phase_enabled() {
   [[ "$RUN_PHASES" == all || ",$RUN_PHASES," == *",$phase,"* ]]
 }
 
-validate_wav_and_metadata() {
+# Device-side shell tests for a recording directory, whatever its format:
+# audio.opus / audio.flac, or audio.wav from before 2026-10-14.
+device_has_final_audio() {
+  printf "{ test -f '%s/audio.opus' || test -f '%s/audio.flac' || test -f '%s/audio.wav'; }" "$1" "$1" "$1"
+}
+
+device_has_partial_audio() {
+  printf "{ test -f '%s/audio.opus.partial' || test -f '%s/audio.flac.partial' || test -f '%s/audio.wav.partial'; }" "$1" "$1" "$1"
+}
+
+# Samples in a pulled FLAC (STREAMINFO total) or Ogg Opus file (the
+# end-of-stream page's granule minus the OpusHead pre-skip).
+sample_count_of() {
+  python3 -I -c '
+import struct, sys
+path, kind = sys.argv[1], sys.argv[2]
+data = open(path, "rb").read()
+if kind == "flac":
+    assert data[:4] == b"fLaC", "not FLAC"
+    print(int.from_bytes(data[18:26], "big") & 0xFFFFFFFFF)
+else:
+    assert data[28:36] == b"OpusHead", "not Ogg Opus"
+    pre_skip = struct.unpack_from("<H", data, 38)[0]
+    last = data.rfind(b"OggS")
+    while last >= 0 and not data[last + 5] & 4:
+        last = data.rfind(b"OggS", 0, last)
+    assert last >= 0, "no end-of-stream page"
+    print(struct.unpack_from("<Q", data, last + 6)[0] - pre_skip)
+' "$1" "$2"
+}
+
+validate_audio_and_metadata() {
   local id=$1
   local local_dir="$EVIDENCE_DIR/endurance/$id"
   mkdir -p "$local_dir"
-  "${ADB[@]}" pull "$RECORDINGS/$id/audio.wav" "$local_dir/audio.wav" >/dev/null
+  local name format audio
+  name=$(adb_shell "cd '$RECORDINGS/$id' && ls audio.opus audio.flac audio.wav 2>/dev/null | head -n 1" |
+    tr -d '\r')
+  [[ -n "$name" ]] || fail "no finalized audio for $id"
+  format=${name#audio.}
+  audio="$local_dir/$name"
+  "${ADB[@]}" pull "$RECORDINGS/$id/$name" "$audio" >/dev/null
   "${ADB[@]}" pull "$RECORDINGS/$id/metadata.json" "$local_dir/metadata.json" >/dev/null
-  [[ "$(adb_shell "test ! -e '$RECORDINGS/$id/audio.wav.partial'; echo \$?" | tr -d '\r')" == 0 ]] ||
-    fail "finalized recording retained a partial WAV"
+  [[ "$(adb_shell "$(device_has_partial_audio "$RECORDINGS/$id"); echo \$?" | tr -d '\r')" != 0 ]] ||
+    fail "finalized recording retained a partial file"
 
-  file "$local_dir/audio.wav" | tee "$local_dir/file.txt"
-  grep -q "WAVE audio, Microsoft PCM, 16 bit, mono 48000 Hz" "$local_dir/file.txt" ||
-    fail "unexpected WAV format"
-
-  local file_bytes data_bytes sample_count duration_ms metadata_bytes metadata_duration
-  file_bytes=$(wc -c < "$local_dir/audio.wav" | tr -d ' ')
-  data_bytes=$(od -An -tu4 -j40 -N4 "$local_dir/audio.wav" | tr -d ' ')
-  [[ "$file_bytes" == $((data_bytes + 44)) ]] || fail "WAV RIFF/data sizes disagree"
-  (( data_bytes % 2 == 0 )) || fail "WAV data chunk has a partial 16-bit sample"
-  sample_count=$((data_bytes / 2))
+  file "$audio" | tee "$local_dir/file.txt"
+  local file_bytes sample_count duration_ms codec content_type metadata_bytes metadata_duration
+  file_bytes=$(wc -c < "$audio" | tr -d ' ')
+  case "$format" in
+    wav)
+      grep -q "WAVE audio, Microsoft PCM, 16 bit, mono 48000 Hz" "$local_dir/file.txt" ||
+        fail "unexpected WAV format"
+      local data_bytes
+      data_bytes=$(od -An -tu4 -j40 -N4 "$audio" | tr -d ' ')
+      [[ "$file_bytes" == $((data_bytes + 44)) ]] || fail "WAV RIFF/data sizes disagree"
+      (( data_bytes % 2 == 0 )) || fail "WAV data chunk has a partial 16-bit sample"
+      sample_count=$((data_bytes / 2))
+      codec=pcm_s16le
+      content_type=audio/wav
+      ;;
+    flac)
+      grep -q "FLAC audio bitstream data, 16 bit, mono" "$local_dir/file.txt" ||
+        fail "unexpected FLAC format"
+      sample_count=$(sample_count_of "$audio" flac) || fail "unreadable FLAC STREAMINFO"
+      codec=flac
+      content_type=audio/flac
+      ;;
+    opus)
+      grep -q "Opus audio" "$local_dir/file.txt" || fail "unexpected Ogg Opus format"
+      sample_count=$(sample_count_of "$audio" opus) || fail "unreadable Ogg Opus pages"
+      codec=opus
+      content_type="audio/ogg; codecs=opus"
+      ;;
+    *) fail "unknown recording format $format" ;;
+  esac
   duration_ms=$((sample_count * 1000 / 48000))
   metadata_bytes=$(jq -r '.audio.size_bytes' "$local_dir/metadata.json")
   metadata_duration=$(jq -r '.recording.audio_duration_ms' "$local_dir/metadata.json")
-  [[ "$metadata_bytes" == "$file_bytes" ]] || fail "metadata WAV size mismatch"
-  [[ "$metadata_duration" == "$duration_ms" ]] || fail "metadata WAV duration mismatch"
+  [[ "$metadata_bytes" == "$file_bytes" ]] || fail "metadata audio size mismatch"
+  [[ "$metadata_duration" == "$duration_ms" ]] || fail "metadata audio duration mismatch"
+  [[ "$(jq -r '.audio.codec' "$local_dir/metadata.json")" == "$codec" ]] ||
+    fail "metadata codec mismatch"
+  [[ "$(jq -r '.audio.content_type' "$local_dir/metadata.json")" == "$content_type" ]] ||
+    fail "metadata content type mismatch"
+  [[ "$(jq -r '.audio.filename' "$local_dir/metadata.json")" == "$id.$format" ]] ||
+    fail "metadata filename mismatch"
   [[ "$(jq -r '.audio.sample_rate_hz' "$local_dir/metadata.json")" == 48000 ]] ||
     fail "metadata sample rate mismatch"
   [[ "$(jq -r '.audio.channels' "$local_dir/metadata.json")" == 1 ]] ||
     fail "metadata channel count mismatch"
   [[ "$(jq -r '.audio.bit_depth' "$local_dir/metadata.json")" == 16 ]] ||
     fail "metadata bit depth mismatch"
-  [[ "$(jq -r '.audio.sha256' "$local_dir/metadata.json")" == "$(host_sha256 "$local_dir/audio.wav")" ]] ||
-    fail "metadata WAV checksum mismatch"
+  [[ "$(jq -r '.audio.sha256' "$local_dir/metadata.json")" == "$(host_sha256 "$audio")" ]] ||
+    fail "metadata audio checksum mismatch"
 
   jq -n \
     --arg id "$id" \
+    --arg format "$format" \
     --argjson file_bytes "$file_bytes" \
-    --argjson data_bytes "$data_bytes" \
     --argjson sample_count "$sample_count" \
     --argjson duration_ms "$duration_ms" \
-    '{meeting_id:$id,file_bytes:$file_bytes,data_bytes:$data_bytes,sample_count:$sample_count,audio_duration_ms:$duration_ms}' \
+    '{meeting_id:$id,format:$format,file_bytes:$file_bytes,sample_count:$sample_count,audio_duration_ms:$duration_ms}' \
     > "$local_dir/validation.json"
 }
 
@@ -338,7 +402,8 @@ run_endurance_phase() {
     pid=$(first_pid)
     remote=$(adb_shell "rss=\$(awk '/VmRSS:/ { print \$2 }' '/proc/$pid/status'); \
       free=\$(df -Pk '$RECORDINGS' | awk 'NR == 2 { print \$4 }'); \
-      size=\$(wc -c < '$RECORDINGS/$id/audio.wav.partial'); \
+      partial=\$(ls '$RECORDINGS/$id'/audio.*.partial 2>/dev/null | head -n 1); \
+      size=\$(wc -c < \"\$partial\"); \
       status=\$(sqlite3 -noheader '$DATABASE' \"SELECT upload_status FROM meetings WHERE id = '$id';\"); \
       printf '%s,%s,%s,%s\n' \"\$rss\" \"\$free\" \"\$size\" \"\$status\"" | tr -d '\r')
     IFS=, read -r rss free_kb partial_bytes status <<< "$remote"
@@ -355,14 +420,14 @@ run_endurance_phase() {
       "$frames_dropped" "$xruns" "$raw_drops" "$processed_drops" "$status" \
       >> "$phase_dir/samples.csv"
     (( sample_index == 0 )) && first_size=$partial_bytes
-    (( partial_bytes >= last_size )) || fail "partial WAV shrank during recording"
+    (( partial_bytes >= last_size )) || fail "partial file shrank during recording"
     last_size=$partial_bytes
     final_size=$partial_bytes
     (( elapsed >= DURATION_SECONDS )) && break
     sample_index=$((sample_index + 1))
     sleep "$SAMPLE_INTERVAL_SECONDS"
   done
-  (( final_size > first_size )) || fail "partial WAV did not grow during recording"
+  (( final_size > first_size )) || fail "partial file did not grow during recording"
 
   inject stop
   local deadline=$((SECONDS + 30))
@@ -406,8 +471,8 @@ run_endurance_phase() {
       fail "one-hour final RSS exceeded the 20%/32 MiB growth allowance"
   fi
 
-  validate_wav_and_metadata "$id"
-  echo "  PASS: $id recorded for ${DURATION_SECONDS}s with consistent WAV and metadata"
+  validate_audio_and_metadata "$id"
+  echo "  PASS: $id recorded for ${DURATION_SECONDS}s with consistent audio and metadata"
 }
 
 run_retention_phase() {
@@ -469,23 +534,22 @@ run_interruption_phase() {
     fail "$phase reconciled as $(meeting_status "$id"), expected $expected_status"
   assert_not_uploadable "$id"
 
+  local dir="$RECORDINGS/$id"
+  local final partial
+  final=$(device_has_final_audio "$dir")
+  partial=$(device_has_partial_audio "$dir")
   case "$phase" in
     active-partial)
-      adb_shell "test -f '$RECORDINGS/$id/audio.wav.partial' &&
-        test ! -e '$RECORDINGS/$id/audio.wav' &&
-        test ! -e '$RECORDINGS/$id/metadata.json'" ||
+      adb_shell "$partial && ! $final && test ! -e '$dir/metadata.json'" ||
         fail "active interruption artifact shape is unsafe"
       ;;
+    # The hook keeps its name from the WAV days: the audio file is finalized.
     wav-finalized)
-      adb_shell "test -f '$RECORDINGS/$id/audio.wav' &&
-        test ! -e '$RECORDINGS/$id/audio.wav.partial' &&
-        test ! -e '$RECORDINGS/$id/metadata.json'" ||
-        fail "WAV-finalized interruption artifact shape is unsafe"
+      adb_shell "$final && ! $partial && test ! -e '$dir/metadata.json'" ||
+        fail "audio-finalized interruption artifact shape is unsafe"
       ;;
     metadata-finalized)
-      adb_shell "test -f '$RECORDINGS/$id/audio.wav' &&
-        test -f '$RECORDINGS/$id/metadata.json' &&
-        test ! -e '$RECORDINGS/$id/audio.wav.partial'" ||
+      adb_shell "$final && test -f '$dir/metadata.json' && ! $partial" ||
         fail "metadata-finalized interruption artifact shape is unsafe"
       ;;
   esac
@@ -506,7 +570,7 @@ run_interruption_phase() {
   echo "  PASS: $id remained $expected_status and non-uploadable across two reconciliations"
 }
 
-for tool in adb jq shasum od awk sed grep diff file; do
+for tool in adb jq shasum od awk sed grep diff file python3; do
   require_tool "$tool"
 done
 [[ "$ALLOW_DEVICE_REBOOT" == yes ]] ||

@@ -4,10 +4,12 @@
 //! (reaching System already required the PIN), and with none a tap says where
 //! to set one — the setup page. Power off and Factory reset go through the
 //! confirmation.
-//! The two switch rows are optimistic: a tap shows the new value at once and
-//! a stale snapshot does not revert it (see `menu::Pending`). Firmware
-//! update (H3) checks, or opens the update screen when there is something
-//! to install or watch.
+//! The two switch rows and Recording format are optimistic: a tap shows the
+//! new value at once and a stale snapshot does not revert it (see
+//! `menu::Pending`). Recording format toggles Opus / FLAC for the next take
+//! (docs/AUDIO_HARDWARE.md "Recording formats"). Firmware update (H3)
+//! checks, or opens the update screen when there is something to install or
+//! watch.
 
 use crate::kit::components::buttons::back_button;
 use crate::kit::components::list::{ListItem, RotaryList};
@@ -22,7 +24,7 @@ use crate::screens_v2::menu::Pending;
 use crate::screens_v2::messages::copy;
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use waved_state::{Command, OtaPhase, OtaState};
+use waved_state::{Command, OtaPhase, OtaState, RecordingFormat};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemRow {
@@ -30,6 +32,7 @@ pub enum SystemRow {
     DateTime,
     AlertTones,
     PreRecording,
+    RecordingFormat,
     UsbStorage,
     Pin,
     About,
@@ -38,11 +41,12 @@ pub enum SystemRow {
     PowerOff,
 }
 
-pub const ROWS: [SystemRow; 10] = [
+pub const ROWS: [SystemRow; 11] = [
     SystemRow::Display,
     SystemRow::DateTime,
     SystemRow::AlertTones,
     SystemRow::PreRecording,
+    SystemRow::RecordingFormat,
     SystemRow::UsbStorage,
     SystemRow::Pin,
     SystemRow::About,
@@ -52,10 +56,26 @@ pub const ROWS: [SystemRow; 10] = [
 ];
 
 /// Firmware update is centred when System opens, as in system.png.
-pub const START_ROW: usize = 7;
+pub const START_ROW: usize = 8;
 
 fn on_off(on: bool) -> String {
     if on { "On" } else { "Off" }.into()
+}
+
+fn format_name(format: RecordingFormat) -> String {
+    match format {
+        RecordingFormat::Opus => "Opus",
+        RecordingFormat::Flac => "FLAC",
+    }
+    .into()
+}
+
+/// The other format: a tap on the row switches between the two.
+fn other_format(format: RecordingFormat) -> RecordingFormat {
+    match format {
+        RecordingFormat::Opus => RecordingFormat::Flac,
+        RecordingFormat::Flac => RecordingFormat::Opus,
+    }
 }
 
 /// The Firmware update row's value (system.png: "Up to date").
@@ -96,6 +116,7 @@ impl SystemRow {
             SystemRow::DateTime => "Date and time",
             SystemRow::AlertTones => "Alert tones",
             SystemRow::PreRecording => "Pre-recording",
+            SystemRow::RecordingFormat => "Recording format",
             SystemRow::UsbStorage => "USB storage",
             SystemRow::Pin => "PIN",
             SystemRow::About => "About",
@@ -111,6 +132,7 @@ impl SystemRow {
             SystemRow::DateTime => icons::CALENDAR,
             SystemRow::AlertTones => icons::BELL,
             SystemRow::PreRecording => icons::CLOCK,
+            SystemRow::RecordingFormat => icons::RECORD,
             SystemRow::UsbStorage => icons::USB,
             SystemRow::Pin => icons::LOCK,
             SystemRow::About => icons::INFO,
@@ -130,6 +152,7 @@ impl SystemRow {
             SystemRow::DateTime => Some(snap.clock.clone()),
             SystemRow::AlertTones => Some(on_off(snap.settings.tones_enabled)),
             SystemRow::PreRecording => Some(on_off(snap.settings.pre_recording)),
+            SystemRow::RecordingFormat => Some(format_name(snap.settings.recording_format)),
             SystemRow::Pin => Some(on_off(snap.settings.pin_enabled)),
             SystemRow::About => Some(super::about::version_line(snap)),
             SystemRow::FirmwareUpdate => Some(update_value(&snap.ota)),
@@ -151,6 +174,7 @@ fn flip(switch: &Pending<bool>) -> bool {
 struct State {
     tones: Pending<bool>,
     pre_recording: Pending<bool>,
+    format: Pending<RecordingFormat>,
     /// The update phase as of the last snapshot, for the row's tap.
     ota: OtaPhase,
     /// Whether a device PIN is set, for the PIN row's value and tap.
@@ -164,6 +188,7 @@ impl State {
     fn follow(&mut self, snap: &UiSnapshot) {
         self.tones.follow(snap.settings.tones_enabled);
         self.pre_recording.follow(snap.settings.pre_recording);
+        self.format.follow(snap.settings.recording_format);
         self.ota = snap.ota.phase.clone();
         self.pin_enabled = snap.settings.pin_enabled;
     }
@@ -172,6 +197,7 @@ impl State {
         match row {
             SystemRow::AlertTones => self.tones.value().map(on_off),
             SystemRow::PreRecording => self.pre_recording.value().map(on_off),
+            SystemRow::RecordingFormat => self.format.value().map(format_name),
             _ => row.value(snap),
         }
     }
@@ -202,6 +228,7 @@ impl Screen for SystemScreen {
             let mut state = self.state.borrow_mut();
             state.tones = Pending::new(snap.settings.tones_enabled);
             state.pre_recording = Pending::new(snap.settings.pre_recording);
+            state.format = Pending::new(snap.settings.recording_format);
             state.ota = snap.ota.phase.clone();
             state.pin_enabled = snap.settings.pin_enabled;
             state.shown = ROWS.iter().map(|row| state.value(*row, snap)).collect();
@@ -238,6 +265,13 @@ impl Screen for SystemScreen {
                     let on = flip(&state.pre_recording);
                     state.show(index, Some(on_off(on)));
                     dispatch.command(Command::SetPreRecording(on));
+                }
+                SystemRow::RecordingFormat => {
+                    let mut state = state.borrow_mut();
+                    let next = other_format(state.format.value().unwrap_or_default());
+                    state.format.set(next);
+                    state.show(index, Some(format_name(next)));
+                    dispatch.command(Command::SetRecordingFormat(next));
                 }
                 SystemRow::UsbStorage => dispatch.command(Command::StartUsbStorage),
                 SystemRow::Pin => {
@@ -287,7 +321,7 @@ mod tests {
     use crate::kit::route::ConfirmKind;
     use crate::kit::testkit::{assert_golden, assert_targets_ok, lvgl};
     use crate::screens_v2::menu::fixture::{fixture, snap};
-    use waved_state::Command;
+    use waved_state::{Command, RecordingFormat};
 
     fn value(screen: &SystemScreen, index: usize) -> String {
         screen
@@ -328,6 +362,7 @@ mod tests {
                 "Date and time",
                 "Alert tones",
                 "Pre-recording",
+                "Recording format",
                 "USB storage",
                 "PIN",
                 "About",
@@ -336,6 +371,68 @@ mod tests {
                 "Power off"
             ]
         );
+    }
+
+    #[test]
+    fn the_recording_format_row_follows_the_setting() {
+        let mut snap = snap();
+        assert_eq!(
+            SystemRow::RecordingFormat.value(&snap).as_deref(),
+            Some("Opus")
+        );
+        snap.settings.recording_format = RecordingFormat::Flac;
+        assert_eq!(
+            SystemRow::RecordingFormat.value(&snap).as_deref(),
+            Some("FLAC")
+        );
+        assert_eq!(ROWS[4], SystemRow::RecordingFormat, "right after Pre-recording");
+    }
+
+    #[test]
+    fn a_tap_switches_the_recording_format_for_the_next_take() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let mut f = fixture();
+            let mut snap = snap();
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            let row = screen.list.as_ref().unwrap().row(4);
+            lv.click(row);
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetRecordingFormat(RecordingFormat::Flac)]
+            ));
+            assert_eq!(value(&screen, 4), "FLAC", "shown at once");
+            // The service has not confirmed yet: a stale snapshot keeps FLAC.
+            screen.update(&snap);
+            assert_eq!(value(&screen, 4), "FLAC");
+            snap.settings.recording_format = RecordingFormat::Flac;
+            screen.update(&snap);
+            lv.click(row);
+            assert!(matches!(
+                f.commands().as_slice(),
+                [Command::SetRecordingFormat(RecordingFormat::Opus)]
+            ));
+            assert_eq!(value(&screen, 4), "Opus");
+            assert_targets_ok(root);
+        });
+    }
+
+    #[test]
+    fn the_recording_format_row_in_view() {
+        lvgl(|lv| {
+            let root = lv.screen();
+            let f = fixture();
+            let mut snap = snap();
+            snap.clock = "14:37".into();
+            snap.settings.pre_recording = true;
+            snap.settings.recording_format = RecordingFormat::Flac;
+            let mut screen = SystemScreen::default();
+            screen.build(root, &f.ctx, &snap);
+            screen.list.as_ref().unwrap().scroll_to(4);
+            assert_golden("screen_system_recording_format", &lv.render());
+            assert_targets_ok(root);
+        });
     }
 
     #[test]
@@ -355,7 +452,7 @@ mod tests {
             snap.settings.pin_enabled = true;
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap);
-            lv.click(screen.list.as_ref().unwrap().row(5));
+            lv.click(screen.list.as_ref().unwrap().row(6));
             assert!(f.commands().is_empty(), "clearing waits for the confirm");
             assert_eq!(
                 f.events(),
@@ -373,7 +470,7 @@ mod tests {
             let snap = snap(); // pin_enabled is false by default
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap);
-            lv.click(screen.list.as_ref().unwrap().row(5));
+            lv.click(screen.list.as_ref().unwrap().row(6));
             assert!(f.commands().is_empty());
             assert_eq!(
                 f.events(),
@@ -495,8 +592,8 @@ mod tests {
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap());
             let list = screen.list.as_ref().unwrap();
-            lv.click(list.row(8));
             lv.click(list.row(9));
+            lv.click(list.row(10));
             assert!(f.commands().is_empty(), "nothing happens before confirming");
             assert_eq!(
                 f.events(),
@@ -519,7 +616,7 @@ mod tests {
             let list = screen.list.as_ref().unwrap();
             lv.click(list.row(0));
             lv.click(list.row(1));
-            lv.click(list.row(6));
+            lv.click(list.row(7));
             assert!(f.commands().is_empty());
             assert_eq!(
                 f.events(),
@@ -562,7 +659,7 @@ mod tests {
             screen.build(root, &f.ctx, &snap);
             snap.system.about.version = "0.2.0 (abc1234)".into();
             screen.update(&snap);
-            assert_eq!(value(&screen, 6), "0.2.0 (abc1234)");
+            assert_eq!(value(&screen, 7), "0.2.0 (abc1234)");
             assert_targets_ok(root);
         });
     }
@@ -577,7 +674,7 @@ mod tests {
             let mut screen = SystemScreen::default();
             screen.build(root, &f.ctx, &snap());
             assert_eq!(SystemRow::UsbStorage.value(&snap()), None);
-            lv.click(screen.list.as_ref().unwrap().row(4));
+            lv.click(screen.list.as_ref().unwrap().row(5));
             assert!(matches!(f.commands().as_slice(), [Command::StartUsbStorage]));
             assert!(f.events().is_empty());
             assert_targets_ok(root);

@@ -192,7 +192,7 @@ async fn stop_recording_populates_pending_decision() {
     let s = h.meeting_rx.borrow().clone();
     let d = s.pending_decision.expect("pending_decision must be set");
     assert_eq!(d.id, id);
-    assert!(d.audio_path.exists(), "audio.wav must exist");
+    assert!(d.audio_path.exists(), "the finalized audio must exist");
     assert!(
         d.endpoint.starts_with("http://127.0.0.1:"),
         "endpoint snapshot: {}",
@@ -209,7 +209,7 @@ async fn save_clears_pending_and_marks_local_only() {
     wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
     // File still exists.
     let dir = h.recordings_dir.join(id.to_string());
-    assert!(dir.join("audio.wav").exists());
+    assert!(waved_codec::find_audio(&dir).is_some());
     // Even if Wi-Fi comes up, nothing is sent: the status is local_only.
     let _ = h.wifi_tx.send(WifiState {
         connected: true,
@@ -264,7 +264,7 @@ async fn shutdown_during_pending_decision_implicit_saves() {
     wait_for(&mut h.meeting_rx, |s| s.pending_decision.is_none()).await;
     let dir = h.recordings_dir.join(id.to_string());
     assert!(
-        dir.join("audio.wav").exists(),
+        waved_codec::find_audio(&dir).is_some(),
         "implicit save must preserve the audio file"
     );
     // pending_decision should be cleared in state too (last seen value).
