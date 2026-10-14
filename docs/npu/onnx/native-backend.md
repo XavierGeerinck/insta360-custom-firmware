@@ -47,10 +47,13 @@ Later multi-node profiles have separate bounded contracts and numerical policies
 - [MarbleNet](marblenet.md): the exact full trained Pad rewrite is qualified;
   TP padding and NN convolutions, with full four-clip inference/benchmark.
 - [SqueezeNet](squeezenet.md): spatial Conv/Relu, MaxPool and Fire/Concat controls
-  qualify. The classifier AVG13×13 kernel rejects; full model remains unqualified.
+  qualify. The original classifier AVG13×13 route rejects; the separate
+  `fp16-squeezenet-mean-v1` fixed-depthwise mean profile qualifies full trained
+  inference on four frozen images. It preserves trained bits and uses the
+  original mean oracle to qualify the FP16 approximation; no benchmark ran.
 
-The new `fp16-squeezenet-v1` importer does not turn these partial controls into
-full-model admission. Missing-NBG or unqualified packages refuse strict native
+The original `fp16-squeezenet-v1` packages20d/20e remain unqualified; the repair
+does not alter their retained results. Missing-NBG or unqualified packages refuse strict native
 execution locally. Its mandatory reviewed persistent phase checks inter-run
 continuity and immediate preflight; no automatic reset or retry is provided.
 

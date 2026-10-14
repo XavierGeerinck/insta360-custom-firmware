@@ -3,7 +3,7 @@
 Research date: 2026-10-14. These are trained-model candidates with public
 weights, not Wave/NPU-qualified models. VAD integration remains deferred until
 the NPU compatibility work is complete ([backlog C20](../../../TODO.md#c--recording-and-audio-backend)).
-The immediate compatibility experiment is SqueezeNet; this guide selects
+The current compatibility repair is SqueezeNet; this guide selects
 subsequent audio workloads without changing production processing.
 
 ## Recommended candidates
@@ -15,6 +15,13 @@ subsequent audio workloads without changing production processing.
 | Stronger full-band denoising | [DPDFNet2_48khz_hr](https://huggingface.co/Ceva-IP/DPDFNet/tree/dd6818d00f50c836fed43a6243ebe49116de5964), 48 kHz | Official checkpoint/ONNX/TFLite, Apache-2.0 model card | Matches the Wave's capture sample rate; substantial quality candidate with 2.58M parameters and explicit streaming state. Native compatibility and complete latency remain unmeasured. |
 | Joint echo cancellation, noise reduction and dereverberation | [LocalVQE v1.2](https://huggingface.co/LocalAI-io/LocalVQE/tree/29ca38495cba9d6393a92a4dd890f28dd81f758d), 16 kHz | Project-author PyTorch/GGUF weights, Apache-2.0 code/card | Actual downloadable joint model, 1.3M parameters. No ONNX artifact in the inspected release; export and equivalence proof are new work. |
 | Established neural AEC control | [DTLN-AEC128](https://github.com/breizhn/DTLN-aec/tree/9d24e128b4f409db18227b8babb343016625921f), 16 kHz | Original-author two-part TFLite model, MIT repository | Provides a reproducible microphone/reference AEC baseline; 1.8M parameters. Original tree contains TFLite, so ONNX conversion needs its own proof. |
+
+For the next **device compatibility baseline**, select GTCRN first. The
+quality contender is UL-UNAS: the authors' matched DNS3 comparison reports
+PESQ2.30 versus GTCRN2.10 at35 versus34 MMAC/s. The often quoted UL-UNAS3.09
+score belongs to a separate VCTK/PESQ-loss training variant, rather than the
+public DNS3 checkpoint used by the inspected ONNX. These paper results motivate
+a comparison; they do not establish quality of our downloaded artifacts.
 
 Published quality/timing figures are upstream evidence, not measurements on
 the Wave. DPDFNet's [paper](https://arxiv.org/html/2512.16420v1) reports improved
@@ -54,8 +61,32 @@ DTLN-AEC are more concrete downloadable AEC candidates for this investigation.
 
 ## Actual host artifact inspection
 
-Three revision-pinned ONNX files were downloaded and checked statically.
-No audio model inference or Wave execution was performed.
+Three revision-pinned ONNX files were downloaded and checked statically in
+PoC20. Follow-up PoC21 ran GTCRN and UL-UNAS on the Mac CPU with ORT1.27,
+one thread, for128 consecutive spectra from retained real speech, including
+explicit streaming state. Both produced finite outputs. GTCRN reproduced the enhanced spectra for16
+reset frames byte-for-byte in the retained probe; UL-UNAS did not. This was a
+graph/state smoke test using a shared square-root Hann window, not a waveform
+quality or source-parity test. Actual waveform comparison must use each
+model's proper analysis/synthesis window: Hann for UL-UNAS, square-root Hann
+for GTCRN. No audio model ran on the Wave.
+
+UL-UNAS also returned different spectra/caches for repeated identical first
+frames and freshly zeroed caches, with all four feed bytes verified unchanged.
+Disabling graph optimization, memory patterns, CPU arena and prepacking did
+not resolve it. Its original, non-simplified author ONNX showed the same
+issue in this host environment. The cause remains unknown; finite output
+alone does not qualify streaming correctness. This makes GTCRN the more
+ready first device baseline while UL-UNAS needs source/runtime investigation.
+The ONNX NumPy reference evaluator could not complete its bidirectional GRU
+case, so no successful independent full reference is claimed. These results
+do not prove that stock Wave ORT1.15.1 has the same behavior.
+
+Private host probes and exact diagnostics are in `artifacts/npu/poc21/audio-probe/`.
+The earliest probe output paths were overwritten by a later diagnostic; that
+limitation is recorded. The retained probe0003 outputs now have distinct
+paths and validated hash bindings. These exploratory artifacts are not
+qualified production references.
 
 | Artifact | Exact identity | Observed graph constraints |
 |---|---|---|
@@ -80,15 +111,25 @@ hop size as latency.
 
 ## Test order after spatial compatibility
 
-1. Establish GTCRN CPU/stateful sequence references, then small native GRU,
+1. Establish source-matched GTCRN CPU/stateful sequence and waveform references,
+   then measure complete processing with stock Wave ORT1.15.1. After that,
+   qualify small native GRU,
    ConvTranspose and normalization controls before considering full offload.
-2. Compare UL-UNAS and DPDFNet against the same clean/noisy recordings and DFN3
+2. Resolve UL-UNAS's identical-feed/state-reset discrepancy before promotion.
+   Compare validated UL-UNAS and DPDFNet against the same clean/noisy recordings and DFN3
    reference, measuring speech preservation, quality, hop deadlines and memory.
 3. Evaluate DTLN-AEC128 and LocalVQE separately with paired mic/reference audio
    and double-talk cases. Prove any export or precision conversion first.
 
 The detailed search report and exact static inventories remain under
 `artifacts/npu/poc20/audio-model-research.md` and `audio-model-sources/`.
+The compact LocalVQE49K line is a DSP AEC front end followed by a neural
+enhancer; its inspected public assets are GGUF, with no compact PyTorch/ONNX
+release verified. Whole-clip Pi5 timing uses precomputed alignment and
+utterance normalization, so it does not establish live A55 behavior. Keep
+LocalVQE v1.2 as the downloadable joint quality candidate and DTLN-AEC128 as
+the original-author AEC control; both add export/runtime work.
+
 Wave compatibility, sustained timing, quality on Wave recordings and complete
 latency are open questions. These recommendations authorize no integration or
-unbounded native experiment beyond the owner's current SqueezeNet test.
+unbounded native experiment beyond the owner's current bounded SqueezeNet repair.

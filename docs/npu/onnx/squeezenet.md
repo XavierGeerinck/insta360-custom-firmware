@@ -1,12 +1,70 @@
 # SqueezeNet1.1 compatibility on the Wave
 
-Three real trained SqueezeNet controls qualified on the Wave NPU on
-2026-10-14: spatial convolution, MaxPool and a Fire block with channel
-concatenation. The classifier graph failed during initialization of its
-13×13 average-pooling kernel. The complete model and paired benchmark were
-therefore skipped. SqueezeNet is **partially compatible, not fully qualified**.
+The complete trained SqueezeNet1.1 FP16 model passed Wave NPU inference on
+all four frozen images on 2026-10-14. A separate native profile repairs the
+rejected GlobalAveragePool lowering with a fixed depthwise convolution.
+All trained coefficients remain unchanged. This qualifies the exact profile
+and tested model, with numerical tolerances; no performance benchmark ran.
 
-## Actual native results
+## Mean repair and full-model result — PoC21
+
+The original classifier failed at its first size-only export call in
+`vivante.nn.pooling.layer2`, before inference. REA inspected the actual
+firmware/device `libOpenVX.so`, SHA
+`f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb`.
+Its ordinary Pooling NN support predicate clears the support flag for modes
+other than MAX. The verification foot copies this flag without overriding
+it. AVG therefore fails that route; changing stride alone cannot make that
+predicate admit AVG. The precise remaining fallback branch that failed is
+unobserved. This does not establish a universal 13×13 hardware limitation.
+
+The isolated `fp16-squeezenet-mean-v1` profile preserves the original ONNX
+GlobalAveragePool, graph and learned bits; only profile metadata changes.
+It emits a depthwise Conv2d with native weights `[13,13,C,1]`, multiplier 1,
+stride 1, dilation 1, zero padding and positive FP32 zero bias. Each weight
+has FP16 bits `0x1e0f`, exactly `1551/262144`. The 169-weight gain is
+`1 - 25/262144`, a −0.0095367431640625% error before accumulation and rounding.
+This is a qualified approximation to the mean. The original independent
+mean oracle and all previously frozen tolerances remain authoritative.
+
+| Control | Actual NN result | Agreement against original independent FP16 reference |
+|---|---|---|
+| 21a | Single-channel 13×13 mean: export and one Run passed | Byte-for-byte agreement, mean 31.359375 |
+| 21b | Trained classifier with 1,000-channel mean: export and one Run passed | 1,000 finite logits, zero policy mismatches; max error 0.015625 |
+| 21c | Complete 65-node model: export and four Runs passed | 4,000 finite logits, zero policy mismatches; max error 0.03125 |
+
+The full NBG is 3,278,944 bytes, SHA
+`a965e230a5fe0aac63f89ccb8ce6618a46113c4d0e8c9c97120bed984596ece5`.
+Actual target logs select NN throughout. The first full Run qualified the
+package; the remaining three used strict qualified execution with an ORT
+session throw guard. No CPU neural fallback or extra warm/benchmark Run occurred.
+
+| Frozen image | Max error vs independent FP16 | Max probability error vs original FP32 | Top-1 class unchanged | Top-5 overlap |
+|---|---:|---:|---:|---:|
+| dog | 0.015625 | 0.000264418819 | 258 | 5/5 |
+| dog1 | 0.015625 | 0.000419957272 | 273 | 5/5 |
+| dog2 | 0.03125 | 0.000189096144 | 235 | 5/5 |
+| grace_hopper | 0.015625 | 0.001945208801 | 457 | 5/5 |
+
+Every output also passes the original FP32 logit policy
+`abs(error) <= 0.05 + 0.02 * abs(reference)`, maximum probability error 0.01,
+identical top-1 and top-5 overlap at least 4/5. Agreement on these four images
+does not measure ImageNet accuracy or arbitrary model compatibility.
+
+See the [PoC21 result ledger](squeezenet-poc21-results.json),
+[notebook](../lab-notebook/2026-10-14-poc21-squeezenet-mean.md) and
+[frozen repair design](../../superpowers/specs/2026-10-14-wave-squeezenet-mean-design.md).
+
+PoC21 used 3 compiler processes,6 public export API calls and 6 NPU Runs
+within its 4/8/8 budget. All 44 staging roots are absent and final captured
+health passes; Wi-Fi is restored to the original saved network. A Wi-Fi
+driver warning during the initial disconnect remains a failed pre-native
+interval. A separately reviewed quiet interval admitted the first new phase.
+The final read-only check leaves literal phase state ACTIVE with 46 events;
+the budget is closed and no native action remains. 415 host tests and5
+subtests pass. Separate pure qualified loads and copied-artifact refusals pass.
+
+## Original pooling experiment — PoC20
 
 | Control | Trained graph | Result | Independent reference agreement |
 |---|---|---|---|
@@ -31,7 +89,7 @@ was NN. These results qualify the exact signatures, not arbitrary geometries.
 The selected ceiling-mode MaxPool geometries give the same output as floor
 mode. This experiment does **not** qualify general ceiling behavior. The
 classifier lowers GlobalAveragePool to public TIM-VX AVG Pool2d, kernel and
-stride13×13, zero padding, FLOOR, followed by an explicit reshape. Its input
+stride 13×13, zero padding, FLOOR, followed by an explicit reshape. Its input
 is FP16 `[13,13,1000,1]`; pooling output is `[1,1,1000,1]`.
 
 The raw20d log reports initialization failure for
@@ -59,8 +117,9 @@ and1 Flatten, with no Dropout. Batch1 input is `[1,3,224,224]`; output is
 Four real images and preprocessing are frozen: RGB, resize256 with bilinear
 antialiasing, center crop224, ImageNet normalization, Pillow11.3. Original
 FP32, actual ORT FP16 and independent NumPy outputs pass the predeclared
-logit/probability/top-k policy on all four images **on the host**. None of
-these four full inputs ran on the NPU.
+logit/probability/top-k policy on all four images on the host. PoC20 did not
+run these full inputs on the NPU; PoC21 runs the same frozen inputs through
+the repaired native profile, as reported above.
 
 | Artifact | SHA-256 |
 |---|---|
@@ -69,7 +128,7 @@ these four full inputs ran on the NPU.
 | Original FP32 ONNX | `76d825183eba140d2462759837ccb7c3802b9da807399ba7138cdad90c3af541` |
 | Frozen32-file preparation | `848c42d1c0bfd704d4f19ab40d573ea04379f26b7fc73ba5c3a532c474367f3c` |
 
-The bounded importer is `fp16-squeezenet-v1`. It rejects unsupported
+The original bounded importer is `fp16-squeezenet-v1`. It rejects unsupported
 operators, attributes, shapes and unconsumed coefficients. Importability
 does not confer native qualification. The retained20d and20e packages
 refuse strict native execution and uncompiled qualification locally, before
@@ -77,7 +136,7 @@ phase activation, a CPU neural session or device contact.20a–20c reload as
 qualified packages without CPU sessions or ADB; twelve copied-artifact
 tamper cases refuse. Original packages and earlier source bytes remain intact.
 
-## Device continuity and closure
+## Original PoC20 continuity and closure
 
 The new budget was6 compiler processes,12 public export API calls and30 NPU
 Runs. Actual use was **4 processes,7 API calls and3 Runs**, producing3 NBGs.
@@ -102,14 +161,15 @@ boot, services and parameters match, no lab processes/galcore holders remain,
 and seed-to-final/post-restoration diagnostics have no new alerts.
 
 Wi-Fi is verified restored to the original saved network, COMPLETED/adminUP
-with an assigned IP; no configuration was saved.381 host tests and5 subtests
+with an assigned IP; no configuration was saved.381 host tests and 5 subtests
 passed. Raw artifacts remain under `artifacts/npu/poc20/` and
 `artifacts/npu/runs/rea-poc20*`.
 
-The next spatial question is the exact rejected AVG signature and a proven
-equivalent lowering, under a new bounded experiment. For audio, the
-[speech-enhancement shortlist](speech-enhancement-candidates.md) recommends
-DPDFNet for full-band noise reduction and LocalVQE/DTLN-AEC for echo
-cancellation, with GTCRN as the smaller recurrent compatibility control.
-Their Wave performance and native compatibility remain unmeasured. VAD
-integration stays deferred under root backlog C20.
+PoC21 uses its own bounded experiment, roots and phase; it does not retry or
+modify the closed PoC20 experiment. For audio, the
+[speech-enhancement shortlist](speech-enhancement-candidates.md) selects GTCRN
+as the next device baseline. UL-UNAS has stronger matched published quality
+but an unresolved identical-feed/reset discrepancy in the Mac host runtime.
+DPDFNet remains the stronger full-band candidate, and LocalVQE/DTLN-AEC the
+echo-cancellation candidates. Their Wave performance and native compatibility
+remain unmeasured. VAD integration stays deferred under root backlog C20.

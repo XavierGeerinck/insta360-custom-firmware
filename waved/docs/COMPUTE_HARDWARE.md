@@ -85,7 +85,7 @@ Research continuation and remaining routes:
    and inference unchanged by making its zero Pad28/28 explicit: TP performs
    Pad, NN performs the original VALID convolution and pointwise/Relu. The
    original first K11/stride2 trained block also passed using equivalent
-   native2×2 strides for height1 only, maximum error0.001953125. REA proves
+   native2×2 strides for height1 only, maximum error 0.001953125. REA proves
    conditional generic/depthwise routing and runtime-configured bounds,
    without establishing the old rejecting branch or a universal15-tap limit.
    All full-graph folded initializer bits and four-clip CPU logits remain
@@ -94,7 +94,7 @@ Research continuation and remaining routes:
    testing stopped. Owner reconnection established a new boot with the same
    pinned stack. A separately reviewed disconnected quiet phase then qualified
    the remaining residuals and full trained graph,24NN +1TP routes. All800
-   frozen frame decisions match original FP32, max probability error0.000815.
+   frozen frame decisions match original FP32, max probability error 0.000815.
    The same-device4warm/32measured paired benchmark gives median prepared-feature
    boundary0.833188ms native versus8.664375ms one-thread stock ORT1.15.1 CPU,
   10.399× faster; calling-thread CPU time falls95.46071%. CPU is FP32/native
@@ -108,7 +108,7 @@ Research continuation and remaining routes:
    original trained first spatial Conv/Relu, MaxPool3/stride2 and Fire block
    with channel Concat exported on NN and ran once each. All15,168 outputs
    were finite with zero element mismatches under the frozen0.03+0.015absref
-   policy; maximum error0.001953125. MaxPool's selected ceil/floor geometries
+   policy; maximum error 0.001953125. MaxPool's selected ceil/floor geometries
    coincide, so general ceiling behavior remains unqualified. The classifier
    Conv1/Relu/AVG13×13/Reshape graph failed initialization of
    `vivante.nn.pooling.layer2`, status−1, during its first size-only export
@@ -123,11 +123,29 @@ Research continuation and remaining routes:
    [SqueezeNet guide](../../docs/npu/onnx/squeezenet.md). Stronger audio candidates
    DPDFNet and LocalVQE are [researched](../../docs/npu/onnx/speech-enhancement-candidates.md),
    with public weights but unmeasured Wave compatibility/quality/timing.
-7. **Remaining model-specific work.** Other shapes, multi-layer graphs,
+7. **SqueezeNet mean repair (PoC21, completed2026-10-14).** REA of the exact
+   firmware/device OpenVX binary finds the ordinary NN pooling support predicate
+   rejects AVG mode; the exact remaining fallback failure is unobserved.
+   The separate `fp16-squeezenet-mean-v1` profile emits a fixed 13×13 depthwise
+   convolution with half bits 0x1e0f, keeping all learned bits and the original
+   mean oracle. Its gain differs by −0.0095367431640625% before accumulation;
+   this is a numerically qualified approximation. Scalar and1,000-channel
+   classifier controls pass, then all four complete 65-node model inputs pass:
+   4,000 finite logits/zero mismatches, max error 0.03125, original FP32 top-1
+   and all top-5 classes agree. Actual use 3 compiler processes / 6 API calls / 6
+   Runs, no benchmark. All 44 roots are absent, final captured health passes
+   and original Wi-Fi is restored; the initial disconnect driver-warning FAIL
+   remains retained. The closed phase has 46 events, literal ACTIVE after the
+   final read-only check. See the
+   [PoC21 notebook](../../docs/npu/lab-notebook/2026-10-14-poc21-squeezenet-mean.md).
+   [Audio research](../../docs/npu/onnx/speech-enhancement-candidates.md) selects
+   GTCRN as the next device baseline; UL-UNAS has an unresolved identical-feed
+   reset discrepancy on Mac ORT1.27. No Wave audio inference or quality claim.
+8. **Remaining model-specific work.** Other shapes, multi-layer graphs,
    additional operator/dtype pairs and one-weight serializer differentials
    need separate qualification. The two first-run timings are correctness
    observations, not performance measurements.
-8. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
+9. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
    Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
    6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
    (`VIP9000NANOS_PID0X1000000E`) SDK. Either pairs with public acuitylite

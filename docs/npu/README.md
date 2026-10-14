@@ -47,17 +47,28 @@ earlier warning/ADB-loss intervals remain failed. See the
 
 **SqueezeNet compatibility (PoC20, completed2026-10-14).** Real spatial Conv,
 MaxPool and Fire/Concat controls qualify on NN with zero element mismatches;
-maximum error0.001953125. The exact classifier AVG13×13 initializer rejects
+maximum error 0.001953125. The exact classifier AVG13×13 initializer rejects
 `vivante.nn.pooling.layer2`, exit5, without an NBG or health change. Full-model
 inference and benchmark were skipped. Actual use4 compiler processes/7 public
 export API calls/3 Runs; all38 roots absent and original Wi-Fi restored.
 See the [SqueezeNet guide](onnx/squeezenet.md) and
 [PoC20 notebook](lab-notebook/2026-10-14-poc20-squeezenet.md).
 
+**SqueezeNet mean repair (PoC21, completed2026-10-14).** The isolated
+`fp16-squeezenet-mean-v1` profile replaces the native AVG lowering with a
+fixed depthwise convolution and keeps the trained bits unchanged. Full
+inference passes all four frozen images:4,000 finite logits, zero policy
+mismatches, maximum error 0.03125, original FP32 top-1/top-5 agreement on each
+image. The FP16 mean is an explicitly qualified approximation. No benchmark
+ran. See the [PoC21 notebook](lab-notebook/2026-10-14-poc21-squeezenet-mean.md)
+and [result ledger](onnx/squeezenet-poc21-results.json).
+
 The [speech-enhancement shortlist](onnx/speech-enhancement-candidates.md)
-selects DPDFNet for stronger full-band noise reduction and LocalVQE/DTLN-AEC
-for joint/standalone echo cancellation. These audio candidates have public
-weights; Wave compatibility, latency and quality remain unmeasured.
+selects GTCRN as the next device baseline. UL-UNAS has stronger matched paper
+quality but an unresolved identical-feed/reset discrepancy on Mac ORT1.27.
+DPDFNet is the stronger full-band candidate, LocalVQE/DTLN-AEC the
+joint/standalone echo-cancellation candidates. Wave compatibility, latency
+and audio quality remain unmeasured.
 
 ### Next real-model compatibility targets
 
@@ -66,7 +77,7 @@ trained models. Integrate the qualified VAD afterward; that deferred task is
 [root backlog C20](../../TODO.md#c--recording-and-audio-backend).
 
 The proposed order tests operator, geometry, dtype and model-size coverage.
-SqueezeNet has the partial results above; the other models remain unqualified.
+SqueezeNet has the exact repaired-profile results above; the other models remain unqualified.
 Expected operators below come from upstream
 architectures; freeze and inspect each actual ONNX export before defining its
 bounded native profile and device experiment.
@@ -78,14 +89,14 @@ bounded native profile and device experiment.
 | 3 | [MobileNetV2 quantized variant](https://github.com/onnx/models/blob/main/validated/vision/classification/mobilenet/README.md), INT8 | Full quantized Conv/depthwise/residual graph, scale/zero-point and possible per-channel handling. Existing U8 FC controls do not establish whole quantized-network support; inspect the selected QOperator/QDQ graph first. |
 | 4 | [ResNet18](https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py), FP16 | Larger spatial residual network, pooling/dense layers, constant/activation memory and compiler scaling. Resource limits need model-specific review. |
 
-**Next spatial question:** isolate the exact rejected classifier AVG signature
-and prove an equivalent lowering before resuming full SqueezeNet. MaxPool's
-success does not qualify average pooling or general ceiling behavior. For audio,
-GTCRN is the smaller first recurrent compatibility workload; DPDFNet is the
+**Next spatial question:** MobileNetV2's stride2 spatial depthwise convolution,
+ReLU6 and residual graph. The SqueezeNet mean repair does not qualify arbitrary
+average pooling or general ceiling behavior. For audio,
+GTCRN is the first recurrent compatibility workload; DPDFNet is the
 stronger48kHz denoising candidate. Each requires frozen trained weights,
 references and newly required native controls, followed by full parity and
 conditional timing. A new bounded contract and reviewed eligible phase are
-required; completed PoC19/20 budgets are closed.
+required; completed PoC19/20/21 budgets are closed.
 
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
@@ -311,6 +322,7 @@ transfer.
 | 18 — Trained MarbleNet | Can the real VAD backbone compile and match FP32 speech decisions? | **Partial native pass; full NPU blocked 2026-10-13** | Trained pointwise/residual blocks qualified; depthwise K29/rate2 rejected. Full model uses explicit CPU fallback, with800/800 frozen host decisions agreeing. |
 | 19 — MarbleNet compatibility | Can an exact rewrite remove the trained convolution rejection? | **Full native pass,2026-10-14** | Exact Pad rewrite qualifies the complete trained model;800/800 FP32 decisions agree. Prepared-feature boundary10.399× faster than CPU. Wi-Fi restored/final state clean; earlier failed intervals retained. |
 | 20 — SqueezeNet spatial compatibility | Can a second trained graph add spatial Conv/pooling/Concat coverage? | **Partial native pass,2026-10-14** | First Conv,MaxPool and Fire/Concat qualify; exact AVG13×13 classifier initializer rejects. Full/benchmark skipped;4 processes/7 APIs/3 Runs, Wi-Fi restored and38 roots absent. |
+| 21 — SqueezeNet mean repair | Can a fixed depthwise mean enable full trained inference? | **Full four-image inference pass,2026-10-14** | Original trained bits and mean oracle preserved; scalar/classifier/full NN exports pass,4,000 full logits pass, all top-1/top-5 agree;3 processes / 6 APIs/6 Runs, no benchmark. |
 | 9B / 9D continuation — Remaining compiler adapter | Can the missing no-kernel NBG consumer and exact VSINPU compiler path be proven? | Pending, separately gated | Acquire x86-64 no-kernel SDK `>=6.4.22` plus ovxlib `>=1.2.26`, prove its dependency/I/O ABI, then compile one fixed Conv before any NPU signature is approved. |
 | Production integration | Can `waved` schedule the NPU safely with fallback and observability? | Pending | Full audio acceptance passes without privileged recovery behavior. |
 
