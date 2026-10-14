@@ -155,11 +155,14 @@ no binary. Deploy through `/tmp` and swap with the watchdog stopped.
    in `/data/overlay/upper`: the copies there are what replace the stock files at boot.
 8. An update starts the watchdog again, unless one runs already (rcS starts it without a
    pidfile; two would fight over the devices), and ends with an `adb reboot` hint when the
-   gadget patch, `S03splash` or `rsyslog.conf` changed (they take effect at boot). A first
+   gadget patch, `S03splash`, `splash.fb` or `rsyslog.conf` changed (by md5; they take
+   effect at boot). A first
    install (no `/data/waved/waved`) asks for `adb reboot`. A failure, Ctrl-C, closed
    terminal (SIGHUP) or closed output pipe after step 5 began does the same; on an update
    it first puts `/tmp/waved.old` back if `/data/waved/waved` is missing or matches neither
-   the new md5 nor the old one (it waits for a swap still running).
+   the new md5 nor the old one (it waits for a swap still running). The old md5 counts only
+   if this run's swap wrote it: the stop step deletes one an earlier update in the same boot
+   left, and the swap writes it only after checking the copy.
 
 Overlay files are written through the mounts, never into `/data/overlay/upper` directly
 (`deploy/revert.sh` deletes there, on purpose). It tests the Wave's files on the Wave and

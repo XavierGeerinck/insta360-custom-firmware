@@ -102,8 +102,10 @@ It covers:
   stubs already in the upper directory kept untouched (a compiled 8352-byte
   `libapplogrs.so`, or an older installer's one-byte one), the watchdog
   started again at the end, the old binary's space counted as free, and a
-  closing `adb reboot` hint only when the gadget patch, the boot splash or the
-  logging settings changed;
+  closing `adb reboot` hint only when the gadget patch, the boot splash
+  (`S03splash`, `splash.fb`) or the logging settings changed; a second update
+  in the same boot, cut before its swap starts, keeps the binary it found
+  rather than an older one from `/tmp/waved.old`;
 - refusals before anything changes: `/etc` and `/usr` not the expected
   overlays (debug mode's overlay on `/` is accepted), too little room on
   `/data` (before any push), a copy that doesn't match, a failed push, an

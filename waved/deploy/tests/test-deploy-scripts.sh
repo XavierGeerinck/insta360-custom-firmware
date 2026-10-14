@@ -400,6 +400,7 @@ run_install() {
 wave_current() {
     cp "$DEPLOY/S03splash" "$W/etc/init.d/S03splash"
     cp "$DEPLOY/rsyslog.conf" "$W/etc/rsyslog.conf"
+    cp "$DEPLOY/splash.fb" "$W/data/waved/splash.fb"
 }
 
 # VERBOSE=1 shows the installer's output and the adb log of a failed check.
@@ -518,7 +519,7 @@ check update_never_writes_the_upper_dir '! logged DIRECT-UPPER-WRITE'
 check update_starts_the_watchdog_last 'watchdog_started_last && before "cp /tmp/waved.new waved" "start-stop-daemon"'
 # This Wave had no S03splash and the stock rsyslog.conf: both take effect at the
 # next boot, so the update ends with a reboot hint (the gadget was patched).
-check update_says_what_needs_a_reboot '[ "$(tail -n 2 "$T/out" | head -n 1)" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ] && [ "$(tail -n 1 "$T/out")" = "The new boot splash and logging settings take effect at the next boot: adb reboot" ] && said "    new /etc/init.d/S03splash" && said "    new /etc/rsyslog.conf"'
+check update_says_what_needs_a_reboot '[ "$(tail -n 2 "$T/out" | head -n 1)" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ] && [ "$(tail -n 1 "$T/out")" = "Reboot to apply the new boot splash and logging settings: adb reboot" ] && said "    new /etc/init.d/S03splash" && said "    new /etc/rsyslog.conf"'
 
 # An update that changes nothing the next boot would pick up: no reboot hint.
 setup; wave_running_waved; wave_current
@@ -527,7 +528,7 @@ check a_current_update_does_not_ask_for_a_reboot '[ $rc -eq 0 ] && ! said "adb r
 # An update that patches the gadget (a Wave an older install.sh set up).
 setup; wave_running_waved; wave_current
 FAKE_GADGET=stock run_install
-check an_update_that_patches_the_gadget_asks_for_a_reboot '[ $rc -eq 0 ] && said "    patched adbd at boot" && [ "$(tail -n 1 "$T/out")" = "The new USB gadget settings take effect at the next boot: adb reboot" ]'
+check an_update_that_patches_the_gadget_asks_for_a_reboot '[ $rc -eq 0 ] && said "    patched adbd at boot" && [ "$(tail -n 1 "$T/out")" = "Reboot to apply the new USB gadget settings: adb reboot" ]'
 
 # An older install.sh's one-newline libapplogrs.so is kept too.
 setup; printf '\n' > "$T/one-byte.so"; wave_running_waved "$T/one-byte.so"
@@ -538,6 +539,35 @@ check update_keeps_a_one_byte_telemetry_stub '[ $rc -eq 0 ] && said "    kept /u
 setup; wave_running_waved; head -c 2097152 /dev/zero > "$W/data/waved/waved"
 FAKE_FREE_KB=19000 run_install
 check counts_the_old_binary_as_free_space '[ $rc -eq 0 ]'
+
+# Only the splash image differs: that takes effect at the next boot too.
+setup; wave_running_waved; wave_current; printf 'an older splash' > "$W/data/waved/splash.fb"
+run_install
+check a_new_splash_image_asks_for_a_reboot '[ $rc -eq 0 ] && said "    new /data/waved/splash.fb" && [ "$(tail -n 1 "$T/out")" = "Reboot to apply the new boot splash: adb reboot" ]'
+
+# The old binary's md5 cannot be written: the swap stops before it removes
+# anything, and die() finds nothing to restore.
+setup; wave_running_waved; mkdir -p "$W/tmp/waved.old.md5"
+run_install
+check an_unwritable_old_md5_stops_the_swap_first '[ $rc -eq 1 ] && said "ERROR: the binary was not replaced" && [ "$(cat "$W/data/waved/waved")" = "old waved" ] && ! said "previous binary" && said "The watchdog runs again."'
+
+# Two updates in one boot: A -> B, then B -> C cut before the swap script
+# starts (adb fails, or Ctrl-C while it connects). /tmp/waved.old (A) and its
+# md5 from the first are still there; the binary B must stay, not go back to A.
+for cut in fail interrupt; do
+    setup; wave_running_waved
+    run_install
+    first_rc=$rc
+    head -c 4096 /dev/urandom > "$T/waved2"
+    : > "$FAKE_ADB_LOG"
+    if [ "$cut" = fail ]; then
+        WAVED_BINARY="$T/waved2" FAKE_SHELL_FAIL="if cp /tmp/waved.new waved" run_install
+    else
+        WAVED_BINARY="$T/waved2" FAKE_INTERRUPT="if cp /tmp/waved.new waved" run_install
+    fi
+    check "second_update_cut_before_the_swap_keeps_the_binary_($cut)" '[ $first_rc -eq 0 ] && [ $rc -eq 1 ] && same "$W/data/waved/waved" "$T/waved" && ! said "previous binary" && [ ! -e "$W/tmp/waved.old.md5" ]'
+    check "second_update_cut_before_the_swap_gets_the_watchdog_back_($cut)" 'said "The watchdog runs again." && watchdog_started_last'
+done
 
 # --- install: refusals before anything changes ------------------------------
 setup; FAKE_FREE_KB=1000 run_install

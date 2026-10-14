@@ -123,9 +123,10 @@ step() {
     echo "=== $1 ==="
 }
 
-# What a command printed on the Wave, without adb's carriage returns.
+# What a command printed on the Wave, without adb's carriage returns. adb
+# reads nothing here: not even a terminal that closed (die() runs then too).
 on_wave() {
-    adb shell "$1" | tr -d '\r'
+    adb shell "$1" < /dev/null | tr -d '\r'
 }
 
 # Run a script on the Wave that prints "ok" last when every step worked.
@@ -301,7 +302,10 @@ STOPPED=yes
 # The watchdog is the S60waved start loop (started by rcS or start-stop-daemon);
 # !/awk/ also skips the shell running this script. waved takes ~2 s to exit
 # (the lift retracts first); its binary's space is free only once it has.
-wave_ok 'killall pspapp pspapp_daemon 2>/dev/null; \
+# First, forget the md5 an earlier update in this boot kept: die() trusts it,
+# and the swap that writes this run's comes later and may never start.
+wave_ok 'rm -f /tmp/waved.old.md5; \
+killall pspapp pspapp_daemon 2>/dev/null; \
 for pid in $(ps | awk "/S60waved start/ && !/awk/ {print \$1}"); do kill $pid; done; \
 rm -f /tmp/S60waved.pid; sleep 1; killall waved 2>/dev/null; n=0; \
 while pidof waved >/dev/null; do \
@@ -321,8 +325,10 @@ mkdir -p /data/waved && cd /data/waved || exit 1; \
 rm -f /tmp/waved.old /tmp/waved.old.md5; \
 if [ -f waved ]; then \
     old=$(md5sum waved | cut -d" " -f1); \
-    cp waved /tmp/waved.old && [ "$(md5sum /tmp/waved.old | cut -d" " -f1)" = "$old" ] || exit 1; \
-    echo "$old" > /tmp/waved.old.md5; \
+    { [ -n "$old" ] && cp waved /tmp/waved.old && \
+      [ "$(md5sum /tmp/waved.old | cut -d" " -f1)" = "$old" ] && \
+      echo "$old" > /tmp/waved.old.md5 && [ "$(cat /tmp/waved.old.md5)" = "$old" ]; } || \
+    { rm -f /tmp/waved.old.md5; exit 1; }; \
 fi; \
 rm -f waved; \
 if cp /tmp/waved.new waved && chmod 755 waved && \
@@ -339,8 +345,10 @@ wave_ok "${swap//WAVED_MD5/$WAVED_MD5}" || die "the binary was not replaced"
 step "Installing S60waved, S03splash, rsyslog.conf, the splash and the firewall rules"
 # A dot name until the rename: rcS runs every /etc/init.d/S??* at boot. The
 # /etc files go through the overlay mount, like everything else here. A new
-# S03splash or rsyslog.conf takes effect at the next boot; it says which.
-wave_ok 'for f in /etc/init.d/S03splash:S03splash.new /etc/rsyslog.conf:rsyslog.conf.new; do \
+# S03splash, splash.fb or rsyslog.conf takes effect at the next boot; it says
+# which.
+wave_ok 'for f in /etc/init.d/S03splash:S03splash.new /data/waved/splash.fb:splash.fb.new \
+    /etc/rsyslog.conf:rsyslog.conf.new; do \
     { [ -f ${f%%:*} ] && [ "$(md5sum < ${f%%:*})" = "$(md5sum < /tmp/${f##*:})" ]; } || echo "    new ${f%%:*}"; \
 done; \
 mkdir -p /etc/init.d && \
@@ -358,7 +366,9 @@ mv -f /data/waved/.iptables.rules.new /data/waved/iptables.rules && \
 rm -f /tmp/S60waved.new /tmp/S03splash.new /tmp/rsyslog.conf.new /tmp/splash.fb.new \
     /tmp/iptables.rules.new && sync && echo ok' ||
     die "S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)"
-if grep -q -x '    new /etc/init.d/S03splash' <<< "$WAVE_OUT"; then reboot_for "boot splash"; fi
+if grep -q -x -e '    new /etc/init.d/S03splash' -e '    new /data/waved/splash.fb' <<< "$WAVE_OUT"; then
+    reboot_for "boot splash"
+fi
 if grep -q -x '    new /etc/rsyslog.conf' <<< "$WAVE_OUT"; then reboot_for "logging settings"; fi
 
 if [ "$HAS_CONFIG" = no ]; then
@@ -423,7 +433,7 @@ if [ "$UPDATE" = yes ]; then
     echo "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ==="
     if [ -n "$REBOOT_FOR" ]; then
         case "$REBOOT_FOR" in *", "*) REBOOT_FOR="${REBOOT_FOR%, *} and ${REBOOT_FOR##*, }" ;; esac
-        echo "The new $REBOOT_FOR take effect at the next boot: adb reboot"
+        echo "Reboot to apply the new $REBOOT_FOR: adb reboot"
     fi
 else
     echo "=== Done! Reboot to start waved ==="

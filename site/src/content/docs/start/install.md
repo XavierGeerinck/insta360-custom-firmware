@@ -116,8 +116,8 @@ How it ends depends on whether waved was on the Wave already:
   restarts. ===`. Your settings stay. The new waved runs without a reboot.
   If the update also changed what only takes effect at boot (the USB
   gadget patch, the boot splash or the logging settings), a last line says
-  so, for example `The new boot splash and logging settings take effect at
-  the next boot: adb reboot`. Reboot when it suits you.
+  so, for example `Reboot to apply the new boot splash and logging
+  settings: adb reboot`. Reboot when it suits you.
 
 If a step fails, the installer stops there and prints an `ERROR:` line that
 says what to do next. This holds for Ctrl-C, a closed terminal or a closed
