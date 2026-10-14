@@ -1,0 +1,357 @@
+{
+  "actual_use": {
+    "export_processes": 4,
+    "npu_runs": 3,
+    "public_compile_to_binary_calls": 7,
+    "successful_nbg_exports": 3
+  },
+  "closure": {
+    "boot_id": "96f50143-2a04-49f6-a755-4bad871655dd",
+    "final_health": {
+      "end_remote_absence_keys": [
+        "/tmp/wave-npu-onnx20-77bfd1526586420c-compile/lib/libCLC.so"
+      ],
+      "final_snapshot_sha256": "67b7e454aa2855088d464bec2a7dec5cf3e48a4fddc082da7c08cbabaf788a74",
+      "native_health_differences": [],
+      "native_kernel_alerts": [],
+      "phase_events": 36,
+      "phase_sha256": "5416310f66fcde117440c1bb78545f900d5657c50e8e2da74929ebe554d3397c",
+      "phase_terminal_state": "ACTIVE",
+      "postrestore_snapshot_sha256": "3510e45626cf67852d403787e5efb2fba525aa418395315d69fe095ecc9eb8c7",
+      "previous_assessment_sha256": "f065cf42b2db537675e36c4d839bca73293d018e0730397bf87572594f8c3d35",
+      "projection": "SYSTEM_ABSENT identical /lib,/usr/lib,/usr/lib64 CLC keys; remote-root absence verified separately",
+      "quiet_seed_sha256": "5ab0fcea129ed3bced4e3da06922293778b458020774c69854a2c6b5bdcb8763",
+      "raw_comparison_preserved": "final-native-health.json",
+      "raw_comparison_sha256": "82ba695a8d1631cc806bccbe3ff2930f3eab60e29c996156a7dc96e6a0dfbfc7",
+      "root_count": 38,
+      "roots": {
+        "/tmp/wave-npu-onnx17-0c2533823891b956-compile": "ABSENT",
+        "/tmp/wave-npu-onnx17-0c2533823891b956-execute": "ABSENT",
+        "/tmp/wave-npu-onnx17-35f6425edaed8c4f-compile": "ABSENT",
+        "/tmp/wave-npu-onnx17-35f6425edaed8c4f-execute": "ABSENT",
+        "/tmp/wave-npu-onnx17-4236dca48539ec0d-compile": "ABSENT",
+        "/tmp/wave-npu-onnx17-4236dca48539ec0d-execute": "ABSENT",
+        "/tmp/wave-npu-onnx17-5bbbc95a8718ba97-compile": "ABSENT",
+        "/tmp/wave-npu-onnx17-5bbbc95a8718ba97-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-28be4f7adf1dc731-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-28be4f7adf1dc731-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-2bc153b127292fd8-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-2bc153b127292fd8-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-3617ab817e55ac09-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-3617ab817e55ac09-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-4e442cbae3a2f96d-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-4e442cbae3a2f96d-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-58e160f2a1a6cb5f-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-58e160f2a1a6cb5f-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-69795fd7510e1ec9-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-69795fd7510e1ec9-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-75b0dc35caa0f1c4-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-75b0dc35caa0f1c4-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-7cbb31bfc04628f2-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-7cbb31bfc04628f2-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-825b2845dfb770c5-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-825b2845dfb770c5-execute": "ABSENT",
+        "/tmp/wave-npu-onnx18-ce433ec8e41eb900-compile": "ABSENT",
+        "/tmp/wave-npu-onnx18-ce433ec8e41eb900-execute": "ABSENT",
+        "/tmp/wave-npu-onnx20-0e16665e13944882-compile": "ABSENT",
+        "/tmp/wave-npu-onnx20-0e16665e13944882-execute": "ABSENT",
+        "/tmp/wave-npu-onnx20-77bfd1526586420c-compile": "ABSENT",
+        "/tmp/wave-npu-onnx20-77bfd1526586420c-execute": "ABSENT",
+        "/tmp/wave-npu-onnx20-9361a50622c80eae-compile": "ABSENT",
+        "/tmp/wave-npu-onnx20-9361a50622c80eae-execute": "ABSENT",
+        "/tmp/wave-npu-onnx20-9c79b484eacbcaa3-compile": "ABSENT",
+        "/tmp/wave-npu-onnx20-9c79b484eacbcaa3-execute": "ABSENT",
+        "/tmp/wave-npu-onnx20-f1f50a50acf8a759-compile": "ABSENT",
+        "/tmp/wave-npu-onnx20-f1f50a50acf8a759-execute": "ABSENT"
+      },
+      "seed_remote_absence_keys": [
+        "/tmp/wave-npu-onnx18-58e160f2a1a6cb5f-compile/lib/libCLC.so"
+      ],
+      "seed_to_postrestore_alerts": [],
+      "seed_to_postrestore_differences": [],
+      "status": "PASS",
+      "wifi_restore_sha256": "e977622afad7bb3246a9814338a937a841838a44a8d45881141a8522f594461a"
+    },
+    "final_health_sha256": "f248d09c093fb69f22bcc03761525c1461aa7daefb55560378bc03959d227d9d",
+    "host_final_verification_sha256": "74c7fec304bad28149d1c4cd26e9b5ba892d8d7ea90944888fc4bd26c3a19b78",
+    "phase_events": 36,
+    "phase_id": "squeezenet-20261014-a1",
+    "phase_terminal_state": "ACTIVE",
+    "pre_native_preparation_health_FAIL_preserved": "8aa74cb3e1bbe33eb2a85357540768c60fb5669cd3a89f84a7f5a97248750d61",
+    "raw_final_comparison_FAIL_preserved": "82ba695a8d1631cc806bccbe3ff2930f3eab60e29c996156a7dc96e6a0dfbfc7",
+    "status": "PASS",
+    "terminal_state_note": "Final read-only continuity check recorded ACTIVE; no further native operations or automatic reseed/advance occurred. Experiment is closed.",
+    "wifi_restoration": {
+      "admin_up": true,
+      "configuration_saved": false,
+      "device_snapshot_sha256": "3510e45626cf67852d403787e5efb2fba525aa418395315d69fe095ecc9eb8c7",
+      "health_differences": [],
+      "health_status": "PASS",
+      "ip_assigned": true,
+      "kernel_alerts": [],
+      "native_calls_after_restore": 0,
+      "original_saved_network_matches": true,
+      "reassociation_ack": "OK",
+      "state": "COMPLETED",
+      "status": "PASS"
+    }
+  },
+  "controls": {
+    "20a": {
+      "compile_binary_sha256": "06c3c4ad59601d7198304eb92b42a139ebf0ec49e319b65a18e80901befdd6b8",
+      "compile_cleanup_sha256": "235e3fda2c6df1cde31fd4e31fe35df263d645f42c5d988fc2e4abeee5a59ce8",
+      "compile_run_id": "rea-poc20a-spatial-compile-20261014-a1",
+      "compile_run_sha256": "b31efabf989761397b4991bb4599df99ce23fb45aa95e05ea7f3c7adc88b88f0",
+      "compile_stdout_sha256": "ed8ccf44d9abe0cf78396a89bf8001997629dfe177c90fc455b64fe2b1a216b0",
+      "description": "spatial first Conv3/s2 and Relu",
+      "lowering_sha256": "77bfd1526586420ce6851cab0ff4e5ebeff728f39e37ddcdd9397c8144f1ff99",
+      "model_sha256": "130ee60d79a7b46bf54d8108f92540089665c85e4b8d110152c9dff683cdefc4",
+      "native_input": {
+        "byte_size": 1326,
+        "dtype": "FLOAT16",
+        "name": "input",
+        "shape": [
+          13,
+          17,
+          3,
+          1
+        ]
+      },
+      "native_output": {
+        "byte_size": 6144,
+        "dtype": "FLOAT16",
+        "name": "output",
+        "shape": [
+          6,
+          8,
+          64,
+          1
+        ]
+      },
+      "nbg_bytes": 6344,
+      "nbg_sha256": "e7b8d2b47cf0e6d790fef7e438a05bc907d656718233d83da9d2b314f8df105d",
+      "numerical_comparison": {
+        "elements": 3072,
+        "max_abs_error": 0.001953125,
+        "mismatched_elements": 0,
+        "observed_sha256": "c8bec5afa1df1abbf42a43b70ecddb224ca156b254ae8caf4a99e9f023cba3bb",
+        "passed": true,
+        "policy": {
+          "atol": 0.03,
+          "rtol": 0.015
+        },
+        "reference_sha256": "08959380d6ef55bc01572e39c7671d28a6c4b0391462284fbf65ab900e55d0b4",
+        "status": "PASS"
+      },
+      "package_sha256": "f83a3a7e33f1a3ac2627370964bdc1b3e3492349faaa266ac16fdc803566519e",
+      "qualification_cleanup_sha256": "4b0003e953c7dc08555030d50e43a1a37e2a12dcfc894ac147cb7be03d78731f",
+      "qualification_run_id": "rea-poc20a-spatial-execute-20261014-a1",
+      "qualification_run_sha256": "81b428461f4b63cf67fc208b58a2c3a7f8ace5a0f84dd798f4d48ceefe2fa901",
+      "qualification_sha256": "16fd12710a28dc7d4844b03b8edb913661f0de9978e6c9e6ac8a275c33c2fe0d",
+      "status": "QUALIFIED",
+      "target": "VXNNE_OPERATION_TARGET_NN"
+    },
+    "20b": {
+      "compile_binary_sha256": "4e7afc752b62cdca61350398d36c080a2d8a8a5523744d1dc0ac7dca26c212ce",
+      "compile_cleanup_sha256": "ba049e6d1757cbff56af6828bb068b08daf360dd14a3f6e8fdbad6c21affaf3f",
+      "compile_run_id": "rea-poc20b-pool-compile-20261014-a1",
+      "compile_run_sha256": "e2f5ec7889cef6b00eb848eb355b142c633819897d44ab04c858922bf4cc27de",
+      "compile_stdout_sha256": "b34ab35230328dab3aef14c6e286c7d8426eed83b00ed3caecf548c1181df576",
+      "description": "MaxPool3/s2 with equivalent ceil/floor geometry",
+      "lowering_sha256": "0e16665e13944882c5dcecef83d3f210858a04c6016cda2b79a8d75735dd8883",
+      "model_sha256": "16017ed229d2d827f5de3db2733a76dfa2bc5102070d6d87319156520d7fff46",
+      "native_input": {
+        "byte_size": 36480,
+        "dtype": "FLOAT16",
+        "name": "input",
+        "shape": [
+          19,
+          15,
+          64,
+          1
+        ]
+      },
+      "native_output": {
+        "byte_size": 8064,
+        "dtype": "FLOAT16",
+        "name": "output",
+        "shape": [
+          9,
+          7,
+          64,
+          1
+        ]
+      },
+      "nbg_bytes": 2504,
+      "nbg_sha256": "626bb2abb0aacd05687af4866f2d46af12917e500d13388e4c61a7955f48b6cb",
+      "numerical_comparison": {
+        "elements": 4032,
+        "max_abs_error": 0.0,
+        "mismatched_elements": 0,
+        "observed_sha256": "e911a9a395cac2bed28bf7c645013286a8f520b5f42a01653537e4156440c695",
+        "passed": true,
+        "policy": {
+          "atol": 0.03,
+          "rtol": 0.015
+        },
+        "reference_sha256": "e911a9a395cac2bed28bf7c645013286a8f520b5f42a01653537e4156440c695",
+        "status": "PASS"
+      },
+      "package_sha256": "608a798941aa267e039dfd48d572349fc30597ba2ea7b3916cd5b6db02690862",
+      "qualification_cleanup_sha256": "be123ab38ea112b970f437c9985460dad9f9ce496fbb30ef504ddaf537575a63",
+      "qualification_run_id": "rea-poc20b-pool-execute-20261014-a1",
+      "qualification_run_sha256": "23fc6f5f33c4c8e6f7aee0beae2022560f2f66ca0a083d1c1711ee0efc35d095",
+      "qualification_sha256": "d8cffaafeebfcbbe0518b4faca825c3eee00e6dd8a1a67a76e04933aef9dfb83",
+      "status": "QUALIFIED",
+      "target": "VXNNE_OPERATION_TARGET_NN"
+    },
+    "20c": {
+      "compile_binary_sha256": "cd58862d2faebd2bc59a3efefb72347d84f4c85eda41f7d666ed3d084525009c",
+      "compile_cleanup_sha256": "cfe70a028afbdd83ca26b28a7aa51ca3f4adc9ea6be48c80167cc09d246df8ef",
+      "compile_run_id": "rea-poc20c-fire-compile-20261014-a1",
+      "compile_run_sha256": "09ae2902d8d2b280ef9a13e243f3fe84c7e0e5eb23566927c91ba16669259e01",
+      "compile_stdout_sha256": "8829b0a0f7cc7d1247e9d6a10363b6a0c1002a4c27517dabaeb6114260a9ae22",
+      "description": "first trained Fire block with channel Concat",
+      "lowering_sha256": "9361a50622c80eaea420c8bb69a60070b526bf73a4f9a9e29e77b2079b569203",
+      "model_sha256": "2d755e4d7932a61e9217835cacc1135adc9eb7ba5e9d085f7e5821c96a9efaf9",
+      "native_input": {
+        "byte_size": 8064,
+        "dtype": "FLOAT16",
+        "name": "input",
+        "shape": [
+          9,
+          7,
+          64,
+          1
+        ]
+      },
+      "native_output": {
+        "byte_size": 16128,
+        "dtype": "FLOAT16",
+        "name": "output",
+        "shape": [
+          9,
+          7,
+          128,
+          1
+        ]
+      },
+      "nbg_bytes": 29304,
+      "nbg_sha256": "da20519ee9e00e3adcf4712f7310244e59d41af270d1613aecf206a09fa69b8b",
+      "numerical_comparison": {
+        "elements": 8064,
+        "max_abs_error": 0.001953125,
+        "mismatched_elements": 0,
+        "observed_sha256": "14f90146804c14d242721da6cdf7815fdeeb4b7b86dfff87f08bdc5e22fec5c6",
+        "passed": true,
+        "policy": {
+          "atol": 0.03,
+          "rtol": 0.015
+        },
+        "reference_sha256": "67d90e1f42e38eac8906557b801d0e0901ea4868d518df207dbdea5c38990fb0",
+        "status": "PASS"
+      },
+      "package_sha256": "0f9074a852e7136afa1b3c37facf6bda44989ef35850cd1d45dc1f3b2a1e11b6",
+      "qualification_cleanup_sha256": "78acf099aaa1070107ae121fd11e61a3e8dfd2bd5d5618803f9fe212c3d6fafb",
+      "qualification_run_id": "rea-poc20c-fire-execute-20261014-a1",
+      "qualification_run_sha256": "3b5215124f9c68001c37901e3c31eae79faecf70e2cceba8efb5079aa8acacf9",
+      "qualification_sha256": "ef4db81002dd1cf305ea83ac174de3f9532345e370bb01b429740b5f33df9bb1",
+      "status": "QUALIFIED",
+      "target": "VXNNE_OPERATION_TARGET_NN"
+    },
+    "20d": {
+      "compile_binary_sha256": "dd32ae4ed0edca4807e7ffbd1e37bf3dee43232250678425023cb8fe49990e17",
+      "compile_cleanup_sha256": "4d75559e6458c0995dad8f74871eb05af21650e45d845dbb07ba7c361cf6a209",
+      "compile_run_id": "rea-poc20d-classifier-compile-20261014-a1",
+      "compile_run_sha256": "14533b71b1335e0261be154f29fd37164655a6e7488d4439daa2fe99147d3967",
+      "compile_stdout_sha256": "f1047891a6e5d7b7e7bcd4027ce07dc8647f78fe39c451f0576bb25e279b2005",
+      "description": "classifier Conv1, Relu, AVG13x13, Flatten",
+      "failed_initializer": "vivante.nn.pooling.layer2",
+      "force_release_diagnostics_preserved": true,
+      "host_adb_exit": 0,
+      "initializer_status": -1,
+      "lowering_sha256": "f1f50a50acf8a759131dbfbc5dad02277617448dd0cac3ce48e2e9efb66bff1a",
+      "model_sha256": "e5a3ffa3ecdde8b68bae5dafd7f5672bf383fd2bd1e65fe6ff7acebc934cf498",
+      "native_input": {
+        "byte_size": 173056,
+        "dtype": "FLOAT16",
+        "name": "input",
+        "shape": [
+          13,
+          13,
+          512,
+          1
+        ]
+      },
+      "native_output": {
+        "byte_size": 2000,
+        "dtype": "FLOAT16",
+        "name": "output",
+        "shape": [
+          1000,
+          1
+        ]
+      },
+      "nbg_produced": false,
+      "npu_runs": 0,
+      "package_sha256": "34522c1b23f15a0207e1ab4a5f226e2bb1fb145167fcf0ca58beaf0d02e0b901",
+      "public_compile_to_binary_calls": 1,
+      "remote_exit": 5,
+      "status": "CLEAN_COMPILE_REJECTION",
+      "timed_out": false
+    }
+  },
+  "date": "2026-10-14",
+  "experiment": "PoC20 trained SqueezeNet1.1 spatial compatibility",
+  "fixtures": {
+    "checkpoint_sha256": "b8a52dc049b60e4b6ab68ad0df457362afab8b6304b2febdc1650a5dab4d7e7b",
+    "frozen_full_inputs": 4,
+    "host_classification_parity_only": true,
+    "host_preparation_env": "Python3.12.9/Torch2.5.1/torchvision0.20.1/NumPy2.5.1/ONNX1.22/ORT1.27/Pillow11.3",
+    "independent_oracle_verification_sha256": "04c0a7a8c64aa7d9f347e646e883002435b2752bd5f71e3922b6a9829b34965e",
+    "original_state_tensors": 52,
+    "preparation_sha256": "848c42d1c0bfd704d4f19ab40d573ea04379f26b7fc73ba5c3a532c474367f3c",
+    "weights_accounted": 1235496
+  },
+  "full_model": {
+    "benchmark_native_runs": 0,
+    "benchmark_status": "SKIPPED",
+    "four_image_native_parity": false,
+    "model_sha256": "f5ac6b08b8304372c06fb897c2cad63e0c30191e9bc866680b1777e5bb62e081",
+    "native_runs": 0,
+    "onnx_nodes": 65,
+    "reason": "20d exact classifier AVG pooling kernel failed initialization",
+    "status": "SKIPPED_PREREQUISITE_REJECTION"
+  },
+  "native_budget": {
+    "export_processes": 6,
+    "npu_runs": 30,
+    "public_compile_to_binary_calls": 12
+  },
+  "profile_id": "fp16-squeezenet-v1",
+  "schema_version": 1,
+  "scope": {
+    "VAD_integration": "deferred until NPU compatibility work complete; root TODO C20",
+    "full_squeezenet": false,
+    "general_ceil_pooling": false,
+    "general_global_average_pooling": false,
+    "new_audio_models_inferred": false,
+    "production_integrated": false,
+    "qualified_signatures": [
+      "20a",
+      "20b",
+      "20c"
+    ]
+  },
+  "status": "PARTIAL_NATIVE_PASS_FULL_BLOCKED",
+  "tests": {
+    "benchmark_attempted": false,
+    "copied_artifact_tamper_refusals": 12,
+    "final_guard_CPU_sessions": 0,
+    "final_guard_device_calls": 0,
+    "passed": 381,
+    "qualified_pure_loads": 3,
+    "subtests_passed": 5,
+    "unqualified_model_refusals": 2
+  }
+}

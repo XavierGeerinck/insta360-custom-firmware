@@ -2,7 +2,7 @@
 
 The explicit `wave-native` backend imports ONNX initializers, compiles them
 through the exact Wave TIM-VX/OpenVX stack, and runs the resulting NBG on
-the NN engine. A package is eligible only after its exact model, compiler,
+the NN/TP engines. A package is eligible only after its exact model, compiler,
 NBG and execution have passed device qualification. The default PoC 9
 backend still uses its existing CPU/refusal policy.
 
@@ -23,7 +23,7 @@ in the [result ledger](native-poc17-results.json) and
 
 ## Supported import profiles
 
-Both profiles require ONNX opset 13, the standard domain, one compute node,
+The two original PoC17 profiles below require ONNX opset 13, the standard domain, one compute node,
 inline immutable initializers and fixed input/output shapes.
 
 | ONNX operator | ONNX contract | Native lowering |
@@ -41,6 +41,18 @@ Importable does not mean qualified. A different supported model needs a
 new package and its own bounded qualification. Full Silero, DeepFilterNet,
 arbitrary Conv/MatMul shapes and general ONNX graphs remain outside this
 backend's qualified coverage.
+
+Later multi-node profiles have separate bounded contracts and numerical policies:
+
+- [MarbleNet](marblenet.md): the exact full trained Pad rewrite is qualified;
+  TP padding and NN convolutions, with full four-clip inference/benchmark.
+- [SqueezeNet](squeezenet.md): spatial Conv/Relu, MaxPool and Fire/Concat controls
+  qualify. The classifier AVG13×13 kernel rejects; full model remains unqualified.
+
+The new `fp16-squeezenet-v1` importer does not turn these partial controls into
+full-model admission. Missing-NBG or unqualified packages refuse strict native
+execution locally. Its mandatory reviewed persistent phase checks inter-run
+continuity and immediate preflight; no automatic reset or retry is provided.
 
 ## Repository setup
 

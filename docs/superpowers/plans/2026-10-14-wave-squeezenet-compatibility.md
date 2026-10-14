@@ -48,15 +48,15 @@ and `tests/test_squeezenet_model.py`; artifacts under poc20/prepared.
 **Interface:** `prepare_squeezenet(assets:Path, output:Path)->dict` emits five
 FP16 models, original FP32 model, four full-input references and control inputs.
 
-- [ ] Establish RED for wrong checkpoint/preprocessing/parameter count, eval
+- [x] Establish RED for wrong checkpoint/preprocessing/parameter count, eval
   Dropout, source-mutation/linked paths and unsafe existing output.
-- [ ] Load trusted checkpoint with weights_only=True. Use torchvision0.20.1
+- [x] Load trusted checkpoint with weights_only=True. Use torchvision0.20.1
   eval model, original CPU outputs and exact explicit FP16 conversions.
-- [ ] Export standard IR8/opset13, identify actual node/shape inventory, slice
+- [x] Export standard IR8/opset13, identify actual node/shape inventory, slice
   frozen original image/activations for the four specified controls.
-- [ ] Freeze every acquired/derived byte, expected outputs, all parameter bits,
+- [x] Freeze every acquired/derived byte, expected outputs, all parameter bits,
   top-k/class margins and environment in exclusive preparation receipt.
-- [ ] Verify ORT against Torch FP32 and independent FP16 after Task2; commit
+- [x] Verify ORT against Torch FP32 and independent FP16 after Task2; commit
   owned fixture source/tests when all immutable references pass.
 
 ## Task2 — Bounded spatial graph family and native sources
@@ -68,16 +68,16 @@ dispatch. Controller owns `npu_onnx_native_lab.py` and phase/shared health hooks
 **Interface:** import/validate/oracle/output comparison and exact compile/execute
 source functions follow existing package contracts with the new profile ID.
 
-- [ ] RED tests for asymmetric shapes/weights, channel ordering, unconsumed
+- [x] RED tests for asymmetric shapes/weights, channel ordering, unconsumed
   initializers, invalid pool geometry, unknown attrs/operator, unsafe constant
   payload/metadata and resealed incompatible DAGs.
-- [ ] Add bounded batch1 Conv/Relu/MaxPool/Concat/GAP/Flatten importer and NumPy
+- [x] Add bounded batch1 Conv/Relu/MaxPool/Concat/GAP/Flatten importer and NumPy
   oracle, fixed numeric policy and explicit native spatial source generation.
-- [ ] Preserve all earlier profile/source bytes; add mandatory continuity phase
+- [x] Preserve all earlier profile/source bytes; add mandatory continuity phase
   and new-profile reference/readback/metadata validation in the controller bridge.
-- [ ] Run focused and previous profile/source tests, actual source regeneration,
+- [x] Run focused and previous profile/source tests, actual source regeneration,
   pure qualified-load/tamper checks, and independent source review before launch.
-- [ ] Commit only assigned source/test/template files.
+- [x] Commit only assigned source/test/template files.
 
 ## Task3 — Native control and full-model qualification
 
@@ -85,44 +85,47 @@ source functions follow existing package contracts with the new profile ID.
 **Artifacts:** poc20/packages20a–20e, exact sources/ELFs, raw run receipts and
 continuous snapshot ledger. No vendor libraries are loaded into host processes.
 
-- [ ] Import/build all five frozen candidates offline; inspect source/binary
+- [x] Import/build all five frozen candidates offline; inspect source/binary
   identities, dependencies/ELF protections and native operation eligibility.
-- [ ] Capture selected-unit baseline and a new60-second quiet eligible interval;
+- [x] Capture selected-unit baseline and a new60-second quiet eligible interval;
   independently review explicit new phase seed and each live control source.
-- [ ] Export each already-selected independent control once, qualify successful
+- [x] Export each already-selected independent control once, qualify successful
   controls once and stop on fault/health/numerical gates. Clean unsupported
   outcomes skip dependent full stages and remain explicit negatives.
-- [ ] After all prerequisite signatures qualify, export20e once, qualify first
-  full image once, run the other three fixed inputs once, enforce full parity.
+- [x] Evaluate prerequisites for20e/full four-image parity. **SKIPPED:**20d failed
+  its first size-only export with a canonical clean rejection; no full export
+  or native input run is authorized by this conditional path.
 
 ## Task4 — Conditional paired benchmark and closure
 
 **Create:** bounded vision benchmark generator/template and controller script,
 meaningful host parser/source-policy tests, SqueezeNet guide/notebook/JSON.
 
-- [ ] If full four-image gate passes, prepare one paired program with4 warm-up
-  and16 measured fixed-image pairs, CPU FP32/stock one-thread ORT and exact
-  qualified FP16 reference. Review exact source/ELF/receipt before one launch.
-- [ ] Independently verify actual output, raw timing samples/statistics, stock
-  target routes, complete phase chain, numeric/cleanup and used budget.
-- [ ] Verify final pinned state/services/boot/parameters, diagnostic overlap,
+- [x] Evaluate the full-model prerequisite for one4warm/16measured paired program.
+  **SKIPPED:**20d rejected. Conditional host-development RED logs retained,
+  unfinished source removed, no benchmark ELF/build or launch occurred.
+- [x] Independently verify actual control outputs, NN routes, phase chain,
+  numeric/cleanup and4process/7API/3Run budget use. **Timing skipped** with
+  the full model; no performance claim made.
+- [x] Verify final pinned state/services/boot/parameters, diagnostic overlap,
   all staging roots absent and no lab processes/galcore holders. Restore and
   verify original Wi-Fi when temporarily disconnected.
-- [ ] Retain actual qualified-load/tamper refusal evidence without CPU/ADB;
+- [x] Retain actual qualified-load/tamper refusal evidence without CPU/ADB;
   final fixture/package integrity and tests; update observed compatibility
   docs with success or exact native blocker, not proposed operator claims.
-- [ ] Final whole-branch review; fix material findings; commit only owned paths.
+- [x] Final whole-branch review PASS:54 artifact/ledger hash bindings verified,
+  no material findings; commit only owned documentation paths.
 
 ## Task5 — Noise reduction and echo cancellation model shortlist
 
 **Research:** primary author/source/model repositories and exact public weights;
 private report poc20/audio-model-research.md and tracked sourced model guide.
 
-- [ ] Compare quality-focused and lightweight trained noise reduction candidates
+- [x] Compare quality-focused and lightweight trained noise reduction candidates
   with the measured Wave DFN3 CPU baseline, sample rates/latency/state/operators.
-- [ ] Find accessible AEC/joint enhancement checkpoints with microphone and
+- [x] Find accessible AEC/joint enhancement checkpoints with microphone and
   far-end-reference inputs; distinguish NS-only DeepVQE ports from genuine AEC.
-- [ ] Record input/uplink versus received-output speech roles, double-talk and
+- [x] Record input/uplink versus received-output speech roles, double-talk and
   reference-alignment requirements, trained weight/source/license evidence,
   unknown Wave compatibility and next bounded test priority. No integration.
 
@@ -138,3 +141,16 @@ private report poc20/audio-model-research.md and tracked sourced model guide.
   the same frozen element policy on every prepared input before device work.
 - First Grace Hopper download URL404 remains retained; replacement comes from
   pinned matplotlibv3.10.0 with full hash. No native retry is involved.
+
+## Completed outcome
+
+20a/20b/20c qualify on NN;20d's AVG13×13 classifier kernel failed size-only
+initialization, remoteexit5/CLEAN/health unchanged.20e/full4images andbenchmark
+skipped. No retry, precision relaxation or unselected native control. Final
+38roots absent/system/diagnostics PASS and originalWiFi verified restored.
+381tests+5subtests PASS; purequalified-load/tamper/negative guards PASS.
+The original host-preparation boot/WiFi failure and final raw temporary-CLC-key
+scope mismatch remain retained; separate pinned system-view assessment proves
+closure. Phase final literalstateACTIVE after read-only closure check,36events;
+no automatic advance/reset, experimentclosed. Audio static/source research
+complete with no audio inference/integration. VAD remains deferred C20.

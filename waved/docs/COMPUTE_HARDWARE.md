@@ -104,11 +104,30 @@ Research continuation and remaining routes:
    to its original saved network. Historical failed intervals remain failed.
    No production VAD service was installed. See the
    [PoC19 notebook](../../docs/npu/lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
-6. **Remaining model-specific work.** Other shapes, multi-layer graphs,
+6. **SqueezeNet spatial compatibility (PoC20, completed2026-10-14).** The
+   original trained first spatial Conv/Relu, MaxPool3/stride2 and Fire block
+   with channel Concat exported on NN and ran once each. All15,168 outputs
+   were finite with zero element mismatches under the frozen0.03+0.015absref
+   policy; maximum error0.001953125. MaxPool's selected ceil/floor geometries
+   coincide, so general ceiling behavior remains unqualified. The classifier
+   Conv1/Relu/AVG13×13/Reshape graph failed initialization of
+   `vivante.nn.pooling.layer2`, status−1, during its first size-only export
+   call. No NBG or inference; healthy CLEAN cleanup, force-release diagnostics
+   preserved. This identifies an exact signature blocker, not a universal
+   pooling limit. Full SqueezeNet and benchmark were skipped. Actual budget
+   use4 compiler processes/7 public export API calls/3 Runs, no retry. Final
+   system/diagnostic checks pass,38 staging roots are absent and original
+   Wi-Fi is restored. The pre-native boot/Wi-Fi failure and a raw final
+   temporary-CLC-key mismatch remain retained; a separately pinned identical
+   system-view assessment proves closure. See the
+   [SqueezeNet guide](../../docs/npu/onnx/squeezenet.md). Stronger audio candidates
+   DPDFNet and LocalVQE are [researched](../../docs/npu/onnx/speech-enhancement-candidates.md),
+   with public weights but unmeasured Wave compatibility/quality/timing.
+7. **Remaining model-specific work.** Other shapes, multi-layer graphs,
    additional operator/dtype pairs and one-weight serializer differentials
    need separate qualification. The two first-run timings are correctness
    observations, not performance measurements.
-7. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
+8. **Toolchain requests (need the owner to send them).** Sunplus C3V "NPU
    Toolkit" page offers a vSimulator SDK CL1307462B (2026-04-09) and Acuity
    6.51.16 on request; Amlogic or `ML_Support@verisilicon.com` for the A113X2
    (`VIP9000NANOS_PID0X1000000E`) SDK. Either pairs with public acuitylite
