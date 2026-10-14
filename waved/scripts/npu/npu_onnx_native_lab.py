@@ -35,12 +35,17 @@ RUNTIME_PROVENANCE_SHA256 = (
 IMAGE = "sha256:a45f1308adfe3fc3b90e329e72d5efe9d743e6cc77017254d28bbba1c689586a"
 TIM_COMMIT = "702715d714277376d7ff466b7b72833ff57564c1"
 ROOT_RE = re.compile(
-    r"/tmp/wave-npu-onnx(?:17|18|20)-[0-9a-f]{16}-(?:compile|execute)\Z"
+    r"/tmp/wave-npu-onnx(?:17|18|20|21)-[0-9a-f]{16}-(?:compile|execute)\Z"
 )
 GRAPH_PROFILE = "fp16-marblenet-v1"
 VISION_PROFILE = "fp16-squeezenet-v1"
-GRAPH_PROFILES = frozenset({GRAPH_PROFILE, "fp16-marblenet-pad-v1", VISION_PROFILE})
-PHASE_PROFILES = frozenset({"fp16-marblenet-pad-v1", VISION_PROFILE})
+VISION_MEAN_PROFILE = "fp16-squeezenet-mean-v1"
+GRAPH_PROFILES = frozenset(
+    {GRAPH_PROFILE, "fp16-marblenet-pad-v1", VISION_PROFILE, VISION_MEAN_PROFILE}
+)
+PHASE_PROFILES = frozenset(
+    {"fp16-marblenet-pad-v1", VISION_PROFILE, VISION_MEAN_PROFILE}
+)
 MAXIMUM_GRAPH_TENSOR_BYTES = 8 * 1024 * 1024
 SYSTEM_HASHES = {
     path: digest
@@ -184,6 +189,8 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _poc_id(record: dict) -> str:
+    if record.get("profile_id") == VISION_MEAN_PROFILE:
+        return "21"
     if record.get("profile_id") == VISION_PROFILE:
         return "20"
     return "18" if record.get("profile_id") in GRAPH_PROFILES else "17"
@@ -214,7 +221,9 @@ def _compare_output(record: dict, expected: bytes, observed: bytes) -> dict:
         raise NativeLabError("native output length differs from its tensor contract")
     if record.get("profile_id") in GRAPH_PROFILES:
         _host()
-        if record.get("profile_id") == VISION_PROFILE:
+        if record.get("profile_id") == VISION_MEAN_PROFILE:
+            from wave_onnx_hybrid.vision_mean import compare_output as validate_graph_output
+        elif record.get("profile_id") == VISION_PROFILE:
             from wave_onnx_hybrid.vision_graph import validate_graph_output
         else:
             from wave_onnx_hybrid.marblenet_graph import validate_graph_output
@@ -1355,7 +1364,9 @@ def _execute_manifest(
         if path.startswith(root + "/")
     }
     numerical = record["profile_id"] in GRAPH_PROFILES
-    if record["profile_id"] == VISION_PROFILE:
+    if record["profile_id"] == VISION_MEAN_PROFILE:
+        operation = "fp16-squeezenet-mean"
+    elif record["profile_id"] == VISION_PROFILE:
         operation = "fp16-squeezenet"
     elif record["profile_id"] == "fp16-marblenet-pad-v1":
         operation = "fp16-marblenet-pad"

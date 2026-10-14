@@ -38,7 +38,7 @@ source and synthesized coefficients. Original oracle remains authoritative.
 - [ ] RED: unsafe metadata/parent reconstruction, changed mean policy/weights/group,
   scalar diagnostic contract, resealed record; legacy bytes unchanged.
 - [ ] Implement marked derivation and validator/oracle wrappers, source emission
-  with NN Conv2d weights[13,13,1,C], multiplier1 and promoted zero bias.
+  with NN Conv2d depthwise WHIcOc weights[13,13,C,1], multiplier1 and promoted zero bias.
 - [ ] Generate actual three sources/reference bytes, verify learnedbits, host
   approximation/classification policies and previous profile/source tests; commit.
 

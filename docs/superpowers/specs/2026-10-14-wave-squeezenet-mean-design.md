@@ -7,7 +7,8 @@ VAD/audio integration is requested. PoC20 evidence/packages remain immutable.
 
 REA binds the actual PoolingLayer2 registration and initializer to the pinned
 libOpenVX SHA f9cd917d4232316ab53a443ec93cd1217893f4de96fc113811b800b9ae8ca0bb.
-Its ordinary NN support callback refuses average mode and also restricts its
+Its ordinary NN support callback clears average-mode support before its
+final verification helper and also restricts its
 MaxPool geometry. Overall failure still depends on remaining SH/SW eligibility;
 we do not claim a universal average-pooling hardware limit. Changing stride13
 to1 cannot make AVG pass that NN callback. Public ReduceMean/separable AVG
@@ -29,6 +30,7 @@ Native policies bind mean bits/shape/group/bias and original-model identity.
 A fixed21a pool-only diagnostic accepts [1,1,13,13]→[1,1,1,1], GlobalAveragePool
 only, no trained constants. Its input is a frozen nonzero real classifier-map
 crop derived from the original trained checkpoint and first frozen dog input.
+Freeze a reference mean≥1 so a zero result cannot pass the original tolerance.
 21b uses original20d classifier,21c uses original20e complete65-node graph.
 
 The authoritative native oracle remains the independent original NumPy mean;
