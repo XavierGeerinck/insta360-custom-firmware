@@ -125,8 +125,11 @@ no binary. Deploy through `/tmp` and swap with the watchdog stopped.
 `cross build` below, run it from anywhere. In this order, which is the safety net:
 
 1. Checks, before anything changes: the Wave answers, no over-the-air update is on trial
-   (`/data/waved/update/trial`, `docs/UPDATES.md`), and `/data` has room for the stripped
-   binary plus 20 MB, counting the installed binary's space as free.
+   (`/data/waved/update/trial`, `docs/UPDATES.md`), `/proc/mounts` shows S02overlayfs'
+   layout (release mode: `/etc` and `/usr` overlays with `upperdir=/data/overlay/upper/etc`
+   and `…/usr`; debug mode: one overlay on `/` with `upperdir=/data/overlay/upper`), and
+   `/data` has room (`df -Pk`) for the stripped binary plus 20 MB, counting the installed
+   binary's space as free.
 2. Strips the binary (`llvm-objcopy` from `rustup component add llvm-tools`, or
    `OBJCOPY=...`) and pushes it, `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb`,
    `iptables.rules`, `scripts/patch-stock-usbgadget.sh` and (if the Wave has none)
@@ -138,8 +141,10 @@ no binary. Deploy through `/tmp` and swap with the watchdog stopped.
    `start_usbgadget()`. Nothing is stopped before this passes: a Wave without the stock app
    and without ADB can't be reached again.
 5. Stops the stock app and the watchdog, waits for waved to exit (`killall -9` at 30 s,
-   gives up at 40 s), swaps the binary (the old one waits in `/tmp/waved.old` and goes back
-   if the new one does not fit).
+   gives up at 40 s), swaps the binary (the old one waits in `/tmp/waved.old`, its md5 in
+   `/tmp/waved.old.md5`, and goes back if the new one does not fit). The swap ignores
+   SIGHUP/INT/TERM/PIPE: adbd SIGHUPs a session's processes when it closes, and a swap cut
+   half-way through the 63 MB copy would leave no binary.
 6. Installs `S60waved`, `S03splash`, `rsyslog.conf`, `splash.fb` and `iptables.rules`,
    each through a dot-named copy and a rename; the default `config.toml` if there was none.
 7. Last, the stubs that keep the stock app and its telemetry off (`S60pspapp_daemon`,
@@ -148,8 +153,13 @@ no binary. Deploy through `/tmp` and swap with the watchdog stopped.
    `scripts/libapplogrs.so`, 8352 bytes). A missing one is written through the `/etc` and
    `/usr` mounts and read back (`#!/bin/sh` and a newline; 0 or 1 byte). Then both must be
    in `/data/overlay/upper`: the copies there are what replace the stock files at boot.
-8. An update starts the watchdog again; a first install (no `/data/waved/waved`) asks for
-   `adb reboot`. A failure or Ctrl-C after step 5 began does the same.
+8. An update starts the watchdog again, unless one runs already (rcS starts it without a
+   pidfile; two would fight over the devices), and ends with an `adb reboot` hint when the
+   gadget patch, `S03splash` or `rsyslog.conf` changed (they take effect at boot). A first
+   install (no `/data/waved/waved`) asks for `adb reboot`. A failure, Ctrl-C, closed
+   terminal (SIGHUP) or closed output pipe after step 5 began does the same; on an update
+   it first puts `/tmp/waved.old` back if `/data/waved/waved` is missing or matches neither
+   the new md5 nor the old one (it waits for a swap still running).
 
 Overlay files are written through the mounts, never into `/data/overlay/upper` directly
 (`deploy/revert.sh` deletes there, on purpose). It tests the Wave's files on the Wave and

@@ -25,8 +25,8 @@ const ADB: &str = r#"#!/bin/sh
 printf 'adb %s\n' "$*" >> "$FAKE_WAVE/log"
 on_wave() {
     printf '%s' "$1" | sed -E \
-        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)/#\1$FAKE_WAVE/\2/#g" \
-        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)([^[:alnum:]_./-]|\$)#\1$FAKE_WAVE/\2\3#g"
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt|proc)/#\1$FAKE_WAVE/\2/#g" \
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt|proc)([^[:alnum:]_./-]|\$)#\1$FAKE_WAVE/\2\3#g"
 }
 merged() {
     (cd "$FAKE_WAVE" && find etc usr -type f -exec cksum {} + | LC_ALL=C sort)
@@ -104,9 +104,14 @@ const OBJCOPY: &str = r#"#!/bin/sh
 cp "$2" "$3" && printf ' STRIPPED' >> "$3"
 "#;
 
+/// The watchdog shows while its `sleep` runs; once killed it is gone (a
+/// zombie until the test reaps it, which the Wave's init would do at once).
 const PS: &str = r#"#!/bin/sh
 echo "  PID USER       VSZ STAT COMMAND"
-if [ -f "$FAKE_WAVE/run/watchdog" ]; then
+alive() {
+    case "$(/bin/ps -o stat= -p "$1" 2>/dev/null)" in "" | Z*) return 1 ;; esac
+}
+if [ -f "$FAKE_WAVE/run/watchdog" ] && alive "$(cat "$FAKE_WAVE/run/watchdog")"; then
     echo " $(cat "$FAKE_WAVE/run/watchdog") root      1520 S    /bin/sh /etc/init.d/S60waved start"
 fi
 if [ -f "$FAKE_WAVE/run/waved" ]; then
@@ -240,10 +245,23 @@ impl FakeWave {
         ] {
             write_exe(&root.join("wave-bin").join(name), text);
         }
-        for dir in ["data", "tmp", "etc/init.d", "usr/lib", "mnt", "run"] {
+        for dir in ["data", "tmp", "etc/init.d", "usr/lib", "mnt", "run", "proc"] {
             fs::create_dir_all(root.join("wave").join(dir)).unwrap();
         }
         fs::write(root.join("wave/log"), "").unwrap();
+        // The /etc and /usr overlays as stock S02overlayfs mounts them (release
+        // mode), in the fake Wave's paths.
+        let w = root.join("wave");
+        let w = w.display();
+        let mut mounts = format!("/dev/data {w}/data ext4 rw,noatime 0 0\n");
+        for d in ["etc", "usr"] {
+            mounts.push_str(&format!(
+                "overlayfs:{w}/data/overlay/upper/{d} {w}/{d} overlay \
+                 rw,noatime,lowerdir={w}/{d},upperdir={w}/data/overlay/upper/{d},\
+                 workdir={w}/data/overlay/work/{d} 0 0\n"
+            ));
+        }
+        fs::write(root.join("wave/proc/mounts"), mounts).unwrap();
         let wave = Self {
             dir,
             processes: Vec::new(),

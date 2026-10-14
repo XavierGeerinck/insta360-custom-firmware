@@ -61,34 +61,61 @@ BINARY="${WAVED_BINARY:-$ROOT/target/aarch64-unknown-linux-gnu/release/waved}"
 DEFAULT_CONFIG="$ROOT/config/default.toml"
 GADGET_PATCH="$ROOT/scripts/patch-stock-usbgadget.sh"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-START_WATCHDOG='start-stop-daemon -S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start'
+WATCHDOG_CMD='start-stop-daemon -S -b -m -p /tmp/S60waved.pid -x /bin/sh -- /etc/init.d/S60waved start'
+# Only if no watchdog runs: rcS starts one without a pidfile, and two would
+# fight over the devices. !/awk/ skips the shell running this script.
+START_WATCHDOG='if ps | awk "/S60waved start/ && !/awk/ { f = 1 } END { exit !f }"; then echo "    the watchdog runs already"; else '"$WATCHDOG_CMD"'; fi'
+# Run on the Wave by die() after a failed update, before the watchdog starts:
+# if the swap was cut short (/data/waved/waved missing, or neither the new
+# binary nor the old one), put the old one back from /tmp/waved.old, checked
+# against the md5 the swap kept. It waits for a swap still running first.
+RESTORE='w=/data/waved/waved; o=/tmp/waved.old; \
+p=$(cat /tmp/waved.swap.pid 2>/dev/null); n=0; \
+while [ -n "$p" ] && kill -0 "$p" 2>/dev/null && [ $n -lt 120 ]; do sleep 1; n=$((n + 1)); done; \
+m=$(md5sum $w 2>/dev/null | cut -d" " -f1); \
+if [ "$m" = WAVED_MD5 ] || [ ! -f $o.md5 ] || [ "$m" = "$(cat $o.md5)" ]; then :; \
+elif [ "$(md5sum $o 2>/dev/null | cut -d" " -f1)" = "$(cat $o.md5)" ]; then \
+    rm -f $w; \
+    if cp $o $w && chmod 755 $w; then sync; echo "    put the previous binary back in $w (from $o)"; \
+    else echo "    could not put the previous binary back in $w; it is still in $o"; fi; \
+else echo "    $w is missing or incomplete, and $o is no good copy of the previous one"; fi; \
+echo ok'
 MARGIN_KB=20480   # room left on /data after the swap: logs, the recordings database
 UPDATE=no
 STOPPED=no
+SWAP_STARTED=no
+REBOOT_FOR=""
 STEP="starting"
 
 die() {
-    # Once here, see it through: a second Ctrl-C must not cut the watchdog
-    # restart short (adb, started from here, ignores it too).
+    # Once here, see it through: no error, second Ctrl-C, closed terminal or
+    # broken output pipe may cut the watchdog restart short (adb, started from
+    # here, ignores those signals too).
+    set +e
     trap - ERR
-    trap '' INT TERM
-    echo "ERROR: $*" >&2
-    # Never leave a Wave that ran waved without its watchdog.
+    trap '' INT TERM HUP PIPE
+    echo "ERROR: $*" >&2 || true
+    # Never leave a Wave that ran waved without its watchdog, or without a binary.
     if [ "$STOPPED" = yes ] && [ "$UPDATE" = yes ]; then
+        if [ "$SWAP_STARTED" = yes ]; then
+            wave_ok "${RESTORE//WAVED_MD5/${WAVED_MD5:-none}}" ||
+                echo "Could not check /data/waved/waved (the previous binary is in /tmp/waved.old)." >&2 || true
+        fi
         if wave_ok "$START_WATCHDOG && echo ok"; then
-            echo "The watchdog runs again." >&2
+            echo "The watchdog runs again." >&2 || true
         else
-            echo "Could not start the watchdog: $START_WATCHDOG" >&2
+            echo "Could not start the watchdog: $WATCHDOG_CMD" >&2 || true
         fi
     elif [ "$STOPPED" = yes ]; then
-        echo "Stock firmware was stopped: adb reboot, then run this again." >&2
+        echo "Stock firmware was stopped: adb reboot, then run this again." >&2 || true
     fi
     exit 1
 }
 # bash runs no ERR trap inside functions (set -E is no cure: grep -c fails on
-# a zero count), so every adb call in one ends in an explicit || die.
+# a zero count), so every adb call in one ends in an explicit || die. HUP is a
+# closed terminal; PIPE a closed output pipe (`install.sh | tee log`).
 trap 'die "install.sh stopped during: $STEP"' ERR
-trap 'die "install.sh interrupted during: $STEP"' INT TERM
+trap 'die "install.sh interrupted during: $STEP"' INT TERM HUP PIPE
 
 # A section: its heading, and its name for the error messages.
 step() {
@@ -102,12 +129,18 @@ on_wave() {
 }
 
 # Run a script on the Wave that prints "ok" last when every step worked.
-# Shows anything else it printed.
+# Shows anything else it printed; all of it is kept in $WAVE_OUT.
 wave_ok() {
     local out
     out="$(on_wave "$1")" || true
+    WAVE_OUT="$out"
     [ -z "$out" ] || printf '%s\n' "$out" | grep -vx ok || true
     [ "$(printf '%s\n' "$out" | tail -n 1)" = ok ]
+}
+
+# A change that takes effect only at the next boot, for the closing hint.
+reboot_for() {
+    if [ -z "$REBOOT_FOR" ]; then REBOOT_FOR="$1"; else REBOOT_FOR="$REBOOT_FOR, $1"; fi
 }
 
 # Whether $1 exists on the Wave. No answer stops the install: a wrong "no"
@@ -177,10 +210,22 @@ fi
 if wave_has /data/waved/waved; then UPDATE=yes; fi
 HAS_CONFIG=no
 if wave_has /data/waved/config.toml; then HAS_CONFIG=yes; fi
+# The overlay files, the stubs and revert.sh all assume S02overlayfs' layout:
+# /etc and /usr overlays with their upper dirs in /data/overlay/upper (release
+# mode), or one overlay on / with /data/overlay/upper as its upper dir (debug
+# mode). Anything else: refuse now, before anything changes.
+OVERLAY_AWK='$3 == "overlay" && $2 == "/etc" && index("," $4 ",", ",upperdir=/data/overlay/upper/etc,") { e = 1 }
+$3 == "overlay" && $2 == "/usr" && index("," $4 ",", ",upperdir=/data/overlay/upper/usr,") { u = 1 }
+$3 == "overlay" && $2 == "/" && index("," $4 ",", ",upperdir=/data/overlay/upper,") { r = 1 }
+END { if ((e && u) || r) print "overlay ok"; else print "etc=" e + 0 " usr=" u + 0 " root=" r + 0 }'
+overlay="$(on_wave "awk '$OVERLAY_AWK' /proc/mounts")" || overlay=""
+[ "$overlay" = "overlay ok" ] ||
+    die "/etc and /usr are not the overlays install.sh expects (upper dirs in /data/overlay/upper; \
+/proc/mounts: ${overlay:-no answer}); nothing was changed. See Troubleshooting: \"The overlay is not as expected\"."
 
 # The old binary's space comes back at the swap, so it counts as free.
 step "Checking free space on /data"
-free_kb="$(on_wave 'df -k /data | tail -n 1' | awk '{print $4}')" || free_kb=""
+free_kb="$(on_wave 'df -Pk /data | tail -n 1' | awk '{print $4}')" || free_kb=""
 old_kb="$(on_wave 'if [ -f /data/waved/waved ]; then du -k /data/waved/waved | cut -f1; else echo 0; fi')" ||
     old_kb=""
 case "$free_kb" in
@@ -220,6 +265,10 @@ fi
 # the patch a Wave has no ADB after the next reboot, and revert.sh can't reach
 # it. On an update the patch finds it done ("already patched").
 step "Patching the USB gadget: ADB at boot, volume ranges, HID controls"
+CHANGED_SO_FAR="What may have changed: /etc/init.d/S89usbgadget (its copy from before the patch is \
+/data/waved/S89usbgadget.bak.<time>)"
+if [ "$HAS_CONFIG" = yes ]; then CHANGED_SO_FAR="$CHANGED_SO_FAR, and the copy of config.toml in $backup"; fi
+CHANGED_SO_FAR="$CHANGED_SO_FAR."
 patch_out="$(on_wave 'sh /tmp/patch-usbgadget.sh 2>&1 && echo ok; rm -f /tmp/patch-usbgadget.sh')" ||
     patch_out=""
 if [ "$(printf '%s\n' "$patch_out" | tail -n 1)" != ok ]; then
@@ -227,11 +276,11 @@ if [ "$(printf '%s\n' "$patch_out" | tail -n 1)" != ok ]; then
     [ -z "$patch_out" ] ||
         printf '%s\n' "$patch_out" | grep -v -e '^reboot the device' -e '^ *adb reboot$' >&2 || true
     die "the USB gadget patch did not finish. Nothing was stopped: the Wave still runs what it ran \
-before. Only /etc/init.d/S89usbgadget may have changed; its copy from before the patch is in \
-/data/waved (S89usbgadget.bak.<time>). See Troubleshooting: \"ADB at boot\"."
+before. $CHANGED_SO_FAR See Troubleshooting: \"ADB at boot\"."
 fi
 # Only what it did: the reboot comes once everything is in place.
 printf '%s\n' "$patch_out" | grep -E '^(already patched|patched|removed) ' | sed 's/^/    /' || true
+if grep -q -E '^(patched|removed) ' <<< "$patch_out"; then reboot_for "USB gadget settings"; fi
 
 # Both must hold: no adbd_enable line in the gadget script is still commented
 # out, and at least one live adbd_enable line is inside start_usbgadget(), the
@@ -244,8 +293,7 @@ adb_at_boot="$(on_wave "awk '$ADB_AWK' /etc/init.d/S89usbgadget")" || adb_at_boo
 case "$adb_at_boot" in
     "commented=0 live="[1-9]*) echo "    $adb_at_boot" ;;
     *) die "ADB is not enabled at boot (/etc/init.d/S89usbgadget: ${adb_at_boot:-no answer}). Nothing \
-was stopped: the Wave still runs what it ran before. Only /etc/init.d/S89usbgadget may have changed; \
-its copy from before the patch is in /data/waved. See Troubleshooting: \"ADB at boot\"." ;;
+was stopped: the Wave still runs what it ran before. $CHANGED_SO_FAR See Troubleshooting: \"ADB at boot\"." ;;
 esac
 
 step "Stopping stock firmware, the watchdog and waved"
@@ -264,10 +312,18 @@ while pidof waved >/dev/null; do \
 done; echo ok' || die "could not stop waved"
 
 step "Swapping the binary"
-# The old binary waits in /tmp/waved.old: if the new one does not fit on
-# /data, it goes back.
-swap='mkdir -p /data/waved && cd /data/waved || exit 1; \
-if [ -f waved ]; then cp waved /tmp/waved.old || exit 1; fi; \
+# The old binary waits in /tmp/waved.old, with its md5: if the new one does
+# not fit on /data, it goes back. The swap ignores the signals a closed adb
+# session or Ctrl-C sends (adbd SIGHUPs the session), so it always finishes
+# or rolls back; its pid tells die() to wait for it.
+swap='trap "" HUP INT TERM PIPE; trap "rm -f /tmp/waved.swap.pid" EXIT; echo $$ > /tmp/waved.swap.pid; \
+mkdir -p /data/waved && cd /data/waved || exit 1; \
+rm -f /tmp/waved.old /tmp/waved.old.md5; \
+if [ -f waved ]; then \
+    old=$(md5sum waved | cut -d" " -f1); \
+    cp waved /tmp/waved.old && [ "$(md5sum /tmp/waved.old | cut -d" " -f1)" = "$old" ] || exit 1; \
+    echo "$old" > /tmp/waved.old.md5; \
+fi; \
 rm -f waved; \
 if cp /tmp/waved.new waved && chmod 755 waved && \
    [ "$(md5sum waved | cut -d" " -f1)" = WAVED_MD5 ]; then \
@@ -277,12 +333,17 @@ else \
     if [ -f /tmp/waved.old ]; then cp /tmp/waved.old waved && chmod 755 waved; fi; \
     echo "the new binary did not fit on /data (df -h /data); the old one is back"; \
 fi'
+SWAP_STARTED=yes
 wave_ok "${swap//WAVED_MD5/$WAVED_MD5}" || die "the binary was not replaced"
 
 step "Installing S60waved, S03splash, rsyslog.conf, the splash and the firewall rules"
 # A dot name until the rename: rcS runs every /etc/init.d/S??* at boot. The
-# /etc files go through the overlay mount, like everything else here.
-wave_ok 'mkdir -p /etc/init.d && \
+# /etc files go through the overlay mount, like everything else here. A new
+# S03splash or rsyslog.conf takes effect at the next boot; it says which.
+wave_ok 'for f in /etc/init.d/S03splash:S03splash.new /etc/rsyslog.conf:rsyslog.conf.new; do \
+    { [ -f ${f%%:*} ] && [ "$(md5sum < ${f%%:*})" = "$(md5sum < /tmp/${f##*:})" ]; } || echo "    new ${f%%:*}"; \
+done; \
+mkdir -p /etc/init.d && \
 cp /tmp/S60waved.new /etc/init.d/.S60waved.new && chmod 755 /etc/init.d/.S60waved.new && \
 mv -f /etc/init.d/.S60waved.new /etc/init.d/S60waved && \
 cp /tmp/S03splash.new /etc/init.d/.S03splash.new && chmod 755 /etc/init.d/.S03splash.new && \
@@ -297,6 +358,8 @@ mv -f /data/waved/.iptables.rules.new /data/waved/iptables.rules && \
 rm -f /tmp/S60waved.new /tmp/S03splash.new /tmp/rsyslog.conf.new /tmp/splash.fb.new \
     /tmp/iptables.rules.new && sync && echo ok' ||
     die "S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)"
+if grep -q -x '    new /etc/init.d/S03splash' <<< "$WAVE_OUT"; then reboot_for "boot splash"; fi
+if grep -q -x '    new /etc/rsyslog.conf' <<< "$WAVE_OUT"; then reboot_for "logging settings"; fi
 
 if [ "$HAS_CONFIG" = no ]; then
     step "Writing the default config.toml"
@@ -358,6 +421,10 @@ if [ "$UPDATE" = yes ]; then
     wave_ok "$START_WATCHDOG && echo ok" || die "could not start the watchdog"
     STOPPED=no
     echo "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ==="
+    if [ -n "$REBOOT_FOR" ]; then
+        case "$REBOOT_FOR" in *", "*) REBOOT_FOR="${REBOOT_FOR%, *} and ${REBOOT_FOR##*, }" ;; esac
+        echo "The new $REBOOT_FOR take effect at the next boot: adb reboot"
+    fi
 else
     echo "=== Done! Reboot to start waved ==="
     echo "Run: adb reboot"

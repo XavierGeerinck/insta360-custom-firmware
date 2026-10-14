@@ -31,10 +31,16 @@
 #                      upper directory (no overlay there)         (0)
 #   FAKE_STUB_WRITE_FAILS  1: writing S60pspapp_daemon fails on the Wave,
 #                      while the rest of that script runs on      (0)
+#   FAKE_OVERLAY       /proc/mounts: release (/etc and /usr overlays) |
+#                      root (debug mode: one overlay on /) | none  (release)
+#   FAKE_CUT_SWAP      1: the swap is cut off after it removed the old binary
+#                      and wrote half the new one, then Ctrl-C     (0)
 #   FAKE_PUSH_FAIL    fail any push whose paths contain this text
 #   FAKE_SHELL_FAIL    fail (adb exits 1) any shell command containing this text
-#   FAKE_INTERRUPT     Ctrl-C (SIGINT to install.sh and the adb it waits for)
-#                      at the first shell command containing this text
+#   FAKE_INTERRUPT     Ctrl-C (the signal to install.sh and the adb it waits
+#                      for) at the first shell command containing this text
+#   FAKE_SIGNAL        the signal FAKE_INTERRUPT sends              (INT)
+#   FAKE_INTERRUPT_WAIT  a file to wait for before sending it
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -117,11 +123,12 @@ setup() {
     T="$(mktemp -d)"
     W="$T/wave"
     mkdir -p "$T/bin" "$T/wave-bin" "$W/data/overlay/upper" "$W/tmp" "$W/etc/init.d" \
-        "$W/usr/lib" "$W/mnt/udisk" "$W/run"
+        "$W/usr/lib" "$W/mnt/udisk" "$W/run" "$W/proc"
     export FAKE_ADB_LOG="$T/adb.log" FAKE_WAVE="$W" FAKE_WAVE_BIN="$T/wave-bin"
     export FAKE_STATE=device FAKE_FREE_KB=177876 FAKE_GADGET=stock FAKE_PATCH=real FAKE_CORRUPT=''
     export FAKE_DATA_FULL=0 FAKE_WAVED_STUCK=0 FAKE_STUBS_STICK=1 FAKE_PUSH_FAIL='' FAKE_SHELL_FAIL=''
-    export FAKE_INTERRUPT='' FAKE_NO_COPY_UP=0 FAKE_STUB_WRITE_FAILS=0
+    export FAKE_INTERRUPT='' FAKE_NO_COPY_UP=0 FAKE_STUB_WRITE_FAILS=0 FAKE_OVERLAY=release
+    export FAKE_CUT_SWAP=0 FAKE_SIGNAL=INT FAKE_INTERRUPT_WAIT=''
     : > "$FAKE_ADB_LOG"
     gadget "#adbd_enable" "# adbd_enable" "" > "$T/gadget-stock"
     gadget "" "" adbd_enable > "$T/gadget-no_boot_adbd"
@@ -143,20 +150,27 @@ W="$FAKE_WAVE"
 # The Wave's paths, moved under $W: /data/... and a bare /data alike.
 map() {
     printf '%s' "$1" | sed -E \
-        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)/#\\1$W/\\2/#g" \
-        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)([^[:alnum:]_./-]|\$)#\\1$W/\\2\\3#g"
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt|proc)/#\\1$W/\\2/#g" \
+        -e "s#(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt|proc)([^[:alnum:]_./-]|\$)#\\1$W/\\2\\3#g"
 }
-# Ctrl-C reaches the whole foreground job: install.sh, the subshells it waits
-# in, and this adb. Only processes running deploy/install.sh are signalled.
+# Ctrl-C (or a closed terminal: FAKE_SIGNAL) reaches the whole foreground job:
+# install.sh, the subshells it waits in, and this adb. Only processes running
+# deploy/install.sh are signalled.
 interrupt() {
-    local p=$PPID args
+    local p=$PPID args n=0 chain=""
+    if [ -n "$FAKE_INTERRUPT_WAIT" ]; then
+        while [ ! -e "$FAKE_INTERRUPT_WAIT" ] && [ $n -lt 200 ]; do sleep 0.05; n=$((n + 1)); done
+    fi
+    # The whole chain first (a subshell signalled first may be gone before its
+    # parent is found), then install.sh itself before the subshells under it.
     while [ "${p:-1}" -gt 1 ]; do
         args="$(ps -o args= -p "$p" 2>/dev/null)" || break
-        case "$args" in *deploy/install.sh*) kill -INT "$p" ;; *) break ;; esac
+        case "$args" in *deploy/install.sh*) chain="$p $chain" ;; *) break ;; esac
         p="$(ps -o ppid= -p "$p" | tr -d ' ')"
     done
-    trap - INT
-    kill -INT $$
+    for p in $chain; do kill -"$FAKE_SIGNAL" "$p"; done
+    trap - INT TERM HUP
+    kill -"$FAKE_SIGNAL" $$
     exit 130
 }
 export LC_ALL=C
@@ -184,6 +198,15 @@ case "$1" in
     if [ -n "$FAKE_SHELL_FAIL" ]; then
       case "$cmd" in *"$FAKE_SHELL_FAIL"*) echo "adb: error: device offline" >&2; exit 1 ;; esac
     fi
+    # The swap cut off after it removed the old binary, half-way through
+    # copying the new one: then Ctrl-C.
+    if [ "$FAKE_CUT_SWAP" = 1 ]; then
+      case "$cmd" in *"if cp /tmp/waved.new waved"*)
+        m="$(map "$cmd")"
+        PATH="$FAKE_WAVE_BIN:$PATH" sh -c "${m%%if cp *}printf 'half a binary' > waved" > /dev/null 2>&1
+        interrupt ;;
+      esac
+    fi
     if [ "$FAKE_STUB_WRITE_FAILS" = 1 ]; then
       cmd="${cmd//> \/etc\/init.d\/S60pspapp_daemon/> /tmp/no-such-dir/S60pspapp_daemon}"
     fi
@@ -195,7 +218,7 @@ case "$1" in
     fi
     mapped="$(map "$cmd")"
     # Never run a script that still names a path outside $W.
-    if printf '%s' "${mapped//"$W"/WAVE}" | grep -Eq "(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt)([^[:alnum:]_.-]|\$)"; then
+    if printf '%s' "${mapped//"$W"/WAVE}" | grep -Eq "(^|[^[:alnum:]_.-])/(data|tmp|etc|usr|mnt|proc)([^[:alnum:]_.-]|\$)"; then
       echo "UNMAPPED: $cmd" >> "$FAKE_ADB_LOG"; echo "fake adb: unmapped path in: $cmd" >&2; exit 97
     fi
     keep=no
@@ -210,7 +233,7 @@ case "$1" in
     merged_before="$(merged_state)"
     # What it prints names the Wave's paths, as on the Wave.
     INIT="$W/etc/init.d/S89usbgadget" BACKUP_DIR="$W/data/waved" PATH="$FAKE_WAVE_BIN:$PATH" \
-      sh -c 'kill() { for p in "$@"; do echo "kill $p" >> "$FAKE_ADB_LOG"; [ "$p" != 4242 ] || rm -f "$FAKE_WAVE/run/watchdog"; done; }
+      sh -c 'kill() { [ "$1" != -0 ] || return 1; for p in "$@"; do echo "kill $p" >> "$FAKE_ADB_LOG"; [ "$p" != 4242 ] || rm -f "$FAKE_WAVE/run/watchdog"; done; }
 '"$mapped" | sed "s#$W##g"
     rc=${PIPESTATUS[0]}
     if [ "$keep" = yes ]; then
@@ -329,15 +352,54 @@ stubs_in_upper() {
     done
 }
 
-# run_install: install.sh against the Wave in $W, its S89usbgadget as
-# $FAKE_GADGET says. Output in $T/out, exit status in $rc.
+# The Wave's /proc/mounts as S02overlayfs leaves it (mount options as its
+# fopivot_release / fopivot write them), in the fake's paths.
+write_mounts() {
+    {
+        echo "/dev/data $W/data ext4 rw,noatime 0 0"
+        case "$FAKE_OVERLAY" in
+            release)
+                for d in etc usr; do
+                    echo "overlayfs:$W/data/overlay/upper/$d $W/$d overlay rw,noatime,lowerdir=$W/$d,upperdir=$W/data/overlay/upper/$d,workdir=$W/data/overlay/work/$d 0 0"
+                done ;;
+            root)
+                echo "overlayfs:$W/data/overlay/upper / overlay rw,noatime,lowerdir=/,upperdir=$W/data/overlay/upper,workdir=$W/data/overlay/work 0 0" ;;
+        esac
+    } > "$W/proc/mounts"
+}
+
+# Copies what install.sh prints to $T/out until the heading of the install
+# step, then stops reading: the pipe of `install.sh 2>&1 | tee log` once tee
+# is gone.
+reader() {
+    local l
+    while IFS= read -r l; do
+        printf '%s\n' "$l" >> "$T/out"
+        case "$l" in "=== Installing S60waved"*) break ;; esac
+    done
+    : > "$T/reader-gone"
+}
+
+# run_install [stderr_closed | pipe_closes]: install.sh against the Wave in $W,
+# its S89usbgadget as $FAKE_GADGET says. Output in $T/out, exit status in $rc.
 run_install() {
     if [ "$FAKE_GADGET" != missing ]; then
         cp "$T/gadget-$FAKE_GADGET" "$W/etc/init.d/S89usbgadget"
         chmod 755 "$W/etc/init.d/S89usbgadget"
     fi
-    "$DEPLOY/install.sh" > "$T/out" 2>&1 < /dev/null
-    rc=$?
+    write_mounts
+    : > "$T/out"
+    case "${1:-}" in
+        stderr_closed) "$DEPLOY/install.sh" > "$T/out" 2>&- < /dev/null; rc=$? ;;
+        pipe_closes) "$DEPLOY/install.sh" 2>&1 < /dev/null | reader; rc=${PIPESTATUS[0]} ;;
+        *) "$DEPLOY/install.sh" > "$T/out" 2>&1 < /dev/null; rc=$? ;;
+    esac
+}
+# A Wave whose boot-time files are this checkout's already: an update that
+# changes nothing the next boot would pick up.
+wave_current() {
+    cp "$DEPLOY/S03splash" "$W/etc/init.d/S03splash"
+    cp "$DEPLOY/rsyslog.conf" "$W/etc/rsyslog.conf"
 }
 
 # VERBOSE=1 shows the installer's output and the adb log of a failed check.
@@ -359,6 +421,12 @@ before() {
     [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]
 }
 same() { cmp -s "$1" "$2"; }
+md5sum_of() {
+    local f
+    f="$(mktemp)"; cat > "$f"
+    { md5sum "$f" 2>/dev/null || md5 -r "$f"; } | cut -d' ' -f1
+    rm -f "$f"
+}
 mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 logged() { grep -q -F -- "$1" "$FAKE_ADB_LOG"; }
 said() { grep -q -F -- "$1" "$T/out"; }
@@ -438,7 +506,9 @@ check update_keeps_the_settings '[ "$(cat "$W/data/waved/config.toml")" = "$OLD_
 check update_backs_up_the_settings_first 'one_config_backup && before "config.toml.before-" "shell sh /tmp/patch-usbgadget.sh"'
 check update_patches_before_stopping_waved 'before "commented++" "killall pspapp" && said "    already patched"'
 check update_stops_the_watchdog_and_waits_for_waved 'logged "kill 4242" && before "pidof waved: exited" "cp /tmp/waved.new waved"'
-check update_keeps_the_old_binary_in_tmp '[ "$(cat "$W/tmp/waved.old")" = "old waved" ] && same "$W/data/waved/waved" "$T/waved"'
+check update_keeps_the_old_binary_in_tmp '[ "$(cat "$W/tmp/waved.old")" = "old waved" ] && same "$W/data/waved/waved" "$T/waved" && [ "$(cat "$W/tmp/waved.old.md5")" = "$(printf "old waved" | md5sum_of)" ] && [ ! -e "$W/tmp/waved.swap.pid" ]'
+# The swap finishes or rolls back on its own when the adb session goes.
+check the_swap_ignores_a_closed_session 'logged "trap \"\" HUP INT TERM PIPE; trap \"rm -f /tmp/waved.swap.pid\" EXIT"'
 check update_installs_the_start_up_scripts 'installed S60waved /etc/init.d/S60waved /etc/init.d/.S60waved.new && installed S03splash /etc/init.d/S03splash /etc/init.d/.S03splash.new && installed rsyslog.conf /etc/rsyslog.conf /etc/.rsyslog.conf.new'
 # Stubs already in the upper dir stay as they are, whatever they hold: the
 # 8352-byte compiled libapplogrs.so is neither rewritten nor size-checked.
@@ -446,7 +516,18 @@ check update_keeps_the_stubs_in_the_upper_dir 'said "    kept /etc/init.d/S60psp
 check update_checks_only_that_kept_stubs_are_there '! grep -q -F "\$f(content)" "$FAKE_ADB_LOG" && logged "for f in /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so"'
 check update_never_writes_the_upper_dir '! logged DIRECT-UPPER-WRITE'
 check update_starts_the_watchdog_last 'watchdog_started_last && before "cp /tmp/waved.new waved" "start-stop-daemon"'
-check update_does_not_ask_for_a_reboot '! said "adb reboot" && [ "$(tail -n 1 "$T/out")" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ]'
+# This Wave had no S03splash and the stock rsyslog.conf: both take effect at the
+# next boot, so the update ends with a reboot hint (the gadget was patched).
+check update_says_what_needs_a_reboot '[ "$(tail -n 2 "$T/out" | head -n 1)" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ] && [ "$(tail -n 1 "$T/out")" = "The new boot splash and logging settings take effect at the next boot: adb reboot" ] && said "    new /etc/init.d/S03splash" && said "    new /etc/rsyslog.conf"'
+
+# An update that changes nothing the next boot would pick up: no reboot hint.
+setup; wave_running_waved; wave_current
+run_install
+check a_current_update_does_not_ask_for_a_reboot '[ $rc -eq 0 ] && ! said "adb reboot" && ! said "    new /etc/" && [ "$(tail -n 1 "$T/out")" = "=== Done. The previous binary is in /tmp/waved.old until the Wave restarts. ===" ]'
+# An update that patches the gadget (a Wave an older install.sh set up).
+setup; wave_running_waved; wave_current
+FAKE_GADGET=stock run_install
+check an_update_that_patches_the_gadget_asks_for_a_reboot '[ $rc -eq 0 ] && said "    patched adbd at boot" && [ "$(tail -n 1 "$T/out")" = "The new USB gadget settings take effect at the next boot: adb reboot" ]'
 
 # An older install.sh's one-newline libapplogrs.so is kept too.
 setup; printf '\n' > "$T/one-byte.so"; wave_running_waved "$T/one-byte.so"
@@ -461,8 +542,17 @@ check counts_the_old_binary_as_free_space '[ $rc -eq 0 ]'
 # --- install: refusals before anything changes ------------------------------
 setup; FAKE_FREE_KB=1000 run_install
 check low_space_refuses_before_any_push '[ $rc -ne 0 ] && grep -q "^ERROR: /data has 0 MB available and waved needs 20 MB. Nothing was changed. See Troubleshooting: \"/data is full\"." "$T/out" && ! grep -q "^push" "$FAKE_ADB_LOG" && stock_untouched'
-setup; FAKE_SHELL_FAIL="df -k /data" run_install
+setup; FAKE_SHELL_FAIL="df -Pk /data" run_install
 check unreadable_free_space_refuses '[ $rc -ne 0 ] && said "ERROR: could not read the free space on /data (no answer)" && ! grep -q "^push" "$FAKE_ADB_LOG"'
+
+# /etc and /usr must be the overlays the stubs and revert.sh assume; checked
+# before anything changes. Debug mode (one overlay on /) has the same upper dir.
+setup; FAKE_OVERLAY=none run_install
+check refuses_without_the_expected_overlays '[ $rc -ne 0 ] && said "ERROR: /etc and /usr are not the overlays install.sh expects" && said "etc=0 usr=0 root=0" && ! grep -q "^push" "$FAKE_ADB_LOG" && stock_untouched'
+setup; FAKE_OVERLAY=root run_install
+check accepts_the_debug_mode_overlay '[ $rc -eq 0 ]'
+setup; run_install
+check checks_the_overlay_before_any_push 'before "/proc/mounts" "push " && logged "df -Pk /data"'
 
 setup; wave_running_waved; FAKE_CORRUPT=/tmp/waved.new run_install
 check md5_mismatch_refuses '[ $rc -ne 0 ] && said "ERROR: /tmp/waved.new on the Wave is not" && said "nothing was changed"'
@@ -508,15 +598,17 @@ setup; wave_running_waved; FAKE_WAVED_STUCK=1 run_install
 check refuses_the_swap_while_waved_runs '[ $rc -ne 0 ] && said "waved does not exit" && said "ERROR: could not stop waved" && grep -q "^killall -9 waved" "$FAKE_ADB_LOG" && ! logged "cp /tmp/waved.new waved" && [ "$(cat "$W/data/waved/waved")" = "old waved" ]'
 check stuck_waved_gets_its_watchdog_back 'said "The watchdog runs again." && watchdog_started_last'
 check stuck_waved_means_nothing_else_is_installed '[ ! -e "$W/etc/init.d/S03splash" ] && ! logged ".S60waved.new" && ! logged "> /etc/init.d/S60pspapp_daemon"'
+check no_binary_check_before_the_swap '! logged "kill -0 \"\$p\"" && ! said "previous binary"'
 
 setup; wave_running_waved; FAKE_DATA_FULL=1 run_install
 check a_binary_that_does_not_fit_puts_the_old_one_back '[ $rc -ne 0 ] && said "the new binary did not fit on " && said "; the old one is back" && said "ERROR: the binary was not replaced" && [ "$(cat "$W/data/waved/waved")" = "old waved" ] && [ "$(mode "$W/data/waved/waved")" = 755 ]'
-check a_binary_that_does_not_fit_gets_the_watchdog_back 'said "The watchdog runs again." && watchdog_started_last && [ "$(cat "$W/data/waved/config.toml")" = "$OLD_CONFIG" ]'
+check a_binary_that_does_not_fit_gets_the_watchdog_back 'said "The watchdog runs again." && watchdog_started_last && [ "$(cat "$W/data/waved/config.toml")" = "$OLD_CONFIG" ] && logged "kill -0 \"\$p\"" && ! said "previous binary"'
 setup; FAKE_DATA_FULL=1 run_install
 check first_install_that_does_not_fit_says_reboot '[ $rc -ne 0 ] && said "Stock firmware was stopped: adb reboot, then run this again." && [ ! -e "$W/etc/init.d/S60waved" ] && ! logged "> /etc/init.d/S60pspapp_daemon"'
 
 setup; wave_running_waved; FAKE_SHELL_FAIL=".S03splash.new" run_install
 check failed_install_step_stops_before_the_stubs '[ $rc -ne 0 ] && said "ERROR: S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)" && ! logged "> /etc/init.d/S60pspapp_daemon" && said "The watchdog runs again." && watchdog_started_last'
+check failed_install_step_keeps_the_new_binary 'same "$W/data/waved/waved" "$T/waved" && logged "kill -0 \"\$p\"" && ! said "previous binary"'
 setup; FAKE_SHELL_FAIL="> /etc/init.d/S60pspapp_daemon" run_install
 check failed_stub_write_refuses '[ $rc -ne 0 ] && said "ERROR: could not stub the stock services" && said "Stock firmware was stopped: adb reboot, then run this again." && ! said "=== Done"'
 setup; FAKE_STUB_WRITE_FAILS=1 run_install
@@ -539,7 +631,26 @@ check stubs_that_did_not_take_on_an_update_restart_the_watchdog '[ $rc -ne 0 ] &
 # --- install: Ctrl-C ----------------------------------------------------------
 setup; wave_running_waved; FAKE_INTERRUPT="killall pspapp" run_install
 check interrupt_names_the_step '[ $rc -ne 0 ] && said "ERROR: install.sh interrupted during: Stopping stock firmware, the watchdog and waved"'
-check interrupted_update_gets_its_watchdog_back 'said "The watchdog runs again." && watchdog_started_last && [ "$(cat "$W/data/waved/waved")" = "old waved" ] && ! logged "cp /tmp/waved.new waved"'
+# Cut before the stop script ran: the watchdog rcS started still runs, so no
+# second one is started next to it.
+check interrupted_update_starts_no_second_watchdog 'said "the watchdog runs already" && said "The watchdog runs again." && ! grep -q "^start-stop-daemon" "$FAKE_ADB_LOG" && [ -f "$W/run/watchdog" ] && [ "$(cat "$W/data/waved/waved")" = "old waved" ] && ! logged "cp /tmp/waved.new waved"'
+
+# A closed terminal (HUP), and Ctrl-C with stderr closed or its pipe gone
+# (`install.sh 2>&1 | tee log`, tee killed first): die still puts the
+# watchdog back after an update, and exits 1.
+setup; wave_running_waved; FAKE_INTERRUPT=".S60waved.new" FAKE_SIGNAL=HUP run_install
+check a_closed_terminal_gets_the_watchdog_back '[ $rc -eq 1 ] && said "ERROR: install.sh interrupted during: Installing S60waved" && said "The watchdog runs again." && watchdog_started_last'
+setup; wave_running_waved; FAKE_INTERRUPT=".S60waved.new" FAKE_SIGNAL=TERM run_install stderr_closed
+check closed_stderr_still_gets_the_watchdog_back '[ $rc -eq 1 ] && watchdog_started_last'
+setup; wave_running_waved
+FAKE_INTERRUPT=".S60waved.new" FAKE_SIGNAL=TERM FAKE_INTERRUPT_WAIT="$T/reader-gone" run_install pipe_closes
+check a_broken_output_pipe_still_gets_the_watchdog_back '[ -e "$T/reader-gone" ] && [ $rc -eq 1 ] && watchdog_started_last'
+
+# The swap cut off half-way (old binary removed, half the new one written):
+# die puts the old one back from /tmp/waved.old before the watchdog starts.
+setup; wave_running_waved; FAKE_CUT_SWAP=1 run_install
+check a_cut_swap_gets_the_old_binary_back '[ $rc -eq 1 ] && said "ERROR: install.sh interrupted during: Swapping the binary" && said "    put the previous binary back in /data/waved/waved (from /tmp/waved.old)" && [ "$(cat "$W/data/waved/waved")" = "old waved" ] && [ "$(mode "$W/data/waved/waved")" = 755 ]'
+check a_cut_swap_then_gets_the_watchdog_back 'said "The watchdog runs again." && watchdog_started_last && before "kill -0 \"\$p\"" "start-stop-daemon -S"'
 setup; FAKE_INTERRUPT="sh /tmp/patch-usbgadget.sh" run_install
 check interrupt_before_stopping_leaves_the_stock_app_alone '[ $rc -ne 0 ] && said "ERROR: install.sh interrupted during: Patching the USB gadget" && stock_untouched && ! said "adb reboot"'
 setup; FAKE_INTERRUPT="cp /tmp/waved.new waved" run_install

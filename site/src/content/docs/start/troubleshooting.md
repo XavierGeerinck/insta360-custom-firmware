@@ -6,8 +6,11 @@ description: What to check and what to do when ADB, the build, the installer or 
 ## Installer messages
 
 Every `ERROR:` the installer prints, in the order of its steps. The first
-group stops before anything on the Wave changed: fix the cause and run the
-installer again.
+group stops before anything was stopped or installed: fix the cause and run
+the installer again. Up to `could not copy config.toml`, nothing on the Wave
+changed at all. The last two can leave a copy of your settings
+(`/data/waved/config.toml.before-<time>`) and a patched
+`/etc/init.d/S89usbgadget`; both are harmless, and the message says which.
 
 | The installer says | What it means | What to do |
 |---|---|---|
@@ -17,6 +20,7 @@ installer again.
 | `no Wave on adb (adb devices)` | No Wave answered on ADB, or more than one ADB device is attached. | [`adb devices` is empty](/insta360-custom-firmware/start/troubleshooting/#adb-devices-is-empty) |
 | `no answer from the Wave about …`, `could not read the free space on /data (…)`, `could not read the size of /data/waved/waved (…)` | The Wave stopped answering during the checks. | [The Wave stopped answering](/insta360-custom-firmware/start/troubleshooting/#the-wave-stopped-answering) |
 | `an over-the-air update is on trial (/data/waved/update/trial)` | An over-the-air update has not finished its trial; installing now would be undone. | [An update was on trial](/insta360-custom-firmware/start/troubleshooting/#an-update-was-on-trial) |
+| `/etc and /usr are not the overlays install.sh expects (…)` | `/etc` and `/usr` are not the overlays the installer writes through. | [The overlay is not as expected](/insta360-custom-firmware/start/troubleshooting/#the-overlay-is-not-as-expected) |
 | `/data has … MB available and waved needs … MB` | Not enough room on `/data` for the new binary. | ["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full) |
 | `could not copy … to … on the Wave (adb push)`, `… on the Wave is not … (md5 …, want …)` | A file did not arrive in the Wave's `/tmp`, or arrived damaged. | [The copy did not match](/insta360-custom-firmware/start/troubleshooting/#the-copy-did-not-match) |
 | `could not read …` | A file in your checkout could not be read for its md5. | Check that `waved/deploy/` and `waved/scripts/` are complete (`git status`). |
@@ -31,11 +35,11 @@ back what it can and says so on the next line:
 | The installer says | What it means | What to do |
 |---|---|---|
 | `could not stop waved` | waved did not exit within 40 seconds, not even when killed. Nothing was replaced. | Run the installer again; if it happens again, reboot the Wave first. |
-| `the binary was not replaced` | The new binary did not fit in `/data/waved`. On an update the old one is back in place. | Make room (["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full)), then run the installer again. |
+| `the binary was not replaced` | The new binary did not go into `/data/waved`, usually for lack of room. On an update the old one is back in place. | Make room (["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full)), then run the installer again. |
 | `S60waved, S03splash, rsyslog.conf, splash.fb or iptables.rules not installed (the new binary is)` | The new binary is in place, but some start-up files may still be the old ones. | Run the installer again. |
 | `config.toml not written` | The default settings file could not be written. | Run the installer again. |
 | `could not stub the stock services`, `the stock app and telemetry stubs did not take (…)` | Everything else is installed, but the stock app's stubs are not in place: one it wrote did not read back as written, or one is not in the overlay's upper directory. The stock app would start next to waved at the next boot. | Run the installer again; [The installer stopped part-way](/insta360-custom-firmware/start/troubleshooting/#the-installer-stopped-part-way) if it stops here again. |
-| `could not start the watchdog` | An update installed everything, but waved's watchdog did not start, so waved is not running. | `adb reboot`: waved starts at boot. |
+| `could not start the watchdog` | An update installed everything, but waved's watchdog did not start. The installer tries once more and says how that went: `The watchdog runs again.`, or `Could not start the watchdog: …` (then waved is not running). | After `Could not start the watchdog`: `adb reboot`; waved starts at boot. |
 
 Two can come at any step. From `Stopping stock firmware, the watchdog and
 waved` on, the installer puts back what it can, as above.
@@ -43,7 +47,7 @@ waved` on, the installer puts back what it can, as above.
 | The installer says | What it means | What to do |
 |---|---|---|
 | `install.sh stopped during: …` | A command failed unexpectedly in the step it names. | Run the installer again; each run starts from the beginning. |
-| `install.sh interrupted during: …` | Ctrl-C or a closed terminal stopped the installer in the step it names. | Run the installer again. |
+| `install.sh interrupted during: …` | Ctrl-C, a closed terminal or a closed output pipe (such as `install.sh \| tee log` with `tee` gone) stopped the installer in the step it names. | Run the installer again. |
 
 ## `adb devices` is empty
 
@@ -120,9 +124,11 @@ The installer stopped because it could not make ADB come up at every boot.
 It refuses to go on without that: a Wave with the stock app switched off and
 no ADB can't be reached again. At this point nothing was stopped and nothing
 was installed. The Wave still runs what it ran before, the stock app or an
-older waved. Only `/etc/init.d/S89usbgadget` may have changed. Before the
-patch changes it, it saves a copy as `/data/waved/S89usbgadget.bak.<time>`.
-Any lines above the `ERROR:` are what the patch printed when it failed.
+older waved. What may have changed, as the message says:
+`/etc/init.d/S89usbgadget` (before the patch changes it, it saves a copy as
+`/data/waved/S89usbgadget.bak.<time>`) and, on a Wave that had settings, the
+copy of them in `/data/waved/config.toml.before-<time>`. Any lines above the
+`ERROR:` are what the patch printed when it failed.
 
 Run the installer again. The patch is safe to repeat:
 
@@ -180,11 +186,17 @@ keeps happening, try another USB-C cable or port.
 ## The installer stopped part-way
 
 These are the failures after the installer stopped the stock app and waved
-(`Stopping stock firmware, the watchdog and waved` and later). The installer
-then puts back what it can, and says so on the line after the `ERROR:`:
+(`Stopping stock firmware, the watchdog and waved` and later), including
+Ctrl-C, a closed terminal or a closed output pipe there. The installer then
+puts back what it can, and says so after the `ERROR:`:
 
+- On an update, it first checks `/data/waved/waved`. If the swap was cut off
+  and left no binary there, or half of one, it puts the previous binary back
+  from `/tmp/waved.old` (checked against the md5 it noted when it saved it)
+  and says `put the previous binary back in /data/waved/waved`.
 - `The watchdog runs again.` (an update): waved runs again, the old binary or
-  the new one, whichever is in place.
+  the new one, whichever is in place. If the watchdog that started at boot
+  still runs, it says `the watchdog runs already` and starts no second one.
 - `Could not start the watchdog: …` (an update): waved is not running. Reboot
   the Wave with `adb reboot`; waved starts at boot.
 - `Stock firmware was stopped: adb reboot, then run this again.` (a first
@@ -197,11 +209,13 @@ installer again or to [revert](/insta360-custom-firmware/start/revert/).
 `could not stop waved` means waved did not exit, so the installer replaced
 nothing. The new binary waits in `/tmp/waved.new` until the next reboot.
 
-`the binary was not replaced` means the new binary did not fit in
-`/data/waved`; the line above it says `the new binary did not fit on /data`.
-On an update the old binary is back in place (a copy also waits in
-`/tmp/waved.old` until the Wave restarts). On a first install there was no
-old one: after the reboot the stock app runs again. Make room
+`the binary was not replaced` means the new binary did not go into
+`/data/waved`. Usually it did not fit, and the line above says `the new
+binary did not fit on /data`; if the old binary could not be copied to
+`/tmp` first, the installer stops before it removes anything. On an update
+the old binary is back in place (a copy also waits in `/tmp/waved.old` until
+the Wave restarts). On a first install there was no old one: after the
+reboot the stock app runs again. Make room
 (["/data is full"](/insta360-custom-firmware/start/troubleshooting/#data-is-full))
 and run the installer again.
 
@@ -209,7 +223,10 @@ and run the installer again.
 did not take` mean everything else is installed, but the two stubs that keep
 the stock app and its telemetry off are not in place. With the stock app's
 start-up script still in effect, the stock app would start next to waved at
-the next boot. Run the installer again.
+the next boot. After an update, run the installer again. After a first
+install, do as the last line says: `adb reboot`, then run the installer
+again. The stock app starts next to waved after that reboot, and ADB comes up
+too; the next run stops the stock app and writes the stubs.
 
 What the installer checks: the stubs live in the overlay's upper directory,
 `/data/overlay/upper`, and it is the copies there that replace the stock
@@ -227,13 +244,32 @@ adb shell 'ls -l /etc/init.d/S60pspapp_daemon /usr/lib/libapplogrs.so /data/over
 ```
 
 If only the two under `/data/overlay/upper` are missing, `/etc` and `/usr`
-are not the overlay the installer expects (`adb shell mount | grep overlay`
-shows what they are).
+are not the overlay the installer expects: see
+[The overlay is not as expected](/insta360-custom-firmware/start/troubleshooting/#the-overlay-is-not-as-expected).
 
 `install.sh stopped during: …` names the step in which a command failed
-unexpectedly, and `install.sh interrupted during: …` the step in which Ctrl-C
-or a closed terminal stopped the installer. Run the installer again; each run
-starts from the beginning.
+unexpectedly, and `install.sh interrupted during: …` the step in which Ctrl-C,
+a closed terminal or a closed output pipe stopped the installer. Run the
+installer again; each run starts from the beginning.
+
+## The overlay is not as expected
+
+The installer writes the Wave's start-up scripts and stubs through `/etc`
+and `/usr`, which the stock start-up script `S02overlayfs` mounts as
+overlays whose changes are kept in `/data/overlay/upper` (`revert.sh` removes
+them there). Before it changes anything, it checks `/proc/mounts` for that:
+`/etc` and `/usr` overlays with `upperdir=/data/overlay/upper/etc` and
+`…/usr`, or (a Wave in debug mode) one overlay on `/` with
+`upperdir=/data/overlay/upper`. The message ends with what it found, such as
+`etc=0 usr=0 root=0`. Nothing was changed. Look at the mounts:
+
+```bash
+adb shell grep overlay /proc/mounts
+```
+
+A Wave that shows something else is set up differently from the Waves the
+installer was written for. Don't install on it; the stubs and `revert.sh`
+would not do what they should.
 
 ## An update was on trial
 

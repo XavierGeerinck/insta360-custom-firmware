@@ -69,8 +69,9 @@ Still in `waved/`:
 
 The installer checks before it changes anything: that the build exists, that
 it can strip the binary, that a Wave answers on ADB, that no over-the-air
-update is on trial, and that `/data` has room (`Checking the Wave`, `Checking
-free space on /data`). Then it
+update is on trial, that `/etc` and `/usr` are the overlays it writes
+through, and that `/data` has room (`Checking the Wave`, `Checking free space
+on /data`). Then it
 
 1. strips the binary and copies it to the Wave's `/tmp`, with the start-up
    scripts, the boot splash, the logging fix, the firewall rules, the USB
@@ -112,19 +113,24 @@ How it ends depends on whether waved was on the Wave already:
 - **An update** (waved was on the Wave) starts waved's watchdog again
   (`Starting the watchdog`), which starts the new waved, and ends with
   `=== Done. The previous binary is in /tmp/waved.old until the Wave
-  restarts. ===`. No reboot is needed. Your settings stay.
+  restarts. ===`. Your settings stay. The new waved runs without a reboot.
+  If the update also changed what only takes effect at boot (the USB
+  gadget patch, the boot splash or the logging settings), a last line says
+  so, for example `The new boot splash and logging settings take effect at
+  the next boot: adb reboot`. Reboot when it suits you.
 
 If a step fails, the installer stops there and prints an `ERROR:` line that
-says what to do next. Once it has stopped anything, it also puts things back
-as far as it can: after a failed update it starts the watchdog again (`The
-watchdog runs again.`), and after a failed first install it says `Stock
-firmware was stopped: adb reboot, then run this again.` Every message and
-what to do about it:
+says what to do next. This holds for Ctrl-C, a closed terminal or a closed
+output pipe too. Once it has stopped anything, it also puts things back as
+far as it can: after a failed update it puts the previous binary back if the
+swap was cut off, then starts the watchdog again (`The watchdog runs
+again.`); after a failed first install it says `Stock firmware was stopped:
+adb reboot, then run this again.` Every message and what to do about it:
 [Installer messages](/insta360-custom-firmware/start/troubleshooting/#installer-messages).
 
 ## 4. Reboot
 
-After a first install:
+After a first install, or when an update's last line asks for it:
 
 ```bash
 adb reboot

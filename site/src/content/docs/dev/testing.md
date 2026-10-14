@@ -83,8 +83,8 @@ deploy/tests/test-deploy-scripts.sh
 It runs `deploy/install.sh` and `deploy/revert.sh` against a fake `adb`, so
 no Wave is needed, and it aborts if `adb` is not the fake. The fake logs every
 call and runs the scripts meant for the Wave in a directory that stands in
-for the Wave's `/data`, `/tmp`, `/etc`, `/usr` and `/mnt`, with fake `ps`,
-`kill`, `killall`, `pidof`, `start-stop-daemon` and `df`. Like the Wave's
+for the Wave's `/data`, `/tmp`, `/etc`, `/usr`, `/mnt` and `/proc/mounts`,
+with fake `ps`, `kill`, `killall`, `pidof`, `start-stop-daemon` and `df`. Like the Wave's
 overlay, it copies whatever a script changes under `/etc` and `/usr` into
 `/data/overlay/upper`, and it flags a script that writes there directly. The
 USB gadget patch it runs is the real one, on an `S89usbgadget`-shaped copy.
@@ -101,10 +101,14 @@ It covers:
   the gadget found already patched, the old binary in `/tmp/waved.old`, the
   stubs already in the upper directory kept untouched (a compiled 8352-byte
   `libapplogrs.so`, or an older installer's one-byte one), the watchdog
-  started again at the end, and the old binary's space counted as free;
-- refusals before anything changes: too little room on `/data` (before any
-  push), a copy that doesn't match, a failed push, an over-the-air update on
-  trial, no Wave, no build, a Wave that stops answering;
+  started again at the end, the old binary's space counted as free, and a
+  closing `adb reboot` hint only when the gadget patch, the boot splash or the
+  logging settings changed;
+- refusals before anything changes: `/etc` and `/usr` not the expected
+  overlays (debug mode's overlay on `/` is accepted), too little room on
+  `/data` (before any push), a copy that doesn't match, a failed push, an
+  over-the-air update on trial, no Wave, no build, a Wave that stops
+  answering;
 - no ADB at boot, no further: a failed patch, a patch that leaves `adbd_enable`
   commented out, a boot function without `adbd_enable`, a check without an
   answer. None of them stops or stubs anything;
@@ -114,7 +118,10 @@ It covers:
   each with the watchdog started again after an update or "adb reboot" after
   a first install;
 - Ctrl-C during a step: the message names the step, and an update gets its
-  watchdog back;
+  watchdog back, also after a closed terminal (SIGHUP), with stderr closed,
+  or with its output pipe gone; a watchdog still running is not started a
+  second time; a swap cut off half-way gets the previous binary put back
+  from `/tmp/waved.old` before the watchdog starts;
 - `revert.sh`: what it deletes, only in the overlay's upper directory.
 
 `VERBOSE=1` prints the installer's output and the `adb` log of a failed
