@@ -45,6 +45,34 @@ boundary,10.399× faster. Wi-Fi and final device state are verified restored;
 earlier warning/ADB-loss intervals remain failed. See the
 [PoC19 notebook](lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
 
+### Next real-model compatibility targets
+
+Owner direction on 2026-10-14: continue NPU compatibility work across other
+trained models. Integrate the qualified VAD afterward; that deferred task is
+[root backlog C20](../../TODO.md#c--recording-and-audio-backend).
+
+The proposed order tests operator, geometry, dtype and model-size coverage.
+These are unqualified candidates. Expected operators below come from upstream
+architectures; freeze and inspect each actual ONNX export before defining its
+bounded native profile and device experiment.
+
+| Order | Trained model / candidate precision | Compatibility question |
+|---|---|---|
+| 1 | [SqueezeNet 1.1](https://github.com/pytorch/vision/blob/main/torchvision/models/squeezenet.py), FP16 | Spatial 2D Conv, ceiling-mode MaxPool, parallel branches/Concat, global average pooling and flattening. Small first vision candidate, without recurrent or attention operators. |
+| 2 | [MobileNetV2](https://github.com/pytorch/vision/blob/main/torchvision/models/mobilenetv2.py), FP16 | Actual 2D depthwise stride 2, ReLU6/Clip, inverted residuals, global pooling and dense classification. MarbleNet's flat-height depthwise policy does not qualify these geometries. |
+| 3 | [MobileNetV2 quantized variant](https://github.com/onnx/models/blob/main/validated/vision/classification/mobilenet/README.md), INT8 | Full quantized Conv/depthwise/residual graph, scale/zero-point and possible per-channel handling. Existing U8 FC controls do not establish whole quantized-network support; inspect the selected QOperator/QDQ graph first. |
+| 4 | [ResNet18](https://github.com/pytorch/vision/blob/main/torchvision/models/resnet.py), FP16 | Larger spatial residual network, pooling/dense layers, constant/activation memory and compiler scaling. Resource limits need model-specific review. |
+
+**Recommended next experiment: SqueezeNet 1.1.** It adds several useful coverage
+dimensions while keeping the first model relatively small. File-based image
+inputs suffice on the Wave; no camera or product integration is required.
+For each candidate, freeze real trained weights and representative inputs,
+record the exact graph and any proven equivalent lowering, qualify newly
+required native operations, then compare actual native outputs with the CPU
+reference. Numerical parity, target routes, performance and device health
+remain separate outcomes. Each model gets a new bounded contract and reviewed
+eligible phase; the completed PoC19 budget is not an open-ended run allowance.
+
 This directory is the evidence hub for learning how to run custom neural
 networks on the Insta360 Wave's VeriSilicon-backed NPU safely and
 reproducibly.

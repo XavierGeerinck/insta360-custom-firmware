@@ -153,7 +153,7 @@ Priority:
 | Wi-Fi provisioning and saved-network reconnect | **Better** | Waved provides a WPA2 setup AP, QR/manual credentials, a captive configuration form, saved-network fallback, and live connection status; stock setup AP was open. |
 | Device configuration through setup portal | **Better** | Versioned `config.toml` fields can be edited and validated without exposing stored secrets. |
 | Raw eight-channel microphone over USB | **Not planned** | Internal eight-channel capture exists; expose it to a host only when a real application requests it. |
-| VIP9000 NPU inference | **Parked** | DFN3 on the CPU takes ≈ 84 % of a core in speech (root `TODO.md` C13), but the NPU is compiler-blocked and measured gains were small (`docs/COMPUTE_HARDWARE.md` "Status: parked"). |
+| VIP9000 NPU inference | **Research active; integration deferred** | Full trained MarbleNet qualifies with a 10.399× prepared-feature boundary speedup. General model compatibility and DFN3 remain unqualified. Owner direction on 2026-10-14: broaden NPU compatibility first, then integrate VAD (root `TODO.md` C20). |
 
 ## Deferred, trigger-based work
 
@@ -173,6 +173,12 @@ Priority:
   Trigger: same-run A/B tuning demonstrates a need.
 - **NPU DFN3 backend.** Parked 2026-10-12. Trigger: a usable VIP9000 compiler
   arrives, or a faster CPU runtime and a lighter model both miss the budget.
+- **Qualified MarbleNet VAD integration.** Owner requested on 2026-10-14;
+  trigger: completion of the current NPU compatibility work across additional
+  real models. Track implementation under [root backlog C20](../TODO.md#c--recording-and-audio-backend).
+  Preserve the qualified model identity and account for its approximately
+  1.46 s lookahead. On-device features, persistent execution and audio-pipeline
+  validation belong to that later integration task.
 
 ## Completed foundation
 
