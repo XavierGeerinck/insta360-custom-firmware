@@ -1545,7 +1545,9 @@ cross compiler would allow NEON (and 1.6).
 packet costs well under a frame; a pre-roll (up to 30 s) would not: it joins a backlog that
 each incoming frame drains by twice its own length (the first 100 ms at once, so a dead
 medium still fails the start), so it reaches the file ~15 s after Record without starving the
-32-frame channel (~680 ms). Finalize and abort write what is left on the blocking pool.
+32-frame channel (~680 ms). Finalize writes what is left on the blocking pool while the
+meeting task goes on; an abort (which the meeting task waits for, before the fault is
+acknowledged) writes at most 3 s more and logs what it leaves out of the damaged take.
 
 **Crash and power loss.** Opus: an Ogg page every second of audio (50 packets), always
 leaving the newest packet for the last page so the end-trimming granule is valid; FLAC: frames

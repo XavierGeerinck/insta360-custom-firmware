@@ -126,6 +126,12 @@ const CATCH_UP_FACTOR: usize = 2;
 /// Pre-roll written at once by `append_pre_roll` (100 ms), so a medium that
 /// cannot be written fails the start, as with WAV.
 const PRE_ROLL_FIRST_WRITE: usize = 4_800;
+/// The most backlog an abort (or a drop) still writes: 3 s of audio. An
+/// abort runs while the meeting task waits, before the fault is
+/// acknowledged; encoding a whole 30 s pre-roll would take seconds on an A55
+/// and overflow the frame channel (~680 ms). The rest of a damaged take's
+/// backlog is dropped, and logged.
+const ABORT_BACKLOG_SAMPLES: usize = 3 * RECORDING_SAMPLE_RATE as usize;
 /// How often the take's file is pushed to the medium (fdatasync), off the
 /// meeting task. A power cut loses at most this plus the writer's last
 /// second.
@@ -449,10 +455,6 @@ impl ActiveRecording {
         Ok(())
     }
 
-    fn drain_all(&mut self) -> std::io::Result<()> {
-        self.drain(self.backlog.len())
-    }
-
     #[cfg(test)]
     pub fn fail_writes_after(&mut self, samples: u64) {
         self.fail_writes_after_samples = Some(samples);
@@ -463,12 +465,21 @@ impl ActiveRecording {
         self.backlog.len()
     }
 
-    /// Write what is still waiting (unless writing already failed), close
-    /// the stream and stop syncing. The first error wins.
-    fn close(&mut self) -> std::io::Result<()> {
+    /// Write up to `backlog_limit` samples still waiting (unless writing
+    /// already failed), close the stream and stop syncing. The first error
+    /// wins.
+    fn close(&mut self, backlog_limit: usize) -> std::io::Result<()> {
         let mut first_error = None;
         if !self.write_failed {
-            first_error = self.drain_all().err();
+            let dropped = self.backlog.len().saturating_sub(backlog_limit);
+            first_error = self.drain(backlog_limit).err();
+            if dropped > 0 {
+                warn!(
+                    "recording {}: {} ms of backlog left out of the closed partial",
+                    self.id,
+                    samples_to_ms(dropped as u64)
+                );
+            }
         }
         match self.writer.take() {
             Some(mut writer) => {
@@ -493,7 +504,7 @@ impl ActiveRecording {
     /// or uploadable artifact: the stream is closed (a playable file) under
     /// its `.partial` name.
     pub fn abort(mut self) -> std::io::Result<PathBuf> {
-        let close_error = self.close().err();
+        let close_error = self.close(ABORT_BACKLOG_SAMPLES).err();
         let partial = self.partial_audio_path();
         let file_sync_error = File::open(&partial).and_then(|file| file.sync_all()).err();
         let dir_sync_error = File::open(&self.dir).and_then(|dir| dir.sync_all()).err();
@@ -509,7 +520,8 @@ impl ActiveRecording {
             // Stop while paused: close the span at the moment of Stop.
             self.resume_at(std::time::Instant::now());
         }
-        self.close()?;
+        // On the blocking pool, while the meeting task keeps draining frames.
+        self.close(usize::MAX)?;
 
         let partial = self.partial_audio_path();
         let final_path = self.audio_path();
@@ -538,7 +550,7 @@ impl Drop for ActiveRecording {
         // Safety net: make an interrupted partial file inspectable, but never
         // rename it to the finalized filename or make it uploadable.
         if self.writer.is_some() {
-            if let Err(error) = self.close() {
+            if let Err(error) = self.close(ABORT_BACKLOG_SAMPLES) {
                 warn!("partial recording close error: {error}");
             }
         }
@@ -889,6 +901,18 @@ mod tests {
         // An integrity fault (not a write error): the backlog is written too.
         let partial = rec.abort().unwrap();
         assert_eq!(decoded(AudioFormat::Opus, &partial).len(), 52_800);
+    }
+
+    #[tokio::test]
+    async fn an_abort_writes_at_most_three_seconds_of_backlog() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut rec = ActiveRecording::start(dir.path(), "Test", AudioFormat::Flac)
+            .await
+            .unwrap();
+        // 10 s of pre-roll: 100 ms are written at once, the rest waits.
+        rec.append_pre_roll(&vec![0.1; 480_000]).unwrap();
+        let partial = rec.abort().unwrap();
+        assert_eq!(decoded(AudioFormat::Flac, &partial).len(), 4_800 + 144_000);
     }
 
     #[test]
