@@ -13,8 +13,13 @@ bridge. Each exact model needs its own successful device qualification.
 The bounded `fp16-marblenet-v1` graph profile also imports actual trained
 Conv/Add/Relu graphs. PoC18 qualified MarbleNet's pointwise and first
 residual blocks; its K29/dilation2 depthwise control was rejected. The
-complete model therefore uses the explicit file-oriented hybrid CPU
-frontend, and strict mode refuses its unqualified native package. See the
+original full package uses the explicit file-oriented hybrid CPU frontend,
+and strict mode refuses that unqualified package. PoC19's separate
+`fp16-marblenet-pad-v1` exact rewrite now qualifies the complete trained model
+on NN/TP. All800 frozen frame decisions match original FP32; the paired
+prepared-feature boundary is10.399× faster than one-thread Wave CPU inference.
+The qualified19f WAV frontend runs strictly on native with zero CPU neural
+sessions; it retains the fixed3.99-second window and future-context limits. See the
 [MarbleNet guide](../../../docs/npu/onnx/marblenet.md) for the command,
 optional Torch feature environment, fixed window and evidence.
 

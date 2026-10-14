@@ -1,4 +1,5 @@
 {
+  "completed_at": "2026-10-14T10:01:47.222Z",
   "controls": {
     "19a": {
       "compile_run_id": "rea-poc19a-isolation-compile-20261013-a1",
@@ -55,31 +56,49 @@
     "19e": {
       "compile_run_id": "rea-poc19e-residuals-compile-20261013-a1",
       "compile_status": "PASS",
-      "eligibility_note": "local compile began after USB warning; encompassing inter-run interval FAILED",
+      "eligibility_note": "old export interval FAILED and preserved; unchanged unqualified NBG reused after independently reviewed new phase; blocked a1 host attempt made zero native calls; first actual E Run passed in exact26-file clone",
       "lowering_sha256": "69795fd7510e1ec95627bcdab9a3e3d6c421e5e8f7365c28356b73044ee96df3",
+      "max_abs_error": 0.00048828125,
       "model_sha256": "435ad68767d955fd79e4de12b593f7956a1917cc0a6af9090805c8175ac5d26e",
       "nbg_bytes": 79376,
       "nbg_sha256": "75697f84d71c5b83f1bab6fe5bda9c804fabf790bb6eb45eed3e9d5a9322301e",
+      "output_sha256": "34893235f3e882eee8d67404035eaaf3f76d0bd55800106b2d5cd9f2b435f246",
       "profile_id": "fp16-marblenet-pad-v1",
-      "qualification_status": "NOT_LAUNCHED"
+      "qualification_run_id": "rea-poc19e-residuals-execute-20261014-b1",
+      "qualification_status": "PASS",
+      "qualified_package_directory": "19e-wifi-quiet"
     },
     "19f": {
-      "compile_status": "NOT_LAUNCHED",
+      "compile_run_id": "rea-poc19f-full-compile-20261014-b1",
+      "compile_status": "PASS",
       "lowering_sha256": "7cbb31bfc04628f2797346ae4854f30c84b04fc232fa41ad5d2f34831ca00014",
+      "max_abs_error": 0.00390625,
       "model_sha256": "4929d1c702ed471bc6a9c50fae46bd23561892457405b4fd02fffb372ac10186",
+      "nbg_bytes": 232384,
+      "nbg_sha256": "69eddc1ac45e2016f5adee2f53de6587fcc564eaaf90c4720e316b1d7e2b53f9",
+      "output_sha256": "72c24cf75041f75a923fa8be74a0c1462834032db850c95588bbd68059151a31",
       "profile_id": "fp16-marblenet-pad-v1",
-      "qualification_status": "NOT_LAUNCHED"
+      "qualification_run_id": "rea-poc19f-full-execute-20261014-b1",
+      "qualification_status": "PASS",
+      "qualified_package_directory": "19f",
+      "routes": {
+        "CPU": 0,
+        "NN": 24,
+        "SH": 0,
+        "TP": 1
+      }
     }
   },
-  "full_model_status": "UNQUALIFIED",
+  "full_model_status": "NATIVE_QUALIFIED",
   "health": {
-    "final_target_state": "UNVERIFIED: selected device absent from ADB",
+    "final_target_state": "2026-10-14 final state verified separately in resumed_phase",
     "pre_native_wifi_incidents": [
       "snapshot-0001",
       "snapshot-0004",
       "snapshot-0005"
     ],
     "quiet_phase": "snapshot0006 through19d cleanup locally clean",
+    "scope": "historical2026-10-13 failed interval; not reclassified by later success",
     "status": "FAIL",
     "usb_incident": {
       "after19d_cleanup": 4955.5,
@@ -91,11 +110,12 @@
     }
   },
   "host_final_integrity": {
+    "after_benchmark": true,
     "cpu_sessions": 0,
-    "packages_loaded": 14,
+    "packages_loaded": 15,
     "prepared_files_verified": 123,
     "production_phase_created": false,
-    "qualified_packages": 10,
+    "qualified_packages": 12,
     "status": "PASS",
     "transport_calls": 0
   },
@@ -111,20 +131,253 @@
     "original_fp32_decisions_agreement": 1.0,
     "pad_preparation_sha256": "92019faefcd00d93faee1d28b5d2cf9c8b1ba63d8c13bc71ac00048ac79df76d"
   },
+  "independent_review": {
+    "closure_status": "PASS",
+    "reports": [
+      "review-6.md",
+      "review-7.md",
+      "review-8.md",
+      "review-9.md",
+      "review-10.md",
+      "review-11.md"
+    ],
+    "scope": "exact source/ELF/NBG/numerical/raw benchmark/continuous b1 health/final state/Wi-Fi restoration/documentation",
+    "status": "PASS"
+  },
+  "native_budget_maximum": {
+    "compile_processes": 8,
+    "compile_to_binary_calls": 16,
+    "runs": 46
+  },
   "native_budget_used": {
-    "compile_processes": 5,
-    "compile_to_binary_calls": 10,
-    "runs": 4
+    "compile_processes": 6,
+    "compile_to_binary_calls": 12,
+    "runs": 45
+  },
+  "native_four_clip_gate": {
+    "clips": {
+      "noise": {
+        "cleanup_sha256": "913e232d0fc021d403dfdff49a1d0abb645801c63204a225f76cae2e5b4dc3a5",
+        "decision_agreement": 1.0,
+        "disagreements": 0,
+        "frames": 200,
+        "identity_sha256": "c8b66f50607896e73d43a329e426f2449f8a293c9d624b4d4d3a259152e18d68",
+        "max_abs_error": 3.0907822960952146e-05,
+        "native_output_sha256": "e55e8e9c0cb8351c314947d09ee30770fb09f8178a5958274d845ac6de6c43e5",
+        "native_speech_frames": 0,
+        "original_output_sha256": "f84a6f5355dd2a1f4060826472def15eb1b55b1044958eb0863641043fa48ba5",
+        "original_speech_frames": 0,
+        "policy": {
+          "max_abs_error": 0.02,
+          "minimum_decision_agreement": 0.99
+        },
+        "run_id": "rea-poc19f-full-noise-20261014-b1",
+        "run_sha256": "01250aa40dc241930f2091d09fe344a9c759a4e707c3d4d8d3025f43436642e7",
+        "status": "PASS",
+        "threshold": 0.5
+      },
+      "noisy-speech": {
+        "cleanup_sha256": "fea34b7e806d1389c4c4000660cccc24da69a1223febb38807526e515461f99f",
+        "decision_agreement": 1.0,
+        "disagreements": 0,
+        "frames": 200,
+        "identity_sha256": "1f6267fced9d61e92035aeea8d40d0c41411f964fdb850bb78ef8e94b37de290",
+        "max_abs_error": 0.00016833440037788971,
+        "native_output_sha256": "714a455ee9dcbf0a8d5286102ce9bd5ab3957c8264c86bcf2c54f9c57c9b199d",
+        "native_speech_frames": 175,
+        "original_output_sha256": "a2b5948e45cb98e21842e3c0e1a00188777060225ab75e6863a43e077a342cd2",
+        "original_speech_frames": 175,
+        "policy": {
+          "max_abs_error": 0.02,
+          "minimum_decision_agreement": 0.99
+        },
+        "run_id": "rea-poc19f-full-noisy-speech-20261014-b1",
+        "run_sha256": "0e07012188b07eb3dceefee4ff31e0da1b254a300698d7be066e1a87c0e2903b",
+        "status": "PASS",
+        "threshold": 0.5
+      },
+      "silence": {
+        "cleanup_sha256": "3830547671508b3efd3db080d0d780600093fbd220262cae9f098b3e43661afc",
+        "decision_agreement": 1.0,
+        "disagreements": 0,
+        "frames": 200,
+        "identity_sha256": "c969abf5e1c6eb0489f597c408a24add4173ca0d783eef63e4b35095776ca9f8",
+        "max_abs_error": 2.342883985605778e-05,
+        "native_output_sha256": "17a863ba13c37bc3968a2309a12a883fd0683fb906430deaa9a3219026f80b93",
+        "native_speech_frames": 0,
+        "original_output_sha256": "d1b2925283d446d2da327ba9f0577de95e1474cf5fa603eee30eb43ab9b67b96",
+        "original_speech_frames": 0,
+        "policy": {
+          "max_abs_error": 0.02,
+          "minimum_decision_agreement": 0.99
+        },
+        "run_id": "rea-poc19f-full-silence-20261014-b1",
+        "run_sha256": "a7f9cbdce9e9e2e6ff28a4fac94e23d79f0cbcbf3b8db72298b5eb72f6327bf8",
+        "status": "PASS",
+        "threshold": 0.5
+      },
+      "speech": {
+        "cleanup_sha256": "883483e1fc82465cf1907ba071caa56799a7db191e9ca7448bc4a9389292ca29",
+        "decision_agreement": 1.0,
+        "disagreements": 0,
+        "frames": 200,
+        "identity_sha256": "05e5f1ff9e7650f0a3f06da9c24693e5cb7e83fb75237eab3332eb20c66819eb",
+        "max_abs_error": 0.0008144925427172045,
+        "native_output_sha256": "72c24cf75041f75a923fa8be74a0c1462834032db850c95588bbd68059151a31",
+        "native_speech_frames": 175,
+        "original_output_sha256": "a1faddc03ec660da98d11e13fcbc2c0d0636f307ed6badb1e73b5c89f597e8cd",
+        "original_speech_frames": 175,
+        "policy": {
+          "max_abs_error": 0.02,
+          "minimum_decision_agreement": 0.99
+        },
+        "run_id": "rea-poc19f-full-execute-20261014-b1",
+        "run_sha256": "f91f076d759dc839ec4226ebc178100339e9fe720558e384e8fa54d454ccbfb4",
+        "status": "PASS",
+        "threshold": 0.5
+      }
+    },
+    "decision_agreement": 1.0,
+    "frames": 800,
+    "labeled_accuracy_evaluation": false,
+    "max_abs_probability_error": 0.0008144925427172045,
+    "receipt_sha256": "970dccf00164bdb295314109496aa8519ad3c873c9c669c98142a1c3812cd901",
+    "speech_result": "initial full native qualification on exact frozen speech features",
+    "status": "PASS",
+    "strict_frontend_clips": {
+      "noise": {
+        "cpu_sessions": 0,
+        "native_calls": 1,
+        "providers": [
+          "WaveNativeBackend"
+        ]
+      },
+      "noisy-speech": {
+        "cpu_sessions": 0,
+        "native_calls": 1,
+        "providers": [
+          "WaveNativeBackend"
+        ]
+      },
+      "silence": {
+        "cpu_sessions": 0,
+        "native_calls": 1,
+        "providers": [
+          "WaveNativeBackend"
+        ]
+      }
+    }
   },
   "objective": "qualify trained full MarbleNet on Wave NN",
-  "pending": [
-    "restore Wi-Fi after ADB reconnection",
-    "approved fresh eligible phase",
-    "19e native qualification",
-    "19f full compile and4 clips",
-    "36Run paired benchmark",
-    "final live state/root verification"
-  ],
+  "paired_benchmark": {
+    "boundary": "prepared input copy + Run + softmax; native also includes NaN canary copy and output readback; CPU output priming and validation outside boundary",
+    "boundary_speedup": 10.399069837221514,
+    "cleanup_sha256": "3783ebb32ab15f1f1bda0c52372ae4e6a06d98df726dbbeef81a979b27551790",
+    "cpu_model_precision": "FLOAT32",
+    "cpu_ort_version": "1.15.1",
+    "cpu_provider": "CPUExecutionProvider",
+    "cpu_threads": 1,
+    "excluded": [
+      "feature extraction",
+      "FP32-to-FP16 feature conversion",
+      "graph/session setup",
+      "file and ADB orchestration",
+      "result validation"
+    ],
+    "feature_extraction_excluded": true,
+    "float32_to_float16_input_conversion_excluded": true,
+    "host_build_negative": "relative Docker volume path rejected before compiler/device; preserved; rebuilt unchanged source/data with absolute host paths",
+    "measured_pairs": 32,
+    "native_model_precision": "FLOAT16",
+    "native_output": "exact qualified FP16 output for every iteration",
+    "native_runs": 36,
+    "preparation_sha256": "d395bd8935e3a84adde0721eff2e2d9dc2c1649be7eb62c4622b13e1daf657d6",
+    "receipt_sha256": "cce23ae038f04bf9ec7ca720b321d15781a2c5cd8d0a995835d4ed476d601c22",
+    "repeated_input": "one frozen3.99-second prepared speech window",
+    "run_id": "rea-poc19f-paired-benchmark-20261014-b1",
+    "run_sha256": "ab7b4830fee91b2991a93bcbb66b1a02bac1c7f830cba5447619f9d4c2278f18",
+    "status": "PASS",
+    "stdout_sha256": "98e4624a711c745e5e93405b4304ea63da0e76cd3768601e844d8849da6e01fa",
+    "thread_cpu_reduction_fraction": 0.954607096534749,
+    "thread_cpu_scope": "calling thread only; does not measure total system CPU or energy",
+    "timings": {
+      "cpu_boundary_ms": {
+        "max": 9.4375,
+        "median": 8.664375,
+        "min": 8.422708,
+        "p95": 9.331614400000001
+      },
+      "cpu_input_copy_ms": {
+        "max": 0.072584,
+        "median": 0.050167,
+        "min": 0.035042,
+        "p95": 0.06204779999999999
+      },
+      "cpu_postprocess_ms": {
+        "max": 0.018791,
+        "median": 0.0184375,
+        "min": 0.017958,
+        "p95": 0.01875
+      },
+      "cpu_run_ms": {
+        "max": 9.3645,
+        "median": 8.577103999999999,
+        "min": 8.342083,
+        "p95": 9.2527728
+      },
+      "cpu_thread_ms": {
+        "max": 8.773791,
+        "median": 8.5453115,
+        "min": 8.361124,
+        "p95": 8.76045945
+      },
+      "npu_boundary_ms": {
+        "max": 1.180958,
+        "median": 0.8331875,
+        "min": 0.636667,
+        "p95": 0.9938705
+      },
+      "npu_canary_copy_ms": {
+        "max": 0.113375,
+        "median": 0.010396,
+        "min": 0.007458,
+        "p95": 0.0118667
+      },
+      "npu_input_copy_ms": {
+        "max": 0.096,
+        "median": 0.08583350000000001,
+        "min": 0.0465,
+        "p95": 0.0942599
+      },
+      "npu_output_copy_ms": {
+        "max": 0.051583,
+        "median": 0.015354,
+        "min": 0.008708,
+        "p95": 0.03703749999999999
+      },
+      "npu_postprocess_ms": {
+        "max": 0.022125,
+        "median": 0.021354,
+        "min": 0.020292,
+        "p95": 0.021976899999999997
+      },
+      "npu_run_ms": {
+        "max": 1.000208,
+        "median": 0.690792,
+        "min": 0.545833,
+        "p95": 0.81496615
+      },
+      "npu_thread_ms": {
+        "max": 0.523874,
+        "median": 0.3878965,
+        "min": 0.225334,
+        "p95": 0.46137255
+      }
+    },
+    "warmup_pairs": 4,
+    "window_seconds": 3.99
+  },
+  "pending": [],
   "phase_guard": {
     "anchor_advance": "verified CLEAN cleanup only",
     "checks": [
@@ -135,11 +388,21 @@
     "clean_compiler_negative": "narrow READY continuation, no retry",
     "commit": "0843080",
     "fault_response": "persistent HALTED, no automatic reseed",
-    "independent_review": "PASS for sole-controller host workflow; no live continuation approval",
+    "independent_review": "PASS for sole controller and explicit lab b1 seed/native stages; full chain verified",
     "interprocess_lock_or_cas": false,
     "production_phase_or_seed_created": false,
+    "rejected_raw_snapshot_retention_commit": "446a85d",
     "scope": "new Pad profile, single controller only",
     "status": "IMPLEMENTED"
+  },
+  "qualified_full_load_tamper": {
+    "altered_artifacts_refused": 13,
+    "control": "19f",
+    "cpu_sessions": 0,
+    "original_artifacts_modified": false,
+    "status": "PASS",
+    "timing": "after four clip Runs, before benchmark; final qualified integrity separately rechecked after benchmark",
+    "transport_calls": 0
   },
   "qualified_load_tamper": {
     "altered_artifacts_refused": 26,
@@ -152,8 +415,32 @@
     "status": "PASS",
     "transport_calls": 0
   },
+  "resumed_phase": {
+    "a1_halted_archive_sha256": "ace9b39d0a235121a47a33b38a87dc51f4375b6a139016a76209d36c67a88dbc",
+    "a1_rejected_raw_snapshot": "not retained by old write ordering; not reconstructed",
+    "a1_status": "HALTED_BEFORE_STAGING_ZERO_VENDOR_CALLS",
+    "agent_driver_reset_or_reboot": false,
+    "closure_query_negative": "initial combined read-only shell command rejected by ADB as too long before shell; preserved separately; bounded seven-root queries passed; no vendor calls or mutations",
+    "every_cleanup": "CLEAN",
+    "id": "marblenet-20261014-b1",
+    "measurement_closed_before_wifi_restore": true,
+    "new_boot_after_owner_reconnection": true,
+    "phase_event_count": 35,
+    "post_wifi_restoration_health_differences": [],
+    "post_wifi_restoration_kernel_alerts": [],
+    "post_wifi_restoration_status": "PASS",
+    "production_service_deployed": false,
+    "quiet_seconds": 525.396,
+    "quiet_snapshot_sha256": "18b56028320f38207ce4c85551f014d04f408698f8baf25582e685d90fe0b172",
+    "roots_absent": 28,
+    "roots_evidence_scope": "controller-checked28-root aggregate and exact derived list retained; per-chunk stdout not retained; read-only seven-root query/assertions independently inspected",
+    "same_pinned_system": true,
+    "seed_to_final_health_differences": [],
+    "seed_to_final_kernel_alerts": [],
+    "status": "PASS"
+  },
   "schema_version": 1,
-  "status": "PARTIAL_BLOCKED",
+  "status": "COMPLETE",
   "tests": {
     "all_host_collection": "nine unrelated optional ERF modules lack SciPy/pystoi in isolated Torch env; negative retained",
     "final_uncompiled_qualification_refusal": {
@@ -176,12 +463,19 @@
       "passed": 470,
       "skipped": 2,
       "subtests_passed": 329
+    },
+    "snapshot_retention_regression": {
+      "passed": 45,
+      "ruff": "PASS",
+      "scope": "focused phase and native bridge harness",
+      "subtests_passed": 5
     }
   },
   "wifi": {
     "configuration_saved_or_credentials_changed": false,
-    "last_known_state": "DISCONNECTED",
+    "last_known_state": "COMPLETED",
     "manual_disconnect_acknowledged": true,
-    "restoration": "BLOCKED_DEVICE_ABSENT"
+    "restoration": "VERIFIED_SAME_SAVED_NETWORK_ADMIN_UP_IP_ASSIGNED",
+    "restoration_at": "2026-10-14T10:01:43.929Z"
   }
 }

@@ -1,5 +1,11 @@
 # 2026-10-13 — PoC19: MarbleNet convolution compatibility
 
+**Completed after owner reconnection on2026-10-14.** The complete trained
+graph qualified on NN/TP, all800 frozen frame decisions match FP32, and the
+paired prepared-feature benchmark measured10.399× faster boundary execution.
+Wi-Fi and final device state are verified restored. The failed2026-10-13 and
+first2026-10-14 intervals below remain failed. See the resumption section.
+
 ## Scope and identity
 
 The owner authorized continuing the REA investigation, a compatible trained
@@ -105,7 +111,7 @@ quiet71-second interval established the new eligible measurement phase.
 The prior failing intervals are not reclassified as healthy. Final Wi-Fi
 restoration and closure evidence remain required.
 
-## USB incident and current stopping point
+## USB incident and2026-10-13 stopping point
 
 The literal `WARNING: Drop the transfer event` appeared at uptime4992.636165,
 37.14 seconds after19d CLEAN cleanup at4955.50. It was already in19e's
@@ -141,7 +147,7 @@ NoRetry and missing-NBG requests refuse before phase activation. No production
 phase or seed has been created. This supports the sole controller workflow;
 its owner UUID is not an interprocess lock or compare-and-swap mechanism.
 
-## Remaining qualification and closure
+## Status at the2026-10-13 stop
 
 The bounded plan permits at most8 compiler processes,16 size/export API
 calls and46 NPU Runs, without retrying a control. Actual use is5 compiler
@@ -185,3 +191,115 @@ Final host verification rechecks all123 prepared files and14 packages,
 including10 qualified ones, with CPU-session/ADB guards. The sole-controller
 guard passed independent review; this does not authorize live continuation
 or replace the outstanding Wi-Fi restoration and final device checks.
+
+## 2026-10-14 resumption and complete native qualification
+
+The owner explicitly reconnected the unit. Boot identity is now
+`eff903fb-00b5-45ab-bcad-30f36195cef5`; the pinned serial, kernel, NPU settings,
+system libraries and model/build/preparation hashes match. No agent reboot,
+driver reset, service restart or USB configuration change was used. Wi-Fi
+was already COMPLETED on the original saved network at reconnection.
+
+The first explicitly reviewed new phase, a1, then HALTED before staging or
+any vendor call: a fresh atbm `wsm_write_mib` WARNING at uptime363.952494 and
+lost200-line diagnostic overlap were detected. Its exact HALTED document,
+SHA `ace9b39d0a235121a47a33b38a87dc51f4375b6a139016a76209d36c67a88dbc`,
+and seed remain retained. The rejected raw snapshot was not saved by the old
+write ordering; it was not reconstructed. Commit446a85d moves its exclusive
+host write before the phase check and device mutation. An exact-warning
+regression proves retention and zero device mutations;45 focused tests and
+5 subtests pass, with Ruff clean.
+
+Under the owner's existing temporary-disable authorization, Wi-Fi was again
+manually disconnected without saving configuration. A separate525.396-second
+quiet interval had exact overlap, no new alerts and unchanged system state.
+Reviewed snapshot SHA
+`18b56028320f38207ce4c85551f014d04f408698f8baf25582e685d90fe0b172`
+explicitly seeded b1 after byte-exact a1 archival. No automatic reseed occurred.
+
+19e's blocked host marker remains untouched. A new host evidence directory,
+`19e-wifi-quiet`, copies26 immutable files from the original unqualified
+candidate, inventory SHA
+`0134a8115f38a5be9b615a419da262dbb72e75da6292116399c2d1102bca92a8`.
+This supports19e's first actual native Run; it is neither a native retry nor
+a repeated export. It passed with max activation error0.00048828125 and
+zero mismatches. Its old surrounding export interval remains failed.
+
+19f's first native export passed and produced232,384 bytes, NBG SHA
+`69eddc1ac45e2016f5adee2f53de6587fcc564eaaf90c4720e316b1d7e2b53f9`.
+Raw parsing verifies CRCs and fixed FP16 I/O. Stock routing is24NN +1TP,
+with zero SH/CPU routes. The actual-size executor source/ELF passed independent
+review before the first full qualification. That speech-feature Run and
+three subsequent strict WAV frontend Runs passed. The frontend calls were
+wrapped in an ORT neural-session throw guard and each recorded one native
+call, zero CPU sessions and CLEAN cleanup.
+
+| Clip | Speech frames | FP32 decision agreement | Max speech-probability error |
+|---|---:|---:|---:|
+| Public speech |175/200|100%|0.000814493|
+| Silence |0/200|100%|0.000023429|
+| Seeded noise |0/200|100%|0.000030908|
+| Derived noisy speech |175/200|100%|0.000168334|
+
+All800 decisions agree with the original source-matched FP32 reconstruction;
+max native activation error is0.00390625 under the unchanged element policy.
+These are fixed-clip parity results, not a labeled VAD accuracy evaluation.
+The real speech clip uses exact frozen features for initial qualification;
+the other three additionally exercise the actual strict file frontend.
+
+## Paired benchmark and limits
+
+One process ran36 CPU/NN pairs:4 warm-up and32 measured, alternating order.
+CPU is the original folded FP32 graph on stock ORT1.15.1 with one thread;
+native is the exact qualified FP16 NBG. Every native iteration reproduces
+the qualified output bytes. The CPU reference matches the earlier successful
+Wave baseline. Source, actual ELF, inputs, both references and preparation
+receipt were independently reviewed before the single benchmark attempt.
+
+| Prepared-feature measurement | CPU median / p95 ms | Native median / p95 ms |
+|---|---:|---:|
+| Run |8.577104 /9.252773|0.690792 /0.814966|
+| Prepared-feature boundary |8.664375 /9.331614|0.833188 /0.993871|
+| Calling-thread CPU time |8.545312 /8.760459|0.387897 /0.461373|
+
+Boundary median speedup is10.399069837×; calling-thread CPU time falls95.46071%.
+Native boundary includes input and NaN-canary copies, Run, output readback
+and softmax. CPU boundary includes input copy, Run and softmax; CPU output
+priming and both paths' result validation are outside it. Feature extraction,
+FP32→FP16 feature conversion, session/graph setup and file/ADB orchestration
+are excluded. Caller-thread clocks do not measure total system CPU or energy.
+Every pair repeats the same frozen speech window. Each window is3.99seconds;
+the20ms output interval still requires about
+1.46seconds of future context and does not establish causal streaming latency.
+
+A host-only build attempt initially used relative Docker volume paths and
+was rejected before compiler/device execution. Its log is preserved; a new
+host directory with absolute paths produced byte-identical source/data.
+This consumed no native budget or retry. The final run count is6 compiler
+processes,12 export API calls and45 NPU Runs, within8/16/46 ceilings.
+
+## Final closure
+
+Independent review reconstructs all35 b1 phase events and every cleanup
+advance from the reviewed seed through the benchmark. Every operation has
+empty health differences/alerts and CLEAN cleanup. Final direct seed-to-state
+diagnostic comparison also passes; kernel, boot, service identities, hashes,
+NPU settings and compiler absence are unchanged. All28 unique staging roots
+are absent and no galcore holders/native lab processes remain.
+
+After closing the measurement phase, wlan0 was raised and reassociation
+acknowledged OK. At2026-10-14T10:01:43.929Z the original saved SSID/network ID
+were verified privately, supplicant COMPLETED, adminUP and an IP assigned.
+Credentials/configuration were not saved or changed. A separate post-restoration
+snapshot passes with no new kernel alerts or state deltas. The earlier blocked
+restoration attempts and all failed intervals remain retained.
+
+Before the benchmark,13 altered artifacts of actual qualified19f copies
+refused with zero CPU sessions/transport and unchanged originals. After the
+benchmark, a separate pure-host check revalidates all123 prepared files and
+15 packages, including12 qualified packages, again with zero CPU/transport.
+No production VAD service was installed. Further live work requires its own
+reviewed phase and bounded contract; no native retries are authorized by
+this completed experiment. Raw resumed evidence is retained under
+`artifacts/npu/poc19/resume-20261014/`; the tracked sanitized ledger contains
+the exact qualification, clip and benchmark receipts.

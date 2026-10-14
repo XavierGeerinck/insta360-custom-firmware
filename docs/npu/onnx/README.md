@@ -8,17 +8,19 @@ below remains the default; its approval registry stays empty.
 
 PoC18 adds a bounded trained Conv/Add/Relu graph profile. The exact
 MarbleNet pointwise and residual blocks qualified on NN; its dilated
-depthwise block was rejected and the complete NPU model remains
-unqualified. The [MarbleNet guide](marblenet.md) documents the real model,
+depthwise block was rejected and the original complete NPU model remained
+unqualified at that stage. The [MarbleNet guide](marblenet.md) documents the real model,
 explicit CPU fallback, fixed audio window and measured limits.
 
 PoC19 qualifies the original dilated layer by moving zero padding into an
 explicit TP operation, followed by unchanged NN convolutions. The first
-trained strided block also qualifies. Full-model NN testing is still pending:
-a USB warning invalidated inter-run continuity, then ADB disappeared and
-blocked Wi-Fi restoration. The
+trained strided block also qualifies. After owner reconnection on2026-10-14,
+the complete graph qualified in a separately reviewed quiet phase:800/800
+FP32 speech decisions agree, with maximum probability error0.000815. The
+paired prepared-feature boundary measured0.833ms native versus8.664ms CPU
+(10.399×). Wi-Fi restoration and final device cleanup are verified. The
 [compatibility notebook](../lab-notebook/2026-10-13-poc19-marblenet-compatibility.md)
-preserves the passing blocks and failed enclosing interval separately.
+preserves the successful new phase and earlier failed intervals separately.
 
 ## Historical PoC 9E/9F result
 

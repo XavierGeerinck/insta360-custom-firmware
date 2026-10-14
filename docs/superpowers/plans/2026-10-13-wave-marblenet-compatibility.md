@@ -89,19 +89,19 @@ matching TIM-VX implementation. **Write:** private `poc19/rea/` report/evidence.
 - [x] Prove learned-tap accounting, fixed tensor geometry and original FP32/
   folded FP16/logit/probability parity on all four host clips. Add meaningful
   wrong-shift/pad/group/tap and unsupported-op refusal tests.
-- [ ] Qualify the rewritten problematic block and remaining untested trained
+- [x] Qualify the rewritten problematic block and remaining untested trained
   signatures in dependency order, once each, with reviewed sources/ELFs.
-- [ ] Qualify the complete one-NBG graph and four frozen clips if prerequisites
+- [x] Qualify the complete one-NBG graph and four frozen clips if prerequisites
   pass; then perform the reviewed4warm/32measured same-device benchmark.
   Preserve the existing explicit CPU fallback and strict eligibility rules.
 
 ## Task5 — Review, evidence and closure
 
-- [ ] Actual qualified-load/tamper regression with no CPU session/transport;
+- [x] Actual qualified-load/tamper regression with no CPU session/transport;
   final global state, diagnostic chain, owned-root and process checks.
-- [ ] Independent source/evidence/numerical/performance review; fix material
+- [x] Independent source/evidence/numerical/performance review; fix material
   findings with focused regressions.
-- [ ] Record actual matrix/limits/compatible graph and timings, or precise
+- [x] Record actual matrix/limits/compatible graph and timings, or precise
   unresolved native blocker, in a notebook/JSON ledger and model guide.
   Mark steps answered/partial/skipped honestly; commit only owned paths.
 
@@ -118,7 +118,7 @@ questions do not justify unsafe target execution or false qualification.
   interface; leave services running.
 - [x] Verify manual DISCONNECTED state and quiet new baseline, then
   launch only reviewed/frozen controls under the unchanged native stop gate.
-- [ ] Restore original UP/association state and verify at final closure.
+- [x] Restore original UP/association state and verify at final closure.
 
 ### Task4 selected contract — explicit temporal padding
 
@@ -187,3 +187,20 @@ driver reset, USB configuration change, or service action. Starting a new
 eligible phase requires a documented incident disposition and authorization.
 Attempt the already-authorized Wi-Fi restoration; if ADB is absent, retain
 the failed restoration and request reconnection while completing host work.
+
+### 2026-10-14 completion after owner reconnection
+
+The owner reconnected the selected unit, beginning a new boot with the same
+pinned stack. The first new a1 host attempt HALTED before staging or any
+vendor call. Its phase/seed and missing raw-snapshot limitation are preserved.
+The host retention fix446a85d passed focused replay tests and review.
+After the already-authorized temporary Wi-Fi disconnect, an independently
+reviewed525-second quiet window explicitly seeded b1. The exact26-file19e
+clone allowed its first actual Run without deleting the original host marker
+or repeating an export. Remaining residuals, full19f/four clips and one
+36-pair benchmark all passed. Final use is6/12/45 within8/16/46 ceilings.
+All800 original FP32 frame decisions agree; prepared-feature boundary is
+10.399× faster. Final kernel/state/service/root checks and original-network
+Wi-Fi restoration are verified. The prior failed phases remain failed.
+See the [completed notebook](../../npu/lab-notebook/2026-10-13-poc19-marblenet-compatibility.md)
+and [result ledger](../../npu/onnx/marblenet-poc19-results.json).

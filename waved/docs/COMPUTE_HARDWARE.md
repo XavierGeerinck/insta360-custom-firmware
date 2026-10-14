@@ -8,7 +8,7 @@ AV400 audio platform).
 | Resource | What it is | Stock firmware uses it for | Suitable for waved |
 |----------|------------|----------------------------|--------------------|
 | 4× Cortex-A55 @ up to 2.016 GHz, NEON + `asimddp` + `asimdhp` | CPU complex | Everything the NPU/DSP doesn't handle | AEC, beamforming, DOA, orchestration |
-| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | **Production integration parked 2026-10-12** (see below). Erf, native FP16 Conv and quantized U8 FC run; general models remain unqualified, and measured gains are small |
+| **Vivante VIP NPU** (GC-class, rev 0x9002, npu_version 6) | Dedicated neural accelerator | Target-native ASR/diarization NBGs | **Production integration parked 2026-10-12** (see below). Fixed trained MarbleNet now qualifies with10.399× prepared-feature speedup; general ONNX coverage remains unqualified |
 | HiFi-class audio DSP at `/dev/audiodsp0` | 8 MB firmware region, chr dev 272 | Unknown (likely stock AEC / NR / DRC) | Out of scope unless we get Cadence/Tensilica toolchain |
 
 ## Vivante NPU
@@ -79,7 +79,7 @@ Research continuation and remaining routes:
    Every call's captured health passed. Final state hashes/services/boot/
    parameters match and all roots are absent; whole-experiment kernel
    history is inconclusive because the initial diagnostic marker aged out.
-5. **MarbleNet compatibility (PoC19, 2026-10-13).** Diagnostic K13/rate2
+5. **MarbleNet compatibility (PoC19, completed2026-10-14).** Diagnostic K13/rate2
    and K29/rate1 controls both exported on NN and ran with maximum error
    0.000244140625. The original K29/rate2 trained layer then passed export
    and inference unchanged by making its zero Pad28/28 explicit: TP performs
@@ -90,10 +90,19 @@ Research continuation and remaining routes:
    without establishing the old rejecting branch or a universal15-tap limit.
    All full-graph folded initializer bits and four-clip CPU logits remain
    exact. A USB transfer WARNING between runs invalidated continuity;
-   remaining residual export passed only its local baseline and no inference
-   followed. Full-model NN qualification and benchmark were not launched.
-   ADB subsequently disappeared, blocking the authorized Wi-Fi restoration
-   and final live checks. See the
+   remaining residual export initially passed only its local baseline and
+   testing stopped. Owner reconnection established a new boot with the same
+   pinned stack. A separately reviewed disconnected quiet phase then qualified
+   the remaining residuals and full trained graph,24NN +1TP routes. All800
+   frozen frame decisions match original FP32, max probability error0.000815.
+   The same-device4warm/32measured paired benchmark gives median prepared-feature
+   boundary0.833188ms native versus8.664375ms one-thread stock ORT1.15.1 CPU,
+  10.399× faster; calling-thread CPU time falls95.46071%. CPU is FP32/native
+   FP16; feature extraction, conversion, graph setup, validation and orchestration
+   are excluded. This does not measure energy or causal streaming latency.
+   Final diagnostic/state/28-root checks pass, and Wi-Fi is verified restored
+   to its original saved network. Historical failed intervals remain failed.
+   No production VAD service was installed. See the
    [PoC19 notebook](../../docs/npu/lab-notebook/2026-10-13-poc19-marblenet-compatibility.md).
 6. **Remaining model-specific work.** Other shapes, multi-layer graphs,
    additional operator/dtype pairs and one-weight serializer differentials
