@@ -5,7 +5,8 @@ set -euo pipefail
 #   --features ui,capture-alsa,recording-integrity-test-hooks
 #
 # The script never removes recording data or changes config/database files.
-# Interrupted takes remain on-device as audio.wav.partial for inspection.
+# Interrupted takes remain on-device as audio.<opus|flac|wav>.partial for
+# inspection.
 
 ADB=(adb)
 if [[ -n "${ADB_SERIAL:-}" ]]; then
@@ -88,13 +89,15 @@ wait_for_restart() {
 assert_partial_only() {
   local dir=$1
   if [[ "$(
-    adb_shell "if test -f '$dir/audio.wav.partial'; then echo yes; fi" | tr -d '\r'
+    adb_shell "for name in audio.opus.partial audio.flac.partial audio.wav.partial; do \
+      if test -f '$dir'/\$name; then echo yes; fi; done" | tr -d '\r'
   )" != yes ]]; then
-    echo "Faulted take did not preserve audio.wav.partial: $dir" >&2
+    echo "Faulted take did not preserve its partial audio file: $dir" >&2
     return 1
   fi
   if [[ "$(
-    adb_shell "if test -e '$dir/audio.wav' -o -e '$dir/metadata.json'; then echo yes; fi" |
+    adb_shell "if test -e '$dir/audio.opus' -o -e '$dir/audio.flac' -o -e '$dir/audio.wav' \
+      -o -e '$dir/metadata.json'; then echo yes; fi" |
       tr -d '\r'
   )" == yes ]]; then
     echo "Faulted take was exposed as a complete artifact: $dir" >&2
