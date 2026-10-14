@@ -1,0 +1,30 @@
+[package]
+name = "waved-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Recording file formats for waved: Ogg Opus, FLAC and WAV writers and readers"
+
+[dependencies]
+hound = "3"
+# libopus 1.5.2 built from source by CMake and linked statically (BSD-3-Clause).
+# Pinned below 1.6: opusic-c 1.6 pulls opusic-sys 0.7 (libopus 1.6), whose
+# aarch64 float2int uses `vcvtns_s32_f32`, missing from the cross image's
+# GCC 4.8.5. `no-simd`: that GCC's arm_neon.h also breaks libopus' NEON
+# intrinsics. `no-fortify-source`: its sysroot fails glibc's _FORTIFY_SOURCE
+# MB_LEN_MAX check. See docs/AUDIO_HARDWARE.md "Recording formats".
+opusic-c = { version = "~1.5.5", default-features = false, features = [
+    "bundled",
+    "no-simd",
+    "no-fortify-source",
+] }
+flacenc = { version = "0.5", default-features = false }
+claxon = "0.4"
+md-5 = "0.10"
+
+[dev-dependencies]
+# Thread CPU time in examples/encode_bench.rs (the host is often busy).
+libc = "0.2"
+# An independent Ogg implementation, to check our pages from the outside.
+ogg = "0.9"
+tempfile = "3"

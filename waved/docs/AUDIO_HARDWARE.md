@@ -1470,7 +1470,8 @@ reference for picking thresholds, not a calibration target.
 
 Investigated 2026-05-27 after the stock 1.2.0.6 diff surfaced an "HD recording
 mode". Conclusion: **meeting recordings are 16-bit lossless WAV and that is the
-right ceiling on this pipeline.** Evidence:
+right ceiling on this pipeline.** (Since 2026-10-14 new takes are Opus or 16-bit
+FLAC, see "Recording formats" below; the 16-bit ceiling is unchanged.) Evidence:
 
 - **The PDM ADC is genuine ~24-bit.** A raw `arecord -D hw:0,2 -f S32_LE -c 8`
   capture reaches **bit 27** in magnitude, the low byte is populated **99.6 %**
@@ -1499,6 +1500,71 @@ i16-only) — a larger effort with **no stock precedent**, deferred.
 **Proper check for any future HD work:** don't trust the WAV header alone —
 read the 24-bit samples and confirm the **low byte is populated** (`!= 0` for a
 large fraction). All-zero low bytes mean promoted 16-bit, not genuine 24-bit.
+
+## Recording formats (2026-10-14)
+
+The owner's decision: **Opus by default, FLAC as a setting** (`recording.format = "opus" |
+"flac"`, System → Recording format, or the setup page). WAV is no longer written: a 1 h 30
+WAV (~520 MB) tripped the webhook's 413 limit. WAV recordings already on the volume keep
+playing, uploading and reconciling. The format is read when Record is pressed; a change
+applies to the next take. Code: `crates/waved-codec` (writers, readers, Ogg pages),
+`crates/waved-meeting/src/recorder.rs`; plan and decisions:
+`docs/superpowers/plans/2026-10-14-recording-formats.md`.
+
+| | Opus (default) | FLAC | WAV (before 2026-10-14) |
+|---|---|---|---|
+| File | `audio.opus` (Ogg Opus, RFC 7845) | `audio.flac` | `audio.wav` |
+| Coding | 32 kbps VBR, `OPUS_APPLICATION_AUDIO`, complexity 10, 20 ms frames, mono 48 kHz | 16-bit mono 48 kHz, fixed 4096-sample blocks, `flacenc` defaults | PCM S16LE mono 48 kHz |
+| Per hour (measured, host, speech-like test audio) | 12.3–13.5 MB (VBR below 32 kbps on pauses); ~14.5 MB at a full 32 kbps | 170 MB (−60 dBFS floor) – 211 MB (−45 dBFS floor) | 345.6 MB |
+| Encode, one host core (Apple M4 Pro, thread CPU time) | 131–145× real time | 1 230–1 460× real time | — |
+| Upload `Content-Type` | `audio/ogg; codecs=opus` | `audio/flac` | `audio/wav` |
+
+**Why AUDIO, not VOIP.** The recorder's input is already AEC'd, beamformed and optionally
+noise-reduced. AUDIO keeps it faithful (DC rejection only; VOIP adds a pitch-tracking
+high-pass), and at complexity ≥ 7 its speech/music analysis still codes speech in SILK/hybrid
+at 32 kbps and music in CELT, where VOIP pushes music into the speech codec. Below complexity 7
+the analysis is off and AUDIO would code everything in CELT at this rate, so complexity stays
+at 10 (8–10 cost the same on the host; 7 is ~25 % cheaper).
+
+**Encoder CPU on the A55 (estimate, not yet measured).** Scaling the host numbers by ~15× (an
+A55 at 2.0 GHz against an M4 Pro performance core on scalar float DSP; 12–20× plausible):
+Opus ≈ 9× real time, i.e. an hour encodes in ~7 min of one core (~11 % of a core while
+recording); FLAC ≈ 80× real time (~1 %). libopus is built **without NEON** (below), so this is
+the scalar figure. Check `top` during a take in the device pass; if it is tight, complexity 7
+keeps the speech/music analysis for ~25 % less.
+
+**libopus build.** `opusic-c` 1.5 / `opusic-sys` 0.6 build libopus 1.5.2 from source with CMake
+and link it statically (BSD-3-Clause). The cross image's GCC 4.8.5 fails three ways, all
+reproduced in the image: its `arm_neon.h` breaks libopus' NEON intrinsics (`vmlaq_lane_f32`
+types) → feature `no-simd`; its sysroot fails glibc's `_FORTIFY_SOURCE` check (`Assumed value
+of MB_LEN_MAX wrong`) → `no-fortify-source`; libopus 1.6 (`opusic-sys` 0.7) calls
+`vcvtns_s32_f32`, which GCC 4.8 lacks, on every aarch64 build → pinned below 1.6. A newer
+cross compiler would allow NEON (and 1.6).
+
+**On the real-time path.** Encoding runs on the meeting task, as the WAV writer did. A 20 ms
+packet costs well under a frame; a pre-roll (up to 30 s) would not: it joins a backlog that
+each incoming frame drains by twice its own length (the first 100 ms at once, so a dead
+medium still fails the start), so it reaches the file ~15 s after Record without starving the
+32-frame channel (~680 ms). Finalize writes what is left on the blocking pool while the
+meeting task goes on; an abort (which the meeting task waits for, before the fault is
+acknowledged) writes at most 3 s more and logs what it leaves out of the damaged take.
+
+**Crash and power loss.** Opus: an Ogg page every second of audio (50 packets), always
+leaving the newest packet for the last page so the end-trimming granule is valid; FLAC: frames
+written as they are encoded, the buffer pushed every 12 frames (~1 s); STREAMINFO's total is 0
+(unknown, valid) until finalize patches it with the total, the frame sizes and the MD5. A
+helper thread `fdatasync`s the take every 2 s; a sync error fails the take like a write error.
+So `kill -9` keeps everything up to the last page/frame and a power cut loses at most ~3 s.
+A cut file decodes up to its last whole page/frame (verified with ffmpeg and our readers);
+our FLAC reader counts the whole frames of a file whose STREAMINFO total is still 0. Policy is
+unchanged: a `.partial` take is `artifact_error`, never uploaded; abort closes its stream so
+it is a valid file under the `.partial` name. The 2026-03 prototype's empty `audio.opus`
+stays `legacy_unsupported` (an empty `audio.opus` is not audio).
+
+**Storage.** `AudioFormat::estimated_bytes_per_hour` (Opus 14.7 MB, FLAC 210 MB, WAV 345.6 MB)
+feeds the start-of-take log ("about N h at this format's rate"). There is no "time left" on
+screen; the retention thresholds stay absolute (`minimum_free_mb` 2 GiB ≈ 140 h of Opus,
+≈ 10 h of FLAC).
 
 ## Field-Testing Gotcha: init.d Watchdog
 

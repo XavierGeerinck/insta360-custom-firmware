@@ -74,10 +74,11 @@ pub(crate) fn started_at(start_time: &str) -> Option<String> {
     (utc.timestamp() >= CLOCK_VALID_AFTER_UNIX_S).then(|| utc.to_rfc3339())
 }
 
+/// The size of the recording's audio, finalized or not, in any format.
 fn audio_size(dir: &Path) -> u64 {
-    ["audio.wav", "audio.wav.partial"]
-        .iter()
-        .find_map(|name| std::fs::metadata(dir.join(name)).ok())
+    waved_codec::find_audio(dir)
+        .or_else(|| waved_codec::find_partial(dir))
+        .and_then(|(_, path)| std::fs::metadata(path).ok())
         .map(|metadata| metadata.len())
         .unwrap_or(0)
 }
@@ -381,6 +382,19 @@ mod tests {
             .await
             .unwrap();
         (id, dir)
+    }
+
+    #[test]
+    fn the_size_is_the_audio_in_any_format() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(audio_size(dir.path()), 0);
+        std::fs::write(dir.path().join("audio.flac.partial"), [0_u8; 7]).unwrap();
+        assert_eq!(audio_size(dir.path()), 7, "an interrupted take");
+        std::fs::write(dir.path().join("audio.opus"), [0_u8; 30]).unwrap();
+        assert_eq!(audio_size(dir.path()), 30, "the finalized file first");
+        let wav = tempfile::tempdir().unwrap();
+        std::fs::write(wav.path().join("audio.wav"), [0_u8; 44]).unwrap();
+        assert_eq!(audio_size(wav.path()), 44, "recordings made before 2026-10-14");
     }
 
     #[tokio::test]

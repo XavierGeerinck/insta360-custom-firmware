@@ -4,7 +4,9 @@ use waved_config::{
     clamp_brightness, clamp_dim_after, clamp_mic_volume, clamp_off_after, clamp_speaker_volume,
     wrap_beam_aim, WavedConfig,
 };
-use waved_state::{AudioMode, Command, MotorPosition, NrLevel, SettingsState, UploadMode};
+use waved_state::{
+    AudioMode, Command, MotorPosition, NrLevel, RecordingFormat, SettingsState, UploadMode,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
@@ -13,6 +15,8 @@ pub enum Change {
     TimeZone(String),
     Clock24h(bool),
     PreRecording(bool),
+    /// The format of the next recording.
+    RecordingFormat(RecordingFormat),
     UploadMode(UploadMode),
     Tones(bool),
     /// Turn the device PIN off: clear the stored record and the pin_enabled
@@ -42,6 +46,7 @@ impl Change {
             }
             Command::SetClock24h(value) => Change::Clock24h(*value),
             Command::SetPreRecording(value) => Change::PreRecording(*value),
+            Command::SetRecordingFormat(format) => Change::RecordingFormat(*format),
             Command::SetUploadMode(mode) => Change::UploadMode(*mode),
             Command::SetAlertTones(value) => Change::Tones(*value),
             Command::ClearDevicePin => Change::ClearDevicePin,
@@ -69,6 +74,7 @@ pub fn apply_to_config(config: &mut WavedConfig, change: &Change) {
         Change::TimeZone(zone) => config.time.zone.clone_from(zone),
         Change::Clock24h(value) => config.time.clock_24h = *value,
         Change::PreRecording(value) => config.recording.pre_recording = *value,
+        Change::RecordingFormat(format) => config.recording.format = *format,
         Change::UploadMode(mode) => config.api.upload_mode = *mode,
         Change::Tones(value) => config.tones.enabled = *value,
         Change::ClearDevicePin => config.security.device_password.clear(),
@@ -94,6 +100,7 @@ pub fn apply_to_settings(settings: &mut SettingsState, change: &Change) {
         Change::TimeZone(zone) => settings.time_zone.clone_from(zone),
         Change::Clock24h(value) => settings.clock_24h = *value,
         Change::PreRecording(value) => settings.pre_recording = *value,
+        Change::RecordingFormat(format) => settings.recording_format = *format,
         Change::UploadMode(mode) => settings.upload_mode = *mode,
         Change::Tones(value) => settings.tones_enabled = *value,
         Change::ClearDevicePin => settings.pin_enabled = false,
@@ -153,6 +160,20 @@ mod tests {
             None
         );
         assert_eq!(Change::from_command(&Command::ToggleMicMute), None);
+    }
+
+    #[test]
+    fn the_recording_format_is_saved_and_mirrored() {
+        let command = Command::SetRecordingFormat(RecordingFormat::Flac);
+        let change = Change::from_command(&command);
+        assert_eq!(change, Some(Change::RecordingFormat(RecordingFormat::Flac)));
+        let change = change.unwrap();
+        let mut config = WavedConfig::default();
+        let mut settings = SettingsState::default();
+        apply_to_config(&mut config, &change);
+        apply_to_settings(&mut settings, &change);
+        assert_eq!(config.recording.format, RecordingFormat::Flac);
+        assert_eq!(settings.recording_format, RecordingFormat::Flac);
     }
 
     #[test]

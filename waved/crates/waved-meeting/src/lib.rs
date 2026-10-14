@@ -571,6 +571,11 @@ impl MeetingService {
         format!("{:?}", self.audio_state_rx.borrow().mode)
     }
 
+    /// The format of a take started now: the setting as it is at Record.
+    fn next_recording_format(&self) -> waved_codec::AudioFormat {
+        recorder::audio_format(self.settings_rx.borrow().recording_format)
+    }
+
     pub async fn run(
         mut self,
         mut cmd_rx: broadcast::Receiver<Command>,
@@ -601,7 +606,8 @@ impl MeetingService {
             self.events_tx.clone(),
             Arc::clone(&upload_wake),
         )
-        .with_usb_storage(self.usb_storage.clone());
+        .with_usb_storage(self.usb_storage.clone())
+        .with_settings(self.settings_rx.clone());
         let _upload_task = tokio::spawn(upload_worker.run(wifi_rx.clone()));
         let mut usb_storage_rx = self.usb_storage.clone();
         let mut volume_away = self.recordings_away();
@@ -631,13 +637,14 @@ impl MeetingService {
 
         loop {
             tokio::select! {
-                // Drain post-AEC mono frames into the active recording's WAV
-                // writer. Append is synchronous (BufWriter under the hood),
-                // a few hundred microseconds per ~21 ms ALSA period.
+                // Drain post-AEC mono frames into the active recording's
+                // encoder (Opus/FLAC, recorder::RecordingWriter). Append is
+                // synchronous: the frame's encode plus a bounded share of a
+                // pre-roll backlog, well under the frame's own duration.
                 Some(frame) = self.audio_rx.recv() => {
                     if let Some(rec) = active.as_mut() {
                         if let Err(error) = rec.append_samples(&frame.recording_f32) {
-                            warn!("recording WAV write failed: {error}");
+                            warn!("recording write failed: {error}");
                             self.integrity
                                 .record_fault(RecordingIntegrityFault::WavWriteFailed);
                             let rec = active.take().expect("active recording disappeared");
@@ -784,10 +791,19 @@ impl MeetingService {
                                         continue;
                                     }
                                     let audio_mode = self.live_audio_mode();
+                                    let format = self.next_recording_format();
+                                    if let Ok(usage) = retention::disk_usage(&self.recordings_dir) {
+                                        info!(
+                                            "recording as {format:?}: {} MB free, about {:.0} h at this format's rate",
+                                            usage.free_bytes / 1_000_000,
+                                            recorder::hours_left(usage.free_bytes, format)
+                                        );
+                                    }
                                     match recorder::ActiveRecording::start_with_integrity_epoch(
                                         &self.recordings_dir,
                                         &audio_mode,
                                         self.integrity.epoch(),
+                                        format,
                                     )
                                     .await
                                     {
@@ -810,7 +826,7 @@ impl MeetingService {
                                             active = Some(rec);
                                             diarizer = Some(crate::diarization::Diarizer::new(id));
                                             // Splice the pre-record prefix onto the front of the
-                                            // new WAV before any live frames arrive.
+                                            // new take before any live frames arrive.
                                             // The setting is read again here: `select!` is
                                             // unbiased, so a just-flipped "off" may not have
                                             // been handled yet, and its audio must not be used.
@@ -1305,13 +1321,16 @@ impl MeetingService {
     ) {
         let id = rec.id;
         let duration = rec.duration_secs();
-        match rec.abort() {
-            Ok(path) => warn!(
-                "recording interrupted: {id}; partial WAV preserved at {} ({})",
+        // Closing writes what is left of a pre-roll backlog and the stream's
+        // end: off the meeting task, which must keep draining frames.
+        match tokio::task::spawn_blocking(move || rec.abort()).await {
+            Ok(Ok(path)) => warn!(
+                "recording interrupted: {id}; partial recording preserved at {} ({})",
                 path.display(),
                 fault.diagnostic()
             ),
-            Err(error) => warn!("failed to close partial recording {id}: {error}"),
+            Ok(Err(error)) => warn!("failed to close partial recording {id}: {error}"),
+            Err(error) => warn!("closing partial recording {id} failed: {error}"),
         }
         self.mark_recording_fault(id, duration, fault).await;
     }
@@ -1929,8 +1948,8 @@ mod wiring_tests {
             Some(RecordingIntegrityFault::ProcessedFrameDropped.diagnostic())
         );
         let dir = recordings_dir.join(id.to_string());
-        assert!(dir.join("audio.wav.partial").exists());
-        assert!(!dir.join("audio.wav").exists());
+        assert!(waved_codec::find_partial(&dir).is_some(), "the partial take stays");
+        assert!(waved_codec::find_audio(&dir).is_none(), "never finalized");
         assert!(!dir.join("metadata.json").exists());
         assert!(!meeting_tx.borrow().recording);
         assert_eq!(
@@ -2120,8 +2139,8 @@ mod wiring_tests {
                 .unwrap();
         assert_eq!(status, MeetingStatus::ArtifactError.as_str());
         let dir = recordings_dir.join(id.to_string());
-        assert!(dir.join("audio.wav.partial").exists());
-        assert!(!dir.join("audio.wav").exists());
+        assert!(waved_codec::find_partial(&dir).is_some(), "the partial take stays");
+        assert!(waved_codec::find_audio(&dir).is_none(), "never finalized");
         assert_eq!(
             meeting_tx.borrow().recording_blocked_reason,
             Some(RecordingIntegrityFault::WavWriteFailed)

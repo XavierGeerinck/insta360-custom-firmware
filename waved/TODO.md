@@ -148,7 +148,7 @@ Priority:
 | HID consumer and telephony controls | **Matched** | Stock report IDs and UI/MCU bridges are implemented and covered by `scripts/test-hid-control.sh`. |
 | Official Wave Controller vendor controls | **Unknown** | Run the official application against Waved, then capture stock USB control traffic only if a missing control is observed. |
 | macOS UAC2 master-volume control | **Partial** | Consumer keys and mute work; the kernel playback Feature Unit does not expose the stock-equivalent master-volume control. |
-| Local WAV meeting recording | **Partial** | Finalization, metadata, bookmarks, diarization, reconciliation, real uploads, storage pressure, and three reboot boundaries pass; literal one-hour and physical power-loss certification remain P0. |
+| Local meeting recording (Opus default, FLAC setting; WAV before 2026-10-14) | **Partial** | Finalization, metadata, bookmarks, diarization, reconciliation, real uploads, storage pressure, and three reboot boundaries pass; literal one-hour and physical power-loss certification remain P0. |
 | Generic multipart recording webhook | **Better** | Durable streaming upload, retry, retention, idempotency, setup configuration, status UI, and toasts are open-firmware capabilities; the full failure matrix remains P1. |
 | Wi-Fi provisioning and saved-network reconnect | **Better** | Waved provides a WPA2 setup AP, QR/manual credentials, a captive configuration form, saved-network fallback, and live connection status; stock setup AP was open. |
 | Device configuration through setup portal | **Better** | Versioned `config.toml` fields can be edited and validated without exposing stored secrets. |

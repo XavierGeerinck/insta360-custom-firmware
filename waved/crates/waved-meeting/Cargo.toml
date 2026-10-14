@@ -17,6 +17,7 @@ waved-state = { path = "../waved-state" }
 waved-config = { path = "../waved-config" }
 waved-audio = { path = "../waved-audio" }
 waved-settings = { path = "../waved-settings" }
+waved-codec = { path = "../waved-codec" }
 tokio = { workspace = true, features = ["sync", "time", "fs", "io-util", "macros", "rt"] }
 uuid.workspace = true
 serde.workspace = true
@@ -31,7 +32,6 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 chrono = { version = "0.4", features = ["serde"] }
-hound = "3"
 sha2 = "0.10"
 tokio-util = { version = "0.7", features = ["io"] }
 nix.workspace = true

@@ -12,7 +12,8 @@ pub async fn upload_recording(
     tokio::fs::create_dir_all(&dest_dir)
         .await
         .map_err(crate::upload::UploadError::Io)?;
-    let dest = dest_dir.join(format!("{meeting_id}.wav"));
+    let (file_name, _) = crate::upload::audio_part(meeting_id, file_path);
+    let dest = dest_dir.join(file_name);
     if file_path.exists() {
         tokio::fs::copy(file_path, &dest)
             .await

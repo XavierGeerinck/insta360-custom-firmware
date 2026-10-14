@@ -21,7 +21,7 @@ pub use validate::{valid_time_zone, validate_config};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
-pub use waved_state::UploadMode;
+pub use waved_state::{RecordingFormat, UploadMode};
 use waved_state::{AudioMode, MotorPosition, NrLevel};
 
 pub const CURRENT_CONFIG_VERSION: u32 = 2;
@@ -41,6 +41,10 @@ const DEFAULT_MIC_HEIGHT: MotorPosition = MotorPosition::Medium;
 
 fn is_default_mic_height(height: &MotorPosition) -> bool {
     *height == DEFAULT_MIC_HEIGHT
+}
+
+fn is_default_recording_format(format: &RecordingFormat) -> bool {
+    *format == RecordingFormat::default()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -129,6 +133,10 @@ pub struct RecordingConfig {
     pub pre_recording: bool,
     /// Seconds before an unanswered "Send this recording?" keeps the file.
     pub ask_timeout_s: u32,
+    /// The format of new recordings: `opus` (default) or `flac`. Added
+    /// 2026-10-14: saved only when not opus.
+    #[serde(skip_serializing_if = "is_default_recording_format")]
+    pub format: RecordingFormat,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -364,6 +372,7 @@ impl Default for RecordingConfig {
         Self {
             pre_recording: false,
             ask_timeout_s: 60,
+            format: RecordingFormat::Opus,
         }
     }
 }
@@ -855,6 +864,29 @@ device_password = "4821"
             config.save(&path).unwrap();
             assert_eq!(WavedConfig::load(&path).unwrap().device.mic_height, height);
         }
+    }
+
+    #[test]
+    fn the_recording_format_is_opus_and_saved_only_as_flac() {
+        // Added 2026-10-14 under the same rule as the milestone 3 keys: a
+        // default config stays loadable by the waved before it.
+        assert_eq!(WavedConfig::default().recording.format, RecordingFormat::Opus);
+        let older = WavedConfig::parse(&legacy(true, "omni")).unwrap();
+        assert_eq!(older.recording.format, RecordingFormat::Opus);
+        let flac = WavedConfig::parse(&v2_with("recording", "format = \"flac\"")).unwrap();
+        assert_eq!(flac.recording.format, RecordingFormat::Flac);
+        assert!(WavedConfig::parse(&v2_with("recording", "format = \"wav\"")).is_err());
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = WavedConfig::default();
+        config.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("format"));
+        config.recording.format = RecordingFormat::Flac;
+        config.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(unknown_before_m3(&saved), ["recording.format"]);
+        assert_eq!(WavedConfig::load(&path).unwrap(), config);
     }
 
     #[test]
